@@ -51,18 +51,19 @@ A pending request for a future UI update. It is distinct from the host's
 notification that execution may proceed and from a frame already in progress.
 _Avoid_: Frame wake, frame execution
 
-**Native backend**:
+**Native host**:
 FLUI's own integration with one operating environment (Windows, macOS, iOS,
-Android, the Web, Linux), written against that environment's native APIs.
-_Avoid_: Port, platform, shell
+Android, the Web, Linux), written against that environment's native APIs; in
+`flui-native` it is one table of types and one file per feature.
+_Avoid_: Backend, port, platform, shell
 
-**Headless backend**:
-A backend with no operating environment behind it, driven by tests and
-automation. It is not a native backend and never stands in for one.
-_Avoid_: Mock platform, fake backend
+**Headless host**:
+A host with no operating environment behind it, driven by tests and
+automation. It is not a native host and never stands in for one.
+_Avoid_: Mock platform, fake host, headless backend
 
 **Ready platform**:
-An operating environment whose native backend provides every core integration
+An operating environment whose native host provides every core integration
 and has passed its conformance checks in an executed run there. Compiling for
 an environment does not make it ready.
 _Avoid_: Supported platform, experimental platform

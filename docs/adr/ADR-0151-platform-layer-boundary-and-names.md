@@ -6,10 +6,10 @@
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
-  Linux backend; section 11 here); and the placement of
+  Linux host; section 11 here); and the placement of
   `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate by
   [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) (its other decisions
-  stand). The boundary ADR-0082 drew between a contract crate and a backend crate stands.
+  stand). The boundary ADR-0082 drew between a contract crate and a host crate stands.
 - **System preferences:** [ADR-0172](ADR-0172-host-owned-system-preferences.md) owns them. The
   Proposed text of this ADR (2026-10-06) had a section on the subject; ADR-0172 replaced it and
   this text does not repeat it.
@@ -41,7 +41,7 @@
 
 ## Context and problem statement
 
-ADR-0082 split the contract crate from the backend crate. The boundary was right and stands; what
+ADR-0082 split the contract crate from the host crate. The boundary was right and stands; what
 grew on each side of it since is the subject here. Numbers are counts over tracked files at `main`
 `083b0f75d` (`wc -l`, `rg`; the platform crates are unchanged since `deb9faea2`) unless another
 source is named.
@@ -49,7 +49,7 @@ source is named.
 - **The contract crate** (`flui-platform-api`) has 16,481 lines in `src/`, re-exported whole as
   `flui::platform`. 63% of it is text-store machinery (3,708 lines), keyboard (2,613), pointer
   (2,016), data transfer and drag (1,173) and haptics (868). Items with no production consumer
-  above the backend sit in it: `WindowEvent`, `WindowBackgroundAppearance`, the `OfferTable` family, four
+  above the host sit in it: `WindowEvent`, `WindowBackgroundAppearance`, the `OfferTable` family, four
   coordinate helpers, and three test doubles (`InMemoryClipboard`, `InMemoryTextStore`,
   `FakeHaptics`). 26 of its 82 public enums are closed with no recorded decision (82 `pub enum`,
   56 of them with `#[non_exhaustive]`, over `crates/flui-platform-api/src`), and nine enums spell
@@ -57,7 +57,7 @@ source is named.
   `window.rs:283` and `:342`, `drag.rs:48`, `haptics/request.rs:125`,
   `input_capabilities/mod.rs:24`, `storage.rs:300`, `preferences/geometry.rs:361` and
   `text_store/host.rs:81`.
-- **The earlier premises have gone stale.** Haptics are implemented on five backends
+- **The earlier premises have gone stale.** Haptics are implemented on five hosts
   (a 1,242-line degradation table, a 909-line consumer in `flui-interaction`). The text-store lock
   machinery has production consumers in `flui-widgets`, `flui-interaction` and the Win32 text
   services. `PlatformDisplay`, `WindowBounds`, the legacy `window.rs` and `PlatformCapabilities`
@@ -68,7 +68,7 @@ source is named.
   runtime in a `thread_local!` because of the `Send` callbacks
   (`crates/flui-app/src/app/runner/host.rs:431-441`). The window side is
   [ADR-0254](ADR-0254-window-contract.md)'s.
-- **The backend crate** (`flui-platform`) has 97,363 lines in `src/` (`platforms/` 72,528,
+- **The host crate** (`flui-platform`) has 97,363 lines in `src/` (`platforms/` 72,528,
   `shared/` 20,320, `traits/` 1,709), the largest crate in the workspace. 45% of `shared/` (about
   9,100 lines) is used by exactly one OS. 21 rule modules are `pub #[doc(hidden)]` only so
   `tests/` can name them, which compiles about 3,900 lines of single-OS rules on every target.
@@ -82,7 +82,7 @@ source is named.
   user code still runs under a lock in two places
   (`crates/flui-platform/src/platforms/android/mod.rs:1010`,
   `crates/flui-platform/src/platforms/headless/platform.rs:748-750`).
-- **`Platform` outgrew its callers.** No production code above the backend calls
+- **`Platform` outgrew its callers.** No production code above the host calls
   `background_executor`, `active_window`, `write_to_clipboard`, `read_from_clipboard`, `open_url`,
   `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `on_window_event`,
   `keyboard_layout`, `on_keyboard_layout_change`, `app_path` or `compositor_name`; `on_open_urls`
@@ -104,8 +104,8 @@ drew holds only what belongs on it?
 ## Decision drivers
 
 - Only `flui-app` depends on the core host and the seam is sealed, so there is no out-of-tree
-  backend and no second consumer of a backend's internals (section 1).
-- A contract item needs a production consumer above the backend; an item without one is a promise
+  host and no second consumer of a host's internals (section 1).
+- A contract item needs a production consumer above the host; an item without one is a promise
   nobody tests (section 2).
 - The contract is Stable: the size of the promise is the size of its API closure, and no public
   signature names an upstream type beyond ADR-0089 §2's exceptions (sections 2 and 5).
@@ -114,7 +114,7 @@ drew holds only what belongs on it?
 - Crate names follow `flui-<word>`, and `flui-native` and `flui-platform` are free on crates.io.
 - The contract depends on `flui-foundation`, which carries `links = "flui_train"`, so its version
   rides the release train until `cargo-semver-checks` shows it stable (section 5).
-- CI executes Linux and wasm32 only: the rules of every OS must compile and run on the Linux CI
+- CI executes Linux and wasm32 only: the pure parts of every platform must compile and run on the Linux CI
   host, and the native FFI halves need local runs (sections 10 and 16).
 - Rules are types: a seal, `clippy::exhaustive_enums` and the `module-dag` gate keep the halves of
   the layer apart before a reviewer has to (sections 5 and 10).
@@ -135,7 +135,7 @@ drew holds only what belongs on it?
 
 1. The restructuring this record decides: two framework platform crates (`flui-platform` for the
    contract, `flui-native` for the core host), a closed list of OS services, one crate for every
-   native backend and a layout with `rules` and `ffi` halves.
+   native host and a feature-first layout with a host table (section 10).
 2. Keep `flui-platform-api` and `flui-platform`.
 3. Name the contract `flui-port`, `flui-contract` or `flui-core`.
 4. Name the core host `flui-os` or `flui-backend`.
@@ -144,14 +144,17 @@ drew holds only what belongs on it?
 7. A pure `rules` crate plus FFI crates.
 8. Keep `shared/`, rename it `backend/`, or gather everything cross-OS into one `mapping/`.
 9. Everything in the core host (GPUI's 76-method `Platform`).
+23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules (`translate/`,
+    `version/`, `displays/`).
+24. Per-platform files named by API family or mechanism (`win32.rs`, `nstextinputclient.rs`).
 10. Menus and haptics as capability crates.
 11. A contract that anticipates consumers.
 12. Its own contract version at once.
-13. A hidden second tier for first-party backends (Slint).
+13. A hidden second tier for first-party hosts (Slint).
 14. A synchronous `Clipboard` with an asynchronous twin (GPUI).
 15. Keep the lock, ledger and generation in the contract, or move them to `flui-widgets`.
 16. `AppLifecycleState` in the contract.
-17. Keep winit as the Linux backend.
+17. Keep winit as the Linux host.
 18. One pull request for both renames.
 19. A `cargo xtask rename` tool.
 20. `cfg` by OS version, and "latest installed SDK" for `targetSdk`.
@@ -161,7 +164,7 @@ drew holds only what belongs on it?
 ## Decision
 
 Chosen option: 1, because it keeps the boundary ADR-0082 drew and puts every item on the side where
-its consumer is: the contract holds only what something above the backend uses, the core host does
+its consumer is: the contract holds only what something above the host uses, the core host does
 what needs an object only it owns, everything permission-gated or hardware-bound is a capability
 crate, and the compiler and the gates named under Confirmation keep the sides apart.
 
@@ -175,25 +178,25 @@ bridge in [ADR-0152](ADR-0152-capability-seam-revised.md) and
 [ADR-0154](ADR-0154-capability-crates.md); the Android, iOS and Web hosts in
 [ADR-0255](ADR-0255-mobile-and-web-hosts.md); system preferences in ADR-0172.
 
-### 1. Two framework platform crates; one crate for every native backend
+### 1. Two framework platform crates; one crate for every native host
 
 | Role | Before | After | Tier / kind | Layer |
 |---|---|---|---|---|
 | Contract | `flui-platform-api` | **`flui-platform`** | C, `stable` | 1 |
-| Core host (every native backend) | `flui-platform` | **`flui-native`** | H, `internal` | 3 |
+| Core host (one host per platform) | `flui-platform` | **`flui-native`** | H, `internal` | 3 |
 | Capability crates | none | `flui-system`, then others (ADR-0154) | `pkg`, `capability` | n/a |
 
 The contract takes the name of the path users already write (`flui::platform::WindowOptions`).
 The core host is the code that talks to the OS. There is no `-core` crate and no crate per OS.
 
 Carried over from ADR-0082 §2, which this section replaces: only `flui-app` depends on the core
-host, apart from test and example dev-dependencies that drive a backend (`allowed-dependents`);
+host, apart from test and example dev-dependencies that drive a host (`allowed-dependents`);
 `PlatformAccessibility` and its listener aliases live in `flui_semantics::platform`, while
-`HostWindow::accessibility` stays in the core host; an out-of-crate backend cannot mint the
+`HostWindow::accessibility` stays in the core host; an out-of-crate host cannot mint the
 `OwnerPlatform` its `run` needs, and section 5 makes that seal explicit.
 
 **One crate for Windows, macOS, iOS, Android, Web, Linux and headless.** winit 0.31 and GPUI
-split into a crate per backend on top of an open backend seam, for out-of-tree backends and for
+split into a crate per host on top of an open host seam, for out-of-tree hosts and for
 users of its types without the event loop (winit:
 [rust-windowing/winit#3433](https://github.com/rust-windowing/winit/issues/3433), the split, and
 [#3367](https://github.com/rust-windowing/winit/issues/3367), the API redesign it follows) and for
@@ -202,7 +205,7 @@ dependents that need not wait for platform crates (GPUI:
 [#49277](https://github.com/zed-industries/zed/pull/49277)). FLUI has neither:
 
 - The seam is sealed (`OwnerPlatform` is minted by a `pub(crate)` constructor) and the only
-  dependent is `flui-app`, which needs every backend to link. A split cannot shorten that build;
+  dependent is `flui-app`, which needs every host to link. A split cannot shorten that build;
   it can only overlap work (reasoned, not measured).
 - A split makes public what the OS crates reach in the core: 468 lines in `platforms/` name
   `crate::shared::` or `crate::traits::`, the `OwnerPlatform` mint among them.
@@ -220,15 +223,15 @@ dependents that need not wait for platform crates (GPUI:
   2025-05-14), and the crates share one version
   ([#4274](https://github.com/rust-windowing/winit/pull/4274)). FLUI's seam is closed on purpose.
 
-What FLUI does instead is in section 10: per-OS `rules` and `ffi` halves in one crate, with the
-compiler and `module-dag` keeping them apart.
+What FLUI does instead is in section 10: one crate laid out by feature, a host table of
+associated types per platform, and the compiler and `module-dag` keeping the parts apart.
 
 The conditions under which this question reopens are listed in More information.
 
 ### 2. What the contract holds
 
-Vocabulary and traits that something above the backend uses (applications through the facade
-included), and the types by which a backend hands the framework a fact. An item with no such
+Vocabulary and traits that something above the host uses (applications through the facade
+included), and the types by which a host hands the framework a fact. An item with no such
 consumer is `pub(crate)` in the core host or does not exist. "It returns with its first consumer"
 is not a state an item may be in: either its consumer is built together with it, or the item is
 not there.
@@ -236,7 +239,7 @@ not there.
 The contract holds the vocabulary of windows, input, text, displays, drag and drop, system
 preferences, host notices, haptics and system chrome; the window and face traits; and the
 capability seam (`Capability`, the provider, `Plugin`, the registrar, `Completion<T>`,
-`Unsupported`). It holds no OS code, no `unsafe`, no test doubles, no backend tables and no
+`Unsupported`). It holds no OS code, no `unsafe`, no test doubles, no host tables and no
 synchronous `Clipboard`, and depends on neither `tracing` nor `parking_lot` (section 7 says how
 they leave; both go into its `reach-forbid`). No public signature names an upstream type beyond
 ADR-0089 §2's exceptions (`raw-window-handle` 0.6 through `HasWindowHandle`, `HasDisplayHandle`
@@ -353,18 +356,18 @@ that class named once.
   size of the promise is the size of the closure; it is not built today.
 - **Sealing.** `Platform` and `HostWindow` are sealed explicitly, by a private supertrait. They
   are already unimplementable outside the crate (`OwnerPlatform::new` is `pub(crate)`) and only
-  backend modules implement them, so the seal costs nothing and makes the compile error say what
+  host modules implement them, so the seal costs nothing and makes the compile error say what
   the types enforce. A sealed trait can be opened later without breaking anyone; an open one can
   be neither sealed nor given a required method without breaking every implementor.
   `PlatformWindow` stays open: 15 test
-  doubles in 13 files outside the backends implement it, and its doctest promises that. For an
+  doubles in 13 files outside the hosts implement it, and its doctest promises that. For an
   open trait: no inert defaults, and any facet beyond the required core is a separate trait
   reached through an `Option`, so adding a facet never breaks an implementor. There is no hidden
-  richer vocabulary for first-party backends: Slint's `WindowAdapterInternal` and its hidden
+  richer vocabulary for first-party hosts: Slint's `WindowAdapterInternal` and its hidden
   `InternalEvent`, which carries the touch finger id, drag payloads and input method composition,
   are the pattern to avoid ([slint-ui/slint@277e7676ce internal/core/window.rs:225-341](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/window.rs#L225-L341),
   [internal/core/platform.rs:564-575](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/platform.rs#L564-L575)), and `PlatformInput` carries pointer, key, IME and drag to
-  every backend alike. Slint seals its `Renderer` the way
+  every host alike. Slint seals its `Renderer` the way
   `Platform` is sealed here ([internal/core/renderer.rs:43-52](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/renderer.rs#L43-L52)).
 - **Versioning.** The contract's version rides the release train until `cargo-semver-checks`
   shows it stable for two trains in a row; then it gets its own version (ADR-0153 option 1,
@@ -373,14 +376,14 @@ that class named once.
   and the two ABI-disciplined C APIs version apart from their implementations: Flutter's embedder
   header writes its ABI rules down ([flutter/flutter@6597889f57
   engine/src/flutter/shell/platform/embedder/embedder.h:12-48](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/embedder/embedder.h#L12-L48)), and SDL tags every symbol `\since`
-  ([libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_version.h:139-160](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_version.h#L139-L160)). winit-core and its backends
+  ([libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_version.h:139-160](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_version.h#L139-L160)). winit-core and its platform crates
   share one version ([rust-windowing/winit@1893565716 winit-core/Cargo.toml:13](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/Cargo.toml#L13)). The contract
   depends on `flui-foundation`, which carries `links = "flui_train"`, so an independent version at
   once is not available.
 
-### 6. Text store: backend machinery stays, widget machinery moves down to `flui-interaction`
+### 6. Text store: host machinery stays, widget machinery moves down to `flui-interaction`
 
-Stay in the contract, because backends call them: the store, host and observer traits and their
+Stay in the contract, because hosts call them: the store, host and observer traits and their
 values, `CommitGate`, `OwnerCalls`, `commit_composition_in_place` and `project_ime_event` (the
 Win32 text services, macOS, Android and Web use them).
 
@@ -391,7 +394,7 @@ ADR-0142's placement of the three types in the contract; ADR-0142's decisions (t
 containment, the owner hearing committed text) stand. `InMemoryTextStore` moves to `flui-testing`
 (section 7).
 
-### 7. Services, test doubles, backend-only items and deletions
+### 7. Services, test doubles, host-only items and deletions
 
 - **Services reach widgets through the seam.** Clipboard and storage are application services:
   widgets reach them only through the capability seam. The providers are assembled by `flui-app`,
@@ -406,19 +409,19 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   drag source) stay facets of the window.
 - **Test doubles leave the contract.** `InMemoryTextStore` moves whole to `flui-testing`
   (ADR-0243). `FakeHaptics` and `InMemoryClipboard` each split in two roles: a headless
-  implementation, `pub(crate)` in the core host (the headless host is a runtime-selected backend
+  implementation, `pub(crate)` in the core host (the headless host is a runtime-selected host
   and cannot depend on `flui-testing`), and a scripted double in `flui-testing`. The roles differ:
   the buffer of a headless host against the sequence of answers a test scripts.
-- **Backend-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`,
+- **Host-only items move into the core host as `pub(crate)`:** `OfferTable`, `OfferRecord`,
   `TransferCompleter`, `TransferUri`, `TransferImage`, `device_to_logical`, `logical_to_device`,
   `offset_from_coords`, `delta_offset_from_coords`, `DeviceInputRegion`, `ProjectedInputRegions`,
-  and the drag provider hooks `OsDragProvider` and `OsDragEndHook`, which nothing above the backend
+  and the drag provider hooks `OsDragProvider` and `OsDragEndHook`, which nothing above the host
   names at `083b0f75d` (`PlatformDragSource` and the drag vocabulary stay).
 - **Deleted:** `WindowEvent`, `Platform::on_window_event`, `KeyText`, and
   `WindowBackgroundAppearance`, which a background-material command gated by a window capability
   replaces (ADR-0254).
-- **Kept, and wired.** `WindowOptions::input_latency` has no setter above the backend today (only
-  the Android and Web backends read it). It stays in the contract, and the application's window
+- **Kept, and wired.** `WindowOptions::input_latency` has no setter above the host today (only
+  the Android and Web hosts read it). It stays in the contract, and the application's window
   configuration, its consumer, sets it in the same series.
 - **Dependencies.** The contract does not log: the caller of a contract function does, so
   `tracing` goes. `DisplayRegistry` moves from `parking_lot` to `std::sync::Mutex`, the last use
@@ -430,7 +433,7 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 - The facade publishes the OS extension modules as `flui::native::<os>` behind `cfg(<os>)` and the
   feature `native`, kind Evolving, so the escape hatch is discoverable and its churn is not Stable.
   Their methods take and return FLUI types only (progress on the taskbar, background material,
-  macOS tabs) and return `Option` or `Unsupported`; none panics on a foreign backend (winit
+  macOS tabs) and return `Option` or `Unsupported`; none panics on a foreign host (winit
   `unwrap`s its downcast: [rust-windowing/winit@1893565716 winit-win32/src/lib.rs:239,355-358](https://github.com/rust-windowing/winit/blob/1893565716/winit-win32/src/lib.rs#L239)).
 - Raw window and display handles leave only through the `raw-window-handle` traits, the one
   upstream exception of ADR-0089 §2.
@@ -449,7 +452,7 @@ Removed from `Platform`: `background_executor` with `BackgroundExecutor` and `Ta
 `compositor_name`, and `on_open_urls`, which has no producer. Moved to `flui-system`: `open_url`,
 `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path`.
 `keyboard_layout` and `on_keyboard_layout_change` become `pub(crate)` in the core host: nothing
-above the backend reads them today. The menu feature, which labels shortcuts, publishes them with
+above the host reads them today. The menu feature, which labels shortcuts, publishes them with
 that consumer.
 
 The application-level registrations that remain (`on_quit`, `on_reopen`, `on_session_end`,
@@ -473,52 +476,97 @@ The core host stops re-exporting contract names: every item has one path.
 
 ### 10. The layout of `flui-native`
 
+The axis is the feature, as in `std::sys` after its reorganisation
+([rust-lang/rust#117276](https://github.com/rust-lang/rust/issues/117276)) and in tokio; the
+completeness of a host is a table of types, as in `wgpu_hal::Api`, and the table is called a
+host, cpal's word for the same object (a `Host` per
+[RustAudio/cpal@68f6f752b2 src/host](https://github.com/RustAudio/cpal/tree/68f6f752b2941ab101e2d7d67fe3f1caa67d9eaf/src/host)).
+
 ```text
 crates/flui-native/
   android/                  Java sources, committed classes.dex and its hash record (outside src/)
   src/
-    lib.rs                  current_platform(): the one backend selection ladder
-    platform.rs             Platform (sealed), AppHandler
+    lib.rs                  current_platform(): picks HostPlatform<Windows> | HostPlatform<Apple> | HostPlatform<Android> |
+                            HostPlatform<Web> | HostPlatform<Wayland> | HostPlatform<X11> | HostPlatform<Winit> | HostPlatform<Headless> by cfg,
+                            and on Linux and for headless at run time; returns Box<dyn Platform>
+    host.rs                 trait Host { type Loop; type Window; type Displays; type Input;
+                            type Text; type Accessibility; type Clipboard; type Drag; type Haptics;
+                            type Preferences; type Lifecycle; type Chrome; type Storage }: the closed
+                            list of section 3 as a type; Absent<F>, the one type for "not on this platform"
+    platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
+                            implementation of Platform, and the AppHandler wiring
     host_window.rs          HostWindow (sealed), as_any
-    owner/                  OwnerPlatform, SharedPlatform, PlatformProxy, the owner signal and slot,
-                            the panic boundary, the one call point for user code,
-                            journal/ (the native input journal and its codec, ADR-0215 §4, built
-                            under the driver feature; its schema is declared in flui-protocol)
-    translate/              what two or more OS families use to turn OS facts into the contract's
-                            vocabulary: pointer_assembly, keys, window_state, system_notice,
-                            haptic_degradation, input_availability, keyboard_adapter, scroll,
-                            visibility, ime_text, preference_read, accessibility_bridge
-    version/                the OS floors and the Since<F> gates (ADR-0244)
-    displays/               the display registry's source (display_source)
-    storage/                FileStore, the Web page store
-    platforms/
-      mod.rs                one gate per backend
-      windows/              rules/ (cfg(any(windows, test)), forbid(unsafe_code)); ffi/ (cfg(windows), the unsafe)
-      apple/                what only macOS and iOS use: the same pair
-      macos/ ios/ android/ web/ linux/    the same pair
-      winit/                stand-in for Linux until the native backend (section 11)
-      headless/             always compiled, selected at run time
+    hosts/                  one table per host and its constructor, nothing else:
+                            windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) winit.rs headless.rs
+    owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
+                            SharedPlatform, PlatformProxy, the signal and slot, the panic boundary, the one
+                            call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
+                            its schema is declared in flui-protocol);
+                            windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs winit.rs headless.rs
+    window/                 mod.rs state.rs visibility.rs; windows/{mod,proc,limits,backdrop}.rs;
+                            apple/{mod,macos,ios,geometry,liquid_glass}.rs; android.rs web.rs
+                            linux/{wayland,x11}.rs winit.rs headless.rs
+    input/                  mod.rs assembly/ keys.rs availability.rs regions.rs;
+                            windows/{mod,raw,direct_manipulation}.rs
+                            apple.rs android.rs web.rs linux/ winit.rs headless.rs
+    text/                   mod.rs ime.rs; windows/{mod.rs, tsf/} apple/{macos,ios}.rs android.rs web.rs
+                            linux/{wayland,x11}.rs headless.rs
+    display/ clipboard/ drag/ accessibility/ haptics/ preferences/ lifecycle/
+                            the same shape: the feature's model beside one file per platform
+    version/                floor.rs gate.rs (ADR-0244)
+    storage/                file_store.rs page_store.rs os_error.rs
 ```
 
-`shared/` and `traits/` disappear.
+`shared/`, `traits/` and `platforms/` disappear.
 
-- **Where code lives.** Code of one OS lives in that OS's directory, code of one family in the
-  family's, and only code that two or more families use goes to `owner/`, `translate/`, `version/` or `displays/`, whichever names its content. The names
-  say what the modules hold; there is no `common`, `util` or `kit`.
-- **`rules` and `ffi`.** `rules` is pure translation and compiles on every host in a test build
-  (`cfg(any(<os>, test))`) under `forbid(unsafe_code)`; `ffi` holds the bindings and the
-  `unsafe`, under the OS `cfg`. `rules` names no `ffi`, no binding crate and no other OS; the
-  compiler checks that on the CI host, where `windows::ffi` does not exist. The FFI half is not called `shell`: that word already names the OS shell (Explorer, Finder) whose services `flui-system` holds.
-- **Direction is checked.** `cargo heli xtask module-dag` is extended to `flui-native`: `owner`,
-  `translate`, `version` and `displays` do not depend on `platforms`; `platforms/<a>` does not
-  depend on `platforms/<b>` except `macos` and `ios` on `apple`; `rules` does not depend on `ffi`.
-  There is no single cross-OS directory: `os_version` belongs to `version/` and `display_source`
-  to `displays/` because neither translates anything, and one `mapping/` for all of them would be
-  `shared/` under another name.
-- **Tests of rules sit beside the rules** as `pub(crate)` modules and run on the Linux CI host.
-  `tests/` keeps the conformance table and the recordings of native traces. The 21 files that name
-  `shared::*` today move. The Definition of Done in AGENTS.md ("through the public API from
-  `tests/`") takes this exception for rule modules.
+- **Names.** The platform vocabulary is std's: `windows`, `apple`, `android`, `web`, `linux`,
+  `winit`, `headless`. `apple/` and `linux/` open into `macos`/`ios` and `wayland`/`x11` only
+  where the code differs; otherwise one file. Repeated file names across features are the norm of
+  this layout (std carries dozens of `unix.rs`; an IDE labels the tab with its directory, an agent
+  edits by path); a mechanism names a file only one level down and only for one OS object
+  (`text/windows/tsf/`, `input/windows/direct_manipulation.rs`), as tokio's
+  `net/windows/named_pipe.rs`; protocol versions live in types, never in file names. The words
+  are fixed: a *platform* is an operating environment, a *host* is FLUI's integration with one,
+  and *backend* names only the GPU backend and `TextInputBackend` (option 4).
+- **Where code lives.** Code two or more platforms use is the feature's model, beside its
+  platform files; code only macOS and iOS share is the feature's `apple/mod.rs`. There is no
+  cross-feature directory for shared code: the version gates are `version/`, the display registry's
+  source is `display/source.rs`, the pointer assembly is `input/assembly/`.
+- **Pure and FFI.** The pure part of a platform file (event decoding, geometry, the mode from
+  flags) is a module under `cfg(any(<os>, test))` and `forbid(unsafe_code)`, compiled and tested on
+  the Linux CI host; the FFI and the `unsafe` stay under `cfg(<os>)`. The halves are modules
+  inside the feature's platform file, not directories named after the mechanism.
+- **Completeness is a type.** `hosts/<os>.rs` is `impl Host for <Os>`, naming a type for
+  every associated position, a feature's platform type or `Absent<F>`, and a constructor. A host
+  that does not name a type for every feature does not compile; `Absent<F>` is the one way to say
+  "not on this platform" and answers `Unsupported { NotOnThisPlatform }`, so no feature keeps a
+  silent default (section 7). `HostPlatform<H>` implements `Platform` once; the seven per-OS
+  implementations with the same wiring disappear. The trait is a table, not a generic core: feature
+  models are not parameterised by it (the cost wgpu paid,
+  [gfx-rs/wgpu#5124](https://github.com/gfx-rs/wgpu/issues/5124)), `Box<dyn Platform>` erases it at
+  the boundary, and a target compiles two or three `HostPlatform<H>` instantiations, not N×M. Among the
+  projects read, a table of associated types appears exactly where hosts coexist or are chosen at
+  run time (wgpu-hal, cpal, glutin, softbuffer, Smithay, `rustc_codegen_ssa`) and not where one
+  host exists per target (std, mio, sysinfo, crossterm); FLUI's headless host coexists on every
+  target and Wayland and X11 coexist on Linux.
+- **A platform is added by one word.** A new environment adds std's name for it to the
+  vocabulary (`tvos` and `visionos` under `apple/`, `ohos` for OpenHarmony, `fuchsia`, a DRM/KMS
+  session under `linux/`; the BSDs compile the Wayland and X11 files of `linux/` under their
+  `cfg`), one file per feature and one table in `hosts/`. The table starts with `Absent<F>` in
+  every position it does not fill, so the parity rows of a new platform are read off its table,
+  and it is a ready platform when no `Absent` is left and its conformance rows ran there.
+- **Direction is checked.** `cargo heli xtask module-dag` is extended to `flui-native`: `owner/`
+  and `version/` depend on no feature; a feature's platform file depends on its feature's model, on
+  `owner/`, on `version/` and on other features' models, never on another feature's platform file,
+  on another platform, or on `hosts/`; `hosts/` depends on every feature and nothing depends on
+  it. An OS multiplexer that serves several features (the Win32 window class and its procedure,
+  the broadcast receiver, DirectManipulation's viewport callbacks, the UIKit responder chain) is
+  `owner/`'s: it dispatches through hook traits declared beside it, each feature's platform file
+  implements the hooks for the messages it owns, and `hosts/<os>.rs` registers them.
+- **Tests of models and pure parts sit beside them** as `pub(crate)` modules and run on the Linux
+  CI host. `tests/` keeps the conformance table and the recordings of native traces. The 21 files
+  that name `shared::*` today move. The Definition of Done in AGENTS.md ("through the public API
+  from `tests/`") takes this exception for the core host's models and pure parts.
 - **One call point for user code.** The application's and a window's handlers are called through
   one point in `owner/` that releases every lock and borrow first; a replaced handler is dropped
   outside any lock. The six lease helpers (`RunningSessionEndHook`, `CallbackLease`,
@@ -526,13 +574,16 @@ crates/flui-native/
   `ExitPolicyHookLease`) and the hand-written take-and-restore code of macOS, iOS and the Web go.
 - **Moves re-key the `globals` entries** (19, keyed by module path), the path-keyed xtask
   allowlists and the `include_bytes!` path of the Android dex.
+- **A capability crate has the same shape** (a model beside one file per platform) without
+  `hosts/` and `owner/`, so moving a feature between the core host and a capability crate is
+  moving a directory (ADR-0154).
 
 ### 11. Native Linux, then winit goes
 
-A native Linux backend (Wayland and X11) is built after the restructuring, on the live code of
+A native Linux host (Wayland and X11) is built after the restructuring, on the live code of
 `crates/flui-platform/src/platforms/linux` (display source, logind notices, AT-SPI adapter). The 274-line
 `LinuxPlatform` stub is deleted with it. When it runs, winit is removed and CI's Linux jobs move
-to the native backend. ADR-0082 §5 kept winit for Linux until a native backend had a second
+to the native host. ADR-0082 §5 kept winit for Linux until a native host had a second
 reason to exist; the reason is now the work itself.
 
 ### 12. The rename: two pull requests, core host first
@@ -584,7 +635,7 @@ One pull request would break `git blame` on paths that exist before and after
 ### 13. `AppLifecycleState` stays in `flui-scheduler`
 
 It is an aggregate of the UI runtime (ADR-0035 §4: lifecycle facts are per presentation, the
-runtime aggregates them). Backends publish presentation facts (`WindowExecutionState`,
+runtime aggregates them). Hosts publish presentation facts (`WindowExecutionState`,
 visibility) and name no scheduler type. Moving it to the contract would put framework policy
 (`should_render`, `should_animate`) in a Stable crate. ADR-0035 stands unchanged; the earlier
 proposal to supersede its §1 is dropped.
@@ -609,13 +660,13 @@ tree no screen reader can see, because its author did not know a feature existed
 
 The cost the feature avoids is paid anyway on Linux. The winit stand-in already links `zbus`
 (`winit-backend` at `crates/flui-platform/Cargo.toml:441-442`, enabled by `flui-app` on Linux at
-`crates/flui-app/Cargo.toml:137`), and the native Linux backend of section 11 needs D-Bus for
+`crates/flui-app/Cargo.toml:137`), and the native Linux host of section 11 needs D-Bus for
 logind notices (`crates/flui-platform/src/platforms/linux/host_notices/logind.rs`) and for portals.
 
 ### 16. Quality bar
 
 The qualities that `docs/platform-parity.md` lists under "Quality bar" are requirements of the
-platform layer, each with the gate or the run that proves it, not wishes. A backend's rows do not
+platform layer, each with the gate or the run that proves it, not wishes. A host's rows do not
 turn ✅ while one of them fails on it.
 
 - **Zero CPU when idle.** Every OS signal is a notification; a timer poll is a defect, not a
@@ -631,7 +682,7 @@ turn ✅ while one of them fails on it.
   (`requestAnimationFrame` timestamps mark the start of the frame, not its display), so its cell
   says so rather than claiming one.
 - **Colour is in the contract's vocabulary:** HDR, wide gamut and the display's colour profile (a
-  surface colour space, headroom, a profile change), not left to each backend.
+  surface colour space, headroom, a profile change), not left to each host.
 - **Sandbox-aware file access** (portals, security-scoped bookmarks, the Storage Access Framework,
   AppContainer): the layer never hands out a path the process cannot use.
 - **Secure text entry and concealed clipboard entries** are part of text input and the clipboard.
@@ -639,16 +690,16 @@ turn ✅ while one of them fails on it.
   right on Windows) and does not force focus.
 - **Conformance is executed with assistive technology** (Narrator, VoiceOver, Orca, TalkBack),
   not only by reading one control through UI Automation or AX.
-- **Native recordings replay on the headless backend** deterministically and cover IME, lifecycle,
+- **Native recordings replay on the headless host** deterministically and cover IME, lifecycle,
   preferences and displays, not only the pointer. The native journal that produces them is a
   module of the core host (`owner/journal/`), written at run time under the `driver` feature, not
   a test-only codec; `flui-protocol` declares its schema so `flui-driver` reads a recording
   without linking the core host.
-- **One way to drive an app.** A backend's conformance rows that need the OS are `flui-driver`
-  scenarios (ADR-0238): the same scenario runs on the headless backend in CI, in process, and
+- **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
+  scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
   through the driver's `os` lane on a device (`cargo xtask device <check>` is a scenario on the
   driver). An executed run, the one thing that turns a parity cell ✅, is an `os`-lane scenario on
-  that OS or a human run; the headless lane proves the framework's path, not the backend. The
+  that OS or a human run; the headless lane proves the framework's path, not the host. The
   driver's synthetic input enters the host input path in `flui-runtime` (ADR-0239), which is the
   same `WindowHandler::input` obligation ADR-0254 gives every window, so a driven app and a real
   one share one path.
@@ -663,13 +714,14 @@ directories). They add no area to it.
 
 ### Consequences
 
-- Good, because `flui::platform` loses the items that had no consumer above the backend, which
+- Good, because `flui::platform` loses the items that had no consumer above the host, which
   costs nothing before the first publication.
 - Neutral, because `flui::native::<os>` appears behind the feature `native`.
 - Good, because widget authors get the lock, ledger and generation through `flui-sdk`, and the
   contract's Stable surface shrinks by about 1,600 lines of policy and the test doubles.
-- Good, because the rules halves of the Windows, macOS, iOS and Android backends run on the Linux
-  CI host, which is what the split buys.
+- Good, because the pure parts of every platform file run on the Linux CI host, a host that
+  lacks a feature fails to compile instead of answering silently, and `Platform` is implemented
+  once.
 - Bad, because the Windows, macOS, iOS and Android FFI halves are compiled but not run by CI, so
   they need local runs.
 - Bad, because every open branch repeats each rename's commands, and a string no compiler reads (a
@@ -699,12 +751,14 @@ directories). They add no area to it.
   the contract), `globals` (re-keyed entries), `module-dag` (extended to `flui-native` as in
   section 10) and `checks`.
 - `cargo heli xtask cross-typecheck` for Windows, macOS, Android, iOS and wasm32 on every pull
-  request that touches a backend or either rename.
+  request that touches a host or either rename.
 - Before the first publication: the API-closure gate of ADR-0089 §6 and `clippy::exhaustive_enums`
   on the contract, with every closed enum carrying its reason.
-- The `forbid(unsafe_code)` of a `rules` module holds under its parent's `expect(unsafe_code)`: a
-  planted `unsafe` block in a rules module fails the build. This is unverified in the repository
-  today and is proven when the first `rules` module lands.
+- The `forbid(unsafe_code)` of a pure module holds under its parent's `expect(unsafe_code)`: a
+  planted `unsafe` block in a pure module fails the build. This is unverified in the repository
+  today and is proven when the first pure module lands. A planted host table that omits one
+  associated type fails to compile, and `rg "impl .*Platform for"` over the core host finds one
+  implementation.
 - Each rename: the map re-run on its own output changes nothing; regenerated trybuild snapshots
   are reviewed as diffs. The second rename's opening check finds no `flui-platform` or
   `flui_platform` token outside the archival roots and this ADR.
@@ -713,7 +767,7 @@ directories). They add no area to it.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not
   pass `panic_boundary` (a `--self-test` case, as the other gates have).
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked
-  done only after a run on that platform); a change to a native backend shows its run in the pull
+  done only after a run on that platform); a change to a native host shows its run in the pull
   request.
 - Review only, with no gate: the regenerated trybuild snapshots (reviewed as diffs), and a string no
   compiler reads (a nextest filter, a CI argument, a `RUST_LOG` value, an xtask path) that a branch
@@ -726,10 +780,10 @@ directories). They add no area to it.
 - Good, because the contract takes the name of the path users already write
   (`flui::platform::WindowOptions`), and the core host the name of the code that talks to the OS
   (section 1).
-- Good, because one crate for every native backend needs no public seam for the OS crates to reach
+- Good, because one crate for every native host needs no public seam for the OS crates to reach
   into the core, no `cfg` moved to a facade or feature forwarding, and no extra tier, layer,
   `globals`, reach and tooling entries (section 1).
-- Good, because the contract holds only vocabulary and traits that something above the backend
+- Good, because the contract holds only vocabulary and traits that something above the host
   uses, so no item is a promise nobody tests (section 2).
 - Good, because the closed list gives the core host a membership rule, and what the rule leaves
   out is a capability crate (section 3).
@@ -737,14 +791,15 @@ directories). They add no area to it.
   never carries an OS version (section 4).
 - Good, because `clippy::exhaustive_enums`, the API-closure gate and explicit seals make the
   stability of the contract checkable (section 5).
-- Good, because the `rules` and `ffi` halves let the compiler and `module-dag` keep single-OS
-  translation apart from the bindings, and let the rules run on the Linux CI host (section 10).
+- Good, because the feature-first layout keeps a feature's model beside its platform files, the
+  host table makes completeness a compile error and `Platform` one implementation, and the pure
+  parts run on the Linux CI host (section 10).
 - Good, because accessibility is always built and the quality bar is a set of requirements with
   gates (sections 15 and 16).
 - Bad, because it moves most of the 97,000 lines of the core host and changes import paths widely.
 - Bad, because the renames make every open branch repeat commands, and a string no compiler reads
   is found by review only.
-- Bad, because a second consumer of an OS backend's internals, or a backend with its own tier,
+- Bad, because a second consumer of an OS host's internals, or a host with its own tier,
   cadence, toolchain or licence, reopens the crate-per-OS question (see More information); if the
   boundaries of section 10 hold, extraction is a move.
 
@@ -761,15 +816,16 @@ directories). They add no area to it.
 ### 4. Name the core host `flui-os` or `flui-backend`
 
 - Bad, because "os" fits Web and headless worse; "backend" already names the GPU backend and
-  `TextInputBackend`, and each `platforms/<os>` is itself a backend.
+  `TextInputBackend`, so the layer keeps the word out of its names: a *platform* is the operating
+  environment and a *host* is FLUI's integration with it (section 10).
 
 ### 5. A crate per OS (winit, GPUI)
 
-- Good, because it serves out-of-tree backends, users of a backend's types without the event loop
+- Good, because it serves out-of-tree hosts, users of a host's types without the event loop
   and dependents that need not wait for platform crates, which is why winit and GPUI split
   (section 1).
-- Bad, because FLUI has no out-of-tree backend and one dependent, `flui-app`, which needs every
-  backend to link: a split cannot shorten that build, only overlap work (reasoned, not measured).
+- Bad, because FLUI has no out-of-tree host and one dependent, `flui-app`, which needs every
+  host to link: a split cannot shorten that build, only overlap work (reasoned, not measured).
 - Bad, because it makes public what the OS crates reach in the core (468 lines in `platforms/`
   name `crate::shared::` or `crate::traits::`).
 - Bad, because the `cfg` moves to a facade and to feature forwarding instead of disappearing (70
@@ -794,7 +850,30 @@ directories). They add no area to it.
 ### 8. Keep `shared/`, rename it `backend/`, or gather everything cross-OS into one `mapping/`
 
 - Bad, because 45% of `shared/` is single-OS code and `pub #[doc(hidden)]` hides it.
-- Bad, because `backend::` beside `platforms::` reads as "the backends".
+- Bad, because `backend::` beside `platforms::` reads as the per-platform tables themselves, and
+  the word stays out of the layer (option 4).
+- Bad, because one cross-OS directory holds version gates and a display feed that translate
+  nothing: `shared/` under another name.
+
+### 23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules
+
+- Good, because an OS specialist finds one directory.
+- Bad, because one object per OS still implements everything, so the 3,000-line `window.rs` and
+  `platform.rs` are cut by the file-length limit and not by meaning, and `Platform` is implemented
+  seven times with the same wiring.
+- Bad, because the halves are named after the test mechanism, two `events.rs` sit in sibling
+  directories, and "shell" already names the OS shell whose services `flui-system` holds.
+- Bad, because four rules say where shared code goes (`translate/`, `version/`, `displays/`,
+  `apple/`) instead of one.
+- Bad, because the completeness of a host is review, not a type.
+
+### 24. Per-platform files named by API family or mechanism
+
+- Good, because no two files share a name.
+- Bad, because `win32`, `appkit` and `uikit` are nobody's vocabulary for platform modules (std,
+  tokio and crossterm name platforms `windows`, `unix`, `apple`), and a file named after an
+  interface or a protocol version (`nstextinputclient.rs`) reads worse than the platform's name
+  plus a type.
 
 ### 9. Everything in the core host (GPUI's 76-method `Platform`)
 
@@ -818,9 +897,9 @@ directories). They add no area to it.
 - Bad, because the contract depends on `flui-foundation` (`links = "flui_train"`); section 5
   enters its own version when `cargo-semver-checks` shows two stable trains.
 
-### 13. A hidden second tier for first-party backends (Slint)
+### 13. A hidden second tier for first-party hosts (Slint)
 
-- Bad, because a third-party backend becomes second class and cannot deliver touch or IME.
+- Bad, because a third-party host becomes second class and cannot deliver touch or IME.
 
 ### 14. A synchronous `Clipboard` with an asynchronous twin (GPUI)
 
@@ -835,12 +914,12 @@ directories). They add no area to it.
 
 ### 16. `AppLifecycleState` in the contract
 
-- Bad, because it puts framework policy in a Stable crate; backends need only the presentation
+- Bad, because it puts framework policy in a Stable crate; hosts need only the presentation
   facts they already publish.
 
-### 17. Keep winit as the Linux backend
+### 17. Keep winit as the Linux host
 
-- Good, because it is the one real backend CI executes today (X11 under Xvfb, Wayland under a
+- Good, because it is the one real host CI executes today (X11 under Xvfb, Wayland under a
   headless weston) and it costs no new code.
 - Bad, because it is a stand-in by design (ADR-0082 §5's own wording) that costs 11,262 lines and
   153 `#[cfg` lines of a path no other OS takes (`crates/flui-platform/src/platforms/winit`).
@@ -864,7 +943,7 @@ directories). They add no area to it.
   accessibility (`crates/flui-app/Cargo.toml:50-56`).
 - Bad, because a product that is otherwise ready ships without accessibility when its author did
   not know the feature existed.
-- Bad, because the D-Bus cost it avoids is paid by the native Linux backend anyway (section 15).
+- Bad, because the D-Bus cost it avoids is paid by the native Linux host anyway (section 15).
 
 ### 22. Quality after the features
 
@@ -875,10 +954,10 @@ directories). They add no area to it.
 ## More information
 
 **Reopening.** Crate per OS is reconsidered if any of these holds: a second consumer of an OS
-backend's internals appears (an external embedder once its seam is designed, or a capability crate
+host's internals appears (an external embedder once its seam is designed, or a capability crate
 that needs the same window-message hooks); `cargo heli build --timings` shows the core host on
-`flui-app`'s critical path for a target with one OS half dominating it; a backend gets its own
-support tier or release cadence; a backend needs a build toolchain consumers should not install;
+`flui-app`'s critical path for a target with one OS half dominating it; a host gets its own
+support tier or release cadence; a host needs a build toolchain consumers should not install;
 a licence differs. If the boundaries of section 10 hold, extraction is a move.
 
 **Revisit when the contract can version apart.** The contract's own version (section 5) is entered

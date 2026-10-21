@@ -48,7 +48,7 @@ the question the decision answers. -->
 
 ## Decision drivers
 
-- <!-- a quality, a constraint or a force: "only flui-app may depend on the backend",
+- <!-- a quality, a constraint or a force: "only flui-app may depend on the core host",
      "the frame path is synchronous", "CI executes Linux only" -->
 - …
 

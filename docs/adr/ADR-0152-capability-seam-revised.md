@@ -52,7 +52,7 @@ their subscriptions.
 The one existing platform handle, `flui_interaction::ClipboardHandle`, is owner-local
 (`PhantomData<Rc<()>>`) and reads through a callback so it can become asynchronous (ADR-0038
 §6); web and Wayland clipboards only read asynchronously. The seam must hand out that handle, not
-a `Send + Sync` backend trait object. The synchronous `Clipboard` trait cannot be implemented
+a `Send + Sync` provider trait object. The synchronous `Clipboard` trait cannot be implemented
 honestly on those two platforms, and keeping it beside an asynchronous twin (as GPUI does) is two
 shapes for one fact.
 
@@ -282,7 +282,7 @@ is keyed by the marker, not by the implementation.
     persistence lands, and `LifecycleContext::storage` is removed. `close_guard`,
     `lifecycle_handle` and `flush_registry_in_crate` are framework capabilities and stay methods.
     `clipboard_handle` is removed when the clipboard moves to the seam.
-12. **Not inherited from ADR-0084:** its obligation for out-of-tree backends to implement
+12. **Not inherited from ADR-0084:** its obligation for out-of-tree hosts to implement
     `PlatformAccessibility` (the core host's list is closed by ADR-0151), and its haptics plan
     (haptics is a facet of the window, ADR-0210 and ADR-0254; its vocabulary stays in the contract
     with its OS paths in the core host, and it does not travel through the seam).
@@ -487,7 +487,7 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
   over (§1).
 - Bad, because its provider needs a window.
 - Bad, because it caches handles, and a cached location handle keeps GPS on.
-- Bad, because it hands out the backend trait object.
+- Bad, because it hands out the provider trait object.
 - Bad, because it leaves three methods unclassified.
 - Bad, because its `Plugin` placement forces every capability crate onto `flui-sdk`.
 

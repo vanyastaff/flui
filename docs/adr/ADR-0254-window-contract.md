@@ -60,7 +60,7 @@ snapshot with commands checked against capabilities, and none makes "unsupported
 queryable answer. winit's setters are silent no-ops with a doc line per platform
 ([rust-windowing/winit@1893565716 winit-core/src/window.rs:874-877,1155-1185](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/window.rs#L874-L877)); GPUI's default to
 no-ops ([zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:1332-1342](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L1332-L1342)); Slint hands the
-backend desired properties and warns that an incomplete two-way protocol misbehaves
+host desired properties and warns that an incomplete two-way protocol misbehaves
 ([slint-ui/slint@277e7676ce internal/core/window.rs:60-76](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/window.rs#L60-L76)); Masonry's signals return nothing and
 include a non-idempotent `ToggleMaximized` ([linebender/xilem@271a27a6d4
 masonry_core/src/app/render_root.rs:228-306](https://github.com/linebender/xilem/blob/271a27a6d4/masonry_core/src/app/render_root.rs#L228-L306)); SDL3 returns a `bool` and a thread-local error
@@ -77,7 +77,7 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
   drift from readback".
 - **Twins of commands.** `show` and `WindowShowError`, `activate` and `close` repeat `Show`,
   `Activate` and the close path, with a second spelling of "unsupported" and, for `close`, a
-  35-line doc listing five backend-defined behaviours.
+  35-line doc listing five host-defined behaviours.
 - **Admission by convention.** `apply` takes a bare `WindowCommand`; "an implementation begins with
   `admit`" is a sentence in a doc comment and a conformance row.
 - **Fourteen registrations.** 21 of the trait's 39 defaulted methods do nothing (`let _ =
@@ -95,7 +95,7 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
   (`crates/flui-platform-api/src/platform_window.rs:247-298`).
 - **Nine spellings of "not here".** Nine enums each define their own `Unsupported` or
   `Unavailable` (ADR-0151 lists them with their lines). The per-frame verbs return `()`: the Win32
-  backend logs a failed backdrop call, so an app cannot know Mica was ignored
+  host logs a failed backdrop call, so an app cannot know Mica was ignored
   (`crates/flui-platform/src/platforms/windows/window.rs:2165-2196`).
   `WindowBackgroundAppearance` carries two Windows-only variants in a Stable contract and has no
   caller.
@@ -103,12 +103,12 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
   (`platform_window.rs:899`); the per-OS extension traits sit in the host crate, which the facade
   does not publish (`crates/flui-platform/src/platforms/windows/window.rs:2518`,
   `crates/flui-platform/src/platforms/macos/window.rs:1657`; `src/lib.rs:147`).
-  `WindowEvent` and `Platform::on_window_event` have no production caller above the backend.
+  `WindowEvent` and `Platform::on_window_event` have no production caller above the host.
 
 winit pairs a `Send + Sync` window with a single handler trait and pays with blocking
 cross-thread marshalling ([rust-windowing/winit@1893565716 winit-core/src/window.rs:620-631](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/window.rs#L620-L631),
 [winit-core/src/application/mod.rs:10](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/application/mod.rs#L10)). GPUI and Slint keep the window `!Send`. Slint also keeps a
-richer hidden tier for its own backends, and a third-party backend is second class there
+richer hidden tier for its own hosts, and a third-party host is second class there
 ([slint-ui/slint@277e7676ce internal/core/window.rs:225-341](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/window.rs#L225-L341), [internal/core/platform.rs:564-575](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/platform.rs#L564-L575)).
 
 The question this record answers: what shape should a window and its host have so that each window
@@ -129,17 +129,17 @@ the thread rule is checked by the compiler instead of documented?
   compile, and `flui-app`'s `thread_local!` for the `!Send` UI runtime exists only because the
   callbacks are `Send`.
 - User code runs on the owner thread, at the owner's next turn and outside any lock or borrow of
-  the backend; a native call that re-enters the window procedure stays out of user code, and a
+  the host; a native call that re-enters the window procedure stays out of user code, and a
   panicking handler method is contained so the next obligation is still delivered.
 - "Not here" has one vocabulary shared with the capability seam (ADR-0152), and the contract never
   carries an OS version (ADR-0244).
-- No second, hidden tier: a third-party backend gets the vocabulary a first-party one gets.
+- No second, hidden tier: a third-party host gets the vocabulary a first-party one gets.
 - Sealing is reversible and opening is not; an open trait has no inert defaults, and every facet
   beyond its required core is a separate trait behind an `Option`.
-- The escape hatch is reachable, typed and total: it never panics on a window of a foreign backend.
+- The escape hatch is reachable, typed and total: it never panics on a window of a foreign host.
 - A command is checked against the capabilities the window has when it is applied, so the race
   between admission and application is a typed error and not an OS failure.
-- CI executes only Linux and wasm32 (AGENTS.md), so each native backend shows a run, and a
+- CI executes only Linux and wasm32 (AGENTS.md), so each native host shows a run, and a
   platform's row is ✅ only after one.
 
 ## Considered options
@@ -148,7 +148,7 @@ the thread rule is checked by the compiler instead of documented?
    commands, one handler passed at open, and an owner-local window with a separate surface target.
 2. Keep the getters as conveniences beside the snapshot.
 3. State delivered as events with payloads (winit).
-4. A desired state the backend converges to (Slint).
+4. A desired state the host converges to (Slint).
 5. Per-capability typed handles (`window.maximizer() -> Option<..>`).
 6. Admission by convention plus a conformance row (today).
 7. An `ApplyError` without `Superseded`.
@@ -158,7 +158,7 @@ the thread rule is checked by the compiler instead of documented?
 11. One event enum into one closure (Slint, Masonry).
 12. A pull queue (SDL).
 13. Keep the closures and make every `on_*` return `Result<(), Unsupported>`.
-14. A richer hidden tier for first-party backends (Slint's `InternalToken`).
+14. A richer hidden tier for first-party hosts (Slint's `InternalToken`).
 15. An open `Platform` and `HostWindow`.
 16. Per-OS fields in `WindowOptions` (GPUI) or untyped property keys (SDL).
 17. winit's extension traits (downcast and `unwrap`).
@@ -209,7 +209,7 @@ and its outcome is read from the next snapshot and, for a close, from the handle
 obligation (decision 4): the veto lives in `close_requested`.
 
 `reveal_after_first_frame` is not carried over as a method either. The reveal policy is data in the
-window's options, `WindowOptions`' `WindowReveal`, and the backend honours the policy the window
+window's options, `WindowOptions`' `WindowReveal`, and the host honours the policy the window
 was opened with; there is nothing for the embedder to call.
 
 Admission is a type:
@@ -219,14 +219,14 @@ Admission is a type:
   refuses a command whose capability is `Unavailable`. The token carries the capabilities revision
   it was admitted against: the revision of the capabilities in the snapshot, which moves when what
   the window honours changes and not with every state change.
-- `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A backend can no longer
+- `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A host can no longer
   receive an unvalidated command, and its `apply` has no admission arm to remember.
 - The errors are split by who can cause them. `AdmissionError` is `Unsupported(Unsupported)` or
-  `InvalidGeometry`, the caller's. `ApplyError` is `Closed`, `Superseded` or `Backend`, the
+  `InvalidGeometry`, the caller's. `ApplyError` is `Closed`, `Superseded` or `Platform`, the
   world's. `Superseded` means the capabilities revision moved between admission and application
   (commands apply at the owner's next turn, so a change can land in between): the command was
   checked against capabilities the window no longer has, and the caller admits it again. Without
-  that arm the race "admitted at revision N, applied at N+1" would reach `Backend` and could not be
+  that arm the race "admitted at revision N, applied at N+1" would reach `Platform` and could not be
   told from a failure of the OS.
 - The framework's caller of `admit` is the queue behind `WindowControl::submit` (ADR-0237
   decision 4): it admits at submit time against the snapshot's capabilities, then applies the
@@ -238,7 +238,7 @@ Admission is a type:
 **The limit, stated in the docs of `AdmittedCommand`:** the token proves that the command was
 validated against the capabilities read at admission, and `apply` compares the token's revision
 with the window's current one, so a command is not applied under capabilities it was not checked
-against. The OS still keeps the last word, and it speaks through `ApplyError::Backend` and the next
+against. The OS still keeps the last word, and it speaks through `ApplyError::Platform` and the next
 snapshot. The remaining test obligation moves from "`apply` refuses exactly when a capability is
 false" to "a window's capabilities are honest".
 
@@ -252,7 +252,7 @@ false" to "a window's capabilities are honest".
 - The backdrop becomes one cross-platform command with a capability, replacing
   `WindowBackgroundAppearance` and its Windows-only variants. A window system that cannot give the
   requested material answers `Unsupported` instead of logging, and the OS-version gate behind it
-  stays a `Since<F>` in the backend (decision 6). OS-specific materials stay reachable through
+  stays a `Since<F>` in the host (decision 6). OS-specific materials stay reachable through
   decision 8.
 - A refusal reaches the caller as `Unsupported`: through `AdmissionError::Unsupported` when the
   change is a command, directly for the verbs.
@@ -266,10 +266,10 @@ ambient slot. It has one method per obligation, not per fact, and none has a def
 | Method | Called when | Returns |
 |---|---|---|
 | `input` | A platform input event for this window arrives. The first is the capability snapshot, `PlatformInput::Capabilities` | `DispatchEventResult`, with its deferred forms for an event queued behind a reentrant callback (ADR-0207) |
-| `state_changed` | A new snapshot has been published, outside any lock or borrow of the backend | Nothing; no payload, the handler re-reads the snapshot |
+| `state_changed` | A new snapshot has been published, outside any lock or borrow of the host | Nothing; no payload, the handler re-reads the snapshot |
 | `frame_requested` | The platform wants a frame for this window | Nothing |
 | `close_requested` | The user, the OS or `WindowControl::request_close` asks the window to close | A `CloseDecision`: proceed, or veto and keep the window |
-| `closed` | The window has closed, once, after it left the backend's tracking | Nothing |
+| `closed` | The window has closed, once, after it left the host's tracking | Nothing |
 | `surface_changed` | The surface behind the window is about to become invalid, or a valid one must exist again; the two directions keep the asymmetry of ADR-0063 decision 6 | Nothing |
 
 This replaces the 14 `on_*` registrations. What goes with them:
@@ -302,14 +302,14 @@ answer, host notice, and the two queries `exit_policy` and `wake_deadline`), eac
 contract: it names `OwnerPlatform`, and only `flui-app` implements it (ADR-0151 §9). The other
 registrations are not carried over.
 `on_window_event` is deleted below. `on_keyboard_layout_change` becomes `pub(crate)` in the host
-crate with `keyboard_layout`, which nothing above the backend reads. `on_open_urls` is deleted now,
+crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted now,
 because nothing produces it, and the delivery of opened URLs and files, `opened(urls, files)`,
 joins the handler with the activation feature. System preferences are not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and
 do not change.
 
 `WindowEvent` and `Platform::on_window_event` are deleted: no production caller exists above the
-backend, and their variants duplicate the snapshot and the handler.
+host, and their variants duplicate the snapshot and the handler.
 
 ### 5. The window is owner-local; the raster thread gets a surface target
 
@@ -320,16 +320,16 @@ method stops compiling instead of being documented. The raster thread receives a
 - a `SurfaceTarget`, `Send + Sync`, implementing `HasWindowHandle + HasDisplayHandle`. The runner
   hands it to `Renderer::new`, which keeps ADR-0063's `WindowTarget` bound, in place of the window;
 - it answers rwh's `HandleError::Unavailable` once the native window is destroyed or suspended.
-  That obligation, with the per-backend rules of ADR-0063 decision 5 (Win32 identity probe,
+  That obligation, with the per-platform rules of ADR-0063 decision 5 (Win32 identity probe,
   AppKit closed flag, Android only for a terminated window, headless always), moves from the
   window to the target;
 - it has `pre_present_notify` as a required method, because the raster thread calls it once per
   presented frame, immediately before the present (an inert default of `PlatformWindow` today,
   `crates/flui-platform-api/src/platform_window.rs:311`; on Wayland it arms the surface's frame
-  callback, which paces `request_redraw` by the compositor). A backend without the concept
-  returns at once, and its documentation says so; the absence is stated by the backend and not
+  callback, which paces `request_redraw` by the compositor). A host without the concept
+  returns at once, and its documentation says so; the absence is stated by the host and not
   inherited from a default;
-- it carries the only `unsafe impl Send` a backend needs, with a `SAFETY` comment that names the
+- it carries the only `unsafe impl Send` a host needs, with a `SAFETY` comment that names the
   invariant (what the target holds and how liveness is checked), not the operation.
 
 ### 6. One vocabulary for "not here"
@@ -348,7 +348,7 @@ seam.
   a boolean cannot. A command is refused exactly when its capability is `Unavailable`.
 - **OS versions never appear in the contract.** `NotOnThisDevice` names no version, and no
   accessor orders the running OS. The gate that produced it stays a `Since<F>` proof in the
-  backend (ADR-0244), so `if sdk >= 29` cannot be written outside FLUI.
+  host (ADR-0244), so `if sdk >= 29` cannot be written outside FLUI.
 - The surface target's answer stays rwh's `HandleError::Unavailable`: it is that crate's contract,
   not an FLUI `Unsupported`.
 
@@ -364,8 +364,8 @@ seam.
   the required core is a separate trait reached through an `Option` handle (as `text_input`,
   `haptics`, `system_chrome` and `drag_source` already are), so adding a facet never breaks an
   implementor.
-- **No second, hidden tier.** `PlatformInput` carries pointer, key, IME and drag to every backend
-  alike. First-party backends get no richer vocabulary than the one a third party sees.
+- **No second, hidden tier.** `PlatformInput` carries pointer, key, IME and drag to every host
+  alike. First-party hosts get no richer vocabulary than the one a third party sees.
 
 ### 8. The escape hatch is published, typed and total
 
@@ -374,7 +374,7 @@ seam.
 - Per-OS extension modules are published by the facade as `flui::native::<os>`, behind `cfg` and a
   `native` feature, as an Evolving surface (ADR-0089 decision 5). Their methods take and return
   FLUI types only, answer `Option` or `Unsupported`, and never panic on a window of a foreign
-  backend (winit `unwrap`s its downcast: [rust-windowing/winit@1893565716
+  host (winit `unwrap`s its downcast: [rust-windowing/winit@1893565716
   winit-win32/src/lib.rs:355-358](https://github.com/rust-windowing/winit/blob/1893565716/winit-win32/src/lib.rs#L355-L358)). Raw window and display handles leave only through the
   `raw-window-handle` traits. OS types that are public in the host crate's paths become
   `pub(crate)`.
@@ -395,7 +395,7 @@ seam.
   synchronous `Handled`, Slint a two-value `Accepted` or `Rejected` ([linebender/xilem@271a27a6d4
   masonry_core/src/app/render_root.rs:548](https://github.com/linebender/xilem/blob/271a27a6d4/masonry_core/src/app/render_root.rs#L548); [slint-ui/slint@277e7676ce
   internal/core/platform.rs:324-333](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/platform.rs#L324-L333)).
-- **`Since<F>` gates inside the backend** (ADR-0244). winit has no version mechanism and GPUI
+- **`Since<F>` gates inside the host** (ADR-0244). winit has no version mechanism and GPUI
   writes "iOS 26+" in a comment and returns zero where it cannot say ([zed-industries/zed@fae8a35482
   crates/gpui/src/platform.rs:1169-1173](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L1169-L1173)).
 - **`HasWindowHandle` and `HasDisplayHandle` as the only upstream traits in the contract**, and the
@@ -403,16 +403,16 @@ seam.
 
 ### Consequences
 
-- Bad, because every backend window changes: it publishes a larger snapshot, takes `apply` with an
+- Bad, because every host window changes: it publishes a larger snapshot, takes `apply` with an
   `AdmittedCommand`, calls one handler, and hands out a surface target; `Platform` and `HostWindow`
-  change with them. CI executes only Linux and wasm32 (AGENTS.md), so each native backend's change
+  change with them. CI executes only Linux and wasm32 (AGENTS.md), so each native host's change
   shows a run on its platform, and `docs/platform-parity.md` flips a cell only after one. Win32's
   live-resize path must still reach `state_changed` from inside the OS callback.
 - Bad, because the `flui-app` runners change: the 14 registrations, repeated across seven runner
   files (some kinds at five to seven sites), become one handler per runner.
 - Good, because the `thread_local!` that holds the `!Send` UI runtime loses its stated reason, the
   `Send` callback surface.
-- Bad, because 15 implementors of `PlatformWindow` outside the backends (13 files, in
+- Bad, because 15 implementors of `PlatformWindow` outside the hosts (13 files, in
   `flui-interaction`, `flui-runtime`, `flui-app` and `flui-testing`; counted with
   `rg '^\s*(unsafe )?impl[^/]*PlatformWindow for'`) implement the new shape.
 - Good, because those test doubles also shed the `Mutex` and `Arc` that `Send + Sync` forced on
@@ -443,11 +443,11 @@ seam.
 ### Confirmation
 
 Written through the public API, from each crate's `tests/`, and each fails on the shape this
-record removes. Backend rows run through the conformance suite in `flui-testing` (ADR-0215): the
-headless and winit backends execute in CI, and a Windows, macOS, iOS or Android row is ✅ in
+record removes. Host rows run through the conformance suite in `flui-testing` (ADR-0215): the
+headless and winit hosts execute in CI, and a Windows, macOS, iOS or Android row is ✅ in
 `docs/platform-parity.md` only after a run on that platform.
 
-- `window_capabilities_are_honest`: for every backend, each command whose capability is not
+- `window_capabilities_are_honest`: for every host, each command whose capability is not
   `Unavailable` takes effect or is clamped, as the next snapshot shows, and each one whose
   capability is `Unavailable` is refused by `admit`. A capability change publishes a new revision
   and one `state_changed`.
@@ -456,7 +456,7 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
   neither does passing a bare `WindowCommand` to `apply`.
 - `a_command_admitted_before_a_capability_change_is_superseded`: a command admitted at one
   capabilities revision and applied after a capability change answers `ApplyError::Superseded`,
-  not `Backend`, and admitting it again either applies it or is refused by `admit`.
+  not `Platform`, and admitting it again either applies it or is refused by `admit`.
 - `submit_reports_a_refusal_and_a_closed_window`: `WindowControl::submit` answers
   `SubmitError::Admission` for a command the capabilities refuse and `SubmitError::Closed` once the
   window has closed.
@@ -465,7 +465,7 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
   `state_changed`, an equal sample publishes neither, and a non-drawable report publishes nothing.
 - `window_handler_obligation_table`: one row per handler method. `input` returns the deferred forms
   for an event queued behind a reentrant callback and delivers the capability snapshot first;
-  `state_changed` is payload-free and runs outside backend locks; `close_requested` veto keeps the
+  `state_changed` is payload-free and runs outside host locks; `close_requested` veto keeps the
   window open, proceed closes it; `closed` runs once; `surface_changed` releases before the handle
   dies and rebuilds unconditionally. A panicking method is contained and the next obligation is
   still delivered.
@@ -479,17 +479,17 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
   `HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`, and a conformance row that after
   `closed` it answers `HandleError::Unavailable` (Android: only for a terminated window), and that
   `pre_present_notify` is called once per presented frame, before the present, and returns at once
-  on a backend without the concept.
+  on a host without the concept.
 - `per_frame_verbs_report_unsupported_exactly_when_unavailable`: rows for the frame-rate hint,
   input regions and the backdrop, including a Windows build below the backdrop gate (injected
   version, as in ADR-0244's `floor_refusal_contract`) answering `Unsupported` with
   `NotOnThisDevice`.
-- `unsupported_reaches_the_caller_unchanged`: a reason produced by a backend arrives intact through
+- `unsupported_reaches_the_caller_unchanged`: a reason produced by a host arrives intact through
   admission, the verbs and `CursorError`.
 - `platform_and_host_window_are_sealed` (compile-fail): an outside `impl Platform` or `impl
   HostWindow` fails to compile, while the `PlatformWindow` doctest still builds a window with no
-  backend in scope.
-- `native_extensions_answer_none_on_a_foreign_backend`: on the headless backend and on a test
+  host in scope.
+- `native_extensions_answer_none_on_a_foreign_host`: on the headless host and on a test
   double, every `flui::native::<os>` accessor answers `None` or `Unsupported` and none panics.
 - Review only, with no test or gate named: that the `SAFETY` comment on the surface target's
   `unsafe impl Send` names the invariant and not the operation (decision 5), and that the docs of
@@ -501,7 +501,7 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 
 - Good, because `WindowState` is the only source of window facts, and a consumer that needs to
   know which fact changed compares the new snapshot with the last one (decision 1).
-- Good, because admission is a type: a backend cannot receive an unvalidated command, the errors
+- Good, because admission is a type: a host cannot receive an unvalidated command, the errors
   are split by who can cause them, and `Superseded` names the race between admission and
   application (decision 2).
 - Good, because verbs the window cannot always honour answer in the same type, `Unsupported`,
@@ -512,12 +512,12 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 - Good, because the window is `!Send + !Sync` and the raster thread gets a separate `SurfaceTarget`,
   so a wrong-thread call stops compiling (decision 5).
 - Good, because sealing `Platform` and `HostWindow` is reversible, `PlatformWindow` stays open with
-  no inert defaults, and no second tier exists for first-party backends (decision 7).
+  no inert defaults, and no second tier exists for first-party hosts (decision 7).
 - Good, because the escape hatch is published, typed and total (decision 8).
 - Good, because it keeps what is better than the references: the triad and its revision rule,
   owner-turn application of commands, `OwnerPlatform` as a `!Send` proof, `DispatchEventResult`,
-  and `Since<F>` gates inside the backend (decision 9).
-- Bad, because every backend, `flui-app` runner, test double and `Renderer::new` call site changes
+  and `Since<F>` gates inside the host (decision 9).
+- Bad, because every host, `flui-app` runner, test double and `Renderer::new` call site changes
   (see Consequences).
 - Bad, because the admission token proves only that a command was validated against the
   capabilities read at admission; the OS keeps the last word, and the remaining test obligation is
@@ -532,7 +532,7 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 
 - Bad, because it is the same drift: a consumer reassembles state from events.
 
-### 4. A desired state the backend converges to (Slint)
+### 4. A desired state the host converges to (Slint)
 
 - Bad, because it conflicts with changes the user or the OS makes and needs a conflict policy;
   ADR-0237 rejected it.
@@ -543,13 +543,13 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 
 ### 6. Admission by convention plus a conformance row (today)
 
-- Bad, because a backend can receive an unvalidated command, and its `apply` carries two arms it
+- Bad, because a host can receive an unvalidated command, and its `apply` carries two arms it
   must remember.
 
 ### 7. An `ApplyError` without `Superseded`
 
 - Bad, because the race "admitted at one capabilities revision, applied at the next" lands in
-  `Backend` and cannot be told from a failure of the OS; the caller could not know that admitting
+  `Platform` and cannot be told from a failure of the OS; the caller could not know that admitting
   again is the answer.
 
 ### 8. Per-frame verbs and the backdrop through the command queue
@@ -584,9 +584,9 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 - Good, because it fixes the inert defaults.
 - Bad, because it fixes nothing else: the `Send` bound, the registration gap and the N slots stay.
 
-### 14. A richer hidden tier for first-party backends (Slint's `InternalToken`)
+### 14. A richer hidden tier for first-party hosts (Slint's `InternalToken`)
 
-- Bad, because a third-party backend becomes second class and cannot deliver touch or IME.
+- Bad, because a third-party host becomes second class and cannot deliver touch or IME.
 
 ### 15. An open `Platform` and `HostWindow`
 
@@ -600,7 +600,7 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 
 ### 17. winit's extension traits (downcast and `unwrap`)
 
-- Bad, because they panic on a window of a foreign backend.
+- Bad, because they panic on a window of a foreign host.
 
 ### 18. An OS-version query in the contract
 

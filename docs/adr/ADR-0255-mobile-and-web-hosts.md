@@ -67,7 +67,7 @@ installing `platforms;android-36` silently turns on targetSdk 36 behaviour: no `
 predictive-back animations by default, edge-to-edge without an opt-out
 ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16)).
 
-**iOS.** The backend is already Rust over `UIApplicationMain` and UIScene: `FluiAppDelegate`,
+**iOS.** The host is already Rust over `UIApplicationMain` and UIScene: `FluiAppDelegate`,
 `FluiSceneDelegate`, `FluiView` and `FluiViewController` are `objc2::define_class!` classes, and
 the generated `Info.plist` carries the scene manifest that Apple's
 [TN3187](https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle)
@@ -103,7 +103,7 @@ object the system calls, and how are the non-Rust parts of those hosts built and
   real events (ADR-0247 item 5, ADR-0249).
 - No process-global state: the `JavaVM` and Activity pointers live in the provider context, never in
   a `static` (ADR-0097).
-- The framework's iOS backend stays Swift-free and Xcode-free; Swift appears only inside capability
+- The framework's iOS host stays Swift-free and Xcode-free; Swift appears only inside capability
   crates that need a Swift-only framework.
 - CJK composition needs marked text, which `UITextInput` carries and `UIKeyInput` cannot.
 - A browser exposes no signal that assistive technology is present, and `EditContext` is
@@ -128,7 +128,7 @@ object the system calls, and how are the non-Rust parts of those hosts built and
 5. Android: `accesskit_android::InjectingAdapter`.
 6. Android: the dex built by a `build.rs`.
 7. iOS: a Swift or Objective-C shim (Flutter's, Compose's and Tauri's shape).
-8. iOS: winit's backend.
+8. iOS: winit's UIKit implementation.
 9. iOS: making `FluiView` the first responder for text.
 10. iOS: registering objc2 protocol objects from capability crates.
 11. Web: `EditContext` alone.
@@ -164,7 +164,7 @@ text-input paths its platform requires.
    following, none of which needs the Activity subclass:
    - **Accessibility.** An `AccessibilityDelegate` on the view, driven by
      `accesskit_android::Adapter`, the low-level core, behind a
-     `flui_semantics::PlatformAccessibility` implementation in the backend (the contract already has
+     `flui_semantics::PlatformAccessibility` implementation in the host (the contract already has
      publish, is-active and activation and action listeners:
      `crates/flui-semantics/src/platform.rs:66-95`). FLUI writes the delegate and its
      provider in `FluiView`, about 70 lines. TalkBack's touch exploration arrives as hover events
@@ -328,11 +328,11 @@ text-input paths its platform requires.
 15. **Swift appears only inside capability crates.** A capability that needs a Swift-only framework
     (App Intents, ActivityKit, SwiftUI-only API) ships a Swift package under the crate's `ios/`
     directory, and `flui-cli` builds it only for an app that depends on that crate. The framework's
-    own iOS backend stays Swift-free.
+    own iOS host stays Swift-free.
 
 ### Web
 
-16. **Rust owns the DOM; the page is a mount point and a loader.** The backend creates one root
+16. **Rust owns the DOM; the page is a mount point and a loader.** The host creates one root
     element and puts into it, in this order, the canvas, a text-input host and a semantics host. The
     semantics host is last, so the root's hit-test order leaves any platform view reachable.
     `flui-cli` generates the page from a template: `<base href>` for hosting under a sub-path,
@@ -557,7 +557,7 @@ before any native is bound. The support claim for a platform is the run.
 - Bad, because the reason Flutter and Compose write theirs in Objective-C, that Dart and
   Kotlin/Native cannot subclass `UIView`, does not apply to Rust.
 
-### 8. iOS: winit's backend
+### 8. iOS: winit's UIKit implementation
 
 - Bad, because it implements `UIKeyInput` only, so it cannot compose marked text.
 - Bad, because it has no UIScene support, which TN3187 will require.

@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; previously major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating; before that minor: entry 2 records the semantics identifier the mobile and Web adapters must map)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; previously minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -18,7 +18,7 @@ request.
 | 2 | [No accessibility on mobile and the Web](#2-no-accessibility-on-mobile-and-the-web) | iOS, Android, Web; desktop | Blind and low-vision users; anyone who must meet accessibility law |
 | 3 | [No system back](#3-no-system-back) | Android, iOS, Web | Every multi-screen mobile or web app |
 | 4 | [Most implemented rows never ran on their environment](#4-most-implemented-rows-never-ran-on-their-environment) | all | Every claim of support |
-| 5 | [Native Linux backend (Wayland and X11)](#5-native-linux-backend-wayland-and-x11) | Wayland, X11 | Linux users |
+| 5 | [Native Linux host (Wayland and X11)](#5-native-linux-host-wayland-and-x11) | Wayland, X11 | Linux users |
 | 6 | [Clipboard is broken on three environments](#6-clipboard-is-broken-on-three-environments) | Android, Wayland, Web; all for rich | Every app with copy and paste |
 | 7 | [File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere](#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere) | all | Every document app; any app with a link |
 | 8 | [No native drag and drop](#8-no-native-drag-and-drop) | all | Document, media and file-manager apps |
@@ -52,6 +52,9 @@ request.
 | 36 | [Power-aware pacing and throttling](#36-power-aware-pacing-and-throttling) | all | Every user on battery or a thermally limited device |
 | 37 | [Locale edge: layout direction, per-app language, system fonts and fallback](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback) | all | Apps in right-to-left or non-Latin languages; users who set a language for one app |
 | 38 | [Accessibility bridge fidelity (properties and announcements)](#38-accessibility-bridge-fidelity-properties-and-announcements) | desktop, iOS, Android, Web | Screen-reader users |
+| 39 | [Add-to-app: no FLUI view inside an existing native app](#39-add-to-app-no-flui-view-inside-an-existing-native-app) | all | Teams adding FLUI to an app they already ship |
+| 40 | [No gamepad, and no D-pad run on a TV](#40-no-gamepad-and-no-d-pad-run-on-a-tv) | all | TV, console-style and Steam Deck users; games |
+| 41 | [No rotary input](#41-no-rotary-input) | Windows, Android; Apple later | Surface Dial and Wear OS users |
 
 ## Entries
 
@@ -95,11 +98,11 @@ request.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)
   - the macOS and iOS window lifecycle (window state and commands, sleep, lock, session end, memory pressure; [#1736](https://github.com/vanyastaff/flui/issues/1736))
-  - a window moved between two monitors on every backend but Windows
+  - a window moved between two monitors on every host but Windows
   - unplugging a monitor on Windows
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
-### 5. Native Linux backend (Wayland and X11)
+### 5. Native Linux host (Wayland and X11)
 
 > **Environments:** Wayland, X11 · **Who it hurts:** Linux users · **Parity:** [Summary](platform-parity.md#summary)
 
@@ -107,6 +110,7 @@ request.
 - winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch and no window bounds.
 - winit reports no event when a window crosses to another Wayland output of equal scale (the `wl_surface.enter` events belong to its connection).
 - FLUI asks every Wayland window's monitor again when the loop goes idle, never run with a window moved between two outputs.
+- Under Hyprland (Omarchy's compositor) the host takes the decoration the compositor chooses through `zxdg_decoration_manager_v1` (no title bar of its own), presents an alpha surface so the compositor's blur applies, and scales through `wp_fractional_scale_v1` and `wp_viewporter`; none of it exists, and winit draws its own decorations there.
 
 ### 6. Clipboard is broken on three environments
 
@@ -121,14 +125,14 @@ request.
 
 > **Environments:** all · **Who it hurts:** Every document app; any app with a link · **Parity:** [System services](platform-parity.md#system-services)
 
-- Every non-Windows backend answers a file dialog with "cancelled".
+- Every non-Windows host answers a file dialog with "cancelled".
 - `open_url` is real on Windows and Web only, and nothing calls it.
 
 ### 8. No native drag and drop
 
 > **Environments:** all · **Who it hurts:** Document, media and file-manager apps · **Parity:** [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop)
 
-- The core runs: in-window sessions, sessions that reach the other windows of their runtime on the source's capture where the backend places its windows, escalation to an OS session, identity and delivery to receivers in `flui-runtime`, exercised headless (ADR-0211). The `Draggable` and `DropTarget` widgets run on it headless, with the cursor, Escape and the keyboard and assistive cut, copy and paste.
+- The core runs: in-window sessions, sessions that reach the other windows of their runtime on the source's capture where the host places its windows, escalation to an OS session, identity and delivery to receivers in `flui-runtime`, exercised headless (ADR-0211). The `Draggable` and `DropTarget` widgets run on it headless, with the cursor, Escape and the keyboard and assistive cut, copy and paste.
 - Windows has OLE as both target and source (`IDropTarget` per window, `DoDragDrop` started on the owner window's next turn, frames for every window while its loop rests), run only within one process (`ole_drag_and_drop_on_real_windows`), never with Explorer, another app, a held mouse button, pen or touch.
 - The Web takes and starts HTML drags (a drag starts only from a press the runtime lifted before the browser's threshold), run in headless Chrome with constructed events.
 - Android takes and starts drags on `FluiView` (ADR-0247): on a Galaxy S21 a drag the probe started dropped its text on its own window, and one crossed into Chrome, which declined it; no drag from or into another app has completed.
@@ -139,7 +143,7 @@ request.
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
 
-- **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop backend ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
+- **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
 - **Missing:** macOS carries them out and reads them back type-checked only, never run ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
 - X11 ran only on an Xvfb server with the test standing in for the window manager.
 - winit cannot read a title back on Linux, so the snapshot holds the one last set.
@@ -245,7 +249,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no backend checks them at start.
+- The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no host checks them at start.
 - Android packages API 23 while rendering only through Vulkan (API 24).
 - iOS and macOS bundles inherit whatever deployment target the build had.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
@@ -360,7 +364,7 @@ request.
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - Honest absence: nine spellings of "not here" exist today, and the Android clipboard is an in-process mock (ADR-0152, ADR-0254). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
-- Replay: pointer, key and wheel traces replay on the headless backend; IME, lifecycle, preference and display recordings do not exist.
+- Replay: pointer, key and wheel traces replay on the headless host; IME, lifecycle, preference and display recordings do not exist.
 - The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
 
@@ -391,6 +395,33 @@ request.
 - The parity rows "Properties (value, hint, description, state)" and "Announcements and live regions" are ❔ on the desktop adapters and ❌ where there is no adapter at all.
 - Each needs a check with the real assistive technology on each OS that reads role, name, value, hint, state, actions, focus order and announcements; a harness that registers AT-SPI listeners and matches only strings carrying a nonce keeps any other source from producing a hit.
 
+### 39. Add-to-app: no FLUI view inside an existing native app
+
+> **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship, one screen at a time · **Parity:** [Windows](platform-parity.md#windows)
+
+- FLUI owns the process: the host creates the window and runs the loop (`FluiActivity` on Android, `UIApplicationMain` on iOS, the Win32 pump, `NSApplication`, the root element it creates on the Web). A view placed into a window the app already owns — a child `HWND`, an `NSView`, a `UIView` under a foreign view controller, an Android `View` in a foreign `Activity`, an element of a page the app renders — has no host mode, so the only way in is to hand FLUI the whole window.
+- What exists: the renderer draws into a `SurfaceTarget` (`HasWindowHandle + HasDisplayHandle`, [ADR-0254](adr/ADR-0254-window-contract.md)), so the surface can be foreign; input, focus, IME, accessibility and lifecycle still assume the host's own window procedure, responder chain or `Activity`.
+- Other frameworks ship it as their enterprise path: Flutter's add-to-app ([Flutter documentation](https://docs.flutter.dev/add-to-app)) with `FlutterEngine` and `FlutterViewController` or `FlutterFragment`, Compose's `ComposeView` in a View hierarchy, SwiftUI's `UIHostingController`, Qt's `QWidget::createWindowContainer`.
+- The design question is who owns the loop: an embedded view is driven by the app's loop and receives events from the app's window, so the owner thread's one call point for user code ([ADR-0151 §10](adr/ADR-0151-platform-layer-boundary-and-names.md)) has to run inside a foreign callback, and ADR-0151 names an external embedder as the first reason to reopen the crate split.
+- The check is one screen of FLUI inside a foreign app on each OS: keyboard focus moving into and out of the view, IME and the assistive technology reaching it, and the app's own lifecycle pausing and resuming it.
+
+### 40. No gamepad, and no D-pad run on a TV
+
+> **Environments:** all · **Who it hurts:** TV, console-style and Steam Deck users; games and media apps · **Parity:** [Input](platform-parity.md#input)
+
+- No gamepad in the contract or on any host: no buttons, sticks, triggers or rumble from XInput or GameInput on Windows, `GCController` on macOS and iOS (and tvOS's remote), Android's `SOURCE_GAMEPAD` and `SOURCE_JOYSTICK` axes (`AXIS_X`, `AXIS_HAT_X`, `KEYCODE_BUTTON_*`), the Web Gamepad API (polled through `navigator.getGamepads()`, with only connect and disconnect events) or evdev on Linux (Wayland has no gamepad protocol; a Steam Deck under gamescope has a controller as its only input).
+- Android's D-pad arrives: the `ui_events` key table maps `KEYCODE_DPAD_UP`, `DOWN`, `LEFT` and `RIGHT` to the arrow keys and `KEYCODE_DPAD_CENTER` to Enter, and `DefaultFocusTraversal` binds unmodified arrows to `DirectionalFocusIntent`, so a remote can move focus; it never ran on Android TV or Fire OS, and a TV app also needs the `leanback` feature declaration and a banner that the Android packaging does not write.
+- Without a pointer (Android TV, tvOS, a console) focus navigation is the whole input model: every widget must be reachable by direction with a visible focus ring, which no run has shown.
+- The check is a remote on an Android TV device and a controller on Windows and a Steam Deck: every control of the interaction gallery reached by direction and activated by the centre button, and a controller's sticks and buttons recorded and replayed.
+
+### 41. No rotary input
+
+> **Environments:** Windows, Android; Apple later · **Who it hurts:** Surface Dial and Wear OS users; visionOS and watchOS when they become hosts · **Parity:** [Input](platform-parity.md#input)
+
+- No rotary vocabulary in the contract: a rotation in detents from a device of its own arrives nowhere — the Surface Dial through `RadialController` on Windows (per window, with the tool menu the OS draws), Wear OS's bezel or crown as a `MotionEvent` with `AXIS_SCROLL` from `SOURCE_ROTARY_ENCODER` ([Android documentation](https://developer.android.com/training/wearables/user-input/rotary-input)), the Digital Crown on watchOS and visionOS.
+- Wear OS is a form factor of the Android host, not a column: its lists are expected to scroll by rotary input, so a watch app without it fails review on the first screen.
+- The check is a Surface Dial on Windows and the rotary input of a Wear OS emulator turning a scroll view by detents, recorded and replayed.
+
 ## Revision history
 
 <details>
@@ -403,7 +434,7 @@ request.
 | 2026-10-16 | minor | Gap 16: Windows precision-touchpad scrolling and pinch implemented (DirectManipulation); no touchpad run yet |
 | 2026-10-17 | minor | Gap 9: Windows OLE drag and drop as target and source; run within one process only |
 | 2026-10-17 | minor | Gap 3: gesture alternatives keep a control path while adapters do not route custom actions |
-| 2026-10-17 | minor | Gap 9: drags between the windows of one runtime stay on the source's capture where the backend places its windows |
+| 2026-10-17 | minor | Gap 9: drags between the windows of one runtime stay on the source's capture where the host places its windows |
 | 2026-10-17 | minor | Gap 16: Windows injected input records golden native recordings; the touchpad's must come from hardware |
 | 2026-10-17 | minor | Gap 9: the `Draggable` and `DropTarget` widgets on the drag sessions, run headless |
 | 2026-10-17 | minor | Gaps 1, 16, 17: `device android-input` on a Galaxy S21 runs touch, a `uinput` pen and touchpad, gesture exclusion, preferences and haptics; Android IME, drag and drop and handwriting wait for a Java side |
@@ -411,14 +442,14 @@ request.
 | 2026-10-17 | minor | Gaps 9 and 17: the Web's drags and Vibration API ran with trusted input in headless Chrome |
 | 2026-10-17 | minor | Gap 1: the Web serves text fields through `EditContext` or a hidden textarea, run through Chrome's input-method path |
 | 2026-10-17 | minor | Gaps 1 and 9: Android IME and drag and drop through `FluiView` (ADR-0247), run on a Galaxy S21 with Samsung Keyboard and a drag within the app |
-| 2026-10-17 | minor | Dark mode leaves the list: every backend reads the user's theme and reports its changes; its live runs belong to "never ran" |
-| 2026-10-17 | minor | Storage leaves the list: `with_storage_dir` gives widgets storage on every backend, run on Windows and Android |
+| 2026-10-17 | minor | Dark mode leaves the list: every host reads the user's theme and reports its changes; its live runs belong to "never ran" |
+| 2026-10-17 | minor | Storage leaves the list: `with_storage_dir` gives widgets storage on every host, run on Windows and Android |
 | 2026-10-18 | minor | Displays and frame pacing narrows: Windows reports its refresh rate, the window's display and display changes, run live |
 | 2026-10-18 | minor | Displays and frame pacing narrows again: macOS and iOS read displays from the OS, deliver changes and (iOS) request and measure ProMotion; type-checked only, no Apple code runs in CI |
 | 2026-10-18 | minor | Displays and frame pacing narrows: the Web estimates its refresh period, follows pixel-ratio and screen changes and lists screens when access is already granted, run live in Chrome |
-| 2026-10-18 | minor | Displays and frame pacing narrows: Android reads its displays and refresh rate through JNI and requests the highest rate while animating or touched, run live on a Galaxy S21; what remains is Wayland and X11 (with the native Linux backend) and the Apple backends not run |
-| 2026-10-18 | minor | Displays and frame pacing narrows: Linux reads the outputs and refresh rates from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) and winit windows name their display by native number; X11 ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server); what remains is a live Wayland change, the Apple backends not run and two-monitor moves not run; the same-scale Wayland move joins the native Linux backend entry |
-| 2026-10-18 | minor | Displays and frame pacing leaves the list: every backend reads its displays and refresh rate and delivers changes, and a second monitor connected live on Windows was told apart by id, followed by the window and by live rate changes. What remains is runs, not code (the Apple backends, a two-monitor move off Windows, a Windows monitor disconnect), so they join "Most implemented rows never ran on their environment" (entry 4); entries 18 to 22 are renumbered 17 to 21 |
+| 2026-10-18 | minor | Displays and frame pacing narrows: Android reads its displays and refresh rate through JNI and requests the highest rate while animating or touched, run live on a Galaxy S21; what remains is Wayland and X11 (with the native Linux host) and the Apple hosts not run |
+| 2026-10-18 | minor | Displays and frame pacing narrows: Linux reads the outputs and refresh rates from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) and winit windows name their display by native number; X11 ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server); what remains is a live Wayland change, the Apple hosts not run and two-monitor moves not run; the same-scale Wayland move joins the native Linux host entry |
+| 2026-10-18 | minor | Displays and frame pacing leaves the list: every host reads its displays and refresh rate and delivers changes, and a second monitor connected live on Windows was told apart by id, followed by the window and by live rate changes. What remains is runs, not code (the Apple hosts, a two-monitor move off Windows, a Windows monitor disconnect), so they join "Most implemented rows never ran on their environment" (entry 4); entries 18 to 22 are renumbered 17 to 21 |
 | 2026-10-18 | minor | The live Wayland output change ran under WSLg (an output grown, a second one added); it leaves the display runs still owed in entry 4 |
 | 2026-10-18 | minor | Gaps 1 and 16: `device android-gallery` runs the interaction gallery's widgets on a Galaxy S21 through the development agent; an editor action commits the keyboard's composition before its Enter |
 | 2026-10-18 | minor | The interaction and display work merged: Dark mode, Storage and Displays left the list, so the interaction entries renumber (text input 1, accessibility 2, drag and drop 8, preferences 14, pointer 15, mobile system UI 16); haptic frame deadlines read the presentation's refresh period from the display snapshot |
@@ -433,5 +464,6 @@ request.
 | 2026-10-20 | major | Entries 23–31 join from the platform-layer quality bar: preferences polled on macOS and Android, no presentation feedback, no HDR or colour management, no sandbox-aware file access, no secure text entry or concealed clipboard, partial latency modes, unaudited distribution, activation without OS focus rules, panic containment not gated. By impact 23 belongs beside 4 and 26 beside 7; the numbers are appended so earlier references stay valid |
 | 2026-10-20 | minor | Restructured for reading: a summary table, one section per entry, the hours column removed |
 | 2026-10-20 | minor | Entries 32–38 join from the quality-bar research: live resize unaudited and unscheduled, no present-mode, queue-depth, VRR or tearing control, launch handoff on mobile and the Web, quality-bar partials with no entry, power-aware pacing, the locale edge, accessibility bridge fidelity; entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30 gain a bullet each (client queries and session survival, the locale rows, entitlement manifests, secrets in diagnostics, timestamp conversion, and the corrections to the presentation-feedback, HDR and activation evidence) |
+| 2026-10-21 | minor | Entries 39–41 join: add-to-app embedding, gamepad and D-pad, rotary input |
 
 </details>

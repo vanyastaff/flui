@@ -44,7 +44,7 @@ parties no way to add one.
 Other frameworks agree: the core owns what every application needs; an optional service is its
 own package with its own OS code (Flutter federated plugins, Tauri plugins, Bevy plugins, Slint
 backends). Flutter's per-OS federation exists because Dart has no conditional compilation; in
-Rust one crate with `cfg`-gated backends does that job, and a replacement implementation is a
+Rust one crate with `cfg`-gated platform code does that job, and a replacement implementation is a
 provider override through the seam. What federation also does is put the interface where the
 consumers are and the implementation where the OS code is; that part is dependency inversion, and
 FLUI keeps it where framework widgets need a handle (decision 3).
@@ -138,7 +138,7 @@ grows with the number of crates.
 - is released with the train while the contract rides it (ADR-0153), and may set its own version
   once the contract has one;
 - registers through the seam with a `Plugin` and ships a simulated provider and a conformance
-  table that every backend it claims must pass (decision 10);
+  table that every platform it claims must pass (decision 10);
 - keeps no process-global state (ADR-0152). ADR-0097's gate scans the workspace, so it enforces
   the rule for crates in the repository; for any other crate it is a stated requirement.
 
@@ -160,7 +160,7 @@ exactly as ADR-0152 does for the clipboard, and only the OS provider lives in th
 (or in `flui-app`, the composition root, when the service is on the core host's closed list: the
 marker sits above the core host, which cannot name it). The provider crate depends on the crate
 that owns the marker; nothing depends back on it. This applies to the few capabilities with
-in-framework consumers; it needs no per-OS package, because `cfg` still selects backends. Haptics
+in-framework consumers; it needs no per-OS package, because `cfg` still selects the platform code. Haptics
 is not among them: it is a facet of the window (ADR-0210, ADR-0254) and does not go through the
 seam.
 
@@ -274,9 +274,13 @@ keys, Electron, Robius) is how applications ship without a usage string.
 
 ### 8. `flui add <capability>`
 
-Capability crates are not part of the facade; they are found through the documentation and the
-command-line tool. `flui add <capability>` runs `cargo add`, writes the declarations (decision 7)
-and shows the registration snippet, as `tauri add` does ([tauri-apps/tauri@9318ab84b8
+Capability crates reach an application two ways. The facade re-exports each official capability
+crate behind a feature of the same name, under one namespace: `flui = { features = ["location",
+"bluetooth"] }` gives `flui::services::location::*`, the way `material` and `cupertino` already
+sit behind facade features (ADR-0088); the crates stay separate, one per permission set, so a
+breaking change in one reaches only the applications that enabled it. And `flui add <capability>`
+runs `cargo add`, enables the facade feature, writes the declarations (decision 7) and shows the
+registration snippet, as `tauri add` does ([tauri-apps/tauri@9318ab84b8
 crates/tauri-cli/src/add.rs](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-cli/src/add.rs)).
 
 ### 9. The host bridge
@@ -314,7 +318,7 @@ crates need it:
   answers later is a `Completion` that a script can drive.
 - **Every capability crate exposes `testing` with a simulated provider** built on that primitive.
 - **One conformance table per crate**, run against the simulated provider in CI and against each
-  real backend where a device or an OS runner exists.
+  real platform where a device or an OS runner exists.
 - **Claimed support is executed support.** The platform table lists a platform as supported only
   when its conformance table has run on that platform in CI or in a recorded local run; otherwise
   "type-checked".
@@ -358,8 +362,9 @@ first capability crate that needs them.
 - Bad, because release work grows with the number of capability crates, each published with every
   train until the contract has its own version (ADR-0153); changelog fragments and automated
   version bumps keep it per crate.
-- Neutral, because capability crates are not part of the facade; they are found through the
-  documentation and the command-line tool.
+- Good, because an application finds every official capability under one namespace,
+  `flui::services::<name>`, behind a facade feature, while the crates stay separate and a breaking
+  change in one reaches only the applications that enabled it (decision 8).
 - Bad, because a capability whose handle framework widgets name costs one more crate boundary (the
   marker below, the provider in the leaf).
 - Good, because in exchange `flui-material` and `flui-interaction` can name the clipboard and links
@@ -380,7 +385,7 @@ first capability crate that needs them.
   `NotDeclared { what }`; an unknown key in `[package.metadata.flui.capability]` is an error; the
   verify mode (a `flui doctor` check) lists the keys a project lacks (decision 7).
 - One conformance table per crate, run against the simulated provider in CI and against each real
-  backend where a device or an OS runner exists; the platform table lists a platform as supported
+  platform where a device or an OS runner exists; the platform table lists a platform as supported
   only when its conformance table has run on that platform in CI or in a recorded local run,
   otherwise "type-checked" (decision 10).
 - Checked when the generator lands: the aggregation rule for Apple's per-SDK privacy bundle, which
