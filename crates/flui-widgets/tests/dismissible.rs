@@ -5,7 +5,8 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
 use flui_widgets::{
-    ColoredBox, DismissDirection, DismissThreshold, Dismissible, GestureDetector, VsyncScope,
+    ColoredBox, DismissDirection, DismissSide, DismissThreshold, Dismissible, GestureDetector,
+    VsyncScope,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -293,6 +294,8 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let mut binding = HeadlessBinding::new();
         let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
         let updates = Rc::clone(&progress);
+        let sides = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let update_sides = Rc::clone(&sides);
         let mut card = Dismissible::new(
             SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
             crate::common::dismiss_alternatives(),
@@ -304,7 +307,10 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         })
         .background(ColoredBox::new(Color::rgb(80, 90, 100)))
         .secondary_background(ColoredBox::new(Color::rgb(110, 120, 130)))
-        .on_update(move |_, details| updates.borrow_mut().push(details.progress));
+        .on_update(move |_, details| {
+            updates.borrow_mut().push(details.progress);
+            update_sides.borrow_mut().push(details.side);
+        });
         for direction in [
             DismissDirection::StartToEnd,
             DismissDirection::EndToStart,
@@ -403,6 +409,18 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         assert!(
             binding.vsync().has_running(),
             "release must start a return animation"
+        );
+        // The card came back out on the side opposite to where the drag began.
+        let returning = match (vertical, sign > 0.0) {
+            (false, true) => DismissSide::EndToStart,
+            (false, false) => DismissSide::StartToEnd,
+            (true, true) => DismissSide::Up,
+            (true, false) => DismissSide::Down,
+        };
+        assert_eq!(
+            sides.borrow().last().copied().flatten(),
+            Some(returning),
+            "vertical {vertical}, sign {sign}: the update names the side the card is out toward"
         );
         let mut previous = *progress.borrow().last().expect("drag update delivered");
         for _ in 0..4 {
@@ -1115,7 +1133,7 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
 pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allow() {
     use flui_painting::typography::TextDirection;
     use flui_widgets::Directionality;
-    let card = |dismissed: &Rc<std::cell::RefCell<Vec<DismissDirection>>>| {
+    let card = |dismissed: &Rc<std::cell::RefCell<Vec<DismissSide>>>| {
         let dismissed = Rc::clone(dismissed);
         Dismissible::new(
             ColoredBox::new(Color::rgb(10, 20, 30)),
@@ -1243,7 +1261,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
     settle(&mut laid);
     assert_eq!(
         *dismissed.borrow(),
-        [DismissDirection::StartToEnd],
+        [DismissSide::StartToEnd],
         "toward the reading end, to the left, it goes out"
     );
 
@@ -1352,4 +1370,23 @@ pub(crate) fn a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide() {
         1,
         "the release past the threshold dismisses the row it slid"
     );
+}
+
+pub(crate) fn a_direction_contains_the_sides_it_allows() {
+    use DismissDirection as D;
+    use DismissSide as S;
+    for (direction, allowed) in [
+        (D::Horizontal, [true, true, false, false]),
+        (D::Vertical, [false, false, true, true]),
+        (D::StartToEnd, [true, false, false, false]),
+        (D::EndToStart, [false, true, false, false]),
+        (D::Up, [false, false, true, false]),
+        (D::Down, [false, false, false, true]),
+        (D::None, [false; 4]),
+    ] {
+        let sides = [S::StartToEnd, S::EndToStart, S::Up, S::Down];
+        for (side, expected) in sides.into_iter().zip(allowed) {
+            assert_eq!(direction.contains(side), expected, "{direction:?} {side:?}");
+        }
+    }
 }

@@ -10,7 +10,7 @@ mod row;
 mod swipe_actions;
 
 pub use dismissible::{
-    DismissDirection, DismissDirectionCallback, DismissThreshold, DismissThresholdError,
+    DismissDirection, DismissSide, DismissSideCallback, DismissThreshold, DismissThresholdError,
     DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState,
 };
 pub use swipe_actions::{
