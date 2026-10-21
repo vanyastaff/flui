@@ -289,6 +289,37 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
         .ok_or_else(|| flui_platform::InvalidPreference::PixelRatio.into())
 }
 
+/// Whether the Activity's current `Configuration.uiMode` is night. The native
+/// `AConfiguration` android-activity refreshes on `ConfigChanged` comes from
+/// the asset manager the Activity started with, which still reports the old
+/// night mode after a change handled in place (a Galaxy S21 on Android 15).
+pub(super) fn night_mode(app: &AndroidApp) -> Result<bool, PreferenceQueryError> {
+    // `Configuration.UI_MODE_NIGHT_MASK` and `Configuration.UI_MODE_NIGHT_YES`.
+    const NIGHT_MASK: i32 = 0x30;
+    const NIGHT_YES: i32 = 0x20;
+    let ui_mode = with_activity(app, |env, activity| {
+        let resources = env
+            .call_method(
+                activity,
+                jni_str!("getResources"),
+                jni_sig!("()Landroid/content/res/Resources;"),
+                &[],
+            )?
+            .l()?;
+        let configuration = env
+            .call_method(
+                &resources,
+                jni_str!("getConfiguration"),
+                jni_sig!("()Landroid/content/res/Configuration;"),
+                &[],
+            )?
+            .l()?;
+        env.get_field(&configuration, jni_str!("uiMode"), jni_sig!("I"))?
+            .i()
+    })?;
+    Ok(ui_mode & NIGHT_MASK == NIGHT_YES)
+}
+
 /// Public API26 factors, or the public theme attribute on API21–25, projected
 /// through the same Activity resource metrics that produced the measurement.
 pub(super) fn scroll_factors(

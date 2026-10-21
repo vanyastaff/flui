@@ -62,7 +62,8 @@ pub struct AndroidWindow {
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
-    /// The night mode last reported to `on_appearance_changed`.
+    /// The night mode last reported to `on_appearance_changed`, which
+    /// `appearance` returns.
     appearance: Arc<Mutex<WindowAppearance>>,
     displays: Arc<super::display::AndroidDisplays>,
     /// The last refresh-rate request, applied again to every native window that
@@ -156,8 +157,15 @@ impl AndroidWindow {
     }
 
     /// Report a night-mode change from the configuration that just changed.
+    /// A failed read keeps the night mode last reported.
     pub(crate) fn settle_appearance(&self) {
-        let appearance = night_mode(&self.app);
+        let appearance = match super::preferences::night_mode(&self.app) {
+            Ok(night) => appearance_of(night),
+            Err(error) => {
+                tracing::warn!(%error, "Android night-mode query failed");
+                return;
+            }
+        };
         if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
             self.callbacks.dispatch_appearance_changed();
         }
@@ -438,11 +446,21 @@ impl crate::traits::HostWindow for AndroidWindow {
 }
 
 /// The light/dark half of the activity's configuration: night mode is the
-/// system dark theme (or the app's `AppCompatDelegate` override of it).
+/// system dark theme (or the app's `AppCompatDelegate` override of it). The
+/// native configuration stands in when the Java read fails; it is current only
+/// until the first change the Activity handles in place.
 fn night_mode(app: &AndroidApp) -> WindowAppearance {
-    match app.config().ui_mode_night() {
-        UiModeNight::Yes => WindowAppearance::Dark,
-        _ => WindowAppearance::Light,
+    appearance_of(
+        super::preferences::night_mode(app)
+            .unwrap_or_else(|_| app.config().ui_mode_night() == UiModeNight::Yes),
+    )
+}
+
+fn appearance_of(night: bool) -> WindowAppearance {
+    if night {
+        WindowAppearance::Dark
+    } else {
+        WindowAppearance::Light
     }
 }
 
@@ -472,7 +490,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        night_mode(&self.app)
+        *self.appearance.lock()
     }
 
     fn display_id(&self) -> Option<DisplayId> {

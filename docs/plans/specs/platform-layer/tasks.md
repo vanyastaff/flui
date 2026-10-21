@@ -365,6 +365,20 @@ graph LR
   `flui-platform` относительно базы PR (R2.7, не гейт). Проверки: самотест — 4 случая; `cargo test
   -p xtask` — 45; nextest контракта, ядра, interaction, widgets и testing — 548; doctest'ы
   контракта — 46; clippy, `checks`, `workspace`, `reach`, `deps`, `actionlint`, `zizmor` — зелёные.
+- [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
+  объявляет все изменения, которые хост читает на `ConfigChanged`:
+  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
+  (тест `the_android_activity_handles_the_configuration_changes_the_host_follows`). `locale` и
+  `layoutDirection` не объявлены: хост Android не читает языки, а цепочка резервных шрифтов
+  выбирается по локали один раз при скане шрифтов среды; они входят в список вместе с этим
+  чтением. Упаковщик без
+  Gradle отказывает `android.jar` ниже API 31 (флаг `fontWeightAdjustment`). Ночной режим хост
+  читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
+  изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
+  --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
+  480, поворот — один `android_main`, значения в `MediaQuery`. Остаток LY63: `targetSdk` из `platform-support.toml`, путь
+  Gradle, правила R8, `windowSoftInputMode`, golden манифеста и `build.gradle.kts`, список в
+  генерируемом манифесте `FluiActivity` (LY62).
 
 ## Отступление от порядка, решённое владельцем
 
