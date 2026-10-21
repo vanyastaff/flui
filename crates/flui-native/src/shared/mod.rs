@@ -55,11 +55,12 @@ pub(crate) mod android_text_weight;
 // Rule module; consumer: the web backend's preference source.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod browser_preferences;
-// Rule module; consumers: the web, Linux and macOS preference sources.
+// Rule module; consumers: the web, Linux, macOS and iOS preference sources.
 #[cfg(any(
     target_arch = "wasm32",
     all(target_os = "linux", feature = "winit-backend"),
     target_os = "macos",
+    target_os = "ios",
     test
 ))]
 pub(crate) mod preferred_locales;
