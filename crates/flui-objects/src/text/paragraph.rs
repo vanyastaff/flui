@@ -527,7 +527,7 @@ impl RenderBox for RenderParagraph {
 
     /// A paragraph with routed links publishes one region per link and per
     /// stretch of text between them, bounded by their glyphs.
-    fn semantics_regions(&self, _size: Size) -> SemanticsRegions {
+    fn semantics_regions(&self, size: Size) -> SemanticsRegions {
         if !self.routes_links() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
@@ -537,6 +537,7 @@ impl RenderBox for RenderParagraph {
                 &self.link_routes,
                 self.link_focus.map(|focus| focus.link),
                 self.painter.text_direction().map(semantics_text_direction),
+                flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, size.width, size.height),
             ),
             after_children: Vec::new(),
         }

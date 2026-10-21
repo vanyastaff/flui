@@ -76,7 +76,10 @@ focusable, focused while their link holds the primary focus
 visible focus the paragraph paints the `FocusRingStyle` bands just outside
 each of the link's glyph boxes. The link nodes are counted in order rather
 than keyed by link, because a link that encloses another is cut in two by
-it. The widget rows
+it. A link whose children all set their own links covers no text
+(`TextSpan::link_covers_text`): it is no link at all, neither numbered nor
+routed. A textless span's semantics label has no glyphs of its own, so its
+node is bounded by the paragraph and still read in its place. The widget rows
 `a_tap_on_a_link_reaches_on_link_at_the_current_text_scale`,
 `a_link_shows_a_pointing_hand_and_a_span_its_own_cursor` and
 `a_handled_link_is_a_link_node_assistive_technology_clicks` check taps, cursors

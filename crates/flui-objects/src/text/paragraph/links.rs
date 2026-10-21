@@ -126,13 +126,14 @@ impl SpanRuns {
         cursor: Option<CursorIcon>,
         offset: &mut usize,
     ) {
-        let link = match span.link {
-            Some(_) => {
-                let index = self.link_count;
-                self.link_count += 1;
-                Some(index)
-            }
-            None => link,
+        // A link its children shadow everywhere covers no text: it takes no
+        // index, as `InlineSpan::links` leaves it out.
+        let link = if span.link_covers_text() {
+            let index = self.link_count;
+            self.link_count += 1;
+            Some(index)
+        } else {
+            link
         };
         let cursor = span.mouse_cursor.or(cursor);
         self.has_cursor |= span.mouse_cursor.is_some();
@@ -245,14 +246,18 @@ impl SpanRuns {
     /// A link with a route is a focusable [`SemanticsRole::Link`] that
     /// assistive technology clicks and focuses through the route's handler,
     /// focused while it is `focused`. A link without one is read as plain
-    /// text: nothing could run it. A stretch with no glyphs (cut by
-    /// `max_lines` or an ellipsis) publishes nothing, as it paints nothing.
+    /// text: nothing could run it. A stretch whose glyphs `max_lines` or an
+    /// ellipsis cut publishes nothing, as it paints nothing. A stretch that
+    /// is only a semantics label (a textless span's) has no glyphs of its
+    /// own: it is bounded by the paragraph, `bounds`, so it is still read in
+    /// its place.
     pub(super) fn semantics_regions(
         &self,
         painter: &TextPainter,
         routes: &[TextLinkRoute],
         focused: Option<usize>,
         direction: Option<TextDirection>,
+        bounds: Rect<f64>,
     ) -> Vec<SemanticsRegion> {
         let mut regions = Vec::new();
         // A link that encloses another one is cut in two by it, so link
@@ -274,13 +279,15 @@ impl SpanRuns {
             };
             let key = region_key(*ordinal, routed.is_some());
             *ordinal += 1;
-            let Some(rect) = painter
+            let glyphs = painter
                 .get_boxes_for_selection(range.start, range.end)
                 .iter()
                 .map(|text_box| text_box.rect)
-                .reduce(|bounds, rect| bounds.union(&rect))
-            else {
-                continue;
+                .reduce(|glyphs, rect| glyphs.union(&rect));
+            let rect = match glyphs {
+                Some(glyphs) => glyphs,
+                None if range.is_empty() => bounds,
+                None => continue,
             };
             if label.is_empty() && routed.is_none() {
                 continue;

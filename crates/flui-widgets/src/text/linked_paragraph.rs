@@ -239,10 +239,15 @@ fn link_rect(pipeline: Option<PipelineCell>, anchor: SubtreeAnchor, index: usize
                     .as_box()?
                     .render_object()
                     .downcast_ref::<RenderParagraph>()?;
-                let bounds = paragraph.link_bounds(index).or_else(|| {
-                    let size = owner.box_size(paragraph_id)?;
-                    Some(Rect::from_ltwh(0.0, 0.0, size.width, size.height))
-                })?;
+                let size = owner.box_size(paragraph_id)?;
+                let own = Rect::from_ltwh(0.0, 0.0, size.width, size.height);
+                // Within the paragraph's box: a last line's glyph box can end
+                // a rounding error past it, which would put the link in one
+                // reading-order row with whatever touches the paragraph.
+                let bounds = paragraph
+                    .link_bounds(index)
+                    .and_then(|glyphs| glyphs.intersect(&own))
+                    .unwrap_or(own);
                 Some(
                     owner
                         .transform_to(paragraph_id, root)?

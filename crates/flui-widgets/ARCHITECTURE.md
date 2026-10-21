@@ -3762,8 +3762,10 @@ around a long-press `Draggable`).
 ### A paragraph's links are focus stops of their own
 
 **Choice:** `RichText` with `on_link` mounts one `Focus` per link around its paragraph,
-each hosting a node whose rect is the link's glyph bounds from the committed layout
-(`Focus::rect_provider`, `RenderParagraph::link_bounds`), so Tab reaches links in reading
+each hosting a node whose rect is the link's glyph bounds from the committed layout,
+kept within the paragraph's box (`Focus::rect_provider`, `RenderParagraph::link_bounds`;
+a last line's box can end a rounding error past the paragraph, which would put the link
+in one row with whatever touches it), so Tab reaches links in reading
 order among every other control, at any text scale, and the reveal on focus scrolls the
 link, not the paragraph, into view. Enter opens the focused link through the link's own
 key handler; the link declares `ActivateIntent` and `ActivationPressIntent` disabled,
@@ -3781,4 +3783,5 @@ at its first and last link (resolution stops at the nearest `Actions`) and map e
 direction and assistive focus by hand; a real node per link gets traversal groups,
 directional focus, reveal and modality from the focus system. **Tests:**
 `tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
-`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`.
+`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`,
+`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`.

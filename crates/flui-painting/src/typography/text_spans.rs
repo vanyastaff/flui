@@ -138,13 +138,16 @@ impl InlineSpan {
         }
     }
 
-    /// The links of this span tree in document order: each span that sets
-    /// one, before its children. A link's position in this list is the
-    /// identity a paragraph routes that link's taps and activation by.
+    /// The links of this span tree in document order: each span whose link
+    /// covers some text ([`TextSpan::link_covers_text`]), before its
+    /// children. A link's position in this list is the identity a paragraph
+    /// routes that link's taps, focus and activation by.
     #[must_use]
     pub fn links(&self) -> Vec<&TextLink> {
         fn collect<'a>(span: &'a TextSpan, links: &mut Vec<&'a TextLink>) {
-            links.extend(span.link.as_ref());
+            if span.link_covers_text() {
+                links.extend(span.link.as_ref());
+            }
             for child in &span.children {
                 collect(child, links);
             }
@@ -344,6 +347,22 @@ impl TextSpan {
     pub fn with_link(mut self, link: impl Into<TextLink>) -> Self {
         self.link = Some(link.into());
         self
+    }
+
+    /// Whether this span sets a link that covers some text: its own, or a
+    /// descendant's that sets no link in between. A link whose children
+    /// all set their own, or carry no text, links nothing a reader could
+    /// see, tap or focus.
+    #[must_use]
+    pub fn link_covers_text(&self) -> bool {
+        fn has_unlinked_text(span: &TextSpan) -> bool {
+            span.text.as_deref().is_some_and(|text| !text.is_empty())
+                || span
+                    .children
+                    .iter()
+                    .any(|child| child.link.is_none() && has_unlinked_text(child))
+        }
+        self.link.is_some() && has_unlinked_text(self)
     }
 
     /// Returns the plain text content of this span and all children.

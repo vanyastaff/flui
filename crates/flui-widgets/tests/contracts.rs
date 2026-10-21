@@ -212,6 +212,7 @@ fn text_editing() {
             ("text::a_focused_link_rings_each_line_of_its_glyphs", crate::text::a_focused_link_rings_each_line_of_its_glyphs),
             ("text::assistive_technology_focuses_a_link", crate::text::assistive_technology_focuses_a_link),
             ("text::tab_to_a_link_below_the_view_scrolls_it_into_view", crate::text::tab_to_a_link_below_the_view_scrolls_it_into_view),
+            ("text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read", crate::text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read),
         ],
     );
 }

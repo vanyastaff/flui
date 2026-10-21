@@ -936,3 +936,66 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
         "the focused link is in view: {shown:?}"
     );
 }
+
+/// A link whose only text is a child's own link links nothing: Tab skips it
+/// and Enter never opens it. A textless span's semantics label is still read
+/// beside the routed link inside it.
+///
+/// Red-checks: count every span that sets a link (Tab stops on the outer
+/// link first and Enter opens it), or drop a stretch with no glyphs (the
+/// label "Read " is not published).
+pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read() {
+    use flui_painting::typography::TextSpan;
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_testing::a11y::Role;
+    use flui_view::ViewExt;
+    use flui_widgets::{Column, RawButton, RichText};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let after = Rc::new(std::cell::Cell::new(0));
+    let (record, pressed) = (Rc::clone(&opened), Rc::clone(&after));
+    let mut laid = lay_out(
+        Column::new(vec![
+            RawButton::new(Text::new("before"))
+                .on_press(|_cx| {})
+                .boxed(),
+            RichText::new(
+                TextSpan::with_children(vec![TextSpan::new("inner").with_link("app://inner")])
+                    .with_link("app://outer"),
+            )
+            .on_link(move |_cx, link| record.borrow_mut().push(link.to_string()))
+            .boxed(),
+            RichText::new(
+                TextSpan::with_children(vec![TextSpan::new("terms").with_link("app://terms")])
+                    .with_semantics_label("Read "),
+            )
+            .on_link(|_cx, _link| {})
+            .boxed(),
+            RawButton::new(Text::new("after"))
+                .on_press(move |_cx| pressed.set(pressed.get() + 1))
+                .boxed(),
+        ]),
+        loose(400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    tree.find_by_label("Read ")
+        .unwrap_or_else(|error| panic!("the textless span's label: {error}\n{}", tree.describe()));
+    tree.find_by_role_and_label(Role::Link, "terms")
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(
+        *opened.borrow(),
+        ["app://inner"],
+        "the first stop after the button is the link with text"
+    );
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(after.get(), 1, "then the terms link, then the button after");
+    assert_eq!(opened.borrow().len(), 1, "the shadowed link never opened");
+}

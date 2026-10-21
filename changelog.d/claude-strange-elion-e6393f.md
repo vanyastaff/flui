@@ -4,7 +4,8 @@
   or an app tag), and `RichText::on_link` handles it with the activation's `EventCx`. A tap on
   the link's glyphs goes through the gesture arena, the pointer over it is a pointing hand, and
   each handled link is an accessible link node with a click action; hit testing and node bounds
-  follow the text scale. `InlineSpan::links` lists a span tree's links in document order.
+  follow the text scale. `InlineSpan::links` lists a span tree's links in document order,
+  leaving out a link that covers no text (`TextSpan::link_covers_text`).
 - **Keyboard access to links**: each handled link is a focus stop measured by its glyphs, so
   Tab reaches links in reading order and a focused link scrolls into view; Enter opens it
   (Space does not); a visible focus draws the focus ring just outside each line of the link's
