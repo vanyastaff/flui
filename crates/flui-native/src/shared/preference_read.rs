@@ -46,7 +46,6 @@ impl ReadAdmission {
 
     /// When the read a failure postponed may run, while one is owed. A source
     /// that has no timer of its own wakes its owner then.
-    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
         let state = *self.state.lock();
         match state {

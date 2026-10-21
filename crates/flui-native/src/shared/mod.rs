@@ -52,15 +52,19 @@ pub(crate) mod android_ndk;
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;
+// Rule module; consumer: the Android preference source.
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android_contrast;
 // Rule module; consumer: the web backend's preference source.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod browser_preferences;
-// Rule module; consumers: the web, Linux, macOS and iOS preference sources.
+// Rule module; consumers: the web, Linux, macOS, iOS and Android preference sources.
 #[cfg(any(
     target_arch = "wasm32",
     all(target_os = "linux", feature = "winit-backend"),
     target_os = "macos",
     target_os = "ios",
+    target_os = "android",
     test
 ))]
 pub(crate) mod preferred_locales;

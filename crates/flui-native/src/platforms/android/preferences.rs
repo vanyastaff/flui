@@ -1,16 +1,22 @@
 //! Activity-context observations through public Android configuration APIs.
 //!
-//! The host samples every 500ms while its owner loop runs, plus ConfigChanged,
-//! even without a user surface. This is bounded polling, not an OS notification.
+//! The host reads them again on `ConfigChanged`, on `Resume` and when
+//! `FluiView` reports a changed setting or contrast level, even without a user
+//! surface.
 
 use std::time::Duration;
 
 use android_activity::AndroidApp;
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_platform::{MotionPreference, TextWeightPreference};
-use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
+use flui_platform::{Locale, MotionPreference, TextWeightPreference};
+use jni::{
+    JValue, JavaVM, jni_sig, jni_str,
+    objects::{JObject, JString},
+    refs::Global,
+};
 
-use crate::shared::os_version::android::{AndroidApi, TextWeight};
+use crate::shared::os_version::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
+use crate::shared::{android_contrast, preferred_locales};
 use flui_platform::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,
@@ -27,6 +33,8 @@ struct Reading {
     text_weight: Option<TextWeightPreference>,
     motion: Option<MotionPreference>,
     haptics: Option<bool>,
+    locales: Option<Vec<Locale>>,
+    high_contrast: Option<bool>,
 }
 
 enum ReadScope {
@@ -140,6 +148,10 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 &[],
             )?
             .i()?;
+        let long_press = match scope {
+            ReadScope::Geometry => long_press,
+            ReadScope::Preferences(_) => long_press_timeout(env, activity, long_press)?,
+        };
         let text_weight = match scope {
             ReadScope::Geometry => None,
             ReadScope::Preferences(api) => {
@@ -218,6 +230,13 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 Some((duration_scale, haptics))
             }
         };
+        let languages_and_contrast = match scope {
+            ReadScope::Geometry => None,
+            ReadScope::Preferences(api) => Some((
+                language_tags(env, &resources, api)?,
+                contrast(env, activity, api)?,
+            )),
+        };
         Ok((
             density,
             touch_slop,
@@ -228,6 +247,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             long_press,
             text_weight,
             duration_scale_and_haptics,
+            languages_and_contrast,
         ))
     })
     .and_then(
@@ -241,10 +261,12 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             long_press,
             text_weight,
             duration_scale_and_haptics,
+            languages_and_contrast,
         )| {
             let ratio = DevicePixelRatio::new(density)
                 .ok_or(flui_platform::InvalidPreference::PixelRatio)?;
             let (duration_scale, haptics) = duration_scale_and_haptics.unzip();
+            let (tags, high_contrast) = languages_and_contrast.unzip();
             Ok(Reading {
                 ratio,
                 touch_slop,
@@ -258,9 +280,160 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                     .map(MotionPreference::from_duration_scale)
                     .transpose()?,
                 haptics,
+                locales: tags
+                    .and_then(|tags| preferred_locales::from_language_tags(tags.split(','))),
+                high_contrast: high_contrast.flatten(),
             })
         },
     )
+}
+
+/// The configuration's preferred languages as comma-separated BCP 47 tags:
+/// its `LocaleList` from API 24, its one `locale` below.
+fn language_tags(
+    env: &mut jni::Env<'_>,
+    resources: &JObject<'_>,
+    api: AndroidApi,
+) -> jni::errors::Result<String> {
+    let configuration = env
+        .call_method(
+            resources,
+            jni_str!("getConfiguration"),
+            jni_sig!("()Landroid/content/res/Configuration;"),
+            &[],
+        )?
+        .l()?;
+    let tags = if api.since::<LocaleList>().is_some() {
+        let locales = env
+            .call_method(
+                &configuration,
+                jni_str!("getLocales"),
+                jni_sig!("()Landroid/os/LocaleList;"),
+                &[],
+            )?
+            .l()?;
+        env.call_method(
+            &locales,
+            jni_str!("toLanguageTags"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?
+        .l()?
+    } else {
+        let locale = env
+            .get_field(
+                &configuration,
+                jni_str!("locale"),
+                jni_sig!("Ljava/util/Locale;"),
+            )?
+            .l()?;
+        if locale.is_null() {
+            return Ok(String::new());
+        }
+        env.call_method(
+            &locale,
+            jni_str!("toLanguageTag"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?
+        .l()?
+    };
+    let tags = env.cast_local::<JString<'_>>(tags)?;
+    if tags.is_null() {
+        return Ok(String::new());
+    }
+    tags.try_to_string(env)
+}
+
+/// High contrast from the system contrast level (API 34) and the
+/// high-contrast-text setting. A setting this app may not read is no
+/// observation of it rather than a failed read.
+fn contrast(
+    env: &mut jni::Env<'_>,
+    activity: &JObject<'_>,
+    api: AndroidApi,
+) -> jni::errors::Result<Option<bool>> {
+    let resolver = env
+        .call_method(
+            activity,
+            jni_str!("getContentResolver"),
+            jni_sig!("()Landroid/content/ContentResolver;"),
+            &[],
+        )?
+        .l()?;
+    let high_text =
+        secure_int(env, &resolver, "high_text_contrast_enabled", 0)?.map(|value| value != 0);
+    let level = match api.since::<SystemContrast>() {
+        Some(_) => {
+            let service = env.new_string("uimode")?;
+            let modes = env
+                .call_method(
+                    activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[JValue::Object(&service)],
+                )?
+                .l()?;
+            if modes.is_null() {
+                None
+            } else {
+                Some(
+                    env.call_method(&modes, jni_str!("getContrast"), jni_sig!("()F"), &[])?
+                        .f()?,
+                )
+            }
+        }
+        None => None,
+    };
+    Ok(android_contrast::high_contrast(level, high_text))
+}
+
+/// The long-press timeout as the secure setting holds it, `fallback` while it
+/// is unset or withheld. `ViewConfiguration` reads a copy the system pushes to
+/// the app separately, which can still be old when the setting's observer fires.
+fn long_press_timeout(
+    env: &mut jni::Env<'_>,
+    activity: &JObject<'_>,
+    fallback: i32,
+) -> jni::errors::Result<i32> {
+    let resolver = env
+        .call_method(
+            activity,
+            jni_str!("getContentResolver"),
+            jni_sig!("()Landroid/content/ContentResolver;"),
+            &[],
+        )?
+        .l()?;
+    Ok(secure_int(env, &resolver, "long_press_timeout", fallback)?.unwrap_or(fallback))
+}
+
+/// The secure setting `key`, `default` while unset. A key Android withholds
+/// from apps throws `SecurityException`, which is no observation of it rather
+/// than a failed read.
+fn secure_int(
+    env: &mut jni::Env<'_>,
+    resolver: &JObject<'_>,
+    key: &str,
+    default: i32,
+) -> jni::errors::Result<Option<i32>> {
+    let key = env.new_string(key)?;
+    match env.call_static_method(
+        jni_str!("android/provider/Settings$Secure"),
+        jni_str!("getInt"),
+        jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;I)I"),
+        &[
+            JValue::Object(resolver),
+            JValue::Object(&key),
+            JValue::Int(default),
+        ],
+    ) {
+        Ok(value) => value.i().map(Some),
+        Err(jni::errors::Error::JavaException) => {
+            env.exception_clear();
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, PreferenceQueryError> {
@@ -470,6 +643,12 @@ pub(super) fn sample(
     }
     if let Some(haptics) = reading.haptics {
         preferences = preferences.with_haptics(haptics);
+    }
+    if let Some(high_contrast) = reading.high_contrast {
+        preferences = preferences.with_high_contrast(high_contrast);
+    }
+    if let Some(locales) = reading.locales {
+        preferences = preferences.with_locales(locales);
     }
     Ok(match reading.text_weight {
         Some(weight) => preferences.with_text_weight(weight),

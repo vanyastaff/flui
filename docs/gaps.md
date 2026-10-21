@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; previously minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -27,7 +27,7 @@ request.
 | 11 | [No native menus](#11-no-native-menus) | macOS, iPadOS; Windows | Every macOS app |
 | 12 | [Lifecycle holes](#12-lifecycle-holes) | all | Apps that save state or hold resources |
 | 13 | [No deep links, URL schemes, file associations or single instance](#13-no-deep-links-url-schemes-file-associations-or-single-instance) | all | Apps opened from links, files or a second launch |
-| 14 | [Most system preferences are read on Windows only](#14-most-system-preferences-are-read-on-windows-only) | all but Windows | Users who rely on accessibility settings or another locale |
+| 14 | [System preferences missing or never run](#14-system-preferences-missing-or-never-run) | all | Users who rely on accessibility settings or another locale |
 | 15 | [Pointer and keyboard gaps](#15-pointer-and-keyboard-gaps) | various | Pen, trackpad and iPad users |
 | 16 | [Mobile system UI](#16-mobile-system-ui) | iOS, Android, Web | Every mobile app |
 | 17 | [Desktop shell services](#17-desktop-shell-services) | desktop | Background, messaging and utility apps |
@@ -36,25 +36,24 @@ request.
 | 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
 | 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
 | 22 | [Version floors not enforced, and one GPU backend per environment](#22-version-floors-not-enforced-and-one-gpu-backend-per-environment) | all | Users on older systems or GPUs without Vulkan or WebGPU |
-| 23 | [Preferences are polled on Android](#23-preferences-are-polled-on-android) | Android | Every user on battery; the first thing a reviewer measures |
-| 24 | [No presentation feedback](#24-no-presentation-feedback) | all | Every animated app; every latency claim |
-| 25 | [No HDR, wide gamut or colour management](#25-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
-| 26 | [Sandbox-aware file access is absent](#26-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
-| 27 | [Secure text entry and concealed clipboard entries are absent](#27-secure-text-entry-and-concealed-clipboard-entries-are-absent) | all | Every sign-in form; password managers |
-| 28 | [Input latency modes and high-rate sampling are partial](#28-input-latency-modes-and-high-rate-sampling-are-partial) | all but Windows and the Web | Drawing, games and anything that tracks a finger or pen |
-| 29 | [Distribution is unaudited](#29-distribution-is-unaudited) | all | Everyone who ships |
-| 30 | [Activation ignores the OS focus rules](#30-activation-ignores-the-os-focus-rules) | Windows, Wayland | Apps brought forward by a link, a second launch or a notification |
-| 31 | [Panic containment at the OS boundary is not gated](#31-panic-containment-at-the-os-boundary-is-not-gated) | all | Every app, on the day a callback panics |
-| 32 | [Live resize is unaudited and unscheduled](#32-live-resize-is-unaudited-and-unscheduled) | desktop, Web | Every user who resizes a window by dragging its edge |
-| 33 | [No present-mode, queue-depth, VRR or tearing control](#33-no-present-mode-queue-depth-vrr-or-tearing-control) | desktop, iOS, Android | Games, drawing and latency-sensitive apps |
-| 34 | [Launch handoff on mobile and the Web](#34-launch-handoff-on-mobile-and-the-web) | iOS, Android, Web | Every mobile and web app in its first second |
-| 35 | [Quality-bar partials with no entry](#35-quality-bar-partials-with-no-entry) | all | Everyone who relies on a platform claim; maintainers who cannot replay a failure |
-| 36 | [Power-aware pacing and throttling](#36-power-aware-pacing-and-throttling) | all | Every user on battery or a thermally limited device |
-| 37 | [Locale edge: layout direction, per-app language, system fonts and fallback](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback) | all | Apps in right-to-left or non-Latin languages; users who set a language for one app |
-| 38 | [Accessibility bridge fidelity (properties and announcements)](#38-accessibility-bridge-fidelity-properties-and-announcements) | desktop, iOS, Android, Web | Screen-reader users |
-| 39 | [Add-to-app: no FLUI view inside an existing native app](#39-add-to-app-no-flui-view-inside-an-existing-native-app) | all | Teams adding FLUI to an app they already ship |
-| 40 | [No gamepad, and no D-pad run on a TV](#40-no-gamepad-and-no-d-pad-run-on-a-tv) | all | TV, console-style and Steam Deck users; games |
-| 41 | [No rotary input](#41-no-rotary-input) | Windows, Android; Apple later | Surface Dial and Wear OS users |
+| 23 | [No presentation feedback](#23-no-presentation-feedback) | all | Every animated app; every latency claim |
+| 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
+| 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
+| 26 | [Secure text entry and concealed clipboard entries are absent](#26-secure-text-entry-and-concealed-clipboard-entries-are-absent) | all | Every sign-in form; password managers |
+| 27 | [Input latency modes and high-rate sampling are partial](#27-input-latency-modes-and-high-rate-sampling-are-partial) | all but Windows and the Web | Drawing, games and anything that tracks a finger or pen |
+| 28 | [Distribution is unaudited](#28-distribution-is-unaudited) | all | Everyone who ships |
+| 29 | [Activation ignores the OS focus rules](#29-activation-ignores-the-os-focus-rules) | Windows, Wayland | Apps brought forward by a link, a second launch or a notification |
+| 30 | [Panic containment at the OS boundary is not gated](#30-panic-containment-at-the-os-boundary-is-not-gated) | all | Every app, on the day a callback panics |
+| 31 | [Live resize is unaudited and unscheduled](#31-live-resize-is-unaudited-and-unscheduled) | desktop, Web | Every user who resizes a window by dragging its edge |
+| 32 | [No present-mode, queue-depth, VRR or tearing control](#32-no-present-mode-queue-depth-vrr-or-tearing-control) | desktop, iOS, Android | Games, drawing and latency-sensitive apps |
+| 33 | [Launch handoff on mobile and the Web](#33-launch-handoff-on-mobile-and-the-web) | iOS, Android, Web | Every mobile and web app in its first second |
+| 34 | [Quality-bar partials with no entry](#34-quality-bar-partials-with-no-entry) | all | Everyone who relies on a platform claim; maintainers who cannot replay a failure |
+| 35 | [Power-aware pacing and throttling](#35-power-aware-pacing-and-throttling) | all | Every user on battery or a thermally limited device |
+| 36 | [Locale edge: layout direction, per-app language, system fonts and fallback](#36-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback) | all | Apps in right-to-left or non-Latin languages; users who set a language for one app |
+| 37 | [Accessibility bridge fidelity (properties and announcements)](#37-accessibility-bridge-fidelity-properties-and-announcements) | desktop, iOS, Android, Web | Screen-reader users |
+| 38 | [Add-to-app: no FLUI view inside an existing native app](#38-add-to-app-no-flui-view-inside-an-existing-native-app) | all | Teams adding FLUI to an app they already ship |
+| 39 | [No gamepad, and no D-pad run on a TV](#39-no-gamepad-and-no-d-pad-run-on-a-tv) | all | TV, console-style and Steam Deck users; games |
+| 40 | [No rotary input](#40-no-rotary-input) | Windows, Android; Apple later | Surface Dial and Wear OS users |
 
 ## Entries
 
@@ -180,14 +179,15 @@ request.
 - `on_open_urls` is never called.
 - Packaging (app identity) not audited.
 
-### 14. Most system preferences are read on Windows only
+### 14. System preferences missing or never run
 
-> **Environments:** all but Windows · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
+> **Environments:** all · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
-- Contrast and languages on Android (Windows, macOS, Linux, iOS and the Web read both; macOS and iOS are type-checked only), regional formats everywhere, text scale on the Web and on Linux desktops other than GNOME, accent colour, gesture timings.
+- Missing: regional formats everywhere, text scale on the Web and on Linux desktops other than GNOME, accent colour, gesture timings.
+- Never run: every host reads contrast and the preferred languages, but macOS and iOS are type-checked only, the Web ran on Node rather than in a browser, and Linux ran against a stand-in portal rather than a desktop session.
 - Windows text scale is applied linearly. WinUI scales larger text less by an undocumented curve, so large text grows more than in a WinUI control at the same setting.
 - Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).
-- Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 37](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
+- Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 36](#36-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
 
 ### 15. Pointer and keyboard gaps
 
@@ -256,16 +256,7 @@ request.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
 - No GLES or WebGL2 fallback is compiled (ADR-0244).
 
-### 23. Preferences are polled on Android
-
-> **Environments:** Android · **Who it hurts:** Every user on battery; the first thing a reviewer measures · **Parity:** [Quality bar](platform-parity.md#quality-bar)
-
-- An idle app wakes every 500 ms.
-- `android/preferences.rs` samples on a timer instead of `ContentObserver` and `ComponentCallbacks2`.
-- The Galaxy S21 run saw the loop wake twice a second after Home.
-- macOS wakes on AppKit notifications and application activation instead; that is type-checked, not yet run on a Mac.
-
-### 24. No presentation feedback
+### 23. No presentation feedback
 
 > **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
@@ -273,7 +264,7 @@ request.
 - No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
 - A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
 
-### 25. No HDR, wide gamut or colour management
+### 24. No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
@@ -281,7 +272,7 @@ request.
 - The engine's colour spaces stop at images and gradients.
 - Android has public headroom APIs (`Display.getHdrSdrRatio`, API 34, with a listener for changes); the Web reports capability only and cannot observe headroom. HDR and SDR-white change events are a parity row of their own.
 
-### 26. Sandbox-aware file access is absent
+### 25. Sandbox-aware file access is absent
 
 > **Environments:** all desktop and mobile · **Who it hurts:** Every app distributed through a store or Flatpak · **Parity:** [System services](platform-parity.md#system-services)
 
@@ -289,7 +280,7 @@ request.
 - `data_dirs` and the dialogs assume an unsandboxed process, so an App Store, Flatpak or MSIX build gets paths it cannot open.
 - The manifests are part of the same gap: nothing generates macOS entitlements, Flatpak `finish-args`, Snap interfaces or MSIX capabilities from declared capabilities (the parity row "Sandbox and entitlement manifests generated from declared capabilities"). Tauri's autostart plugin shows the cost: it writes a launcher path that cannot run outside the Flatpak sandbox ([tauri-apps/plugins-workspace#3166](https://github.com/tauri-apps/plugins-workspace/issues/3166)).
 
-### 27. Secure text entry and concealed clipboard entries are absent
+### 26. Secure text entry and concealed clipboard entries are absent
 
 > **Environments:** all · **Who it hurts:** Every sign-in form; password managers · **Parity:** [Text input](platform-parity.md#text-input)
 
@@ -298,7 +289,7 @@ request.
 - Android's `ClipDescription.EXTRA_IS_SENSITIVE` (API 33) is only a rendering hint, so the Android cell of the concealed-clipboard row can be at most partial by design.
 - Platform-edge diagnostics have no redaction check: protected-field text, clipboard payloads and URLs with tokens must never reach the `tracing` targets or the `native-capture` journal, which will carry text and URLs once more event families are recorded (the [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) lists them under "Data to exclude").
 
-### 28. Input latency modes and high-rate sampling are partial
+### 27. Input latency modes and high-rate sampling are partial
 
 > **Environments:** all but Windows and the Web · **Who it hurts:** Drawing, games and anything that tracks a finger or pen · **Parity:** [Input](platform-parity.md#input)
 
@@ -307,7 +298,7 @@ request.
 - iOS coalesced and predicted touches and the Linux and macOS paths are not audited.
 - Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the Wayland, X11, Android and Web conversions are not audited.
 
-### 29. Distribution is unaudited
+### 28. Distribution is unaudited
 
 > **Environments:** all · **Who it hurts:** Everyone who ships · **Parity:** [Distribution](platform-parity.md#distribution)
 
@@ -316,7 +307,7 @@ request.
 - The identity that notifications, URL schemes, portals and jump lists need is not checked into the package.
 - Entitlement and sandbox manifests (macOS and iOS entitlements, Flatpak `finish-args`, Snap interfaces, MSIX capabilities, Android permissions) are not generated from declared capabilities; the Android template declares `VIBRATE` itself.
 
-### 30. Activation ignores the OS focus rules
+### 29. Activation ignores the OS focus rules
 
 > **Environments:** Windows, Wayland · **Who it hurts:** Apps brought forward by a link, a second launch or a notification · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
@@ -324,14 +315,14 @@ request.
 - Windows re-foregrounds whatever is already in front.
 - macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is documented by Apple, which also marks `activate(ignoringOtherApps:)` deprecated; neither is audited.
 
-### 31. Panic containment at the OS boundary is not gated
+### 30. Panic containment at the OS boundary is not gated
 
 > **Environments:** all · **Who it hurts:** Every app, on the day a callback panics · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - `panic_boundary` guards 210 call sites by hand.
 - No gate proves every `extern "C"` passes through one, and a missed boundary unwinds into C.
 
-### 32. Live resize is unaudited and unscheduled
+### 31. Live resize is unaudited and unscheduled
 
 > **Environments:** desktop, Web · **Who it hurts:** Every user who resizes a window by dragging its edge · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -342,17 +333,17 @@ request.
 - It is among the most-reported defects of comparable frameworks ([emilk/egui#903](https://github.com/emilk/egui/issues/903) is a fast-resize flicker). A reference run should record its trade-off in the row note: Flutter's Windows embedder blocks the platform thread for up to 100 ms for a frame at the new size.
 - Pass criteria: a scripted two-second border drag with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded.
 
-### 33. No present-mode, queue-depth, VRR or tearing control
+### 32. No present-mode, queue-depth, VRR or tearing control
 
 > **Environments:** desktop, iOS, Android · **Who it hurts:** Games, drawing and latency-sensitive apps · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
 - The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing.
-- Presentation feedback (entry 24) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
+- Presentation feedback (entry 23) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
 - Windows tearing needs `DXGI_FEATURE_PRESENT_ALLOW_TEARING` and `DXGI_PRESENT_ALLOW_TEARING`, which can only be used with sync interval 0 ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/variable-refresh-rate-displays)); Wayland has `wp_tearing_control_v1`, `fifo-v1` and `commit-timing-v1`.
 - Queue depth costs latency: the default DXGI queue of up to three frames adds about 16–32 ms of input latency in another framework ([libsdl-org/SDL#15656](https://github.com/libsdl-org/SDL/issues/15656)).
 - The Web has nothing to control: `requestAnimationFrame` is its only cadence.
 
-### 34. Launch handoff on mobile and the Web
+### 33. Launch handoff on mobile and the Web
 
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every mobile and web app in its first second · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -361,7 +352,7 @@ request.
 - The parity row "Show without a blank first frame" covers the desktop only, where the window is created hidden and shown after the first presented frame; Electron does the same with a hidden window shown on `ready-to-show` and a `backgroundColor`.
 - A dark-mode user should see the dark splash and the dark first frame, not a white flash between them.
 
-### 35. Quality-bar partials with no entry
+### 34. Quality-bar partials with no entry
 
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
@@ -370,7 +361,7 @@ request.
 - The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
 
-### 36. Power-aware pacing and throttling
+### 35. Power-aware pacing and throttling
 
 > **Environments:** all · **Who it hurts:** Every user on battery or a thermally limited device · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
@@ -379,7 +370,7 @@ request.
 - Apple's `CADisplayLink.preferredFrameRateRange` is only a hint that Low Power Mode, a critical thermal state and accessibility settings can override, so an app that asks for 120 Hz still has to follow the state.
 - The check forces each state and asserts a delivery within one event-loop turn and a frame-rate or work reduction.
 
-### 37. Locale edge: layout direction, per-app language, system fonts and fallback
+### 36. Locale edge: layout direction, per-app language, system fonts and fallback
 
 > **Environments:** all · **Who it hurts:** Apps in right-to-left or non-Latin languages; users who set a language for one app · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
@@ -388,7 +379,7 @@ request.
 - Text layout resolves fonts through `fontdb` in `flui-painting`; DirectWrite `IDWriteFontFallback`, Android `SystemFonts` (API 29), CoreText and fontconfig are the platform answers to which font draws a character the requested family lacks.
 - The check is a locale matrix (en-US, ar-EG for right-to-left, ja-JP, hi-IN with its numbering) on every OS: list order, first weekday, 12 or 24 hour clock, per-app override, and CJK and emoji text without missing-glyph boxes.
 
-### 38. Accessibility bridge fidelity (properties and announcements)
+### 37. Accessibility bridge fidelity (properties and announcements)
 
 > **Environments:** desktop, iOS, Android, Web · **Who it hurts:** Screen-reader users: a control announced without its value, hint or state, or a change nobody hears · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
@@ -397,7 +388,7 @@ request.
 - The parity rows "Properties (value, hint, description, state)" and "Announcements and live regions" are ❔ on the desktop adapters and ❌ where there is no adapter at all.
 - Each needs a check with the real assistive technology on each OS that reads role, name, value, hint, state, actions, focus order and announcements; a harness that registers AT-SPI listeners and matches only strings carrying a nonce keeps any other source from producing a hit.
 
-### 39. Add-to-app: no FLUI view inside an existing native app
+### 38. Add-to-app: no FLUI view inside an existing native app
 
 > **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -407,7 +398,7 @@ request.
 - The design question is who owns the loop: an embedded view is driven by the app's loop and receives events from the app's window, so the owner thread's one call point for user code ([ADR-0151 §10](adr/ADR-0151-platform-layer-boundary-and-names.md)) has to run inside a foreign callback, and ADR-0151 names an external embedder as the first reason to reopen the crate split.
 - The check is one screen of FLUI inside a foreign app on each OS: keyboard focus moving into and out of the view, IME and the assistive technology reaching it, and the app's own lifecycle pausing and resuming it.
 
-### 40. No gamepad, and no D-pad run on a TV
+### 39. No gamepad, and no D-pad run on a TV
 
 > **Environments:** all · **Who it hurts:** TV, console-style and Steam Deck users; games · **Parity:** [Input](platform-parity.md#input)
 
@@ -416,7 +407,7 @@ request.
 - Without a pointer (Android TV, tvOS, a console) focus navigation is the whole input model: every widget must be reachable by direction with a visible focus ring, which no run has shown.
 - The check is a remote on an Android TV device and a controller on Windows and a Steam Deck: every control of the interaction widgets reached by direction and activated by the centre button, and a controller's sticks and buttons recorded and replayed.
 
-### 41. No rotary input
+### 40. No rotary input
 
 > **Environments:** Windows, Android; Apple later · **Who it hurts:** Surface Dial and Wear OS users · **Parity:** [Input](platform-parity.md#input)
 
@@ -467,5 +458,6 @@ request.
 | 2026-10-20 | minor | Restructured for reading: a summary table, one section per entry, the hours column removed |
 | 2026-10-20 | minor | Entries 32–38 join from the quality-bar research: live resize unaudited and unscheduled, no present-mode, queue-depth, VRR or tearing control, launch handoff on mobile and the Web, quality-bar partials with no entry, power-aware pacing, the locale edge, accessibility bridge fidelity; entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30 gain a bullet each (client queries and session survival, the locale rows, entitlement manifests, secrets in diagnostics, timestamp conversion, and the corrections to the presentation-feedback, HDR and activation evidence) |
 | 2026-10-21 | minor | Entries 39–41 join: add-to-app embedding, gamepad and D-pad, rotary input |
+| 2026-10-21 | minor | Entry 23 closes: Android preferences arrive through `FluiView`'s setting, contrast and inset callbacks, and the Galaxy S21 loop made no turn in 10 s idle, resumed or behind Home; entries 24–41 become 23–40. Entry 14 becomes "System preferences missing or never run" |
 
 </details>

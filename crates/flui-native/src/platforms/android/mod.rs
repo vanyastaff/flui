@@ -258,6 +258,21 @@ impl AndroidPlatform {
         Ok(current)
     }
 
+    /// When the loop reads preferences, scroll factors and insets next: the
+    /// cadence while `FluiView` does not observe, or the retry a failed read
+    /// owes, whichever comes first. Nothing else would come back for that
+    /// retry: a change reported during its backoff is deferred, not queued.
+    fn next_sample(&self, cadence: Option<web_time::Instant>) -> Option<web_time::Instant> {
+        [cadence, self.preference_admission.retry_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    fn sample_due(&self, cadence: Option<web_time::Instant>, now: web_time::Instant) -> bool {
+        self.next_sample(cadence).is_some_and(|at| now >= at)
+    }
+
     fn refresh_scroll_factors(&self) {
         // Query outside the owner-local cache guard. A failed refresh keeps
         // accepted logical factors; only the never-observed case uses authored
@@ -338,6 +353,17 @@ impl AndroidPlatform {
                 java_view::ViewEvent::DragEnded { result } => {
                     if let Some(window) = &window {
                         window.drag_source_of().finish(result);
+                    }
+                }
+                java_view::ViewEvent::SettingsChanged => {
+                    self.refresh_scroll_factors();
+                    if let Err(error) = self.refresh_preferences() {
+                        tracing::warn!(%error, "Android preference query failed");
+                    }
+                }
+                java_view::ViewEvent::InsetsChanged => {
+                    if let Some(window) = &window {
+                        window.request_safe_area();
                     }
                 }
             }
@@ -588,7 +614,9 @@ impl Platform for AndroidPlatform {
             .map_err(|error| PlatformError::Preferences {
                 message: error.to_string(),
             })?;
-        let mut next_preference_sample = web_time::Instant::now();
+        // When preferences, scroll factors and insets are read next; `None`
+        // waits for a change to be reported.
+        let mut next_preference_sample = Some(web_time::Instant::now());
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         platform.displays.watch_refresh_rate();
@@ -613,15 +641,24 @@ impl Platform for AndroidPlatform {
                 break;
             }
 
-            // Public ViewConfiguration getters have no complete public change
-            // notification. Bound refresh to 500ms while resumed, independently
-            // of a surface; a paused Activity reads them again on `Resume`.
+            // `FluiView` reports setting and inset changes, and configuration
+            // changes arrive as `ConfigChanged`; each reads them again. A
+            // resumed Activity reads them once more on its first turn and on
+            // `Resume`. Until the view is in the window, or if it never gets
+            // there, a 500ms cadence while resumed stands in, so no change is
+            // lost; a paused Activity reads them again on `Resume`.
             let now = web_time::Instant::now();
             let window = platform.window.lock().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_safe_area();
             }
-            if platform.activity.resumed.load(Ordering::SeqCst) && now >= next_preference_sample {
+            if platform.activity.resumed.load(Ordering::SeqCst)
+                && platform.sample_due(next_preference_sample, now)
+            {
+                // Taken before the read: a view that becomes ready during it
+                // reports once it observes, and only a view that was ready
+                // already ends the cadence.
+                let observed = platform.java_view.is_ready();
                 if let Some(window) = window.as_ref() {
                     window.request_safe_area();
                 }
@@ -629,7 +666,7 @@ impl Platform for AndroidPlatform {
                 if let Err(error) = platform.refresh_preferences() {
                     tracing::warn!(%error, "Android preference query failed");
                 }
-                next_preference_sample = now + Duration::from_millis(500);
+                next_preference_sample = (!observed).then(|| now + Duration::from_millis(500));
             }
             if platform.owner_signal.drive() {
                 platform.running.store(false, Ordering::Relaxed);
@@ -677,7 +714,8 @@ impl Platform for AndroidPlatform {
                             should_render,
                             resumed,
                             wake_deadline,
-                            next_preference_sample,
+                            next_preference_sample: platform
+                                .next_sample(next_preference_sample),
                         },
                         web_time::Instant::now(),
                     );
@@ -712,7 +750,7 @@ impl Platform for AndroidPlatform {
                             platform.displays.invalidate();
                             // Nothing was sampled while paused: read the
                             // preferences and insets again on the next turn.
-                            next_preference_sample = web_time::Instant::now();
+                            next_preference_sample = Some(web_time::Instant::now());
 
                             // The execution state first, then the surface: a
                             // presentation rebuilt on `true` below already runs.
@@ -868,7 +906,11 @@ impl Platform for AndroidPlatform {
                             if let Err(error) = platform.refresh_preferences() {
                                 tracing::warn!(%error, "Android configuration query failed");
                             }
-                            next_preference_sample = web_time::Instant::now() + Duration::from_millis(500);
+                            if !platform.java_view.is_ready() {
+                                next_preference_sample = Some(
+                                    web_time::Instant::now() + Duration::from_millis(500),
+                                );
+                            }
                             let window = platform.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();

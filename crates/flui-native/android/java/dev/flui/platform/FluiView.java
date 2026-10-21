@@ -1,9 +1,12 @@
 package dev.flui.platform;
 
 import android.app.Activity;
+import android.app.UiModeManager;
 import android.content.ClipData;
 import android.content.ClipDescription;
+import android.content.ContentResolver;
 import android.content.Context;
+import android.database.ContentObserver;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
@@ -12,12 +15,16 @@ import android.graphics.Point;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
 import android.view.DragEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
@@ -59,6 +66,26 @@ public final class FluiView extends View {
 
     static native void nativeImeCursorUpdates(long handle, int mode);
 
+    /** A setting FLUI reads that no configuration change reports has changed. */
+    static native void nativeSettingsChanged(long handle);
+
+    /** The window insets this view received have changed. */
+    static native void nativeInsetsChanged(long handle);
+
+    /**
+     * The secure, system and global settings behind FLUI's preferences:
+     * configuration changes (locales, font scale and weight, density) reach the
+     * native side as the activity's own configuration change instead.
+     */
+    private static final Uri[] OBSERVED_SETTINGS = {
+        Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),
+        // `HAPTIC_FEEDBACK_ENABLED`, deprecated in API 33 but still what the
+        // native side reads for the touch-feedback switch.
+        Settings.System.getUriFor("haptic_feedback_enabled"),
+        Settings.Secure.getUriFor("long_press_timeout"),
+        Settings.Secure.getUriFor("high_text_contrast_enabled"),
+    };
+
     private long handle;
     private final Activity activity;
     private final InputMethodManager inputMethods;
@@ -82,6 +109,12 @@ public final class FluiView extends View {
     private int reportedCompositionStart = -1;
     private int reportedCompositionEnd = -1;
     private int reportedGeneration = -1;
+    /** Reports a change of {@link #OBSERVED_SETTINGS}, on this thread. */
+    private final ContentObserver settings;
+    /** Whether {@link #settings} and the contrast listener are registered. */
+    private boolean observing;
+    /** The contrast listener on API 34 and above, while {@link #observing}. */
+    private Object contrast;
 
     private FluiView(Activity activity, long handle) {
         super(activity);
@@ -101,6 +134,60 @@ public final class FluiView extends View {
         if (Build.VERSION.SDK_INT >= 33) {
             Api33.manualHandwriting(this);
         }
+        settings = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                settingsChanged();
+            }
+        };
+    }
+
+    void settingsChanged() {
+        long handle = this.handle;
+        if (handle != 0) {
+            nativeSettingsChanged(handle);
+        }
+    }
+
+    /**
+     * Observe the settings only while in the window: a view that never gets
+     * there, or a bridge that freed its handle after failing to keep the view,
+     * leaves nothing behind that could call it. Registration comes first, then
+     * one report, so a change made before observation began is read too.
+     */
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (handle == 0 || observing) {
+            return;
+        }
+        ContentResolver resolver = activity.getContentResolver();
+        for (Uri setting : OBSERVED_SETTINGS) {
+            resolver.registerContentObserver(setting, false, settings);
+        }
+        if (Build.VERSION.SDK_INT >= 34) {
+            contrast = Api34.observeContrast(this);
+        }
+        observing = true;
+        settingsChanged();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        stopObserving();
+        super.onDetachedFromWindow();
+    }
+
+    private void stopObserving() {
+        if (!observing) {
+            return;
+        }
+        observing = false;
+        activity.getContentResolver().unregisterContentObserver(settings);
+        if (contrast != null) {
+            Api34.forgetContrast(this, contrast);
+            contrast = null;
+        }
     }
 
     /** Create the view and lay it over the activity's whole content. */
@@ -114,6 +201,7 @@ public final class FluiView extends View {
     /** The native bridge is going away: stop calling it and leave the window. */
     public void detach() {
         handle = 0;
+        stopObserving();
         editing = false;
         for (Object permissions : dropPermissions.values()) {
             release(permissions);
@@ -128,6 +216,16 @@ public final class FluiView extends View {
 
     long handle() {
         return handle;
+    }
+
+    /** The view covers the window, so every inset change reaches it. */
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        long handle = this.handle;
+        if (handle != 0) {
+            nativeInsetsChanged(handle);
+        }
+        return super.onApplyWindowInsets(insets);
     }
 
     // ---------------------------------------------------------------- IME
@@ -584,6 +682,28 @@ public final class FluiView extends View {
                     .setEditorBounds(bounds)
                     .setHandwritingBounds(bounds)
                     .build());
+        }
+    }
+
+    private static final class Api34 {
+        /** Report a change of the system contrast level, on the main thread. */
+        static Object observeContrast(final FluiView view) {
+            UiModeManager.ContrastChangeListener listener = new UiModeManager.ContrastChangeListener() {
+                @Override
+                public void onContrastChanged(float contrast) {
+                    view.settingsChanged();
+                }
+            };
+            modes(view).addContrastChangeListener(view.activity.getMainExecutor(), listener);
+            return listener;
+        }
+
+        static void forgetContrast(FluiView view, Object listener) {
+            modes(view).removeContrastChangeListener((UiModeManager.ContrastChangeListener) listener);
+        }
+
+        private static UiModeManager modes(FluiView view) {
+            return (UiModeManager) view.activity.getSystemService(Context.UI_MODE_SERVICE);
         }
     }
 

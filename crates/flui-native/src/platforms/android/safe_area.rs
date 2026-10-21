@@ -53,6 +53,9 @@ pub(super) struct Capture {
     pub(super) query: Query,
     /// A reply taken at a size the window no longer has is asked for again.
     pub(super) retry_stale: bool,
+    /// A change was reported while a reply was out: once it settles, ask
+    /// again, since that reply may predate the change.
+    pub(super) requery: bool,
 }
 
 impl Default for Capture {
@@ -61,6 +64,7 @@ impl Default for Capture {
             accepted: EdgeInsets::ZERO,
             query: Query::Idle,
             retry_stale: false,
+            requery: false,
         }
     }
 }

@@ -69,8 +69,9 @@ pub(crate) struct LoopTurn {
     pub(crate) resumed: bool,
     /// The earliest wall-clock deadline the wake hook reported.
     pub(crate) wake_deadline: Option<Instant>,
-    /// When the preferences that have no change notification are read next.
-    pub(crate) next_preference_sample: Instant,
+    /// When preferences, scroll factors and insets are read next; `None` while
+    /// their changes are reported instead.
+    pub(crate) next_preference_sample: Option<Instant>,
 }
 
 /// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
@@ -85,7 +86,8 @@ const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
 /// the loop wakes on no timer of its own:
 ///
 /// - a turn with a frame to deliver does not block;
-/// - a resumed turn blocks until the next deadline or preference sample;
+/// - a resumed turn blocks until the next deadline or preference sample, and
+///   with neither until it is woken;
 /// - a paused turn blocks until a deadline that is still ahead, and with none
 ///   until it is woken. A deadline already behind was offered to the owner this
 ///   turn and is left waiting for a frame, which nothing delivers before the
@@ -96,12 +98,11 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     }
     let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
     if turn.resumed {
-        let next = turn
-            .wake_deadline
-            .map_or(turn.next_preference_sample, |deadline| {
-                deadline.min(turn.next_preference_sample)
-            });
-        Some(until(next))
+        [turn.wake_deadline, turn.next_preference_sample]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(until)
     } else {
         turn.wake_deadline
             .filter(|deadline| *deadline > now)
@@ -261,7 +262,7 @@ mod tests {
     /// A paused Activity cannot deliver a frame, so the loop blocks: no timer
     /// of its own, no past deadline turning the poll into a busy loop, and only
     /// a deadline still ahead (a timer the owner serves without a frame) bounds
-    /// the wait.
+    /// the wait. A resumed loop whose changes are reported blocks the same way.
     #[test]
     fn a_paused_loop_blocks_until_it_is_woken() {
         let now = Instant::now();
@@ -270,7 +271,13 @@ mod tests {
             should_render,
             resumed,
             wake_deadline,
-            next_preference_sample: now + ms(500),
+            next_preference_sample: Some(now + ms(500)),
+        };
+        let reported = |wake_deadline| LoopTurn {
+            should_render: false,
+            resumed: true,
+            wake_deadline,
+            next_preference_sample: None,
         };
         for (case, turn, expected) in [
             (
@@ -279,6 +286,16 @@ mod tests {
                 Some(Duration::ZERO),
             ),
             ("resumed and idle", turn(false, true, None), Some(ms(500))),
+            (
+                "resumed and idle, with changes reported",
+                reported(None),
+                None,
+            ),
+            (
+                "resumed, with changes reported, a timer ahead",
+                reported(Some(now + ms(250))),
+                Some(ms(250)),
+            ),
             (
                 "resumed, a deadline before the next sample",
                 turn(false, true, Some(now + ms(3))),

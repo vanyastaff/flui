@@ -113,11 +113,15 @@ Packaged applications require API 23, where `View.getRootWindowInsets` becomes
 available; both SDK-tools packaging and generated Gradle configuration enforce it.
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window; a reply taken at an older size
-is asked for once more. The window asks on every resize, configuration change and
-new native window, and every 500 ms while resumed. From API 30 the insets are the
+is asked for once more. The window asks on every resize, configuration change,
+new native window, `Resume` and inset change `FluiView` reports from
+`onApplyWindowInsets`; every 500 ms while resumed only until the view is in the
+window. From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
-outstanding; accepted changes dispatch callbacks after cache guards are released. `android_safe_area_native_metrics` pins density
+outstanding; a request while it is out asks once more after its reply settles,
+since that reply may predate the change. Accepted changes dispatch callbacks after
+cache guards are released. `android_safe_area_native_metrics` pins density
 conversion, stale orientation rejection and invalid conversion inputs; native
 rotation and resume additionally require a device run.
 
@@ -774,12 +778,23 @@ its next activation. The observers hold only a weak owner signal and end before
 the source, with the platform or at the winit loop's shutdown. A failed or
 unwound read schedules one owner wake at its retry deadline, since no timer
 would otherwise come back for it.
-Android has no complete external-setting notification for its observations
-either: its host attempts a refresh every 500ms while its owner loop can run,
-including without user windows. This is a sampling cadence, not an immediate OS
-notification or a bound on a blocked owner's latency. Android also invalidates
-on `ConfigChanged` and delivers accepted configuration changes before subsequent
-input. Errors preserve the accepted observation and the next refresh attempt.
+Android has no single notification for its observations either. Configuration
+values (locales, font scale and weight, density) invalidate on `ConfigChanged`,
+whose accepted changes are delivered before subsequent input. `FluiView` reports
+the rest: content observers on the animator duration scale, touch feedback,
+long-press timeout and high-contrast-text settings, the `UiModeManager` contrast
+listener from API 34, and `onApplyWindowInsets`. Each reaches the owner as a view
+event that reads again. The view observes only while attached to the window: it
+registers in `onAttachedToWindow` and then reports once, so a change made before
+observation began is read too, and unregisters when detached and in `detach`,
+which clears its handle first. A view that never reaches the window, or that the
+native side detaches because it could not keep it, leaves nothing that could call
+a freed handle. Until the view is in the window, or if it never gets there, the
+host reads every 500ms while resumed, so no change is lost. The long-press
+timeout is read from its secure setting, since `ViewConfiguration`'s copy can
+still be old when the observer fires. A failed read owes a retry at its deadline,
+which bounds the loop's wait like the cadence does, so errors preserve the
+accepted observation and the next refresh attempt.
 AppKit registers its observers before its first native getter. A cold source has
 no accepted observation; an initial query error cannot abort platform bootstrap,
 publish a fabricated default, or discard its retry. The shared production read
