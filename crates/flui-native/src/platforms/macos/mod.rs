@@ -69,6 +69,7 @@ mod events;
 mod haptics;
 mod liquid_glass;
 mod loop_control;
+mod observation;
 mod owner_lane;
 mod platform;
 pub(super) mod preferences;

@@ -492,6 +492,8 @@ impl WinitPlatform {
             platform: Arc::clone(&self),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
             #[cfg(target_os = "macos")]
@@ -946,6 +948,9 @@ struct WinitApp {
     preference_source: Option<super::super::windows::preferences::PreferenceSource>,
     #[cfg(target_os = "macos")]
     preference_source: Option<Arc<super::super::macos::preferences::PreferenceSource>>,
+    /// Wakes the owner when AppKit reports a preference change; owner-thread only.
+    #[cfg(target_os = "macos")]
+    preference_observers: Option<super::super::macos::preferences::PreferenceObservers>,
     #[cfg(target_os = "linux")]
     preference_source: Option<Arc<super::preferences::PreferenceSource>>,
     /// Sleep, shutdown, lock and memory pressure from logind and the kernel;
@@ -1807,10 +1812,12 @@ impl WinitApp {
                     message: "the AppKit preference owner is unavailable".into(),
                 }
             })?;
-            let source = super::super::macos::preferences::PreferenceSource::new(&signal);
+            let (source, observers) =
+                super::super::macos::preferences::PreferenceSource::new(&signal);
             self.platform
                 .with_state(|state| state.preferences = Arc::downgrade(&source));
             self.preference_source = Some(source);
+            self.preference_observers = Some(observers);
         }
         Ok(())
     }
@@ -2339,6 +2346,8 @@ impl WinitApp {
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         let preference_source = self.preference_source.take();
         #[cfg(target_os = "macos")]
+        let preference_observers = self.preference_observers.take();
+        #[cfg(target_os = "macos")]
         let screen_observer = self.screen_observer.take();
         #[cfg(target_os = "linux")]
         let host_notices = self.host_notices.take();
@@ -2352,6 +2361,8 @@ impl WinitApp {
         self.platform.displays.stop();
         #[cfg(target_os = "macos")]
         drop(screen_observer);
+        #[cfg(target_os = "macos")]
+        drop(preference_observers);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         drop(preference_source);
         #[cfg(target_os = "linux")]
@@ -2402,6 +2413,8 @@ impl WinitApp {
             }
             // Also runs during unwind: native observation ends before the
             // owner releases its source, without retiring user callback captures.
+            #[cfg(target_os = "macos")]
+            drop(self.preference_observers.take());
             let source = self.preference_source.take();
             drop(source);
             #[cfg(target_os = "linux")]
@@ -3039,6 +3052,8 @@ mod tests {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
             #[cfg(target_os = "macos")]

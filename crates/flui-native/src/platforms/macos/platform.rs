@@ -39,6 +39,10 @@ pub struct MacOSPlatform {
 
     loop_control: Arc<super::loop_control::LoopControl>,
 
+    /// Wakes the owner when AppKit reports a preference change. Declared
+    /// before the source so native observation ends first.
+    _preference_observers: super::preferences::PreferenceObservers,
+
     preferences: Arc<super::preferences::PreferenceSource>,
 
     /// Background executor (GCD-based)
@@ -170,7 +174,8 @@ impl MacOSPlatform {
 
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
-            let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
+            let (preferences, preference_observers) =
+                super::preferences::PreferenceSource::new(&loop_control.owner_signal);
             let displays = Arc::new(display::MacosDisplays::new());
             let screen_observer =
                 display::ScreenObserver::new(&displays, &loop_control.owner_signal);
@@ -187,6 +192,7 @@ impl MacOSPlatform {
                 config,
                 displays,
                 _screen_observer: screen_observer,
+                _preference_observers: preference_observers,
                 notices,
                 affinity: OwnerAffinity::new(),
             };

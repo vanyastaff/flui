@@ -890,6 +890,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         platform: Arc::clone(&platform),
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
+        #[cfg(target_os = "macos")]
+        preference_observers: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
         #[cfg(target_os = "macos")]
@@ -1195,6 +1197,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
             #[cfg(target_os = "macos")]
