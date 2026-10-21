@@ -51,6 +51,28 @@ A pending request for a future UI update. It is distinct from the host's
 notification that execution may proceed and from a frame already in progress.
 _Avoid_: Frame wake, frame execution
 
+**Native backend**:
+FLUI's own integration with one operating environment (Windows, macOS, iOS,
+Android, the Web, Linux), written against that environment's native APIs.
+_Avoid_: Port, platform, shell
+
+**Headless backend**:
+A backend with no operating environment behind it, driven by tests and
+automation. It is not a native backend and never stands in for one.
+_Avoid_: Mock platform, fake backend
+
+**Ready platform**:
+An operating environment whose native backend provides every core integration
+and has passed its conformance checks in an executed run there. Compiling for
+an environment does not make it ready.
+_Avoid_: Supported platform, experimental platform
+
+**Capability**:
+An operating-system service outside the core integrations, reached by a widget
+through a typed handle and provided by a separately versioned crate. Its absence
+on an environment is a value, never an error the widget cannot inspect.
+_Avoid_: Plugin, platform feature
+
 **Owner retirement**:
 The permanent end of a UI execution owner's task and callback lifetime.
 Closing one presentation does not by itself retire its runtime's owner.

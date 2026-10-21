@@ -1,42 +1,400 @@
 # Where FLUI falls short
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (entry 2 records the semantics identifier the mobile and Web adapters must map)
+> [!NOTE]
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; previously major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating; before that minor: entry 2 records the semantics identifier the mobile and Web adapters must map)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
-production app on that environment. Each entry says what is missing, the evidence, who it hurts, an
-agent wall-clock estimate, and the parity document that tracks it. Every entry blocks a ready
-platform ([`platform-parity.md`](platform-parity.md)). Pick from the top, check open pull requests
-first (`gh pr list`), and when a gap closes, update this file and the parity document in the same
-pull request.
+production app on that environment. Each entry says what is missing, the evidence, who it hurts and
+the parity document that tracks it. Every entry blocks a ready platform
+([`platform-parity.md`](platform-parity.md)). Pick from the top, check open pull requests first
+(`gh pr list`), and when a gap closes, update this file and the parity document in the same pull
+request.
 
-## Ranked
+## At a glance
 
-| # | Gap | Environments | Evidence | Who it hurts | Hours | Doc |
-|---|---|---|---|---|---|---|
-| 1 | **No text input on mobile and the Web**: no IME connection, soft keyboard, keyboard insets or input hints | iOS, Android, Web | No `UITextInput`; Android serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through `device android-gallery` a field submitted by Done while the keyboard still composed), never with Gboard, `CursorAnchorInfo` placement, keyboard insets, paste through `OnReceiveContentListener` or stylus handwriting; the Web now serves fields through `EditContext` or a hidden textarea, run only through Chrome's own input-method path in headless Chrome, with no soft keyboard, insets or input hints | Every app with a text field | 45–75 | [Text input](platform-parity.md#text-input) |
-| 2 | **No accessibility on mobile and the Web; desktop off by default and untested with a screen reader** | iOS, Android, Web; desktop | AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM); when they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop; the desktop adapters sit behind the `a11y` feature; the runs read one control, not a Narrator, VoiceOver or Orca session; no locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path | Blind and low-vision users; anyone who must meet accessibility law | 30–50 | [Accessibility](platform-parity.md#accessibility) |
-| 3 | **No system back** | Android, iOS, Web | From targetSdk 36 Android delivers neither `onBackPressed` nor `KEYCODE_BACK`, so only predictive back works; iOS needs its own edge swipe; the Web needs History or Navigation API routing | Every multi-screen mobile or web app | 10–16 | [Input](platform-parity.md#input) |
-| 4 | **Most implemented rows never ran on their environment** | all | 🟡 dominates every column of the parity summary; device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift. Display runs still owed: the macOS and iOS display sources (type-checked, never run), the macOS and iOS window lifecycle (window state and commands, sleep, lock, session end, memory pressure; [#1736](https://github.com/vanyastaff/flui/issues/1736)), a window moved between two monitors on every backend but Windows, and unplugging a monitor on Windows. A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written | Every claim of support | 40–80 | [Summary](platform-parity.md#summary) |
-| 5 | **Native Linux backend (Wayland and X11)** replaces the winit fallback | Wayland, X11 | winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch, no window bounds, and reports no event when a window crosses to another Wayland output of equal scale (the `wl_surface.enter` events belong to its connection; FLUI asks every Wayland window's monitor again when the loop goes idle, never run with a window moved between two outputs) | Linux users | 150–250 | [Summary](platform-parity.md#summary) |
-| 6 | **Clipboard is broken on three environments; no rich formats** | Android, Wayland, Web; all for rich | Android is an in-process mock; pure Wayland without data-control is inert; Web reads only its own writes | Every app with copy and paste | 14–22 | [Clipboard](platform-parity.md#clipboard-and-drag-and-drop) |
-| 7 | **File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere** | all | Every non-Windows backend answers a file dialog with "cancelled"; `open_url` is real on Windows and Web only, and nothing calls it | Every document app; any app with a link | 25–42 | [System services](platform-parity.md#system-services) |
-| 8 | **No native drag and drop** | all | The core runs: in-window sessions, sessions that reach the other windows of their runtime on the source's capture where the backend places its windows, escalation to an OS session, identity and delivery to receivers in `flui-runtime`, exercised headless (ADR-0211). Windows has OLE as both target and source (`IDropTarget` per window, `DoDragDrop` started on the owner window's next turn, frames for every window while its loop rests), run only within one process (`ole_drag_and_drop_on_real_windows`), never with Explorer, another app, a held mouse button, pen or touch. The `Draggable` and `DropTarget` widgets run on it headless, with the cursor, Escape and the keyboard and assistive cut, copy and paste. The Web takes and starts HTML drags (a drag starts only from a press the runtime lifted before the browser's threshold), run in headless Chrome with constructed events. Android takes and starts drags on `FluiView` (ADR-0247): on a Galaxy S21 a drag the probe started dropped its text on its own window, and one crossed into Chrome, which declined it; no drag from or into another app has completed. Still missing: `NSDraggingDestination` and every other native drag source and target. Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets) | Document, media and file-manager apps | 22–36 | [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop) |
-| 9 | **Window control has run only on Windows and an X11 test server** | desktop | Title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop backend ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)), but macOS carries them out and reads them back type-checked only, never run ([#1736](https://github.com/vanyastaff/flui/issues/1736)); X11 ran only on an Xvfb server with the test standing in for the window manager; winit cannot read a title back on Linux, so the snapshot holds the one last set; Wayland never reports minimized; placement restore ran only on Windows; live resize is not audited | Every desktop app | 8–16 | [Windows](platform-parity.md#windows) |
-| 10 | **No custom title bar, popups or owned windows** | desktop | Undecorated Windows windows can't be dragged or resized; no caption hit-testing or snap layouts; menus, tooltips and dropdowns can't leave the window | Apps with modern chrome; every menu and dropdown | 22–36 | [Windows](platform-parity.md#windows) |
-| 11 | **No native menus** | macOS, iPadOS; Windows | No macOS menu bar (no Quit or Edit menu), no native context menus, no Dock menu or jump list | Every macOS app | 20–32 | [Menus](platform-parity.md#menus) |
-| 12 | **Lifecycle holes** | all | Session end is delivered on Windows (checked with sent messages), macOS, iOS, Android, the Web and Linux (there as a notification); the Web reports page freeze, context loss and page hide only against a fake page, not yet from Chrome; sleep, wake and lock reach Windows, macOS and Linux (Linux checked only against a stand-in for logind), and memory pressure Windows, macOS, iOS, Android and Linux | Apps that save state or hold resources | 20–35 | [App lifecycle](platform-parity.md#app-lifecycle) |
-| 13 | **No deep links, URL schemes, file associations or single instance** | all | `on_open_urls` is never called; packaging (app identity) not audited | Apps opened from links, files or a second launch | 15–25 | [App lifecycle](platform-parity.md#app-lifecycle) |
-| 14 | **Most system preferences are read on Windows only** | all but Windows | Contrast, languages and regional formats, Linux and Web text scale, accent colour, gesture timings. Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212) | Users who rely on accessibility settings or another locale | 20–35 | [System preferences](platform-parity.md#system-preferences) |
-| 15 | **Pointer and keyboard gaps** | various | No pen on macOS or Linux; the Windows precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through `cargo xtask device windows-input`); Android touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through `cargo xtask device android-input`, with no hardware touchpad or stylus, and its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through `cargo xtask device android-gallery`, with no physical keyboard, key repeat or dead key; no precise-scroll phases on the Web, whose trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome; the winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad; iPad pointer and hardware keyboard missing; no cursors on mobile; keyboard layout read on Windows only. Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44) | Pen, trackpad and iPad users | 30–50 | [Input](platform-parity.md#input) |
-| 16 | **Mobile system UI** | iOS, Android, Web | Status-bar icon style ran on Android, iOS is type-checked only; no navigation-bar or immersive control (Android enforces edge-to-edge from targetSdk 35); no orientation lock; haptics has both tiers and the frame queue (ADR-0210), but its macOS and iOS paths never ran on a device, the Web's ran only in headless Chrome (activation refused, then `Submitted`, no motor), Android ran only feedback and amplitude waveforms (on a Galaxy S21 without primitives; envelopes and compositions never ran), and Windows pen haptics ran only on a host with no haptic pen, while Windows touchpad and mouse haptics (`InputHapticsManager`) wait for a `windows` crate that ships it ([interaction spec](plans/specs/flui-interaction/completeness/tasks.md)); no safe area on the Web or for the macOS notch. System gesture exclusion is implemented on Android and iOS; it ran on an Android device, never on iOS | Every mobile app | 14–24 | [System UI](platform-parity.md#system-ui) |
-| 17 | **Desktop shell services** | desktop | No tray, notifications, taskbar progress or badge, global shortcuts, launch at login, keep-awake or secure storage | Background, messaging and utility apps | 37–60 | [System services](platform-parity.md#system-services) |
-| 18 | **Text services** | all | No spell check, system edit menu, autofill or handwriting | Writing apps; sign-in forms; tablet users | 22–36 | [Text input](platform-parity.md#text-input) |
-| 19 | **No native views inside the UI** (web view, map, video) | all | Not in the contract; the design shapes compositing, hit-testing and accessibility | Apps that embed a map, browser or player | 30–60 + owner decision | [Windows](platform-parity.md#windows) |
-| 20 | **Window looks**: backdrop materials, transparency, icon, capture exclusion | desktop; mobile for capture | Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux | Apps with a native look; apps showing sensitive data | 9–16 | [Windows](platform-parity.md#windows) |
-| 21 | **Unaudited rows** | desktop, Web | App identity and packaging, live resize | Unknown | 2–4 | [Windows](platform-parity.md#windows) |
-| 22 | **Version floors not enforced, and one GPU backend per environment** | all | The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no backend checks them at start; Android packages API 23 while rendering only through Vulkan (API 24); iOS and macOS bundles inherit whatever deployment target the build had; Windows links a 1607 API unconditionally; the Linux release glibc is the runner's; no GLES or WebGL2 fallback is compiled (ADR-0244) | Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal | 30–55 | [App lifecycle](platform-parity.md#app-lifecycle) |
+| # | Gap | Environments | Who it hurts |
+|--:|:--|:--|:--|
+| 1 | [No text input on mobile and the Web](#1-no-text-input-on-mobile-and-the-web) | iOS, Android, Web | Every app with a text field |
+| 2 | [No accessibility on mobile and the Web](#2-no-accessibility-on-mobile-and-the-web) | iOS, Android, Web; desktop | Blind and low-vision users; anyone who must meet accessibility law |
+| 3 | [No system back](#3-no-system-back) | Android, iOS, Web | Every multi-screen mobile or web app |
+| 4 | [Most implemented rows never ran on their environment](#4-most-implemented-rows-never-ran-on-their-environment) | all | Every claim of support |
+| 5 | [Native Linux backend (Wayland and X11)](#5-native-linux-backend-wayland-and-x11) | Wayland, X11 | Linux users |
+| 6 | [Clipboard is broken on three environments](#6-clipboard-is-broken-on-three-environments) | Android, Wayland, Web; all for rich | Every app with copy and paste |
+| 7 | [File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere](#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere) | all | Every document app; any app with a link |
+| 8 | [No native drag and drop](#8-no-native-drag-and-drop) | all | Document, media and file-manager apps |
+| 9 | [Window control has run only on Windows and an X11 test server](#9-window-control-has-run-only-on-windows-and-an-x11-test-server) | desktop | Every desktop app |
+| 10 | [No custom title bar, popups or owned windows](#10-no-custom-title-bar-popups-or-owned-windows) | desktop | Apps with modern chrome; every menu and dropdown |
+| 11 | [No native menus](#11-no-native-menus) | macOS, iPadOS; Windows | Every macOS app |
+| 12 | [Lifecycle holes](#12-lifecycle-holes) | all | Apps that save state or hold resources |
+| 13 | [No deep links, URL schemes, file associations or single instance](#13-no-deep-links-url-schemes-file-associations-or-single-instance) | all | Apps opened from links, files or a second launch |
+| 14 | [Most system preferences are read on Windows only](#14-most-system-preferences-are-read-on-windows-only) | all but Windows | Users who rely on accessibility settings or another locale |
+| 15 | [Pointer and keyboard gaps](#15-pointer-and-keyboard-gaps) | various | Pen, trackpad and iPad users |
+| 16 | [Mobile system UI](#16-mobile-system-ui) | iOS, Android, Web | Every mobile app |
+| 17 | [Desktop shell services](#17-desktop-shell-services) | desktop | Background, messaging and utility apps |
+| 18 | [Text services](#18-text-services) | all | Writing apps; sign-in forms; tablet users |
+| 19 | [No native views inside the UI (web view, map, video)](#19-no-native-views-inside-the-ui-web-view-map-video) | all | Apps that embed a map, browser or player |
+| 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
+| 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
+| 22 | [Version floors not enforced, and one GPU backend per environment](#22-version-floors-not-enforced-and-one-gpu-backend-per-environment) | all | Users on older systems or GPUs without Vulkan or WebGPU |
+| 23 | [Preferences are polled on macOS and Android](#23-preferences-are-polled-on-macos-and-android) | macOS, Android | Every user on battery; the first thing a reviewer measures |
+| 24 | [No presentation feedback](#24-no-presentation-feedback) | all | Every animated app; every latency claim |
+| 25 | [No HDR, wide gamut or colour management](#25-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
+| 26 | [Sandbox-aware file access is absent](#26-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
+| 27 | [Secure text entry and concealed clipboard entries are absent](#27-secure-text-entry-and-concealed-clipboard-entries-are-absent) | all | Every sign-in form; password managers |
+| 28 | [Input latency modes and high-rate sampling are partial](#28-input-latency-modes-and-high-rate-sampling-are-partial) | all but Windows and the Web | Drawing, games and anything that tracks a finger or pen |
+| 29 | [Distribution is unaudited](#29-distribution-is-unaudited) | all | Everyone who ships |
+| 30 | [Activation ignores the OS focus rules](#30-activation-ignores-the-os-focus-rules) | Windows, Wayland | Apps brought forward by a link, a second launch or a notification |
+| 31 | [Panic containment at the OS boundary is not gated](#31-panic-containment-at-the-os-boundary-is-not-gated) | all | Every app, on the day a callback panics |
+| 32 | [Live resize is unaudited and unscheduled](#32-live-resize-is-unaudited-and-unscheduled) | desktop, Web | Every user who resizes a window by dragging its edge |
+| 33 | [No present-mode, queue-depth, VRR or tearing control](#33-no-present-mode-queue-depth-vrr-or-tearing-control) | desktop, iOS, Android | Games, drawing and latency-sensitive apps |
+| 34 | [Launch handoff on mobile and the Web](#34-launch-handoff-on-mobile-and-the-web) | iOS, Android, Web | Every mobile and web app in its first second |
+| 35 | [Quality-bar partials with no entry](#35-quality-bar-partials-with-no-entry) | all | Everyone who relies on a platform claim; maintainers who cannot replay a failure |
+| 36 | [Power-aware pacing and throttling](#36-power-aware-pacing-and-throttling) | all | Every user on battery or a thermally limited device |
+| 37 | [Locale edge: layout direction, per-app language, system fonts and fallback](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback) | all | Apps in right-to-left or non-Latin languages; users who set a language for one app |
+| 38 | [Accessibility bridge fidelity (properties and announcements)](#38-accessibility-bridge-fidelity-properties-and-announcements) | desktop, iOS, Android, Web | Screen-reader users |
+
+## Entries
+
+### 1. No text input on mobile and the Web
+
+> **Environments:** iOS, Android, Web · **Who it hurts:** Every app with a text field · **Parity:** [Text input](platform-parity.md#text-input)
+
+- No IME connection, soft keyboard, keyboard insets or input hints.
+- **Missing on iOS:** no `UITextInput`.
+- **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through `device android-gallery` a field submitted by Done while the keyboard still composed).
+- **Missing on Android:** never run with Gboard, `CursorAnchorInfo` placement, keyboard insets, paste through `OnReceiveContentListener` or stylus handwriting.
+- **Runs on the Web:** it now serves fields through `EditContext` or a hidden textarea, run only through Chrome's own input-method path in headless Chrome.
+- **Missing on the Web:** no soft keyboard, insets or input hints.
+- **Missing everywhere:** client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting, and a session that survives a window move, resize, DPI change and focus loss, are rows of their own under [Text input](platform-parity.md#text-input). Other frameworks show the failures: macOS dictation silently drops text when `selectedRange` returns `NSNotFound` ([rust-windowing/winit#4666](https://github.com/rust-windowing/winit/issues/4666), [#3617](https://github.com/rust-windowing/winit/issues/3617)), a Korean input method stops editing inline after the window moves ([DioxusLabs/dioxus#5246](https://github.com/DioxusLabs/dioxus/issues/5246)), and the input-method output of egui carries a position only ([emilk/egui#7941](https://github.com/emilk/egui/issues/7941)).
+
+### 2. No accessibility on mobile and the Web
+
+> **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
+
+- Desktop is off by default and untested with a screen reader.
+- AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
+- When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
+- The desktop adapters sit behind the `a11y` feature.
+- The runs read one control, not a Narrator, VoiceOver or Orca session.
+- No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
+
+### 3. No system back
+
+> **Environments:** Android, iOS, Web · **Who it hurts:** Every multi-screen mobile or web app · **Parity:** [Input](platform-parity.md#input)
+
+- From targetSdk 36 Android delivers neither `onBackPressed` nor `KEYCODE_BACK`, so only predictive back works.
+- iOS needs its own edge swipe.
+- The Web needs History or Navigation API routing.
+
+### 4. Most implemented rows never ran on their environment
+
+> **Environments:** all · **Who it hurts:** Every claim of support · **Parity:** [Summary](platform-parity.md#summary)
+
+- 🟡 dominates every column of the parity summary.
+- Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
+- Display runs still owed:
+  - the macOS and iOS display sources (type-checked, never run)
+  - the macOS and iOS window lifecycle (window state and commands, sleep, lock, session end, memory pressure; [#1736](https://github.com/vanyastaff/flui/issues/1736))
+  - a window moved between two monitors on every backend but Windows
+  - unplugging a monitor on Windows
+- A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
+
+### 5. Native Linux backend (Wayland and X11)
+
+> **Environments:** Wayland, X11 · **Who it hurts:** Linux users · **Parity:** [Summary](platform-parity.md#summary)
+
+- It replaces the winit fallback.
+- winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch and no window bounds.
+- winit reports no event when a window crosses to another Wayland output of equal scale (the `wl_surface.enter` events belong to its connection).
+- FLUI asks every Wayland window's monitor again when the loop goes idle, never run with a window moved between two outputs.
+
+### 6. Clipboard is broken on three environments
+
+> **Environments:** Android, Wayland, Web; all for rich · **Who it hurts:** Every app with copy and paste · **Parity:** [Clipboard](platform-parity.md#clipboard-and-drag-and-drop)
+
+- No rich formats.
+- Android is an in-process mock.
+- Pure Wayland without data-control is inert.
+- Web reads only its own writes.
+
+### 7. File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere
+
+> **Environments:** all · **Who it hurts:** Every document app; any app with a link · **Parity:** [System services](platform-parity.md#system-services)
+
+- Every non-Windows backend answers a file dialog with "cancelled".
+- `open_url` is real on Windows and Web only, and nothing calls it.
+
+### 8. No native drag and drop
+
+> **Environments:** all · **Who it hurts:** Document, media and file-manager apps · **Parity:** [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop)
+
+- The core runs: in-window sessions, sessions that reach the other windows of their runtime on the source's capture where the backend places its windows, escalation to an OS session, identity and delivery to receivers in `flui-runtime`, exercised headless (ADR-0211). The `Draggable` and `DropTarget` widgets run on it headless, with the cursor, Escape and the keyboard and assistive cut, copy and paste.
+- Windows has OLE as both target and source (`IDropTarget` per window, `DoDragDrop` started on the owner window's next turn, frames for every window while its loop rests), run only within one process (`ole_drag_and_drop_on_real_windows`), never with Explorer, another app, a held mouse button, pen or touch.
+- The Web takes and starts HTML drags (a drag starts only from a press the runtime lifted before the browser's threshold), run in headless Chrome with constructed events.
+- Android takes and starts drags on `FluiView` (ADR-0247): on a Galaxy S21 a drag the probe started dropped its text on its own window, and one crossed into Chrome, which declined it; no drag from or into another app has completed.
+- **Still missing:** `NSDraggingDestination` and every other native drag source and target.
+- Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets).
+
+### 9. Window control has run only on Windows and an X11 test server
+
+> **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
+
+- **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop backend ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
+- **Missing:** macOS carries them out and reads them back type-checked only, never run ([#1736](https://github.com/vanyastaff/flui/issues/1736)).
+- X11 ran only on an Xvfb server with the test standing in for the window manager.
+- winit cannot read a title back on Linux, so the snapshot holds the one last set.
+- Wayland never reports minimized.
+- Placement restore ran only on Windows; live resize is not audited.
+
+### 10. No custom title bar, popups or owned windows
+
+> **Environments:** desktop · **Who it hurts:** Apps with modern chrome; every menu and dropdown · **Parity:** [Windows](platform-parity.md#windows)
+
+- Undecorated Windows windows can't be dragged or resized.
+- No caption hit-testing or snap layouts.
+- Menus, tooltips and dropdowns can't leave the window.
+
+### 11. No native menus
+
+> **Environments:** macOS, iPadOS; Windows · **Who it hurts:** Every macOS app · **Parity:** [Menus](platform-parity.md#menus)
+
+- No macOS menu bar (no Quit or Edit menu).
+- No native context menus, no Dock menu or jump list.
+
+### 12. Lifecycle holes
+
+> **Environments:** all · **Who it hurts:** Apps that save state or hold resources · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- Session end is delivered on Windows (checked with sent messages), macOS, iOS, Android, the Web and Linux (there as a notification).
+- The Web reports page freeze, context loss and page hide only against a fake page, not yet from Chrome.
+- Sleep, wake and lock reach Windows, macOS and Linux (Linux checked only against a stand-in for logind), and memory pressure Windows, macOS, iOS, Android and Linux.
+
+### 13. No deep links, URL schemes, file associations or single instance
+
+> **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- `on_open_urls` is never called.
+- Packaging (app identity) not audited.
+
+### 14. Most system preferences are read on Windows only
+
+> **Environments:** all but Windows · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
+
+- Contrast, languages and regional formats, Linux and Web text scale, accent colour, gesture timings.
+- Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).
+- Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 37](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
+
+### 15. Pointer and keyboard gaps
+
+> **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
+
+- **Missing:** no pen on macOS or Linux; iPad pointer and hardware keyboard missing; no cursors on mobile; keyboard layout read on Windows only.
+- Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through `cargo xtask device windows-input`).
+- Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through `cargo xtask device android-input`, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through `cargo xtask device android-gallery`, with no physical keyboard, key repeat or dead key.
+- Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
+- The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
+- Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
+
+### 16. Mobile system UI
+
+> **Environments:** iOS, Android, Web · **Who it hurts:** Every mobile app · **Parity:** [System UI](platform-parity.md#system-ui)
+
+- Status-bar icon style ran on Android, iOS is type-checked only.
+- **Missing:** no navigation-bar or immersive control (Android enforces edge-to-edge from targetSdk 35); no orientation lock; no safe area on the Web or for the macOS notch.
+- Haptics has both tiers and the frame queue (ADR-0210), but:
+  - its macOS and iOS paths never ran on a device
+  - the Web's ran only in headless Chrome (activation refused, then `Submitted`, no motor)
+  - Android ran only feedback and amplitude waveforms (on a Galaxy S21 without primitives; envelopes and compositions never ran)
+  - Windows pen haptics ran only on a host with no haptic pen, while Windows touchpad and mouse haptics (`InputHapticsManager`) wait for a `windows` crate that ships it ([interaction spec](plans/specs/flui-interaction/completeness/tasks.md))
+- System gesture exclusion is implemented on Android and iOS; it ran on an Android device, never on iOS.
+
+### 17. Desktop shell services
+
+> **Environments:** desktop · **Who it hurts:** Background, messaging and utility apps · **Parity:** [System services](platform-parity.md#system-services)
+
+- No tray, notifications, taskbar progress or badge, global shortcuts, launch at login, keep-awake or secure storage.
+
+### 18. Text services
+
+> **Environments:** all · **Who it hurts:** Writing apps; sign-in forms; tablet users · **Parity:** [Text input](platform-parity.md#text-input)
+
+- No spell check, system edit menu, autofill or handwriting.
+- Handwriting, dictation and reconversion also need the text-input client queries and the session that survives a window move, resize, DPI change and focus loss; those rows sit under [Text input](platform-parity.md#text-input) and are tracked with [entry 1](#1-no-text-input-on-mobile-and-the-web).
+
+### 19. No native views inside the UI (web view, map, video)
+
+> **Environments:** all · **Who it hurts:** Apps that embed a map, browser or player · **Parity:** [Windows](platform-parity.md#windows)
+
+- Not in the contract; the design shapes compositing, hit-testing and accessibility.
+- Needs an owner decision.
+
+### 20. Window looks
+
+> **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
+
+- Backdrop materials, transparency, icon, capture exclusion.
+- Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux.
+
+### 21. Unaudited rows
+
+> **Environments:** desktop, Web · **Who it hurts:** Unknown · **Parity:** [Windows](platform-parity.md#windows)
+
+- App identity and packaging, live resize.
+
+### 22. Version floors not enforced, and one GPU backend per environment
+
+> **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no backend checks them at start.
+- Android packages API 23 while rendering only through Vulkan (API 24).
+- iOS and macOS bundles inherit whatever deployment target the build had.
+- Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
+- No GLES or WebGL2 fallback is compiled (ADR-0244).
+
+### 23. Preferences are polled on macOS and Android
+
+> **Environments:** macOS, Android · **Who it hurts:** Every user on battery; the first thing a reviewer measures · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- An idle app wakes every 500 ms.
+- `macos/preferences.rs` and `android/preferences.rs` sample on a timer instead of `NSWorkspace`/`UIAccessibility`/`NSNotificationCenter` and `ContentObserver`/`ComponentCallbacks2`.
+- The Galaxy S21 run saw the loop wake twice a second after Home.
+
+### 24. No presentation feedback
+
+> **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
+
+- Nothing reports when a frame reached the screen.
+- No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
+- A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
+
+### 25. No HDR, wide gamut or colour management
+
+> **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
+
+- The platform layer has no surface colour space, headroom query or display-profile change.
+- The engine's colour spaces stop at images and gradients.
+- Android has public headroom APIs (`Display.getHdrSdrRatio`, API 34, with a listener for changes); the Web reports capability only and cannot observe headroom. HDR and SDR-white change events are a parity row of their own.
+
+### 26. Sandbox-aware file access is absent
+
+> **Environments:** all desktop and mobile · **Who it hurts:** Every app distributed through a store or Flatpak · **Parity:** [System services](platform-parity.md#system-services)
+
+- No security-scoped bookmarks, portals, AppContainer-aware paths, Storage Access Framework or document-scoped URLs.
+- `data_dirs` and the dialogs assume an unsandboxed process, so an App Store, Flatpak or MSIX build gets paths it cannot open.
+- The manifests are part of the same gap: nothing generates macOS entitlements, Flatpak `finish-args`, Snap interfaces or MSIX capabilities from declared capabilities (the parity row "Sandbox and entitlement manifests generated from declared capabilities"). Tauri's autostart plugin shows the cost: it writes a launcher path that cannot run outside the Flatpak sandbox ([tauri-apps/plugins-workspace#3166](https://github.com/tauri-apps/plugins-workspace/issues/3166)).
+
+### 27. Secure text entry and concealed clipboard entries are absent
+
+> **Environments:** all · **Who it hurts:** Every sign-in form; password managers · **Parity:** [Text input](platform-parity.md#text-input)
+
+- No `EnableSecureEventInput`, `isSecureTextEntry`, `IME_FLAG_NO_PERSONALIZED_LEARNING`, clipboard-history exclusion or sensitive clip flags.
+- A password typed in FLUI reaches input-method learning and the clipboard manager.
+- Android's `ClipDescription.EXTRA_IS_SENSITIVE` (API 33) is only a rendering hint, so the Android cell of the concealed-clipboard row can be at most partial by design.
+- Platform-edge diagnostics have no redaction check: protected-field text, clipboard payloads and URLs with tokens must never reach the `tracing` targets or the `native-capture` journal, which will carry text and URLs once more event families are recorded (the [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) lists them under "Data to exclude").
+
+### 28. Input latency modes and high-rate sampling are partial
+
+> **Environments:** all but Windows and the Web · **Who it hurts:** Drawing, games and anything that tracks a finger or pen · **Parity:** [Input](platform-parity.md#input)
+
+- `InputLatency` is set by nobody.
+- Android cannot honour it on `NativeActivity`.
+- iOS coalesced and predicted touches and the Linux and macOS paths are not audited.
+- Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the Wayland, X11, Android and Web conversions are not audited.
+
+### 29. Distribution is unaudited
+
+> **Environments:** all · **Who it hurts:** Everyone who ships · **Parity:** [Distribution](platform-parity.md#distribution)
+
+- Packages, signing, notarisation, identity.
+- `flui build` stages unsigned `.app`s and a debug APK; no MSIX, Flatpak, AAB, notarisation or Authenticode.
+- The identity that notifications, URL schemes, portals and jump lists need is not checked into the package.
+- Entitlement and sandbox manifests (macOS and iOS entitlements, Flatpak `finish-args`, Snap interfaces, MSIX capabilities, Android permissions) are not generated from declared capabilities; the Android template declares `VIBRATE` itself.
+
+### 30. Activation ignores the OS focus rules
+
+> **Environments:** Windows, Wayland · **Who it hurts:** Apps brought forward by a link, a second launch or a notification · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- No `xdg-activation` token.
+- Windows re-foregrounds whatever is already in front.
+- macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is documented by Apple, which also marks `activate(ignoringOtherApps:)` deprecated; neither is audited.
+
+### 31. Panic containment at the OS boundary is not gated
+
+> **Environments:** all · **Who it hurts:** Every app, on the day a callback panics · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `panic_boundary` guards 210 call sites by hand.
+- No gate proves every `extern "C"` passes through one, and a missed boundary unwinds into C.
+
+### 32. Live resize is unaudited and unscheduled
+
+> **Environments:** desktop, Web · **Who it hurts:** Every user who resizes a window by dragging its edge · **Parity:** [Windows](platform-parity.md#windows)
+
+- No environment has been audited: the row "Live resize without jitter" is ❔ on Windows, macOS, Wayland, X11 and the Web, and entries 9 and 21 mention it only in passing.
+- Windows has no `WM_ENTERSIZEMOVE` handling outside the DirectManipulation tests. That message opens a modal loop inside `DefWindowProc` that lasts until the drag ends ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-entersizemove)); winit reports that its `ControlFlow` is ignored there and that continuous redraws make a drag choppy ([rust-windowing/winit#3272](https://github.com/rust-windowing/winit/issues/3272), [#4708](https://github.com/rust-windowing/winit/issues/4708)).
+- Metal presents asynchronously to Core Animation transactions unless `CAMetalLayer.presentsWithTransaction` is set ([Apple](https://developer.apple.com/documentation/quartzcore/cametallayer/presentswithtransaction)); Wayland needs an `ack_configure` before the committing frame and frame callbacks to pace the redraw; X11 has `_NET_WM_SYNC_REQUEST`. None of these is audited here.
+- The engine presents with `Fifo`, which blocks on vsync and ghosts a stale frame during the Windows modal resize loop; its own notes name `DXGI_SCALING_NONE` as the only real fix, which wgpu 30 does not expose. `examples/resize_jitter_probe.rs` saw no size-mismatched acquire in a 40-resize burst into the Metal swapchain; the compositor-side half is unobserved.
+- It is among the most-reported defects of comparable frameworks ([emilk/egui#903](https://github.com/emilk/egui/issues/903) is a fast-resize flicker). A reference run should record its trade-off in the row note: Flutter's Windows embedder blocks the platform thread for up to 100 ms for a frame at the new size.
+- Pass criteria: a scripted two-second border drag with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded.
+
+### 33. No present-mode, queue-depth, VRR or tearing control
+
+> **Environments:** desktop, iOS, Android · **Who it hurts:** Games, drawing and latency-sensitive apps · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
+
+- The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing.
+- Presentation feedback (entry 24) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
+- Windows tearing needs `DXGI_FEATURE_PRESENT_ALLOW_TEARING` and `DXGI_PRESENT_ALLOW_TEARING`, which can only be used with sync interval 0 ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/variable-refresh-rate-displays)); Wayland has `wp_tearing_control_v1`, `fifo-v1` and `commit-timing-v1`.
+- Queue depth costs latency: the default DXGI queue of up to three frames adds about 16–32 ms of input latency in another framework ([libsdl-org/SDL#15656](https://github.com/libsdl-org/SDL/issues/15656)).
+- The Web has nothing to control: `requestAnimationFrame` is its only cadence.
+
+### 34. Launch handoff on mobile and the Web
+
+> **Environments:** iOS, Android, Web · **Who it hurts:** Every mobile and web app in its first second · **Parity:** [Windows](platform-parity.md#windows)
+
+- The OS shows a splash before the first frame on these environments, and the first frame must match it: Android 12 and later through the `SplashScreen` API ([Android documentation](https://developer.android.com/develop/ui/views/launch/splash-screen)), the iOS launch screen, and the page background before a Web app's wasm loads.
+- Nothing aligns them today: the generated Web page sets no background before the wasm loads and its manifest `theme_color` is `#FFFFFF`, the generated Android manifest sets no splash or window background, and iOS declares an empty `UILaunchScreen`.
+- The parity row "Show without a blank first frame" covers the desktop only, where the window is created hidden and shown after the first presented frame; Electron does the same with a hidden window shown on `ready-to-show` and a `backgroundColor`.
+- A dark-mode user should see the dark splash and the dark first frame, not a white flash between them.
+
+### 35. Quality-bar partials with no entry
+
+> **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- Honest absence: nine spellings of "not here" exist today, and the Android clipboard is an in-process mock (ADR-0152, ADR-0254). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
+- Replay: pointer, key and wheel traces replay on the headless backend; IME, lifecycle, preference and display recordings do not exist.
+- The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
+- Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
+
+### 36. Power-aware pacing and throttling
+
+> **Environments:** all · **Who it hurts:** Every user on battery or a thermally limited device · **Parity:** [System preferences](platform-parity.md#system-preferences)
+
+- Power state (battery, low-power mode, thermal) is read on no environment, and nothing acts on it: no row named a frame cap or a background pause before.
+- The native signals exist: Apple's `ProcessInfo.thermalState` and `isLowPowerModeEnabled` with a change notification, Android's `PowerManager.getCurrentThermalStatus()` and `addThermalStatusListener`, Windows battery saver through `SYSTEM_POWER_STATUS.SystemStatusFlag` and `RegisterPowerSettingNotification`, and the Linux portal's `PowerProfileMonitor.power-saver-enabled`.
+- Apple's `CADisplayLink.preferredFrameRateRange` is only a hint that Low Power Mode, a critical thermal state and accessibility settings can override, so an app that asks for 120 Hz still has to follow the state.
+- The check forces each state and asserts a delivery within one event-loop turn and a frame-rate or work reduction.
+
+### 37. Locale edge: layout direction, per-app language, system fonts and fallback
+
+> **Environments:** all · **Who it hurts:** Apps in right-to-left or non-Latin languages; users who set a language for one app · **Parity:** [System preferences](platform-parity.md#system-preferences)
+
+- Entry 14 names languages and regional formats only. Layout direction, per-app language, and system fonts and fallback have no reading in the platform layer.
+- Android 13 adds per-app language preferences and `setApplicationLocales` ([Android documentation](https://developer.android.com/guide/topics/resources/app-languages)); iOS has a per-app language setting; a right-to-left layout follows from the locale.
+- Text layout resolves fonts through `fontdb` in `flui-painting`; DirectWrite `IDWriteFontFallback`, Android `SystemFonts` (API 29), CoreText and fontconfig are the platform answers to which font draws a character the requested family lacks.
+- The check is a locale matrix (en-US, ar-EG for right-to-left, ja-JP, hi-IN with its numbering) on every OS: list order, first weekday, 12 or 24 hour clock, per-app override, and CJK and emoji text without missing-glyph boxes.
+
+### 38. Accessibility bridge fidelity (properties and announcements)
+
+> **Environments:** desktop, iOS, Android, Web · **Who it hurts:** Screen-reader users: a control announced without its value, hint or state, or a change nobody hears · **Parity:** [Accessibility](platform-parity.md#accessibility)
+
+- Entry 2 is about missing adapters; a bridge that exists can still drop properties or announcements, and the two fail independently of the tree and actions.
+- Another framework's Linux bridge drops a field's `value` and `hint` ([flutter/flutter#194638](https://github.com/flutter/flutter/issues/194638)) and gives no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)).
+- The parity rows "Properties (value, hint, description, state)" and "Announcements and live regions" are ❔ on the desktop adapters and ❌ where there is no adapter at all.
+- Each needs a check with the real assistive technology on each OS that reads role, name, value, hint, state, actions, focus order and announcements; a harness that registers AT-SPI listeners and matches only strings carrying a nonce keeps any other source from producing a hit.
 
 ## Revision history
+
+<details>
+<summary>Revision history</summary>
 
 | Date | Change | Summary |
 |---|---|---|
@@ -72,3 +430,8 @@ pull request.
 | 2026-10-21 | minor | Gap 1: Android and Web read `TextInputPurpose` (the Android keyboard type, the Web `inputmode`); no device or browser run yet, and iOS and Wayland still read none of it |
 | 2026-10-20 | minor | Entry 2 records the identifier obligation (ADR-0240) for the Android, iOS and Web adapters |
 | 2026-10-21 | minor | `InputLatency` on `WindowOptions`: the web reads `pointerrawupdate` for a `Low` window (type-checked for wasm32, not run in a browser); Android is not wired because `NativeActivity` takes touch from the native input queue and the Java `requestUnbufferedDispatch` does not reach it, so it needs `GameActivity` or a polling mode first |
+| 2026-10-20 | major | Entries 23–31 join from the platform-layer quality bar: preferences polled on macOS and Android, no presentation feedback, no HDR or colour management, no sandbox-aware file access, no secure text entry or concealed clipboard, partial latency modes, unaudited distribution, activation without OS focus rules, panic containment not gated. By impact 23 belongs beside 4 and 26 beside 7; the numbers are appended so earlier references stay valid |
+| 2026-10-20 | minor | Restructured for reading: a summary table, one section per entry, the hours column removed |
+| 2026-10-20 | minor | Entries 32–38 join from the quality-bar research: live resize unaudited and unscheduled, no present-mode, queue-depth, VRR or tearing control, launch handoff on mobile and the Web, quality-bar partials with no entry, power-aware pacing, the locale edge, accessibility bridge fidelity; entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30 gain a bullet each (client queries and session survival, the locale rows, entitlement manifests, secrets in diagnostics, timestamp conversion, and the corrections to the presentation-feedback, HDR and activation evidence) |
+
+</details>

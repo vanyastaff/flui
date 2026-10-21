@@ -96,9 +96,11 @@ backend change needs `cargo heli nextest run -p flui-platform` by hand.
 
 ## ADR Policy
 
-ADRs (`docs/adr/`) record the cross-crate decisions the code follows. A change of decision is a
-new ADR with `Supersedes:`, and `Superseded-by:` on the old one; code that disagrees with an
-accepted ADR is a defect in one of them.
+ADRs (`docs/adr/`) record the cross-crate decisions the code follows, in the MADR shape
+[`docs/adr/README.md`](docs/adr/README.md) gives: drivers, every option with its pros and cons,
+the decision as a Rust shape, and how compliance is confirmed. A change of decision is a new ADR
+with `Supersedes:`, and `Superseded-by:` on the old one; code that disagrees with an accepted ADR
+is a defect in one of them.
 
 ## Extending FLUI
 

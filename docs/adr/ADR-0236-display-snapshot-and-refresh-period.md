@@ -6,6 +6,10 @@
   capability check style only; the Android refresh-rate hint it describes remains in force.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 7's Android
   idle poll only: the Android loop blocks until woken.
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), decision 5's delivery shape only: the
+  window's display is a field of the window state snapshot and "your display may have changed"
+  arrives through the window handler's state-changed obligation, not through `display_id()` and a
+  callback. The snapshot, its keys and the refresh period stand.
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
   the fallback period comes from. The fallback deadline, its 0.95 factor and the rest of the
   decision are unchanged.

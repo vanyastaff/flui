@@ -3,6 +3,13 @@
 - **Status:** Accepted
 - **Date:** 2026-09-14
 - **Amends:** ADR-0045 decision 1 and §7 (see the end of this record)
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window itself as the
+  `Send + Sync` surface target (decision 1's `Arc<dyn PlatformWindow>` handed to
+  `Renderer::new`, and decision 5's `Unavailable` obligation on every `PlatformWindow`, which
+  moves to the separate surface target the window hands out) and decision 6's
+  `on_surface_status_change` registration (it becomes the window handler's `surface_changed`; the
+  signal's release-and-rebuild semantics stay). The `WindowTarget` bound, the lease, probing
+  before creating and the engine side stay.
 
 *A `wgpu::Surface<'static>` is sound only while the window behind it exists. The engine used to
 prove that with another crate's convention; now it proves it with ownership, and recovery asks

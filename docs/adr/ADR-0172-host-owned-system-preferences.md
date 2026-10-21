@@ -2,7 +2,9 @@
 
 - **Status:** Accepted architecture; gesture/wheel consumers implemented with local acceptance; broader implementation and acceptance pending.
 - **Date:** 2026-10-08
-- **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §4 only.
+- **Supersedes:** the system-preferences section of the 2026-10-06 proposal of
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md); the accepted ADR-0151 (2026-10-20)
+  leaves system preferences to this ADR.
 - **Amended by:** [ADR-0212](ADR-0212-system-preferences-for-input.md) (haptics preference,
   per-display gesture values, accessibility timing floors, preset order)
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),

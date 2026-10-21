@@ -13,6 +13,11 @@
   `flui-semantics` and `flui-platform` moves from layer 2 to layer 3; that placement is accepted
   on merge of the UI runtime-core move (ADR-0083 move 4), which ships it.
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
+  contract crate holds), §2 (the crates' names and what the core host keeps) and §5's Linux row
+  (winit as the Linux backend), and for §4 step 2 jointly with
+  [ADR-0254](ADR-0254-window-contract.md) (callbacks lose `Send`). The remaining sections are
+  unchanged.
 - **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
   replaced by handle-derived availability and `InputCapabilities`)
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,

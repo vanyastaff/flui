@@ -4,6 +4,13 @@
   the drop target, the drag source, the content receiver and the handwriting request; run on a
   Galaxy S21 (Android 15) through `cargo xtask device android-input`.
 - **Date:** 2026-10-17
+- **Superseded-by:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) for item 1's embedding of the dex
+  in the library with `include_bytes!` and its "every packager ships that copy" (the sources, the
+  checked-in dex, the digest gate and "no JDK" stand), item 2 except its first sentence (the
+  in-memory and file loaders and the `hasCode="false"` manifest), and item 9 (taken there). Items 3
+  to 8 and 10 stand, and item 3's "that loader" is the Activity's class loader. The "Alternatives
+  rejected" entry on a dex in the APK and the consequence "no packaging path changes" follow items 1
+  and 2.
 - **Amends:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the Android row of its
   platform mapping, and its GameActivity hypothesis), [ADR-0211](ADR-0211-unified-drag-and-drop.md)
   (the Android target and source)
