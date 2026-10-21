@@ -98,6 +98,11 @@ pub(crate) struct MotionFrame {
     linear: [f64; 4],
 }
 
+/// The chord that differentiates a route, relative to its coordinates: far
+/// above the rounding of the largest of them, far below any curvature a
+/// perspective route shows within it.
+const STEP_RELATIVE: f64 = 1.0 / 65_536.0;
+
 impl MotionFrame {
     /// The root's own space.
     pub(crate) const IDENTITY: Self = Self {
@@ -122,14 +127,31 @@ impl MotionFrame {
         // The chords go through the plane unprojection that localizes every
         // delivered position, so a perspective route is differentiated by
         // the mapping the recognizer actually sees.
-        let (Some((ox, oy)), Some((x_x, x_y)), Some((y_x, y_y))) = (
-            transform.unproject_to_plane(at.dx, at.dy),
-            transform.unproject_to_plane(at.dx + 1.0, at.dy),
-            transform.unproject_to_plane(at.dx, at.dy + 1.0),
+        let Some((ox, oy)) = transform.unproject_to_plane(at.dx, at.dy) else {
+            return Self::IDENTITY;
+        };
+        // The step scales with the coordinates in play: a fixed one pixel
+        // vanishes next to a huge translation, on either side of the map.
+        let step = at
+            .dx
+            .abs()
+            .max(at.dy.abs())
+            .max(ox.abs())
+            .max(oy.abs())
+            .max(1.0)
+            * STEP_RELATIVE;
+        let (Some((x_x, x_y)), Some((y_x, y_y))) = (
+            transform.unproject_to_plane(at.dx + step, at.dy),
+            transform.unproject_to_plane(at.dx, at.dy + step),
         ) else {
             return Self::IDENTITY;
         };
-        let linear = [x_x - ox, y_x - ox, x_y - oy, y_y - oy];
+        let linear = [
+            (x_x - ox) / step,
+            (y_x - ox) / step,
+            (x_y - oy) / step,
+            (y_y - oy) / step,
+        ];
         if linear.iter().all(|value| value.is_finite()) {
             Self { linear }
         } else {
@@ -245,5 +267,25 @@ pub(super) fn motion_owner(
         (None, Some((axial, _, _))) => Some(axial),
         (Some(free), None) => Some(free),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quarter turn behind a huge translation: a one-pixel chord rounds
+    /// away on the local side, and the frame must still turn root `y` into
+    /// local `x`.
+    #[test]
+    fn frame_survives_a_large_translation() {
+        let transform = Matrix4::translation(-1e20, 0.0, 0.0)
+            * Matrix4::rotation_z(std::f64::consts::FRAC_PI_2);
+        let frame = MotionFrame::from_root_to_local(&transform, Offset::new(1e20, 0.0));
+        let local = frame.localize(Offset::new(0.0, 20.0));
+        assert!(
+            (local.dx.abs() - 20.0).abs() < 1e-3 && local.dy.abs() < 1e-3,
+            "{local:?}"
+        );
     }
 }
