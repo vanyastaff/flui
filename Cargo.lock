@@ -2166,7 +2166,6 @@ dependencies = [
  "android-activity",
  "anyhow",
  "arboard",
- "bitflags 2.13.2",
  "block2 0.6.2",
  "console_error_panic_hook",
  "core-foundation 0.10.1",

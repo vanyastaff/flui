@@ -210,8 +210,6 @@ pub use platforms::AndroidPlatform;
 // Re-export platform implementations
 #[cfg(target_os = "ios")]
 pub use platforms::IOSPlatform;
-#[cfg(target_os = "linux")]
-pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
@@ -278,7 +276,8 @@ pub use traits::{
 ///    - Selection order (first match wins):
 ///      - `cfg(windows)` → `WindowsPlatform`
 ///      - `cfg(target_os = "macos")` → `MacOSPlatform`
-///      - `cfg(target_os = "linux")` → `LinuxPlatform`
+///      - `cfg(target_os = "linux")` → `WinitPlatform` (the `winit-backend`
+///        feature)
 ///      - `cfg(target_os = "android")` → `AndroidPlatform`
 ///      - `cfg(target_os = "ios")` → `IOSPlatform`
 ///      - `cfg(target_arch = "wasm32")` → `WebPlatform`
@@ -298,8 +297,8 @@ pub use traits::{
 /// - **macOS**: Returns `MacOSPlatform` - the native AppKit backend: windows,
 ///   input, clipboard, IME, displays, and a vsync-paced frame loop
 /// - **Linux**: Returns `WinitPlatform` if the `winit-backend` feature is
-///   enabled (native Wayland/X11 — `LinuxPlatform` — is not implemented yet,
-///   roadmap Cross.P); otherwise returns an error. `flui-app` enables
+///   enabled (the native Wayland and X11 host replaces it, ADR-0151
+///   section 11); otherwise returns an error. `flui-app` enables
 ///   `winit-backend` for Linux builds.
 /// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
 ///   available)
@@ -377,10 +376,10 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
     {
-        // Native Wayland/X11 is not implemented yet (`LinuxPlatform` is a
-        // stub — roadmap Cross.P); the winit fallback backend is the Linux
-        // path until then. It is opt-in via `winit-backend` because it pulls
-        // in `arboard` (clipboard); `flui-app` enables it for Linux builds.
+        // The winit fallback host is the Linux path until the native Wayland
+        // and X11 host replaces it (ADR-0151 section 11). It is opt-in via
+        // `winit-backend` because it pulls in `arboard` (clipboard); `flui-app`
+        // enables it for Linux builds.
         #[cfg(feature = "winit-backend")]
         {
             Ok(Box::new(WinitPlatform::new()))

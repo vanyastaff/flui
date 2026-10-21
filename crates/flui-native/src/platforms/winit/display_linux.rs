@@ -124,7 +124,7 @@ impl WinitDisplaySource {
     pub(super) fn is_wayland(&self) -> bool {
         match &*self.watcher.lock() {
             Some((protocol, _)) => *protocol == Protocol::Wayland,
-            None => crate::platforms::linux::LinuxPlatform::is_wayland(),
+            None => Protocol::current() == Some(Protocol::Wayland),
         }
     }
 

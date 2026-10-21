@@ -123,8 +123,8 @@ wasm-bindgen-futures = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { workspace = true }
 
-# Linux desktop: native Wayland/X11 (`LinuxPlatform`) is a stub (roadmap
-# Cross.P), so enable flui-native's winit fallback backend here. Additive
+# Linux desktop: the native Wayland and X11 host does not exist yet (ADR-0151
+# section 11), so enable flui-native's winit fallback host here. Additive
 # `features` on a target-scoped re-declaration of an existing dependency —
 # Windows/macOS builds stay on their native backends and never pull in
 # `winit-backend`'s `arboard` (clipboard) dependency.

@@ -6,7 +6,6 @@
   carry the protocol clients (`wayland-client`, `wayland-protocols`, `x11rb`, all already in the
   lock through winit); `winit-backend` enables both on Linux. The protocol is chosen the way winit
   chooses it, and the source reads its own connection on a thread of its own.
-- `LinuxPlatform::is_wayland` and `is_x11` answer from that choice instead of panicking.
 - `DisplayKey::WaylandOutput` (the version 4 connector name) and `DisplayKey::X11Output` (the XID of
   a monitor's first RandR output).
 
