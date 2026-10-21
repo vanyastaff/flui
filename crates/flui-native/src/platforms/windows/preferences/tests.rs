@@ -257,6 +257,133 @@ fn a_refused_rearm_timer_is_set_again_by_the_next_message() {
     assert!(!host.rearm_timer_owed_for_test());
 }
 
+/// An owner signal that counts its wakes.
+fn counting_signal() -> (Arc<OwnerSignal>, Arc<std::sync::atomic::AtomicUsize>) {
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let signal = OwnerSignal::new({
+        let wakes = Arc::clone(&wakes);
+        Arc::new(move || {
+            wakes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    });
+    signal.start().expect("the owner signal starts");
+    (signal, wakes)
+}
+
+/// A window the OS still owns after a failed `DestroyWindow` keeps its
+/// context and its class, so a message it still gets runs against a closed,
+/// inert source instead of a freed one.
+fn a_receiver_the_os_keeps_stays_registered_and_inert() {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow, UnregisterClassW};
+    use windows::core::PCWSTR;
+
+    let (signal, wakes) = counting_signal();
+    let invalidation = Arc::new(Invalidation {
+        accepting: AtomicBool::new(true),
+        pending: AtomicBool::new(false),
+        signal: Arc::downgrade(&signal),
+        displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+    });
+    let receiver = receiver::Receiver::new(Arc::clone(&invalidation), None).expect("receiver");
+    let hwnd = receiver.hwnd_for_test();
+    let (class, instance) = receiver.class_for_test();
+    // `PreferenceSource` closes admission before its receiver retires.
+    invalidation.accepting.store(false, Ordering::Release);
+    let woken = wakes.load(Ordering::SeqCst);
+    let mut unregistered = false;
+    receiver.retire_for_test(
+        |_| Err(windows::Win32::Foundation::E_ACCESSDENIED.into()),
+        |_, _| {
+            unregistered = true;
+            Ok(())
+        },
+    );
+    assert_eq!(
+        Arc::strong_count(&invalidation),
+        2,
+        "the kept window's context, which shares the invalidation, is still alive"
+    );
+    assert!(!unregistered, "the kept window's class is not retired");
+
+    // SAFETY: `hwnd` is a handle this test created; `IsWindow` only asks.
+    assert!(
+        unsafe { IsWindow(Some(hwnd)) }.as_bool(),
+        "the OS kept the window"
+    );
+    // SAFETY: a pointer-free notification to the window this test kept.
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::SendMessageW(
+            hwnd,
+            windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
+            Some(windows::Win32::Foundation::WPARAM(0)),
+            Some(windows::Win32::Foundation::LPARAM(0)),
+        );
+    }
+    assert!(!invalidation.pending.load(Ordering::Acquire));
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        woken,
+        "a closed source wakes nothing"
+    );
+
+    // Retire what the failed destruction kept. Its context stays leaked.
+    // SAFETY: this thread created the window, so it can destroy it.
+    unsafe { DestroyWindow(hwnd) }.expect("the kept window is destroyed");
+    // SAFETY: no window of the class is left.
+    unsafe { UnregisterClassW(PCWSTR(class.as_ptr()), Some(instance)) }
+        .expect("the kept class is retired");
+}
+
+/// Every WinRT delegate captures only its source's invalidation, which the
+/// source closes before it revokes them: one that outlives the source, as a
+/// failed revocation would leave it, marks nothing pending and wakes nobody,
+/// while a successor still wakes.
+fn a_delegate_that_outlives_its_source_is_inert() {
+    let (signal, wakes) = counting_signal();
+    let displays = Arc::new(crate::platforms::windows::display::WindowsDisplays::new());
+    let source = PreferenceSource::with_host(&signal, &displays, None).expect("native source");
+    // What each WinRT delegate captures.
+    let kept = Arc::clone(&source.invalidation);
+    drop(source);
+    kept.pending.store(false, Ordering::Release);
+    let woken = wakes.load(Ordering::SeqCst);
+    kept.notify();
+    kept.notify_displays();
+    assert!(!kept.pending.load(Ordering::Acquire));
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        woken,
+        "the old delegate wakes nobody"
+    );
+
+    let successor = PreferenceSource::with_host(&signal, &displays, None).expect("successor");
+    let woken = wakes.load(Ordering::SeqCst);
+    successor.send_setting_change_for_test();
+    assert!(successor.pending());
+    assert!(
+        wakes.load(Ordering::SeqCst) > woken,
+        "the successor still wakes"
+    );
+}
+
+#[test]
+fn preference_receiver_retirement() {
+    crate::table_test::run_table(
+        "preference_receiver_retirement",
+        &[
+            (
+                "a_receiver_the_os_keeps_stays_registered_and_inert",
+                a_receiver_the_os_keeps_stays_registered_and_inert as fn(),
+            ),
+            (
+                "a_delegate_that_outlives_its_source_is_inert",
+                a_delegate_that_outlives_its_source_is_inert as fn(),
+            ),
+        ],
+    );
+}
+
 #[test]
 fn host_event_sources() {
     crate::table_test::run_table(
