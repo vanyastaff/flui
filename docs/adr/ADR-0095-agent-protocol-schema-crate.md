@@ -33,8 +33,8 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
-- **Refs:** decision D16 in the [decision index](../../design/decisions.md); the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** decision D16 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), moved
 `SemanticsRole` and `SemanticsAction` into it (`flui-semantics` re-exports them), and made

@@ -34,7 +34,7 @@ Platform accessibility API (via flui-platform backends)
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
 `cargo doc -p flui-semantics --open`. Architecture context lives in
-[`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md).
+[`docs/architecture.md`](../../docs/architecture.md).
 
 ## License
 

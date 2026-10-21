@@ -9,9 +9,7 @@ FLUI takes inspiration from Flutter — the tree model, the lifecycle ordering, 
 - [README](README.md): status, quick start, why FLUI, hello world, MSRV, license.
 - [Getting started](docs/getting-started.md): platform setup (Windows / macOS / Android NDK / WASM) and the `cargo xtask` commands.
 - [Architecture](docs/architecture.md): the layered workspace and the frame pipeline as the code is today.
-- [Design](design/README.md): the target architecture, the decision behind each part, and the questions still open.
 - [ADRs](docs/adr/): the cross-crate decisions the code follows, one file per decision.
-- [Foundations](docs/FOUNDATIONS.md): the architecture contract and locked contracts.
 - [Crates](docs/crates.md): the layered crate map and per-crate status.
 - [Testing](docs/testing.md): the headless frame driver, snapshots, the render-object harness, the live smoke suite, and the facade-only "Agent workflow" acceptance test (`tests/agent_workflow.rs`).
 - [Hot reload](docs/hot-reload.md): the `dlopen` plugin host for desktop iteration.
@@ -92,6 +90,5 @@ A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView f
 ## For contributors and agents
 
 - [AGENTS.md](AGENTS.md): the guide every agent runtime loads — design stance, code navigation, build and CI commands, definition of done.
-- [Roadmap](docs/ROADMAP.md): the dependency-ordered milestones toward beta and what lands next.
 - [Panic policy](docs/PANIC-POLICY.md): `expect("BUG: …")` for invariants, `Result` for everything else.
 - [Contributing](CONTRIBUTING.md): planning a large change, git hygiene; AGENTS.md's "Checking a change" lists the pre-PR checks.

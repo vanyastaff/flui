@@ -35,7 +35,7 @@ lints (bare `unwrap()` included), spelling, links, workflow lint, and every rule
 
 These paths get findings only when near-certain and severe:
 
-- `docs/plans/` and `docs/research/`, archival and kept verbatim;
+- `docs/plans/`, archival and kept verbatim;
 - files marked `@generated`, and `Cargo.lock`;
 - `*.snap` files, checked only against the PR body: a regenerated snapshot the PR doesn't
   explain is a finding, the snapshot contents are not.

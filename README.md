@@ -8,12 +8,12 @@
 
 FLUI brings Flutter's tree architecture to Rust as five trees — `View` (immutable configuration) → `Element` (lifecycle, reconciliation) → `RenderObject` (layout, paint, hit-test) → `Layer` (compositing, rebuilt each frame), with `Semantics` alongside for accessibility — adapted to native ownership, type-safe arity, and a strict layered crate DAG. The widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline runs end to end, and gestures and animation are integrated.
 
-**Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
+**Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
-**Documentation:** the book at <https://vanyastaff.github.io/flui/>, still being filled in; [`docs/getting-started.md`](docs/getting-started.md) covers the checkout, the desktop first run, and the Web and Android targets. The target architecture and the decision behind each part are in [`design/README.md`](design/README.md).
+**Documentation:** the book at <https://vanyastaff.github.io/flui/>, still being filled in; [`docs/getting-started.md`](docs/getting-started.md) covers the checkout, the desktop first run, and the Web and Android targets. The decision behind each part of the architecture is recorded in the ADRs under [`docs/adr/`](docs/adr/).
 
-The next milestone is a beta release; its user workflows and required evidence
-are defined in [Beta release criteria](docs/BETA.md).
+The next milestone is a release for the community; its user workflows and required evidence
+are defined in the [release requirements](docs/plans/specs/release/requirements.md).
 
 ## Status
 
@@ -93,7 +93,7 @@ driver.
 - **Five-tree pipeline.** Immutable `View` → `Element` → `RenderObject` → `Layer`, with `Semantics` alongside. Build / Layout / Paint phases run on demand only.
 - **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
 - **GPU-first rendering.** `wgpu` 30 backend with `lyon` tessellation, Parley shaping, and an engine-owned glyph atlas for text.
-- **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS (a beta candidate) has live, operator-equivalent input evidence; Windows, Linux, Android, Web/WASM and the iOS Simulator are experimental, each with narrower recorded runs. See the [per-platform status table](docs/BETA.md#platform-status--candidate-this-branch-at-v010-and-after) before relying on a platform this project has not verified for you.
+- **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Linux, Android, Web/WASM and the iOS Simulator are experimental, each with narrower recorded runs. See the [per-platform status](docs/platform-parity.md) before relying on a platform this project has not verified for you.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
 - **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. `flui-platform` (Win32/AppKit/Android FFI) holds most of it by a wide margin; `flui-hot-reload` (the `dlopen` ABI boundary) and `flui-rendering` (a miri-audited arena, `subtree_arena.rs`) follow, and a few other crates carry a handful of sites. `flui-engine` denies `unsafe` in its hand-written production code; its generated shader bindings allow it. [`docs/architecture.md`](docs/architecture.md#confinement-of-unsafe) lists the production sites. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
@@ -196,15 +196,12 @@ together (the procedure lives in `rust-toolchain.toml`'s header).
 
 | Guide | Description |
 |-------|-------------|
-| **[Foundations](docs/FOUNDATIONS.md)** | **Architecture contract** — target architecture, locked contracts, target crate graph |
-| **[Roadmap](docs/ROADMAP.md)** | **Roadmap** — dependency-ordered milestones toward beta |
-| [Design](design/README.md) | Target architecture, the decision behind each part, open questions |
 | [Getting Started](docs/getting-started.md) | Prerequisites, build, run examples, platform-specific setup |
 | [Architecture](docs/architecture.md) | Frame pipeline + layered crate DAG overview (current state) |
 | [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
 
-For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
+For the architectural rules (dependency DAG, pipeline contracts) see the ADRs in [`docs/adr/`](docs/adr/).
 For AI-agent guidance (build commands, architecture, troubleshooting) see [`AGENTS.md`](AGENTS.md).
 
 ## Community

@@ -444,10 +444,9 @@ impl MacOSWindow {
             // window is `windowBackgroundColor`, a near-white
             // (`rgb(240,240,240)` measured on this host) that sits behind
             // the content view for as long as the first frame is still being
-            // set up — on a cold launch, up to several seconds
-            // (`docs/BETA.md`'s first-frame-race record shows 2.81 s). The
-            // user-facing glitch this default produces is documented in
-            // that file's "blank white window" paragraphs: the window is
+            // set up — on a cold launch, up to several seconds (2.81 s
+            // measured). The user-facing glitch this default produces is a
+            // blank white window: the window is
             // ordered front *before* `Renderer::render_scene` ever reaches
             // `queue.present`, so the viewer sees the bare background, not
             // the application. Setting the background to
@@ -545,9 +544,8 @@ impl MacOSWindow {
             // and the first frame reaches the compositor only after the GPU
             // stack behind it is built and the first present lands —
             // measured at 2.81 s on a cold launch — so an opaque window
-            // here shows its bare background for that whole gap (the launch
-            // blank-window observation in `docs/BETA.md`). It cannot simply
-            // stay hidden either: an un-ordered window gets no Metal
+            // here shows its bare background for that whole gap. It cannot
+            // simply stay hidden either: an un-ordered window gets no Metal
             // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
             // 0 gives the surface a window to present into while the viewer
             // sees nothing; `reveal_after_first_frame` restores alpha 1.

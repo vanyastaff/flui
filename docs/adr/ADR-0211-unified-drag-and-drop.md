@@ -33,8 +33,8 @@ Desktop OS drags are modal or callback-driven sessions (`DoDragDrop`, AppKit dra
 that would take touch, pen and a second finger away from the arena if every drag ran there.
 Platforms also differ: Web data must be in the store at `dragstart`, X11 reports the action only
 at the drop, and winit 0.31 has no outgoing DnD on X11
-([best practices](../research/2026-10-12-interaction-input-best-practices.md) §5.2,
-[dependency selection](../research/2026-10-13-interaction-dependency-selection.md) §4).
+([best practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md) §5.2,
+[dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md) §4).
 
 ## Decision
 
@@ -86,7 +86,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    not how to reach the value. Apps that share values across windows use `WindowPolicy::Shared`,
    whose windows share one runtime. A cross-runtime value would need a `Send + Sync` payload bound
    that no single-runtime drag needs; redeeming through the source runtime would stall the Win32
-   drop loop ([threading](../research/2026-10-13-interaction-threading-model.md) Q4).
+   drop loop ([threading](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md) Q4).
 5. **Actions and sessions.** `AllowedActions { within_app, outside_app }`, each a `TransferActions`
    set. Several sessions can be live at once (one per contact, as `UIDragSession` allows); each is
    keyed by its own id. This amends ADR-0038 §2: where a platform delivers several incoming OS

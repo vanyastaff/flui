@@ -33,9 +33,9 @@
 //! From `init_state` / `did_change_dependencies` — i.e. lifecycle hooks, not
 //! `build`. Acquiring a handle inside `build` (or any layout/paint path) and
 //! scheduling from it is how you write an unbounded rebuild loop.
-//! [`FOUNDATIONS.md`](../../../../docs/FOUNDATIONS.md) permits an
-//! out-of-catalog `mark_needs_build` driver only when it cannot be reached
-//! from `build`/`layout`/`paint`. Here the type system is that gate: the
+//! An out-of-catalog `mark_needs_build` driver is allowed only when it
+//! cannot be reached from `build`/`layout`/`paint`. Here the type system
+//! is that gate (ADR-0078): the
 //! handle comes from `LifecycleContext::rebuild_handle`, and `build`
 //! receives a `BuildContext`, which has no such method.
 //!

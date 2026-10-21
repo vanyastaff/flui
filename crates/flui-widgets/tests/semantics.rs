@@ -268,17 +268,14 @@ pub(crate) fn collection_consumer_uses_member_totals_for_separated_and_composed_
         if composed {
             first = first.semantics(
                 SemanticSetMapping::interleaved(
-                    Rc::new(|index| {
-                        index
-                            .is_multiple_of(2)
-                            .then(|| i32::try_from(index / 2).expect("fixture member index"))
-                    }),
+                    Rc::new(|index| index.is_multiple_of(2).then_some(index / 2)),
                     3,
                 )
-                .composed_at(0, Some(5)),
+                .composed_at(0, flui_widgets::SetSize::Known(5)),
             );
             second = second.semantics(
-                SemanticSetMapping::one_to_one(ItemCount::Exact(2)).composed_at(3, Some(5)),
+                SemanticSetMapping::one_to_one(ItemCount::Exact(2))
+                    .composed_at(3, flui_widgets::SetSize::Known(5)),
             );
         }
         Viewport::new((first, second))

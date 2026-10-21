@@ -421,7 +421,7 @@ fn inapplicable_of(node: &SemanticsNode) -> impl Iterator<Item = InapplicableAtt
     node.accessibility_id().into_iter().flat_map(move |id| {
         crate::applicability::inapplicable(attrs).map(move |attribute| InapplicableAttribute {
             node: id,
-            role: attrs.role,
+            role: attrs.effective_role(),
             attribute,
         })
     })

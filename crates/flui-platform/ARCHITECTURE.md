@@ -875,7 +875,7 @@ apartment and the message-only windows are unchanged.
 write, and the winit backend has no FLUI-pumped loop. Opening with a `NULL` owner, as `arboard` and FLUI used to,
 does not exclude other threads of the process, since all `NULL` openers count
 as one owner (see "Win32 clipboard: cross-thread sessions" in
-`docs/safety-review.md`).
+[`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
 
 `ClipboardSession` therefore opens with one message-only window
 (`HWND_MESSAGE` parent), created lazily on the first session and never
@@ -1825,7 +1825,7 @@ AppKit shows a window the moment it is ordered front, and the first frame
 reaches the compositor only once the GPU stack behind it exists and the first
 present lands — 2.81 s on a measured cold launch — so ordering an opaque window
 at open shows its bare background for that whole gap (the launch blank-window
-observation in `docs/BETA.md`). The deferral is the caller's to ask for,
+observation in [`docs/BETA.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md)). The deferral is the caller's to ask for,
 through `WindowOptions::reveal`: with `WindowReveal::AfterFirstFrame`, macOS
 orders a `visible: true` window front at `alphaValue` 0 and restores alpha 1
 when the embedder reports the first presented frame through

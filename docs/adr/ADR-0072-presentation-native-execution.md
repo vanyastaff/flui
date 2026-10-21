@@ -108,7 +108,7 @@ policy admits one logical session at a time.
 
 Verified on the iPhone 16e simulator in portrait against the view's own
 `safeAreaInsets`; the acceptance record and its stated limits are in
-[docs/BETA.md](../BETA.md) § "iOS safe-area layout". Scene
+[docs/BETA.md](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md) § "iOS safe-area layout". Scene
 implementation now exists. Native scene-disconnect/reattach and windowless-owner
 execution acceptance, complete mobile quit/background behavior and OS termination
 notification limits remain separate evidence; termination still guarantees no callback.

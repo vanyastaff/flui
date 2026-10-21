@@ -330,6 +330,25 @@ empty/repopulate, separators, composition, independent and nested sets, explicit
 index precedence and authored collections. The isolated render-object row
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 continues to cover direct index replacement.
+
+A stamped item whose own node forms none (a `Padding` over a `Column`) hands
+its position to the fragments it forwards. One logical item is one member: only
+the first fragment carries it, so a row that forms two controls does not
+announce both as "item 1", and a position declared anywhere in the item, a
+descendant boundary included, is that member's and suppresses the stamp.
+
+The same post-assembly pass (`reconcile_collections`) holds every place to the
+set and table it actually sits in once the tree is built, so a node the clip
+dropped imposes no scope. A position past its known set's size, and a cell, its
+spans or a row outside its known table, is not published: the consumer would
+read "item 8 of 3" or "row 5 of 3". A set is any node that declares a size, a
+lazy host, an authored `SemanticsCollection` or a `Semantics` with
+`size_of_set`; a role-less one publishes as a List.
+
+`collection_semantics` in `crates/flui-widgets/tests` reads tables, trees,
+levels, sorted headers, hand-built lists and these limits the way an adapter
+does, and the `lazy row`, `tree item level` and `sorted column` fixtures of
+`cargo xtask device windows-a11y` read them from UI Automation.
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's

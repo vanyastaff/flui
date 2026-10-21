@@ -15,8 +15,8 @@
   [ADR-0163](ADR-0163-presentation-owned-pointer-resampling.md),
   [ADR-0199](ADR-0199-presentation-sampling-recovery.md); spec
   [docs/plans/specs/flui-interaction/completeness/](../plans/specs/flui-interaction/completeness/design.md);
-  research [threading model](../research/2026-10-13-interaction-threading-model.md),
-  [trace format](../research/2026-10-12-interaction-input-followups.md).
+  research [threading model](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md),
+  [trace format](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md).
 
 ## Context
 

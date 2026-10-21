@@ -6,7 +6,7 @@
   decision 1's absence of a speed criterion and its corresponding consequence only.
   Presentation DPR ownership, release-time acquisition, refusal and missing-owner fallback remain in force.
 - **Related:** [ADR-0186](ADR-0186-typed-animation-rest-thresholds.md), converter-owned distances;
-  the approved [physics requirements](../plans/specs/flui-animation/physics/requirements.md),
+  the approved [physics requirements](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-animation/physics/requirements.md),
   conservative rest timing and displacement-derived tolerance.
 
 ## Context

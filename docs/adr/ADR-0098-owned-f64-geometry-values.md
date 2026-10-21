@@ -15,9 +15,9 @@
   [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
 - **Refs:** [issue #1352](https://github.com/vanyastaff/flui/issues/1352); the
-  [census](../research/2026-09-28-geometry-value-layer-census.md) (every count below); the
-  [options research](../research/2026-09-28-geometry-options-research.md) (every external
-  claim below); the earlier [euclid spike](../research/2026-05-29-u17-euclid-spike-report.md)
+  [census](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-28-geometry-value-layer-census.md) (every count below); the
+  [options research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-28-geometry-options-research.md) (every external
+  claim below); the earlier [euclid spike](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-05-29-u17-euclid-spike-report.md)
 
 ## Context
 

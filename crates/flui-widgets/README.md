@@ -68,7 +68,7 @@ schedules the same in-place update.
 
 ## Status
 
-This is the [Core.1 vertical slice](../../docs/ROADMAP.md) — it proves the whole
+The catalog is a vertical slice — it proves the whole
 `build → layout → paint → composite → reconcile` pipeline on live widget code,
 including parent-data layout (`Flexible`/`Expanded`/`Positioned`), scrolling
 (`ListView`/`SingleChildScrollView` over slivers), and animation

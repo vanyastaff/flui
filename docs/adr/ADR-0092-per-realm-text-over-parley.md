@@ -60,7 +60,7 @@
   layout), [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) (the raster
   thread and the `GpuContext` atlas), [ADR-0097](ADR-0097-no-process-global-state-gate.md)
   (`FONT_SYSTEM` left the allowlist at §10 step 6a)
-- **Refs:** decision D12 in the [decision index](../../design/decisions.md); roadmap exit B1
+- **Refs:** decision D12 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); roadmap exit B1
   (per-UI runtime fonts)
 
 ## Context
@@ -896,7 +896,7 @@ that wires what it adds.
   §10 step 6a and are now available through the immutable links in this record's metadata.
   Their live authorities are §1's shaping choice, §2's registration/face agreement,
   §7's family resolution and §8's carried acceptance gates. The independent historical
-  spike methods/results remain in [the text-stack research](../research/text-stack-2026.md).
+  spike methods/results remain in [the text-stack research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/text-stack-2026.md).
   ADR-0065, ADR-0066 and ADR-0067 retain their scoped `Amended by` links to this record.
 
 ## Verification

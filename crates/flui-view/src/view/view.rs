@@ -158,7 +158,7 @@ pub trait View: Downcast + DynClone + 'static {
     /// Override this method, or wrap your view in [`crate::Memo<V>`] which
     /// provides a `PartialEq`-based implementation. The `PartialEq` bound
     /// lives **only** on `Memo<V>` — there is no blanket bound on `View`
-    /// (the Druid trap). See `docs/FOUNDATIONS.md` C1.
+    /// (the Druid trap).
     ///
     /// # Opposite polarity to `can_update`
     ///

@@ -8,7 +8,7 @@
   `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
   framework finalization but deliberately leaked after callback panic, because aggregate drop glue
   cannot be made safe by an outer unwind boundary.
-- **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
+- **Supersedes:** the signals clause of [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
   (Proposed; its §1, §2 and §5 ship ahead of acceptance) — its §1 routes a cross-thread write by
@@ -70,7 +70,7 @@ one thing: a **precise reader set** per signal.
 That composes with `Memo<V>`/`can_update`: signals decide *which* elements enter the drain;
 memoisation decides how far a drain propagates.
 
-## 2. Market (sources in `docs/research/state-model-2026.md`)
+## 2. Market (sources in [`docs/research/state-model-2026.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/state-model-2026.md))
 
 | System | Node ownership | Write → what re-runs | Take-away |
 |---|---|---|---|
@@ -414,7 +414,7 @@ the Save cell) measured 4 elements / 17.9 µs against 44 / 39.2 µs.
 
 ## References
 
-- FOUNDATIONS C1, C5, C8; ADR-0018; ADR-0027 (`UiRuntime`, `UiCommandSender`);
+- [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1, C5, C8; ADR-0018; ADR-0027 (`UiRuntime`, `UiCommandSender`);
   ADR-0078 (capability and build-phase rules); issue #1090.
-- `docs/research/state-model-2026.md` — market survey with sources.
+- [`docs/research/state-model-2026.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/state-model-2026.md) — market survey with sources.
 - ADR-0075 — derived values and effects; follow-ups #1248–#1254.

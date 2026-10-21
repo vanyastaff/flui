@@ -4,7 +4,7 @@
 - **Date:** 2026-10-18
 - **Related:** [ADR-0041](ADR-0041-workspace-topology-contract.md),
   [ADR-0074](ADR-0074-realm-scoped-signals.md),
-  [FOUNDATIONS](../FOUNDATIONS.md) Part II item 4
+  [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) Part II item 4
 
 ## Context
 

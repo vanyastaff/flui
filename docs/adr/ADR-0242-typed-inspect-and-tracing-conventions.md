@@ -10,7 +10,7 @@
   [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (the geometry values `Value` carries)
 - **Spec:** [flui-driver](../plans/specs/flui-driver/requirements.md), "Introspection and tracing
   across crates"; evidence in the
-  [introspection and tracing survey](../research/2026-10-18-flui-introspection-and-tracing.md)
+  [introspection and tracing survey](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-introspection-and-tracing.md)
 
 ## Context
 

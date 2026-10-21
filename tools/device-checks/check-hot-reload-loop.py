@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Drive `flui run`'s worker hot-reload loop end to end on a generated project.
 
-The developer-iteration row of docs/BETA.md asks for evidence that the
-documented reload mode applies edits predictably, preserves state per its
-contract, survives a failed edit, does nothing while idle, and shuts down
-cleanly. This script is that loop, against a project the CLI itself
+Developer iteration needs evidence that the documented reload mode applies
+edits predictably, preserves state per its contract, survives a failed edit,
+does nothing while idle, and shuts down cleanly. This script is that loop,
+against a project the CLI itself
 generates (`flui create --hot-reload`), driven through the CLI's own
 machine-readable event stream (`flui --json run`), so the oracle is what the
 CLI reports to any tool, not a scrape of its narration.

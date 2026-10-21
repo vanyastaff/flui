@@ -91,6 +91,10 @@ pub use accesskit::{NodeId, TreeUpdate};
 pub use applicability::RoleAttribute;
 pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
+// RE-EXPORTS - Collections
+// ============================================================================
+pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
+// ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================
 pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};

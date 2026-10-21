@@ -311,7 +311,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `gesture_lifecycle_matrix`, `pointer_and_gesture_recognition`,
   `scroll_physics_and_activity`, `navigator_and_overlay`, `owner_metrics_contract`
   и `frame_pacing_and_pump_matrix`; детали и native ограничения —
-  [приёмка I11](../flui-interaction/tasks.md#текущая-локальная-приёмка-i11-gesturewheel).
+  [приёмка I11](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-interaction/tasks.md#текущая-локальная-приёмка-i11-gesturewheel).
   All-features clippy/compile-fail и Win32 wheel smoke прошли. Заключительный
   `check-changed` прошёл на `38f9d5238` относительно `b357bc903`; CI ещё ожидается.
   Остальные пункты LY8/LY9 этой отметкой не закрываются.

@@ -18,7 +18,7 @@
   stays in `flui-platform`), [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
   (the store's commit gate), [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md) (the `TextStoreHost` a
   window offers), research note
-  [`2026-10-17-android-java-side.md`](../research/2026-10-17-android-java-side.md)
+  [`2026-10-17-android-java-side.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-android-java-side.md)
 
 ## Context
 

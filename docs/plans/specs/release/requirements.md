@@ -4,8 +4,8 @@
 - **Дата:** 2026-10-05
 - **База:** `main` @ `4915054c8`
 - **Срок:** релиз 2026-12-31; RC 2026-12-15.
-- **Связанные документы:** [ROADMAP](../../../ROADMAP.md) (B0–B4), [BETA](../../../BETA.md),
-  [migration plan](../../2026-09-25-architecture-migration-plan.md), [design/](../../../../design/README.md).
+- **Связанные документы:** [ROADMAP](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md) (B0–B4), [BETA](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md),
+  [migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md), [design/](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/README.md).
   Карта фич, статусы и календарь — в [tasks.md](tasks.md).
 
 Этот документ задаёт, что значит «релиз для сообщества», и как доказать, что он готов. Он
@@ -99,7 +99,7 @@ Rust-разработчик, который раньше не видел FLUI:
   Настоящий литерал `Text { data, .. }` добавляется после стабилизации фичи, без ломки API:
   определения виджетов с самого начала проектируются под это.
 - **R19.** КОГДА новичок проходит первый час с FLUI, СИСТЕМА НЕ ДОЛЖНА повторять известные
-  боли других фреймворков из топ-10 исследования [`dx/research.md`](../dx/research.md). Каждый
+  боли других фреймворков из топ-10 исследования [`research/2026-10-05-dx-pain-points.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/dx/research.md). Каждый
   пункт закрыт требованием в спеке-владельце или явно перенесён в release notes с причиной.
   Новые спеки, которые из этого возникли: `layout-diagnostics` (молчаливые ошибки раскладки) и
   `testing-dx` (поиск виджетов в тестах и ввод текста по finder'у, а не по координатам).
@@ -168,7 +168,7 @@ Rust-разработчик, который раньше не видел FLUI:
   анонсируется на 0.3. Частичного перехода не бывает: `CustomPainter: Send + Sync` не может
   держать `!Send`-контроллер как источник перерисовки, модель стала бы противоречивой.
 - **D4 (принято 2026-10-05: владелец поручил решить оркестратору; основание — эксперимент
-  [`realm-model/experiment.md`](../realm-model/experiment.md)).** Один owner-поток на процесс.
+  [`research/2026-10-05-realm-model-experiment.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/realm-model/experiment.md)).** Один owner-поток на процесс.
   Realm — единица изоляции (GlobalKey, scheduler, teardown, граница паник), а не параллелизма.
   Многопоточность — там, где работа параллельна: воркеры, raster-поток. Общее между окнами
   состояние — app-scope `!Send` граф на этом потоке: читается в `build` любого realm и пишется

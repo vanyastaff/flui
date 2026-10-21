@@ -79,5 +79,5 @@ survive collapse in the parent. See [Lifecycle](../concepts/lifecycle.md) for ow
   `flui-widgets` plus `CupertinoTheme`, an official package on `flui-sdk`.
   [`packages/flui-cupertino/src/`](https://github.com/vanyastaff/flui/tree/main/packages/flui-cupertino/src)
 
-Once the framework crates publish (see `docs/ROADMAP.md`), this page becomes a thin index into
+Once the framework crates publish, this page becomes a thin index into
 docs.rs instead of the source tree directly.

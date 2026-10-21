@@ -18,9 +18,9 @@
   vocabulary and its generated-table gate), [ADR-0090](ADR-0090-ime-pull-text-store-contract.md)
   (the text-store conformance this mirrors), [ADR-0163](ADR-0163-presentation-owned-pointer-resampling.md);
   spec [docs/plans/specs/flui-interaction/completeness/](../plans/specs/flui-interaction/completeness/design.md);
-  research [trace format](../research/2026-10-12-interaction-input-followups.md),
-  [synthetic-first testing](../research/2026-10-12-interaction-input-best-practices.md),
-  [dependency selection](../research/2026-10-13-interaction-dependency-selection.md).
+  research [trace format](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md),
+  [synthetic-first testing](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md),
+  [dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md).
 
 ## Context
 

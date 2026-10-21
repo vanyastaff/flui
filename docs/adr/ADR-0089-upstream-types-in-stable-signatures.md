@@ -19,9 +19,9 @@
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (`flui-sdk` and the facade),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) (`flui-protocol`)
-- **Refs:** decision D8 and owner decision 3 in the [decision index](../../design/decisions.md);
+- **Refs:** decision D8 and owner decision 3 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   panel record in
-  [`report-decisions.ru.md`](../research/2026-09-25-architecture-review/report-decisions.ru.md) §3
+  [`report-decisions.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md) §3
 
 ## Context
 
@@ -172,7 +172,7 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
   consumer.
 - **Ship the escape modules up front.** Not chosen by default: it publishes Evolving surface no
   code uses. Whether to ship them early is an open owner question
-  ([open questions](../../design/open-questions.md)); the default is on demand, with
+  ([open questions](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md)); the default is on demand, with
   `flui_sdk::gpu` the only one now.
 - **Pin the outbound mapping with an exhaustive match.** Rejected: `#[non_exhaustive]` forces a
   `_` arm in any other crate, and the pin evaporates.

@@ -24,8 +24,8 @@
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
 - **Refs:** decision D3 of the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md);
-  index in [`design/decisions.md`](../../design/decisions.md)
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
+  index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
 
@@ -70,7 +70,7 @@ Three constraints shape any fix:
   wasm and static libraries; neither is a dependency today.
 - Flutter's federated plugins have no way for an application to replace a plugin's endorsed
   implementation (flutter#80374, cited in the review's
-  [ecosystem design](../research/2026-09-25-architecture-review/designs/ecosystem_evolution_first.md)).
+  [ecosystem design](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/designs/ecosystem_evolution_first.md)).
 
 ### What a prototype showed (2026-09-26)
 
