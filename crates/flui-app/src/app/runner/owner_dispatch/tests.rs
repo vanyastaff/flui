@@ -1273,9 +1273,10 @@ fn preferences_wake_each_isolated_window() {
     teardown_platform_ui_runtime();
 }
 
-fn owner_wake_refreshes_installed_preference_consumers() {
+fn the_platform_preference_source_reaches_installed_consumers() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_native::{HeadlessPlatform, Platform};
+    use flui_platform::SystemPreferences;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
@@ -1287,8 +1288,14 @@ fn owner_wake_refreshes_installed_preference_consumers() {
             flui_widgets::Text::new("Preference")
         }
     }
+    let scaled = |scale: f64| {
+        SystemPreferences::default()
+            .with_text_scale(scale)
+            .expect("valid scale")
+    };
     let _clear = OwnerHostClearGuard::arm();
-    let platform = HeadlessPlatform::new();
+    let platform = HeadlessPlatform::new().with_preferences(scaled(2.0));
+    let source = platform.preference_source();
     let turns = platform.owner_turns();
     let observed = Rc::new(RefCell::new(Vec::new()));
     let reader = Rc::clone(&observed);
@@ -1297,11 +1304,6 @@ fn owner_wake_refreshes_installed_preference_consumers() {
     Box::new(platform)
         .run(Box::new(move |owner| {
             install_owner_platform(owner)?;
-            let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
-            host.logical().update_preferences(
-                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
-                host.effects(),
-            )?;
             let runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
             let mut installation = prepare_platform_ui_runtime(runtime, test_window());
@@ -1324,23 +1326,33 @@ fn owner_wake_refreshes_installed_preference_consumers() {
         }))
         .expect("headless bootstrap");
     let (dispatcher, frame) = frame.borrow().expect("installed frame");
+    let linear = |scale: f64| TextSizing::linear(scale).expect("valid scale");
+    let next_frame = || {
+        turns.drive();
+        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    };
     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
     assert_eq!(
         &*observed.borrow(),
-        &[TextSizing::linear(2.0).expect("valid scale")]
+        &[linear(2.0)],
+        "the first build did not read the value the source reported before any window"
     );
-    with_owner_platform(|owner| owner.proxy().wake())
-        .expect("owner")
-        .expect("wake");
-    turns.drive();
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("refreshed frame");
+    source.set(scaled(3.0));
+    next_frame();
+    assert_eq!(&*observed.borrow(), &[linear(2.0), linear(3.0)]);
+    source.fail_next_read("the settings service went away");
+    next_frame();
     assert_eq!(
         &*observed.borrow(),
-        &[
-            TextSizing::linear(2.0).expect("valid scale"),
-            TextSizing::linear(1.0).expect("valid scale")
-        ],
-        "owner wake did not deliver the headless source's absent text-scale observation"
+        &[linear(2.0), linear(3.0)],
+        "a failed read replaced the accepted value"
+    );
+    source.set(SystemPreferences::default());
+    next_frame();
+    assert_eq!(
+        &*observed.borrow(),
+        &[linear(2.0), linear(3.0), linear(1.0)],
+        "an unknown text scale did not restore the consumer's baseline"
     );
     teardown_platform_ui_runtime();
 }
@@ -2618,8 +2630,8 @@ fn owner_dispatch_matrix() {
                 preferences_wake_each_isolated_window as fn(),
             ),
             (
-                "owner_wake_refreshes_installed_preference_consumers",
-                owner_wake_refreshes_installed_preference_consumers as fn(),
+                "the_platform_preference_source_reaches_installed_consumers",
+                the_platform_preference_source_reaches_installed_consumers as fn(),
             ),
             (
                 "platform_brightness_follows_the_window_appearance",

@@ -141,6 +141,12 @@ pub(super) struct HeadlessState {
     /// How many times the host told this platform it released a session end it
     /// had answered with a block.
     session_end_releases: usize,
+    /// What `Platform::preferences` reports: unknown until
+    /// [`HeadlessPlatform::with_preferences`] or [`HeadlessPreferences::set`].
+    preferences: flui_platform::SystemPreferences,
+    /// The failure the next `Platform::preferences` read reports instead of a
+    /// value ([`HeadlessPreferences::fail_next_read`]).
+    preference_failure: Option<String>,
 }
 
 impl HeadlessPlatform {
@@ -170,6 +176,8 @@ impl HeadlessPlatform {
             window_policy: HeadlessWindowPolicy::default(),
             notices: Arc::default(),
             session_end_releases: 0,
+            preferences: flui_platform::SystemPreferences::default(),
+            preference_failure: None,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -340,6 +348,25 @@ impl HeadlessPlatform {
         self
     }
 
+    /// What the system reports as its preferences from the start, before any
+    /// window exists. The default reports every field unknown.
+    #[must_use]
+    pub fn with_preferences(self, values: flui_platform::SystemPreferences) -> Self {
+        self.with_state(|state| state.preferences = values);
+        self
+    }
+
+    /// Obtain the preference source before `run` consumes this platform: the
+    /// handle changes the system's preferences the way an operating system
+    /// would, from any thread. See [`HeadlessPreferences`].
+    #[must_use]
+    pub fn preference_source(&self) -> HeadlessPreferences {
+        HeadlessPreferences {
+            signal: Arc::downgrade(&self.signal),
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
     /// Obtain the display controls before `run` consumes this platform: the
     /// handle changes a display the way an operating system would, from any
     /// thread. See [`HeadlessDisplayControls`].
@@ -504,6 +531,13 @@ impl Platform for HeadlessPlatform {
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         Ok(self.with_state(|state| state.displays.snapshot()))
+    }
+
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        self.with_state(|state| match state.preference_failure.take() {
+            Some(message) => Err(PlatformError::Preferences { message }),
+            None => Ok(state.preferences.clone()),
+        })
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -982,6 +1016,56 @@ impl HeadlessDisplayControls {
             let _ = signal.wake();
         }
         Ok(())
+    }
+}
+
+/// The headless platform's system preferences after `run` has consumed it:
+/// obtained from [`HeadlessPlatform::preference_source`] before `run`.
+///
+/// A change commits to the platform's preferences and then wakes the owner, as
+/// a native source does when the OS reports a setting change, so it works from
+/// any thread: the host reads `Platform::preferences` on its next turn and
+/// delivers what it accepts to every runtime.
+#[derive(Clone)]
+pub struct HeadlessPreferences {
+    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessPreferences {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessPreferences")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeadlessPreferences {
+    /// Report `values` as the system's preferences and wake the owner. A
+    /// platform that is gone applies nothing.
+    pub fn set(&self, values: flui_platform::SystemPreferences) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        state.lock().preferences = values;
+        self.wake();
+    }
+
+    /// Make the next read fail with `message`, as a native getter that cannot
+    /// complete does, and wake the owner. The host keeps the values it accepted
+    /// last; the read after that reports the platform's preferences again.
+    pub fn fail_next_read(&self, message: impl Into<String>) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        state.lock().preference_failure = Some(message.into());
+        self.wake();
+    }
+
+    fn wake(&self) {
+        // A failed wake leaves the signal's pending debt for the next turn.
+        if let Some(signal) = self.signal.upgrade() {
+            let _ = signal.wake();
+        }
     }
 }
 

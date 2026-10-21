@@ -77,9 +77,12 @@ the dispatch layer moves there too.
   changing OS settings. Read failure leaves observations unknown and does not
   skip outgoing resource retirement. Desktop owner wakes refresh through the
   same identity-fenced path before window completions; source caches avoid native
-  reads when no invalidation is pending. `owner_wake_refreshes_installed_preference_consumers`
-  drives the registered headless owner hook and verifies the retained widget's
-  next rendered scale. This is delivery evidence, not an actual OS settings change.
+  reads when no invalidation is pending. `the_platform_preference_source_reaches_installed_consumers`
+  drives the headless platform's preference source (`HeadlessPreferences`): the
+  first build reads the value reported before any window, a change reaches the
+  retained widget, a failed read keeps the accepted value and an unknown scale
+  restores the consumer's baseline. This is delivery evidence, not an actual OS
+  settings change.
   Windows retries native read failures through its window-independent loop wait;
   deferred reads retain the accepted snapshot without another failure diagnostic.
   `deferred_native_reads_preserve_accepted_preferences` checks the next build and

@@ -204,7 +204,7 @@ pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, HeadlessWindowPolicy, MockWindow,
+    HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

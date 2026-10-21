@@ -420,6 +420,59 @@ struct Effects {
     geometry_gate: RefCell<Option<flui_foundation::ManualClock>>,
 }
 
+impl Effects {
+    /// The effects of an 800×600 presentation at `address` that expects
+    /// nothing in particular of its frames.
+    fn new(address: PresentationAddress, owner: &OwnerHost) -> Self {
+        let size = Rc::new(Cell::new((800, 600)));
+        Self {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+                paragraphs: Vec::new(),
+            }),
+            size,
+            frame_time: Cell::new(web_time::Instant::now()),
+            trace: RefCell::default(),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::default(),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+            geometry_gate: RefCell::new(None),
+        }
+    }
+}
+
+/// System preferences with only a text scale.
+fn text_scale(scale: f64) -> flui_platform::SystemPreferences {
+    flui_platform::SystemPreferences::default()
+        .with_text_scale(scale)
+        .expect("valid scale")
+}
+
+/// A published runtime whose root reads its text sizing, after its first frame.
+fn preference_recipient(owner: &OwnerHost) -> (Effects, Rc<RefCell<Vec<TextSizing>>>) {
+    let runtime = crate::owner_publication::runtime();
+    let observed = Rc::default();
+    runtime
+        .attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("mount preference consumer");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish recipient")
+        .commit();
+    let effects = Effects::new(address, owner);
+    owner
+        .frame_dispatcher(address)
+        .expect("recipient frame")
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial consumer frame");
+    (effects, observed)
+}
+
 impl OwnerEffects for Effects {
     fn finish_install(
         &self,
@@ -958,6 +1011,18 @@ fn owner_metrics_contract() {
             (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
+            ),
+            (
+                "preference_fanout_passes_a_closed_sibling",
+                preference_fanout_passes_a_closed_sibling as fn(),
+            ),
+            (
+                "an_older_preference_revision_cannot_replace_a_newer_seed",
+                an_older_preference_revision_cannot_replace_a_newer_seed as fn(),
+            ),
+            (
+                "text_scale_reaches_a_late_runtime_and_its_later_presentation",
+                text_scale_reaches_a_late_runtime_and_its_later_presentation as fn(),
             ),
             (
                 "a_secondary_window_observation_does_not_present_the_primary",
@@ -3699,6 +3764,167 @@ fn preference_fanout_survives_a_failing_runtime() {
         }
         owner.shutdown(&recipients[0].0);
     }
+}
+
+fn preference_fanout_passes_a_closed_sibling() {
+    let owner = OwnerHost::new();
+    let (closing, _) = preference_recipient(&owner);
+    let (open, observed) = preference_recipient(&owner);
+    owner
+        .presentation_dispatcher(closing.address)
+        .expect("closing window")
+        .close(&closing)
+        .expect("close the first recipient");
+    owner
+        .update_preferences(text_scale(2.0), &open)
+        .expect("deliver past a closed sibling");
+    owner
+        .frame_dispatcher(open.address)
+        .expect("live recipient")
+        .deliver(crate::VSYNC, &open)
+        .expect("frame after the update");
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&TextSizing::linear(2.0).expect("valid scale")),
+        "a closed sibling cost the remaining recipient its delivery"
+    );
+    assert!(
+        owner.frame_dispatcher(closing.address).is_err(),
+        "the closed recipient stays retired"
+    );
+    owner.shutdown(&open);
+}
+
+fn an_older_preference_revision_cannot_replace_a_newer_seed() {
+    let owner = OwnerHost::new();
+    let (first, _) = preference_recipient(&owner);
+    let prepared = Rc::new(RefCell::new(Some(
+        owner.prepare_runtime(crate::owner_publication::runtime()),
+    )));
+    let refused = Rc::new(Cell::new(false));
+    let first = Rc::new(first);
+    {
+        let (owner, prepared, refused, effects) = (
+            owner.clone(),
+            Rc::clone(&prepared),
+            Rc::clone(&refused),
+            Rc::clone(&first),
+        );
+        // While the first runtime's callback runs, two revisions are accepted
+        // and their deliveries queue behind it. A runtime published now would
+        // queue its initialization behind the older revision; the owner
+        // refuses the publication instead, so no seed can be overtaken.
+        first
+            .owner
+            .presentation_dispatcher(first.address)
+            .expect("first window")
+            .test_callback(
+                Box::new(move |_| {
+                    owner
+                        .update_preferences(text_scale(2.0), &*effects)
+                        .expect("first revision");
+                    owner
+                        .update_preferences(text_scale(3.0), &*effects)
+                        .expect("second revision");
+                    let install = prepared.borrow_mut().take().expect("prepared once");
+                    match owner.publication(install) {
+                        Ok(_) => panic!("a runtime was published behind queued revisions"),
+                        Err(refusal) => {
+                            refused.set(matches!(
+                                refusal.error,
+                                flui_runtime::owner::PublicationError::Busy
+                            ));
+                            *prepared.borrow_mut() = Some(refusal.prepared);
+                        }
+                    }
+                }),
+                &*first,
+            )
+            .expect("run the first runtime's callback");
+    }
+    assert!(refused.get(), "the owner refused the publication as busy");
+    // A runtime the host builds after the callback starts from the newest
+    // accepted revision, as the composition root seeds every runtime.
+    let mut late = seeded_runtime(&owner);
+    let observed: Rc<RefCell<Vec<TextSizing>>> = Rc::default();
+    late.attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("mount the late consumer");
+    pump_once(&mut late);
+    assert_eq!(
+        *observed.borrow(),
+        [TextSizing::linear(3.0).expect("valid scale")],
+        "the late runtime's first build must read the newest accepted revision"
+    );
+    owner.shutdown(&*first);
+}
+
+/// A runtime seeded with the host's latest accepted preferences, before any
+/// root is mounted: the order the composition root builds every runtime in.
+fn seeded_runtime(owner: &OwnerHost) -> UiRuntime {
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        )
+        .with_preferences(
+            owner
+                .preferences()
+                .expect("live owner")
+                .expect("accepted preferences"),
+        ),
+    )
+    .expect("seeded runtime")
+}
+
+/// One frame of a runtime that is not published to an owner.
+fn pump_once(runtime: &mut UiRuntime) {
+    let mut sink = Sink {
+        size: Rc::new(Cell::new((800, 600))),
+        submitted: 0,
+        paragraphs: Vec::new(),
+    };
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut sink,
+    );
+}
+
+fn text_scale_reaches_a_late_runtime_and_its_later_presentation() {
+    let owner = OwnerHost::new();
+    let (first, _) = preference_recipient(&owner);
+    owner
+        .update_preferences(text_scale(2.0), &first)
+        .expect("scale before the late runtime exists");
+    let mut late = seeded_runtime(&owner);
+    let observed: Rc<RefCell<Vec<TextSizing>>> = Rc::default();
+    late.attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("late root");
+    pump_once(&mut late);
+    let second =
+        late.install_presentation(late.assemble_presentation(crate::owner_publication::window()));
+    late.attach_root_widget_with_size_to(
+        second,
+        &PreferenceReader(Rc::clone(&observed)),
+        800.0,
+        600.0,
+    )
+    .expect("later presentation root");
+    pump_once(&mut late);
+    let scaled = TextSizing::linear(2.0).expect("valid scale");
+    assert_eq!(
+        *observed.borrow(),
+        [scaled.clone(), scaled],
+        "a late runtime and its later presentation must start from the accepted scale"
+    );
+    owner.shutdown(&first);
 }
 
 fn queued_state_bursts_coalesce_between_observing_frames() {
