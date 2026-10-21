@@ -3,7 +3,10 @@
     clippy::arc_with_non_send_sync,
     reason = "WidgetsBinding observers are owner-local Arc capabilities"
 )]
-use flui_view::{AppLifecycleState, RouteInformation, WidgetsBinding, WidgetsBindingObserver};
+use flui_view::{
+    AppLifecycleState, RouteInformation, ViewFocusDirection, ViewFocusEvent, ViewFocusState,
+    WidgetsBinding, WidgetsBindingObserver,
+};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -16,15 +19,15 @@ use std::task::{Context, Poll, Waker};
 #[derive(Default)]
 struct Healthy {
     metrics: Cell<usize>,
-    accessibility: Cell<usize>,
+    focus: Cell<usize>,
     lifecycle: Cell<usize>,
 }
 impl WidgetsBindingObserver for Healthy {
     fn did_change_metrics(&self) {
         self.metrics.set(self.metrics.get() + 1);
     }
-    fn did_change_accessibility_features(&self) {
-        self.accessibility.set(self.accessibility.get() + 1);
+    fn did_change_view_focus(&self, _: ViewFocusEvent) {
+        self.focus.set(self.focus.get() + 1);
     }
     fn did_change_app_lifecycle_state(&self, _: AppLifecycleState) {
         self.lifecycle.set(self.lifecycle.get() + 1);
@@ -109,7 +112,11 @@ impl Drop for Observer {
             self.binding
                 .upgrade()
                 .expect("snapshot retirement binding alive")
-                .handle_accessibility_features_changed();
+                .handle_view_focus_changed(ViewFocusEvent {
+                    view_id: 1,
+                    state: ViewFocusState::Focused,
+                    direction: ViewFocusDirection::Undefined,
+                });
         }
         assert!(!self.fail_drop, "{}", self.name);
     }
@@ -361,7 +368,7 @@ pub(crate) fn dispatch_child(case: &str) {
                 }
                 assert_eq!(counts(&f.calls), [1, 1]);
                 assert_eq!(
-                    f.replacement.accessibility.get(),
+                    f.replacement.focus.get(),
                     1,
                     "destructor reentry reaches new registry"
                 );
