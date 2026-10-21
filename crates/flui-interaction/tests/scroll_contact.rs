@@ -5,8 +5,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::geometry::Point;
 use flui_interaction::{
-    EventPropagation, GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerTarget,
-    RenderId, ScrollTarget,
+    DragAxis, DragGestureRecognizer, EventPropagation, GestureBinding, GestureRecognizer,
+    HitTestEntry, HitTestResult, InteractionLane, PointerTarget, RenderId, ScrollTarget,
 };
 use flui_platform::{
     EventTime, PointerEvent,
@@ -381,4 +381,155 @@ mod identity {
             .count();
         assert_eq!(downs, ends, "every contact that opened ended: {log:?}");
     }
+}
+
+/// A feed backed by a horizontal drag recognizer and a vertical scroll target
+/// beneath it, both declared: the two compete for the pan (ADR-0251 §2).
+struct Contest {
+    lane: InteractionLane,
+    binding: GestureBinding,
+    started: Rc<RefCell<u32>>,
+    scrolled: Rc<RefCell<Vec<(f64, f64)>>>,
+    path: HitTestResult,
+}
+
+fn contest(scroll_innermost: bool) -> Contest {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let started = Rc::new(RefCell::new(0));
+    let scrolled = Rc::new(RefCell::new(Vec::new()));
+    let mut path = HitTestResult::new();
+    lane.enter(|| {
+        let count = Rc::clone(&started);
+        let recognizer =
+            DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal)
+                .on_start(move |_| *count.borrow_mut() += 1)
+                .build();
+        let feed: PointerTarget = handle
+            .register_pointer(move |dispatch| {
+                if matches!(dispatch.local, PointerEvent::Down(_)) {
+                    recognizer.add_pointer(dispatch);
+                } else {
+                    recognizer.handle_event(dispatch);
+                }
+            })
+            .expect("pointer handler");
+        handle
+            .declare_scroll_contact_feed(feed)
+            .expect("declaration");
+        let log = Rc::clone(&scrolled);
+        let scroll: ScrollTarget = handle
+            .register_scroll(move |event| {
+                log.borrow_mut().push((event.delta.x(), event.delta.y()));
+                EventPropagation::Stop
+            })
+            .expect("scroll target");
+        handle
+            .declare_scroll_target_axis(scroll, DragAxis::Vertical)
+            .expect("axis");
+        let feed_entry = HitTestEntry::new(RenderId::new(1)).pointer_target(feed);
+        let scroll_entry = HitTestEntry::new(RenderId::new(2)).scroll_target(scroll);
+        if scroll_innermost {
+            path.add(scroll_entry);
+            path.add(feed_entry);
+        } else {
+            path.add(feed_entry);
+            path.add(scroll_entry);
+        }
+    });
+    Contest {
+        lane,
+        binding,
+        started,
+        scrolled,
+        path,
+    }
+}
+
+impl Contest {
+    fn send(&self, phase: ScrollPhase, dx: f64, dy: f64, nanos: u64) {
+        self.send_within_frame(phase, dx, dy, nanos);
+        self.lane.enter(|| {
+            self.binding.flush_pending_moves();
+        });
+    }
+
+    /// A packet whose move has not yet had its frame.
+    fn send_within_frame(&self, phase: ScrollPhase, dx: f64, dy: f64, nanos: u64) {
+        let event = PointerEvent::Scroll(
+            ScrollEvent::new(
+                source(),
+                EventTime::from_nanos(nanos),
+                PointerPosition::try_new(Point::new(50.0, 60.0)).expect("position"),
+                ScrollDelta::try_new(ScrollUnit::Pixels, dx, dy).expect("delta"),
+            )
+            .with_precision(ScrollPrecision::Precise)
+            .with_phase(phase),
+        );
+        self.lane.enter(|| {
+            self.binding
+                .handle_pointer_event(&event, |_| self.path.clone());
+        });
+    }
+}
+
+#[test]
+fn a_pan_along_the_scroll_axis_is_replayed_to_the_scroll_target() {
+    let contest = contest(false);
+    contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
+    contest.send(ScrollPhase::Changed, 0.0, 4.0, 2);
+    assert!(
+        contest.scrolled.borrow().is_empty(),
+        "the wait for the verdict holds the packets back"
+    );
+    contest.send(ScrollPhase::Changed, 0.0, 80.0, 3);
+    contest.send(ScrollPhase::Changed, 0.0, 5.0, 4);
+    assert_eq!(
+        *contest.scrolled.borrow(),
+        vec![(0.0, 0.0), (0.0, 4.0), (0.0, 80.0), (0.0, 5.0)],
+        "the buffered packets arrive first, in order, then the live ones"
+    );
+    assert_eq!(*contest.started.borrow(), 0, "the horizontal feed lost");
+}
+
+#[test]
+fn a_pan_along_the_feed_axis_goes_to_the_feed() {
+    let contest = contest(false);
+    contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
+    contest.send(ScrollPhase::Changed, 80.0, 0.0, 2);
+    contest.send(ScrollPhase::Changed, 5.0, 0.0, 3);
+    contest.send(ScrollPhase::Ended, 0.0, 0.0, 4);
+    contest.send(ScrollPhase::MomentumBegan, 3.0, 0.0, 5);
+    assert_eq!(*contest.started.borrow(), 1);
+    assert!(
+        contest.scrolled.borrow().is_empty(),
+        "the scroll target saw nothing of a pan its competitor won, momentum included"
+    );
+}
+
+#[test]
+fn a_release_before_slop_leaves_the_pan_to_the_scroll_target() {
+    for scroll_innermost in [true, false] {
+        let contest = contest(scroll_innermost);
+        contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
+        contest.send(ScrollPhase::Changed, 0.0, 1.0, 2);
+        contest.send(ScrollPhase::Ended, 0.0, 0.0, 3);
+        assert_eq!(*contest.started.borrow(), 0);
+        assert_eq!(
+            *contest.scrolled.borrow(),
+            vec![(0.0, 0.0), (0.0, 1.0), (0.0, 0.0)],
+            "scroll target innermost: {scroll_innermost}"
+        );
+    }
+}
+
+#[test]
+fn a_release_settles_a_move_that_had_no_frame_yet() {
+    let contest = contest(false);
+    contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
+    contest.send_within_frame(ScrollPhase::Changed, 80.0, 0.0, 2);
+    contest.send_within_frame(ScrollPhase::Ended, 0.0, 0.0, 3);
+    assert_eq!(*contest.started.borrow(), 1, "the feed crossed slop");
+    assert!(contest.scrolled.borrow().is_empty());
 }

@@ -952,6 +952,9 @@ struct LocalLaneInner {
     /// Pointer targets that declared they feed a drag-family recognizer
     /// (ADR-0251 §2).
     scroll_contact_feeds: RefCell<std::collections::HashSet<TargetId>>,
+    /// The axis each scroll target scrolls along, for targets that take part in
+    /// a scroll-fed contact as a competitor (ADR-0251 §2).
+    scroll_target_axes: RefCell<HashMap<TargetId, crate::DragAxis>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -1013,6 +1016,7 @@ impl InteractionLane {
             shader_mask_targets: RefCell::new(HashMap::new()),
             payload_targets: RefCell::new(HashMap::new()),
             scroll_contact_feeds: RefCell::new(std::collections::HashSet::new()),
+            scroll_target_axes: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -1885,8 +1889,38 @@ impl InteractionDispatchHandle {
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
         lane.target_owners.borrow_mut().remove(&target.target_id);
+        lane.scroll_target_axes
+            .borrow_mut()
+            .remove(&target.target_id);
         drop(removed);
         Ok(())
+    }
+
+    /// Declare the axis `target` scrolls along, so a touchpad pan that opens an
+    /// arena contact (ADR-0251) lets it compete with the recognizers that
+    /// feed on it. A scroll target that never declares keeps receiving every
+    /// scroll packet, and a pan beside a feed goes to the feed alone.
+    pub fn declare_scroll_target_axis(
+        &self,
+        target: ScrollTarget,
+        axis: crate::DragAxis,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        lane.scroll_target_axes
+            .borrow_mut()
+            .insert(target.target_id, axis);
+        Ok(())
+    }
+
+    /// The axis `target` declared, if it did.
+    pub(crate) fn scroll_target_axis(&self, target: ScrollTarget) -> Option<crate::DragAxis> {
+        let lane = self.active_lane().ok()?;
+        self.validate_lane(target.lane_id).ok()?;
+        lane.scroll_target_axes
+            .borrow()
+            .get(&target.target_id)
+            .copied()
     }
 
     /// Invoke one registered scroll target synchronously.
