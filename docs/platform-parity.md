@@ -282,9 +282,9 @@ secrets).
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract |
 | Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ✅ | iOS and Android answer each size natively; Windows applies its one `TextScaleFactor` linearly, while WinUI scales larger text less; Linux doesn't read `text-scaling-factor`. Headless: `the_system_text_scale_grows_each_span_once`, `a_field_measures_and_hit_tests_the_current_text_scale` |
 | Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet |
-| Contrast | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |  |
+| Contrast | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | The Web reads `prefers-contrast` and `forced-colors` and follows their changes: `browser_contrast_and_languages_reach_their_owner` runs on Node against a controlled browser boundary; not run in a browser |
 | Bold text | — | — | — | — | 🟡 | 🟡 | — | ❌ |  |
-| Languages and regional formats | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Only Windows reads the languages; no regional formats (24-hour clock, first weekday) anywhere |
+| Languages and regional formats | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | Windows and the Web read the languages (the Web from `navigator.languages`, following `languagechange`; run on Node against a controlled browser boundary, not in a browser); no regional formats (24-hour clock, first weekday) anywhere |
 | Layout direction and per-app language | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | The platform layer exposes no layout direction and no per-app language override (Android 13 and iOS let the user pick a language for one app). |
 | System fonts and fallback | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | ❔ | — | Text layout resolves fonts through `fontdb` in `flui-painting`; the platform layer exposes no system-font or fallback query, and the CJK and emoji fallback of each OS is not audited. |
 | Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. |

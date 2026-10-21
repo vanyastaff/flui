@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
-use std::sync::{Arc, Weak, atomic::Ordering};
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
@@ -108,7 +108,7 @@ impl WebPlatform {
         Ok(Self {
             state,
             signal,
-            preferences: RefCell::new(preferences),
+            preferences: RefCell::new(Some(preferences)),
             displays: WebDisplays::new(),
             display_observers: RefCell::new(None),
             page_observers: RefCell::new(None),
@@ -264,33 +264,25 @@ impl Platform for WebPlatform {
                 message: "browser preference owner has stopped".into(),
             });
         }
-        let observation = self.preferences.borrow().as_ref().map(|source| {
-            (
-                source.query.clone(),
-                source.no_preference.clone(),
-                Arc::clone(&source.active),
-            )
-        });
-        let Some((query, no_preference, active)) = observation else {
-            return Ok(flui_platform::SystemPreferences::default());
+        // Sample outside the borrow: the browser's answers must not observe
+        // the host's own state held.
+        let Some(sampler) = self
+            .preferences
+            .borrow()
+            .as_ref()
+            .map(super::preferences::Preferences::sampler)
+        else {
+            return Err(PlatformError::Preferences {
+                message: "browser preference source is closed".into(),
+            });
         };
-        let motion = if query.matches() {
-            Some(flui_platform::MotionPreference::Reduce)
-        } else if no_preference.matches() {
-            Some(flui_platform::MotionPreference::NoPreference)
-        } else {
-            None
-        };
-        if !active.load(Ordering::Acquire) || !self.signal.accepting() {
+        let preferences = sampler.sample()?;
+        if !self.signal.accepting() {
             return Err(PlatformError::Preferences {
                 message: "browser preference owner stopped during sampling".into(),
             });
         }
-        let preferences = flui_platform::SystemPreferences::default();
-        Ok(match motion {
-            Some(motion) => preferences.with_motion(motion),
-            None => preferences,
-        })
+        Ok(preferences)
     }
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
