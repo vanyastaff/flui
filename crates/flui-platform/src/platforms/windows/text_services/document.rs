@@ -644,21 +644,32 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pacpnext: *mut i32,
     ) -> windows_core::Result<()> {
         self.com_entry("GetText", |state| {
+            // Only what the caller's buffer can hold is read and encoded.
+            let wanted = if pchplain.is_null() {
+                0
+            } else {
+                i32::try_from(cchplainreq).unwrap_or(i32::MAX)
+            };
             let units = state.slot.read(|session| {
                 let end = if acpend == -1 {
                     acp(session.document_len())
                 } else {
                     acpend
                 };
-                let text = session.text(range(acpstart, end)?).map_err(store_error)?;
+                let capped = end.min(acpstart.saturating_add(wanted));
+                let text = match session.text(range(acpstart, capped)?) {
+                    Ok(text) => text,
+                    // The cap fell inside a surrogate pair: stop before it.
+                    Err(_) if capped < end && capped > acpstart => session
+                        .text(range(acpstart, capped - 1)?)
+                        .map_err(store_error)?,
+                    Err(error) => return Err(store_error(error)),
+                };
                 Ok(text.encode_utf16().collect::<Vec<u16>>())
             })?;
-            let wanted = usize::try_from(cchplainreq).unwrap_or(usize::MAX);
-            let copied = if pchplain.is_null() {
-                0
-            } else {
-                units.len().min(wanted)
-            };
+            let copied = units
+                .len()
+                .min(usize::try_from(wanted).unwrap_or(usize::MAX));
             if copied > 0 {
                 // SAFETY: TSF's buffer holds `cchplainreq` units and
                 // `copied` is at most that; the source is our own vector.
