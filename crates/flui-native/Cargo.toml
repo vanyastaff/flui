@@ -347,6 +347,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSURL",
     "NSEnumerator",
     "NSRunLoop",
+    "NSLocale",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIFont",
