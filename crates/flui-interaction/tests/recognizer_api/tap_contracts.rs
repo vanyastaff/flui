@@ -453,7 +453,8 @@ fn cancel_reuses_tap() {
     recognizer.handle_event(PointerDispatch::at_root(&up));
     arena.drain_deferred_resolutions();
     assert_eq!(taps.get(), 1);
-    assert_eq!(cancels.get(), 1);
+    // The cancel came before the press showed, so no cancel is owed.
+    assert_eq!(cancels.get(), 0);
 }
 
 fn cancel_during_up_suppresses_tap() {

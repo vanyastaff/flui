@@ -687,7 +687,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         for sequence in live {
             let candidate = RoutePanic::capture(|| {
                 invoke_callback(
-                    self.callbacks.cancel(sequence.button),
+                    self.callbacks.cancel_after_down(&sequence),
                     || {
                         sequence.member.contact.cancel();
                     },

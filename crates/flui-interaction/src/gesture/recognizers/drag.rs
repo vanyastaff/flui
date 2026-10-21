@@ -27,8 +27,6 @@ use std::{
 };
 use web_time::Instant;
 
-mod native;
-
 /// Position used for the initial drag notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -319,7 +317,6 @@ impl DragGestureRecognizerBuilder {
             axis_lock: self.axis_lock,
             rail: Cell::new(None),
             callbacks: self.callbacks,
-            native: RefCell::new(None),
             contacts: RefCell::new(Vec::new()),
             active: Cell::new(None),
             started: Cell::new(false),
@@ -392,8 +389,6 @@ pub struct DragGestureRecognizer {
     /// The axis a railed free drag locked onto at its start.
     rail: Cell<Option<Axis>>,
     callbacks: DragCallbacks,
-    /// The precision-touchpad pan being read as a drag, if any.
-    native: RefCell<Option<native::NativeDrag>>,
 }
 impl std::fmt::Debug for DragGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1058,9 +1053,6 @@ impl GestureRecognizer for DragGestureRecognizer {
         }
     }
     fn cancel(&self) -> CancelOutcome {
-        if let Some(outcome) = self.cancel_native() {
-            return outcome;
-        }
         self.terminate(GestureEndReason::Cancelled, None)
     }
 }
