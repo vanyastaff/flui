@@ -32,9 +32,12 @@ neither: no backend sends a pan there.
    phases keep today's path: the first scroll consumer owns them (ADR-0207 §4).
 
 2. **Members.** At `Began` the binding collects, along the hit path at the focal point:
-   - drag-family recognizers that opt in to scroll-fed contacts. The opt-in is a recognizer
-     setting, default on for `GestureDetector` pan and drag slots and off for the recognizer a
-     `Scrollable` builds for itself, so a `Scrollable` is never its own competitor;
+   - pointer targets that feed a drag-family recognizer and declare it
+     (`PointerTarget::feeds_scroll_contacts`). A recognizer reaches the arena through its
+     `Listener`'s pointer callbacks, so the binding cannot tell a feed from a raw `Listener` by
+     looking at the recognizer: the declaration is on the target, made by `GestureDetector` for
+     its pan and drag slots and never by the recognizer a `Scrollable` builds for itself, so a
+     `Scrollable` is never its own competitor;
    - scroll targets that can move on their axis (extent above zero), each carrying a motion role
      (`Axial(axis)`) and standing for its `Scrollable`.
    Same-axis ancestors are not members (ADR-0208 §2 rule 3: the innermost claimant owns, the
@@ -67,9 +70,10 @@ neither: no backend sends a pan there.
    target really compete, and ends at slop, as it does for touch. A touchpad pan beside no
    recognizer, or with an unambiguous winner, is never buffered.
 
-7. **Invisible to `Listener`s.** The contact is arena-internal. Raw `Listener` pointer callbacks
-   keep receiving `ScrollEvent`s and no synthetic `Down`; the cancel-on-hand-off of ADR-0208 rule
-   5 therefore sends none for it. Hover stays frozen for the latch's life.
+7. **Only feeds see the contact.** The binding builds the contact's `Down`, `Move` and `Up` and
+   delivers them to the declaring targets alone. Raw `Listener` pointer callbacks keep receiving
+   `ScrollEvent`s and no synthetic sample, and the cancel-on-hand-off of ADR-0208 rule 5 sends
+   them none for this contact. Hover stays frozen for the latch's life.
 
 8. **Lifetime.** The contact ends with the latch: `Ended` is its `Up`, `Cancelled` and an idle
    lapse (ADR-0209 §5) are its cancel. A replaced or withdrawn latch cancels it.
@@ -78,8 +82,8 @@ neither: no backend sends a pan there.
 
 - A pan-only `GestureDetector` is driven by a touchpad pan, and a `Scrollable` inside a draggable
   is ordered by the same table on both devices.
-- `ScrollTarget` gains a motion role and an eligibility probe; `PointerKindSet` is untouched, the
-  opt-in is its own setting, so a pen or touch default does not move.
+- `ScrollTarget` gains a motion role and an eligibility probe, and `PointerTarget` gains the
+  declaration of §2; `PointerKindSet` is untouched, so a pen or touch default does not move.
 - Tests, in `flui-interaction/tests/` as one module of `main.rs`: the ownership table parameterized
   by source (touch contact, scroll-fed contact); fast path (a lone scroll target never opens a
   contact); buffered replay on a scroll-target win; momentum dropped after a recognizer win;
