@@ -13,7 +13,7 @@ use flui_platform::{
     DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 
-/// One display a [`HeadlessPlatform`](super::HeadlessPlatform) is built with.
+/// One display a [`HeadlessPlatform`](crate::HeadlessPlatform) is built with.
 ///
 /// Displays are laid out left to right in the order given; the first is the
 /// primary display.

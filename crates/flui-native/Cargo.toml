@@ -566,11 +566,6 @@ order = 1
 # program against a capability trait depend on `flui-platform` instead.
 # Examples and tools are applications and are exempt from this list.
 allowed-dependents = ["flui-app"]
-# Import directions between the core host's modules (ADR-0151 §10), checked by
-# `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
-# feature directory and `owner`/`version` join `features` and `base` when the
-# change that creates them lands.
-modules = { features = [], platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"], groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }, base = [], hosts = "hosts" }
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "platforms::windows::platform::WindowIdentity::source::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
@@ -594,3 +589,14 @@ globals = [
     { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
     { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]
+
+[package.metadata.flui.modules]
+# Import directions between the core host's modules (ADR-0151 §10), checked by
+# `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
+# feature directory and `owner`/`version` join `features` and `base` when the
+# change that creates them lands.
+features = []
+platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
+groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
+base = []
+hosts = "hosts"

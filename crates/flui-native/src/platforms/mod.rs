@@ -51,5 +51,3 @@ pub use headless::{
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
     HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
-#[cfg(target_arch = "wasm32")]
-pub use web::WebPlatform;

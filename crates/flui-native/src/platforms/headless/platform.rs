@@ -48,13 +48,13 @@ use flui_platform::{
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 /// Builds the text-store host a headless window offers
-/// ([`HeadlessPlatform::with_text_store_host`]). Shared with every window,
+/// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)). Shared with every window,
 /// so `Send + Sync`; what it builds is owner-thread state.
 type TextStoreHostFactory = Arc<dyn Fn() -> Rc<dyn TextStoreHost> + Send + Sync>;
 
 /// Process-wide identity source for mock windows.
 ///
-/// A headless test may construct several independent [`HeadlessPlatform`]
+/// A headless test may construct several independent [`HeadlessPlatform`](crate::HeadlessPlatform)
 /// values whose windows later meet in one application registry. Scoping the
 /// counter to a platform instance lets those windows alias even though real
 /// backend handles are process-unique.
@@ -92,12 +92,12 @@ pub(super) struct HeadlessState {
     is_running: bool,
     pub(super) windows: Vec<MockWindow>,
     /// Whether the windows sit on one desktop and answer
-    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`]).
+    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
     placement: bool,
     keyboard_layout: String,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
-    /// [`HeadlessPlatform::enable_deferred_window_open`]): when `true`,
+    /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
     /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
     /// `DirectOwnerHooks`, so `OwnerPlatform::open_window` enqueues into
     /// `pending_opens` and returns `WindowOpen::Pending` instead of
@@ -117,23 +117,23 @@ pub(super) struct HeadlessState {
     /// thread-local runtime state.
     exit_reevaluation_requested: bool,
     /// What every window opened from now on offers as its text-store host
-    /// ([`HeadlessPlatform::with_text_store_host`]); `None`: push-model.
+    /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)); `None`: push-model.
     text_store_host: Option<TextStoreHostFactory>,
-    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`]).
+    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
     input_availability: flui_platform::input_capabilities::InputCapabilities,
     /// The attached input devices: presence and device ids from one registry.
     devices: crate::shared::pointer_assembly::DeviceRegistry,
     /// Issues each simulated device's native label, never one twice.
     device_labels: flui_foundation::IdMint<std::num::NonZeroU64>,
     /// The displays this platform reports; replaced by
-    /// [`HeadlessPlatform::with_displays`] and changed through
+    /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
     /// [`HeadlessDisplayControls`].
     displays: HeadlessDisplays,
     /// What every window opened from now on honours
-    /// ([`HeadlessPlatform::with_window_capabilities`]).
+    /// ([`HeadlessPlatform::with_window_capabilities`](crate::HeadlessPlatform::with_window_capabilities)).
     window_capabilities: WindowCapabilities,
     /// What the host clamps or declines for every window opened from now on
-    /// ([`HeadlessPlatform::with_window_policy`]).
+    /// ([`HeadlessPlatform::with_window_policy`](crate::HeadlessPlatform::with_window_policy)).
     window_policy: HeadlessWindowPolicy,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
@@ -142,7 +142,7 @@ pub(super) struct HeadlessState {
     /// had answered with a block.
     session_end_releases: usize,
     /// What `Platform::preferences` reports: unknown until
-    /// [`HeadlessPlatform::with_preferences`] or [`HeadlessPreferences::set`].
+    /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`].
     preferences: flui_platform::SystemPreferences,
     /// The failure the next `Platform::preferences` read reports instead of a
     /// value ([`HeadlessPreferences::fail_next_read`]).
@@ -665,8 +665,8 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
         .build()
 }
 
-/// Attaches and removes simulated input devices on a [`HeadlessPlatform`]
-/// ([`HeadlessPlatform::input_devices`]).
+/// Attaches and removes simulated input devices on a [`HeadlessPlatform`](crate::HeadlessPlatform)
+/// ([`HeadlessPlatform::input_devices`](crate::HeadlessPlatform::input_devices)).
 #[derive(Clone)]
 pub struct HeadlessInputDevices {
     state: Weak<Mutex<HeadlessState>>,
@@ -816,7 +816,7 @@ fn create_mock_window(
 
 /// [`OwnerHooks`] for the headless backend's deferred-open test mode
 /// (installed by `Platform::run` in place of `DirectOwnerHooks` when
-/// [`HeadlessPlatform::enable_deferred_window_open`] was called first).
+/// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open) was called first).
 /// Exercises the `WindowOpen::Pending` arm of the owner-lane contract
 /// without needing a real winit event loop: every `open_owner_window` call
 /// enqueues a [`ClaimSlot`] request into `HeadlessState::pending_opens`
@@ -912,7 +912,7 @@ impl HeadlessOwnerTurns {
 
 /// Reports session ends and system notices to the headless platform's
 /// registered hooks after `run` has consumed it — obtained from
-/// [`HeadlessPlatform::host_events`] before `run`.
+/// [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events) before `run`.
 ///
 /// Each call runs the hook on the calling thread, outside the platform's state
 /// lock, so the hook may call back into the platform; a hook registered while it
@@ -997,8 +997,8 @@ impl Drop for TakenSessionHook<'_> {
 }
 
 /// Changes the headless platform's displays after `run` has consumed it —
-/// obtained from [`HeadlessPlatform::display_controls`] before `run`, the same
-/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`].
+/// obtained from [`HeadlessPlatform::display_controls`](crate::HeadlessPlatform::display_controls) before `run`, the same
+/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`](crate::HeadlessPlatform::owner_turns).
 ///
 /// A change commits to the platform's snapshot and then wakes the owner, as a
 /// native source does when the OS reports a mode switch, and so works from any
@@ -1050,7 +1050,7 @@ impl HeadlessDisplayControls {
 }
 
 /// The headless platform's system preferences after `run` has consumed it:
-/// obtained from [`HeadlessPlatform::preference_source`] before `run`.
+/// obtained from [`HeadlessPlatform::preference_source`](crate::HeadlessPlatform::preference_source) before `run`.
 ///
 /// A change commits to the platform's preferences and then wakes the owner, as
 /// a native source does when the OS reports a setting change, so it works from
@@ -1101,7 +1101,7 @@ impl HeadlessPreferences {
 
 /// Probe/drive handle for parked
 /// `Platform::request_exit_policy_reevaluation` requests on the headless
-/// mock — obtained via [`HeadlessPlatform::exit_reevaluation`] BEFORE
+/// mock — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::HeadlessPlatform::exit_reevaluation) BEFORE
 /// `Platform::run` consumes the platform. The mock has no event loop of
 /// its own, so the owner-thread half of a re-evaluation request (the
 /// winit backend's `process_control` arm) is driven explicitly by the
@@ -1210,7 +1210,7 @@ impl HeadlessExitReevaluation {
     }
 }
 
-/// Test handle returned by [`HeadlessPlatform::enable_deferred_window_open`]
+/// Test handle returned by [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)
 /// — resolves the oldest still-pending deferred window-open request,
 /// completing the [`PendingWindow`] a `HeadlessDeferredOwnerHooks` call
 /// returned. `Weak`: this handle must never keep the platform state alive
@@ -1283,7 +1283,7 @@ impl HeadlessDeferredWindowOpens {
 
 /// The canonical test/headless window double.
 ///
-/// Every window [`HeadlessPlatform`] opens is a `MockWindow`: a fully
+/// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `MockWindow`: a fully
 /// functional [`PlatformWindow`] that needs no
 /// display server. Beyond the trait surface it offers what a test harness
 /// needs to drive a window from the outside:
@@ -1299,7 +1299,7 @@ impl HeadlessDeferredWindowOpens {
 ///   registered callback a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
-/// [`HeadlessPlatform`] and downcasting the returned
+/// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
 /// `Arc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
 #[derive(Clone)]
 pub struct MockWindow {
