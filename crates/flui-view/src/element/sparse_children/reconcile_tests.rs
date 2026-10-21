@@ -9,7 +9,7 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
-use super::{ReconcileSource, SparseChildren, build_item_or_error};
+use super::{ReconcileSource, SparseChildren, item_exists};
 use crate::view::{RenderView, View};
 use crate::{BoxedView, BuildOwner, ElementTree};
 
@@ -346,18 +346,17 @@ fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
     }
 }
 
-fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
+fn a_panicking_builder_counts_as_present_for_that_index_only() {
     let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|i| {
         assert!(i != 1, "boom");
-        Some(BoxedView::new(KeyedBox::new(i as u32)))
+        (i < 3).then(|| BoxedView::new(KeyedBox::new(i as u32)))
     });
-    assert!(build_item_or_error(&*builder, 0).is_some());
-    let recovered = build_item_or_error(&*builder, 1).expect("an error view, not None");
-    assert_eq!(
-        recovered.view_type_id(),
-        std::any::TypeId::of::<crate::view::ErrorView>()
+    assert!(item_exists(&*builder, 0));
+    assert!(
+        item_exists(&*builder, 1),
+        "a panicking index is present: it renders an error view, and the list is not truncated there"
     );
-    assert!(recovered.key().is_none(), "the error view is unkeyed");
+    assert!(!item_exists(&*builder, 3), "past the end is absent");
 }
 
 #[test]
@@ -374,8 +373,8 @@ fn sparse_reconcile_containment_matrix() {
                 a_child_panicking_in_create_render_object_is_replaced_at_that_index_only as fn(),
             ),
             (
-                "a_panicking_builder_yields_the_error_view_for_that_index_only",
-                a_panicking_builder_yields_the_error_view_for_that_index_only as fn(),
+                "a_panicking_builder_counts_as_present_for_that_index_only",
+                a_panicking_builder_counts_as_present_for_that_index_only as fn(),
             ),
         ],
     );

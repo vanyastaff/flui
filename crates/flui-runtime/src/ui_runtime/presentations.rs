@@ -188,6 +188,7 @@ impl UiRuntime {
         let snapshot = self.preferences.borrow().clone();
         let unknown = flui_platform_api::SystemPreferences::default();
         presentation.set_motion_override(self.motion_override.get());
+        presentation.set_error_view_builder(self.error_view_builder.get());
         super::preferences::publish(
             &presentation,
             snapshot

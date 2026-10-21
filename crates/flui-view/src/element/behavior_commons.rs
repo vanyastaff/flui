@@ -115,7 +115,7 @@ pub(crate) fn stamp_sliver_slot(
 ///
 /// This is the producer half of the `ErrorView` recovery path — the
 /// receiver (`ErrorView` + `FrameworkError` +
-/// `set_error_view_builder`) already exists; this wires the catch that
+/// the owner's error view builder) already exists; this wires the catch that
 /// feeds it. The catch wraps `build()` and replaces the built view with the
 /// registered error view.
 ///
@@ -211,7 +211,7 @@ where
                 })) {
                     flui_foundation::panic::retain_opaque_payload(payload);
                 }
-                return crate::view::ErrorView::build_error_view(&error);
+                return crate::view::ErrorView::build_error_view(&error, owner.error_view_builder);
             };
             let panic = RecoveredPanic::from_payload(
                 RecoveredAt::Element {
@@ -227,7 +227,8 @@ where
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No
             // successful recovery record is published until it returns a view.
-            let error_view = crate::view::ErrorView::build_error_view(&panic.error);
+            let error_view =
+                crate::view::ErrorView::build_error_view(&panic.error, owner.error_view_builder);
             if let Some(flag) = owner.build_recovered {
                 flag.set(true);
             }

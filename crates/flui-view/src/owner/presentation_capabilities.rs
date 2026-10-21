@@ -60,4 +60,18 @@ impl BuildOwner {
     pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
         self.storage = Some(storage);
     }
+
+    /// Set the factory that renders a recovered failure in this owner's tree,
+    /// or `None` for the default [`ErrorView`](crate::ErrorView). A UI runtime
+    /// sets it on every presentation it assembles; it applies from the next
+    /// recovery on.
+    pub fn set_error_view_builder(&mut self, builder: Option<crate::view::ErrorViewBuilder>) {
+        self.error_view_builder = builder;
+    }
+
+    /// The factory set by [`Self::set_error_view_builder`].
+    #[must_use]
+    pub fn error_view_builder(&self) -> Option<crate::view::ErrorViewBuilder> {
+        self.error_view_builder
+    }
 }

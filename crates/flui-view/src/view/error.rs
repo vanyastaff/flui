@@ -18,8 +18,6 @@
 //! );
 //! ```
 
-use std::sync::RwLock;
-
 use flui_foundation::panic::payload_text;
 
 use super::into_view::BoxedView;
@@ -30,55 +28,6 @@ use super::view::View;
 ///
 /// This allows applications to customize how errors are displayed.
 pub type ErrorViewBuilder = fn(&FrameworkError) -> Box<dyn View>;
-
-/// Global configurable factory for ErrorView.
-///
-/// Applications can set this to customize error display.
-static ERROR_VIEW_BUILDER: RwLock<Option<ErrorViewBuilder>> = RwLock::new(None);
-
-/// Set the global error view builder.
-///
-/// When an error occurs during build, this factory is used to create
-/// the error widget. If not set, the default ErrorView is used.
-pub fn set_error_view_builder(builder: ErrorViewBuilder) {
-    if let Ok(mut guard) = ERROR_VIEW_BUILDER.write() {
-        *guard = Some(builder);
-    }
-}
-
-/// Clear the global error view builder.
-pub fn clear_error_view_builder() {
-    if let Ok(mut guard) = ERROR_VIEW_BUILDER.write() {
-        *guard = None;
-    }
-}
-
-/// Run a unit test that mutates [`ERROR_VIEW_BUILDER`] in a dedicated
-/// process, because unrelated lib tests cannot share a process-local guard.
-#[cfg(test)]
-pub(crate) fn isolate_error_view_builder_test(test_name: &str) -> bool {
-    const ISOLATED_TEST: &str = "FLUI_ISOLATED_ERROR_VIEW_BUILDER_TEST";
-    if std::env::var(ISOLATED_TEST).as_deref() == Ok(test_name) {
-        return false;
-    }
-
-    let output = std::process::Command::new(
-        std::env::current_exe().expect("the libtest executable must exist"),
-    )
-    .args([test_name, "--exact", "--nocapture"])
-    .env(ISOLATED_TEST, test_name)
-    .output()
-    .expect("the isolated libtest process must start");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success()
-            && stdout.contains("running 1 test")
-            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
-        "isolated test process did not run exactly one passing test: {test_name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    true
-}
 
 /// Error details for framework errors.
 #[derive(Debug, Clone)]
@@ -172,7 +121,9 @@ impl std::error::Error for FrameworkError {}
 ///
 /// # Customization
 ///
-/// Use [`set_error_view_builder`] to customize how errors are displayed.
+/// Set an [`ErrorViewBuilder`] on the UI runtime (`AppConfig::with_error_view_builder`,
+/// or `BuildOwner::set_error_view_builder` for one presentation) to customize how
+/// errors are displayed.
 #[derive(Clone)]
 pub struct ErrorView {
     /// The error message to display.
@@ -206,17 +157,16 @@ impl ErrorView {
         }
     }
 
-    /// Build an error view using the global builder or default.
-    pub fn build_error_view(error: &FrameworkError) -> Box<dyn View> {
-        // Check for custom builder
-        if let Ok(guard) = ERROR_VIEW_BUILDER.read()
-            && let Some(builder) = *guard
-        {
-            return builder(error);
+    /// Build an error view with `custom` when one is configured, else the
+    /// default [`ErrorView`].
+    pub fn build_error_view(
+        error: &FrameworkError,
+        custom: Option<ErrorViewBuilder>,
+    ) -> Box<dyn View> {
+        match custom {
+            Some(builder) => builder(error),
+            None => Box::new(Self::from_error(error)),
         }
-
-        // Default: use ErrorView
-        Box::new(Self::from_error(error))
     }
 }
 
@@ -267,11 +217,14 @@ impl View for ErrorView {
 /// matching, or trigger a `GlobalKey` retake, instead of staying isolated
 /// to the failed slot. `ElementTree::mount_or_substitute` /
 /// `ElementTree::update_or_substitute` are this primitive's own callers;
-/// `crate::element::sparse_children::build_item_or_error` — a *different*
+/// `crate::element::sparse_children::build_item_or_report` — a *different*
 /// containment window, the lazy-sliver item builder itself — calls this
 /// too, so the two never drift into two ways of stripping a key.
-pub(crate) fn recovery_view_for(error: &FrameworkError) -> BoxedView {
-    let recovered = ErrorView::build_error_view(error);
+pub(crate) fn recovery_view_for(
+    error: &FrameworkError,
+    custom: Option<ErrorViewBuilder>,
+) -> BoxedView {
+    let recovered = ErrorView::build_error_view(error, custom);
     if recovered.key().is_some() {
         BoxedView::new(UnkeyedRecovery {
             inner: BoxedView::from(recovered),

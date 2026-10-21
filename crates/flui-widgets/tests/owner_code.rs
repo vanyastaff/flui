@@ -3548,13 +3548,6 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     static OBSERVER_FAILURE_RECOVERED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 
-    struct ClearErrorBuilder;
-    impl Drop for ClearErrorBuilder {
-        fn drop(&mut self) {
-            flui_view::view::clear_error_view_builder();
-        }
-    }
-
     let controller = TextEditingController::new();
     let (old, new) = (
         FocusNode::with_debug_label("replaced node"),
@@ -3573,17 +3566,16 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     }));
     let previous_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
     assert_eq!(previous_elements.len(), 1);
-    // This row runs in its own child process, so the public global error
-    // factory cannot interfere with another case. Recovery must report the
-    // observer's earlier failure rather than the competing focus listener.
-    flui_view::view::set_error_view_builder(|error| {
-        assert_eq!(error.message, "observer failure on status");
-        OBSERVER_FAILURE_RECOVERED.store(true, std::sync::atomic::Ordering::Relaxed);
-        Box::new(flui_view::ErrorView::from_error(error))
+    // Recovery must report the observer's earlier failure rather than the
+    // competing focus listener.
+    harness.with_build_owner_mut(|owner| {
+        owner.set_error_view_builder(Some(|error| {
+            assert_eq!(error.message, "observer failure on status");
+            OBSERVER_FAILURE_RECOVERED.store(true, std::sync::atomic::Ordering::Relaxed);
+            Box::new(flui_view::ErrorView::from_error(error))
+        }));
     });
-    let clear_error_builder = ClearErrorBuilder;
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
-    drop(clear_error_builder);
     assert!(
         OBSERVER_FAILURE_RECOVERED.load(std::sync::atomic::Ordering::Relaxed),
         "the observer's first failure reached frame recovery"

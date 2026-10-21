@@ -211,7 +211,7 @@ impl SparseChildren {
     ///    that is how a keyed child whose data moved *out of the resident
     ///    band* is still found (a static child list derives the map from its
     ///    children). Every
-    ///    index is built through [`build_item_or_error`], so a panicking
+    ///    index is built through [`build_item_or_report`], so a panicking
     ///    builder yields an error child at that index and nothing else.
     /// 2. **Match and apply.** A built view with a key claims the first
     ///    unclaimed resident carrying an equal key (first wins on duplicate
@@ -502,7 +502,7 @@ pub(crate) struct ReconcileOutcome {
 
 /// Mount `view` at `logical_index`, substituting the registered `ErrorView`
 /// when [`ElementTree::mount_or_substitute`]'s containment window catches a
-/// panic — the boundary one level up from [`build_item_or_error`], which
+/// panic — the boundary one level up from [`build_item_or_report`], which
 /// bounds only the *builder*.
 ///
 /// The boundary is [`ElementTree::mount_or_substitute`]'s permanent window
@@ -616,11 +616,15 @@ fn try_build_item(
     std::panic::catch_unwind(AssertUnwindSafe(|| builder(index)))
 }
 
-/// Build the item at `index` through `builder`, substituting the registered
-/// `ErrorView` when the builder panics, **without reporting** — for
-/// `sliver_adaptor.rs`'s two COUNT-PROBE callers (`regrown_item_count` and
-/// `probe_item_count`), which build and discard the view purely to learn
-/// whether an index exists.
+/// Whether `builder` yields an item at `index`, for `sliver_adaptor.rs`'s two
+/// COUNT-PROBE callers (`regrown_item_count` and `probe_item_count`), which
+/// build the view and discard it purely to learn whether an index exists.
+///
+/// A builder that panics counts the index as **present**: the item exists and
+/// renders an error view, and truncating the list at a panicking index would
+/// silently shorten it because one row threw. The substitute view itself is
+/// never made, so a probe calls no error-view factory for a view it throws
+/// away.
 ///
 /// A probe's panic is unreported by design, not by oversight: an index a
 /// probe hits either goes on to be built again through the mount path
@@ -629,17 +633,10 @@ fn try_build_item(
 /// past the retained band), in which case there is no production content
 /// this panic ever affected. Reporting it here too would count one failing
 /// builder as two failures for the indices that go on to be mounted.
-///
-pub(crate) fn build_item_or_error(
-    builder: &dyn Fn(usize) -> Option<BoxedView>,
-    index: usize,
-) -> Option<BoxedView> {
+pub(crate) fn item_exists(builder: &dyn Fn(usize) -> Option<BoxedView>, index: usize) -> bool {
     match try_build_item(builder, index) {
-        Ok(view) => view,
-        Err(payload) => Some(recovery_view_for(&crate::view::FrameworkError::from_panic(
-            payload.as_ref(),
-            format!("probing lazy sliver child {index}"),
-        ))),
+        Ok(view) => view.is_some(),
+        Err(_) => true,
     }
 }
 
@@ -653,7 +650,7 @@ pub(crate) fn build_item_or_error(
 /// For the two MOUNT-path callers ([`SparseChildren::reconcile`] and
 /// `SliverAdaptorManager::service`, `sliver_adaptor.rs`): the index a
 /// panicking builder yields an error view for is either resident already or
-/// about to be mounted, so — unlike [`build_item_or_error`]'s probe-only
+/// about to be mounted, so — unlike [`item_exists`]'s probe-only
 /// callers — this IS production content, and the panic is reported through
 /// `owner` exactly once, at [`LifecycleHook::Build`].
 ///
@@ -682,7 +679,7 @@ pub(crate) fn build_item_or_report(
                 payload.as_ref(),
                 format!("building lazy sliver child {index}"),
             );
-            let substitute = recovery_view_for(&panic.error);
+            let substitute = recovery_view_for(&panic.error, owner.error_view_builder);
             owner.push_recovered_panic(panic);
             Some(substitute)
         }

@@ -13,7 +13,7 @@
 //! lazy sliver host's own delegate — the item builder
 //! (`sparse_children::build_item_or_report`, on the mount path only; the
 //! count-probe callers in `sliver_adaptor.rs` stay unreported by design,
-//! see `build_item_or_error`'s doc) and `find_index_by_key`
+//! see `item_exists`'s doc) and `find_index_by_key`
 //! (`sparse_children::find_index_or_none`) — catches
 //! a user lifecycle-hook panic and applies that seam's local outcome
 //! (substitution, removal cleanup, or declining a lazy move) rather than

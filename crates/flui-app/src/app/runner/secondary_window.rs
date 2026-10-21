@@ -230,6 +230,7 @@ struct SecondaryWindowInstallConfig {
     frame_failure_detail: FrameFailureDetail,
     pointer_resampling: flui_runtime::presentation::PointerResampling,
     motion_override: flui_runtime::MotionOverride,
+    error_view_builder: Option<flui_view::ErrorViewBuilder>,
     input_tap: Option<flui_runtime::InputTapFactory>,
 }
 
@@ -864,6 +865,7 @@ pub(super) fn open_secondary_window_impl(
         frame_failure_detail: config.frame_failure_detail,
         pointer_resampling: config.pointer_resampling,
         motion_override: config.motion_override,
+        error_view_builder: config.error_view_builder,
         input_tap: config.input_tap,
     };
 
@@ -940,6 +942,7 @@ where
                 frame_failure_detail: config.frame_failure_detail,
                 pointer_resampling: config.pointer_resampling,
                 motion_override: config.motion_override,
+                error_view_builder: config.error_view_builder,
                 input_tap: config.input_tap.clone(),
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
@@ -1103,6 +1106,7 @@ fn finish_open_secondary_window(
                         .expect("BUG: a fresh runtime issues its first tap registration");
                 }
                 ui_runtime.set_motion_override(config.motion_override);
+                ui_runtime.set_error_view_builder(config.error_view_builder);
                 // No frame-failure handler is installed here. Under
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
@@ -1313,6 +1317,7 @@ mod tests {
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
                     motion_override: AppConfig::new().motion_override,
+                    error_view_builder: None,
                     input_tap: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
@@ -1550,6 +1555,7 @@ mod tests {
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
                         motion_override: AppConfig::new().motion_override,
+                        error_view_builder: None,
                         input_tap: None,
                     };
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
@@ -1637,6 +1643,7 @@ mod tests {
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
                         motion_override: AppConfig::new().motion_override,
+                        error_view_builder: None,
                         input_tap: None,
                     };
                     let stage = if first {
@@ -1727,6 +1734,7 @@ mod tests {
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
                     motion_override: AppConfig::new().motion_override,
+                    error_view_builder: None,
                     input_tap: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(

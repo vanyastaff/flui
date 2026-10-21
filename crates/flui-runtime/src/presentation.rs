@@ -1279,6 +1279,11 @@ impl PresentationState {
         self.motion_clock.borrow().policy()
     }
 
+    pub(crate) fn set_error_view_builder(&self, builder: Option<flui_view::ErrorViewBuilder>) {
+        self.widgets
+            .with_build_owner_mut(|owner| owner.set_error_view_builder(builder));
+    }
+
     pub(crate) fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
         self.motion_clock.borrow_mut().set_override(preference);
     }

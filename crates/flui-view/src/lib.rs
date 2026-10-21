@@ -248,7 +248,6 @@ pub use view::{
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
     RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,
     StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================

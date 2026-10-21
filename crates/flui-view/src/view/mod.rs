@@ -30,11 +30,7 @@ mod stateless;
 mod view;
 
 pub use animated::AnimatedView;
-#[cfg(test)]
-pub(crate) use error::isolate_error_view_builder_test;
-pub use error::{
-    ErrorView, ErrorViewBuilder, FrameworkError, clear_error_view_builder, set_error_view_builder,
-};
+pub use error::{ErrorView, ErrorViewBuilder, FrameworkError};
 // The containment substitute-view factory: `ErrorView`'s own
 // concept, so it lives beside `ErrorView::build_error_view` rather than in
 // `tree::element_tree`. Crate-internal — `ElementTree::mount_or_substitute`

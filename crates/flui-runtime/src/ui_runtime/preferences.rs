@@ -296,6 +296,17 @@ fn refresh(
 }
 
 impl UiRuntime {
+    /// Set the factory that renders a recovered build, mount or update failure
+    /// in every current and later presentation of this runtime, or `None` for
+    /// the default [`ErrorView`](flui_view::ErrorView). It applies from the
+    /// next recovery on; failures already substituted keep their view.
+    pub fn set_error_view_builder(&self, builder: Option<flui_view::ErrorViewBuilder>) {
+        self.error_view_builder.set(builder);
+        for presentation in self.presentations.iter() {
+            presentation.set_error_view_builder(builder);
+        }
+    }
+
     /// Apply an application override to every current and later presentation.
     /// Clocks commit before any inherited-data notification or platform wake.
     pub fn set_motion_override(&self, preference: flui_animation::MotionOverride) {

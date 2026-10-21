@@ -1222,9 +1222,7 @@ fn regrown_item_count(
     if current == usize::MAX {
         return None;
     }
-    super::sparse_children::build_item_or_error(builder, current)
-        .is_some()
-        .then(|| probe_item_count(builder))
+    super::sparse_children::item_exists(builder, current).then(|| probe_item_count(builder))
 }
 
 /// How many items a lazy sliver has, when the caller knows.
@@ -1289,7 +1287,7 @@ impl From<usize> for ItemCount {
 ///   search reports `usize::MAX` and lets the caller's window bound it — the
 ///   same answer the unbounded-window path already gives.
 ///
-/// Every probe goes through `build_item_or_error`, the same boundary the
+/// Every probe goes through `item_exists`, the same panic boundary the
 /// adaptor's own builder calls use, so a panicking builder does not unwind out
 /// of the mount and abort the whole sliver. A panic counts the index as
 /// **present**, because that is what the boundary does with it: the item
@@ -1305,8 +1303,7 @@ impl From<usize> for ItemCount {
 pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
     // `lo` is a count known to be reachable (every index below it exists);
     // `hi` is a count known to be past the end, once the loop settles.
-    let exists =
-        |index: usize| super::sparse_children::build_item_or_error(builder, index).is_some();
+    let exists = |index: usize| super::sparse_children::item_exists(builder, index);
     if !exists(0) {
         return 0;
     }

@@ -29,3 +29,9 @@
 - **Text sizing woke the owner twice a second in a backgrounded app** (`flui-app`, Android and
   iOS): an unavailable native window now parks the capture without a deadline, and failing native
   calls back off from 500 ms to 8 s with one warning per streak.
+- **Error view factory is UI runtime configuration** (`flui-view`, `flui-runtime`, `flui-app`):
+  `set_error_view_builder`, `clear_error_view_builder` and the process-wide `ERROR_VIEW_BUILDER`
+  are gone. Set the factory with `AppConfig::with_error_view_builder` (or
+  `UiRuntime::set_error_view_builder` / `BuildOwner::set_error_view_builder`); it applies to every
+  presentation of the runtime, including windows opened later, and two runtimes in one process no
+  longer share it.

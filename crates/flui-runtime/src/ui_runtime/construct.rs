@@ -196,6 +196,7 @@ impl UiRuntime {
             id: ui_runtime_id,
             preferences: RefCell::new(preferences),
             motion_override: Cell::new(flui_animation::MotionOverride::FollowSystem),
+            error_view_builder: Cell::new(None),
             geometry_turn: std::rc::Rc::new(RefCell::new(None)),
             owner_frame,
             interaction_lane,

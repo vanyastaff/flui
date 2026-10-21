@@ -98,7 +98,6 @@ pub(crate) fn dispatch_child(kind: &str) {
     };
     let factory = kind.ends_with("factory");
     let telemetry = kind.ends_with("report");
-    flui_view::clear_error_view_builder();
     let armed = Rc::new(Cell::new(!matches!(hook, Hook::Update)));
     let original_drops = Arc::new(AtomicUsize::new(0));
     let report_drops = Arc::new(AtomicUsize::new(0));
@@ -139,7 +138,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         None
     };
     if factory {
-        flui_view::set_error_view_builder(failing_factory);
+        owner.set_error_view_builder(Some(failing_factory));
     }
     let subscriber = tracing_subscriber::registry().with(telemetry.then(|| FailedTelemetry {
         calls: Arc::clone(&report_calls),
@@ -148,7 +147,6 @@ pub(crate) fn dispatch_child(kind: &str) {
     let result = tracing::subscriber::with_default(subscriber, || {
         catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)))
     });
-    flui_view::clear_error_view_builder();
     assert_eq!(original_drops.load(Ordering::SeqCst), 0);
     assert_eq!(report_drops.load(Ordering::SeqCst), 0);
     if factory {
