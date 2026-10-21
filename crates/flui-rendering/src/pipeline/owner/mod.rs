@@ -15,6 +15,8 @@ mod compositing;
 mod construction;
 mod counters;
 mod diagnostics;
+mod hit_slop;
+mod input_regions;
 mod layout;
 mod paint;
 mod poison;
@@ -22,6 +24,7 @@ mod query;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod transform_path;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
@@ -152,6 +155,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The render tree storing all RenderObjects (Slab-based).
     render_tree: RenderTree,
+    /// Ancestry buffers checked out by read-only transform queries. A pool
+    /// allows reentrant queries without borrowing across authored transforms.
+    transform_paths: std::cell::RefCell<Vec<Vec<RenderId>>>,
 
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
@@ -200,6 +206,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
 
+    /// Region identity authority survives semantics owner disposal/replacement.
+    semantics_regions: semantics::RegionIdentities,
+
     /// Semantics diagnostics the frame driver has not yet reported, moved
     /// here from the semantics owner after each flush so a disposed or
     /// replaced owner cannot take them with it.
@@ -224,6 +233,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
+
+    /// Paint passes that committed a layer tree, which numbers each tree's scene so a layer id
+    /// from an earlier one is not read as a layer of the next.
+    scenes_painted: u64,
 
     /// Composite-resolved offsets for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
@@ -376,6 +389,7 @@ where
         fonts_seen: from.fonts_seen,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
+        transform_paths: from.transform_paths,
         root_id: from.root_id,
         notifier: from.notifier,
         scheduler: from.scheduler,
@@ -383,11 +397,13 @@ where
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
+        semantics_regions: from.semantics_regions,
         semantics_diagnostics: from.semantics_diagnostics,
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
+        scenes_painted: from.scenes_painted,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
         root_content: from.root_content,

@@ -6,22 +6,25 @@
   (`multiselectable`), on `SemanticsConfiguration` and as `Semantics` builders. They are published
   to AccessKit; a level, a table's shape, a cell's position, a sort and a selection rule are
   checked against the roles ARIA 1.2 gives them. A level, a row and a column count from one, as
-  ARIA's do.
+  ARIA's do. A role-less node that declares a set size publishes as a list.
 - `flui-testing`: `A11yNode::size_of_containing_set`, `outline_level`, `row_count`,
   `column_count`, `row_index`, `column_index`, `row_span`, `column_span`, `sort_direction` and
   `is_multiselectable`.
 
 ### Changed
 
-- **A lazy list's size is its container's.** The scroll container declares the set's size and
-  publishes as a list; its rows declare only their position. Before, the size was stamped on each
-  row, where no adapter reads it, so "item 12 of 100" never reached a screen reader. A list whose
-  length is unknown publishes no size, and its rows publish no position under an enclosing set of
-  known size, which would otherwise read "item 12 of 5". A hand-numbered row inside a lazy list now
-  announces its own number against the delegate's size.
-- `IndexedSemantics::new` and `RenderIndexedSemantics::new` take a `usize`; `SliverSlot`,
-  `SliverMultiBoxAdaptorParentData::{semantic_index, semantic_set_size}` and
-  `SemanticSetMapping::{composed_at, interleaved}` carry `usize` and `SetSize` instead of `i32`.
+- **Places are held to the set and table they sit in.** A position past its known set's size, and a
+  cell, a span or a row outside its known table, is not published ("item 8 of 3", "row 5 of 3").
+  A set declared with `size_of_set` withholds the totals above it like an authored
+  `SemanticsCollection` when it is unknown or holds another set's members.
+- **One lazy item is one member.** An item whose root forms no node hands its position to its first
+  semantics node only, and a position declared anywhere in the item, a descendant boundary
+  included, suppresses the stamp.
+- `IndexedSemantics::new`, `RenderIndexedSemantics::new` and
+  `SemanticsConfiguration::set_collection_index` take a `usize`; `SliverSlot`,
+  `SliverMultiBoxAdaptorParentData::semantic_index` and
+  `SemanticSetMapping::{composed_at, interleaved}` carry `usize` and `SetSize` instead of `i32`
+  and `Option<i32>`.
 
 ### Removed
 

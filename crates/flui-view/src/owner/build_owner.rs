@@ -46,6 +46,8 @@ use super::external_build_inbox::{BuildPremise, PendingBuilds};
 thread_local! {
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    static LAYOUT_SCOPE_HOPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Upper bound on RE-ENTRY mid-drain absorbs per frame (issue #1180).
@@ -245,6 +247,8 @@ pub(crate) struct BuildScopeQueues {
     isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
     /// Reused while rerouting after scope removal or tree reparenting.
     scratch: Vec<DirtyElement>,
+    /// Nearest scope per element, reused by each repartition.
+    scope_memo: super::dirty_queue::ScopeMemo,
 }
 
 /// Per-cause rebuild counters for one `build_scope`, indexed by the
@@ -545,6 +549,7 @@ pub struct BuildOwner {
     /// created by [`Self::new`] receive a fresh isolated manager.
     focus_manager: Rc<FocusManager>,
     lifecycle_handle: Option<crate::LifecycleHandle>,
+    window_handle: Option<crate::WindowHandle>,
 
     /// The binding's frame-driven async task driver, installed by
     /// whichever binding owns this owner. `None` until then — a tree built with
@@ -577,6 +582,16 @@ pub struct BuildOwner {
     /// The presentation's plain-text clipboard. `None` only on a bare owner;
     /// a UI runtime installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's external textures. `None` only on a bare owner.
+    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
+
+    /// The presentation's haptics. `None` only on a bare owner; a UI runtime
+    /// installs one over its presentation's haptics host.
+    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
+
+    /// The presentation's drag-and-drop. `None` only on a bare owner; a UI
+    /// runtime installs one over its runtime's drag sessions.
+    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
 
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
@@ -749,10 +764,14 @@ impl BuildOwner {
             build_scope_queues: None,
             focus_manager,
             lifecycle_handle: None,
+            window_handle: None,
             async_driver: None,
             post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            haptics_handle: None,
+            drag_and_drop: None,
+            texture_registry: None,
             storage: None,
             flush_registry: None,
             interaction_dispatch: None,
@@ -770,6 +789,17 @@ impl BuildOwner {
     #[doc(hidden)]
     pub fn set_lifecycle_handle(&mut self, handle: crate::LifecycleHandle) {
         self.lifecycle_handle = Some(handle);
+    }
+
+    /// Give the tree's elements the window they are presented in.
+    #[doc(hidden)]
+    pub fn set_window_handle(&mut self, handle: crate::WindowHandle) {
+        self.window_handle = Some(handle);
+    }
+
+    /// Weak window capability, absent for a bare owner or one without a window.
+    pub(crate) fn window_handle(&self) -> Option<crate::WindowHandle> {
+        self.window_handle.clone()
     }
 
     /// Weak presentation lifecycle capability, absent for a bare owner.
@@ -813,33 +843,6 @@ impl BuildOwner {
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
-    }
-
-    /// Install the binding's IME/text-input attach-detach capability.
-    ///
-    /// Called during `UiRuntime` construction with the weak handle minted by that
-    /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
-    /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
-    /// honestly rather than accepting attaches nobody delivers events to.
-    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
-        self.text_input_handle = Some(handle);
-    }
-
-    /// Install the presentation's plain-text clipboard.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// UI runtime's platform clipboard, so `LifecycleContext::clipboard_handle`
-    /// answers `Some` under every UI runtime.
-    pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
-        self.clipboard_handle = Some(handle);
-    }
-
-    /// Install the UI runtime's byte storage.
-    ///
-    /// Called during presentation construction when the UI runtime has storage,
-    /// so `LifecycleContext::storage` answers `Some` under it.
-    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
-        self.storage = Some(storage);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -965,6 +968,21 @@ impl BuildOwner {
         self.clipboard_handle.as_ref()
     }
 
+    /// The presentation's haptics handle, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::haptics`, which applies the
+    /// enclosing `HapticsMode`.
+    #[must_use]
+    pub fn haptics_handle(&self) -> Option<&flui_interaction::HapticsHandle> {
+        self.haptics_handle.as_ref()
+    }
+
+    /// The presentation's drag-and-drop, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::drag_and_drop`.
+    #[must_use]
+    pub fn drag_and_drop(&self) -> Option<&flui_interaction::drag::DragAndDrop> {
+        self.drag_and_drop.as_ref()
+    }
+
     /// The UI runtime's byte storage, if one was installed.
     #[must_use]
     pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform_api::Storage>> {
@@ -1077,16 +1095,8 @@ impl BuildOwner {
     /// external-inbox drain uses) keeps the contract regardless of what
     /// `schedule_build_for` was told. Each entry keeps its queue order.
     fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
-        if self.dirty_elements.is_empty() {
-            return;
-        }
-        let queued: Vec<DirtyElement> = self.dirty_elements.take_entries().collect();
-        for dirty in queued {
-            let depth = tree
-                .get(dirty.id())
-                .map_or(0, crate::tree::ElementNode::depth);
-            self.dirty_elements.requeue(dirty.at_depth(depth));
-        }
+        self.dirty_elements
+            .rekey(|id| tree.get(id).map_or(0, crate::tree::ElementNode::depth));
     }
 
     /// Return the nearest mounted layout-builder scope containing `element`.
@@ -1111,6 +1121,8 @@ impl BuildOwner {
         LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
         let mut cursor = Some(element);
         while let Some(candidate) = cursor {
+            #[cfg(test)]
+            LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
             if live_scopes.contains(&candidate) && tree.contains(candidate) {
                 return Some(candidate);
             }
@@ -1163,6 +1175,14 @@ impl BuildOwner {
         live_scopes: &HashSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
+        let mut memo = std::mem::take(
+            &mut self
+                .build_scope_queues
+                .as_mut()
+                .expect("BUG: repartition creates scoped queues")
+                .scope_memo,
+        );
+        memo.clear();
         while let Some(mut dirty) = self
             .build_scope_queues
             .as_mut()
@@ -1174,8 +1194,21 @@ impl BuildOwner {
                 .get(dirty.id())
                 .map_or(0, crate::tree::ElementNode::depth);
             dirty = dirty.at_depth(depth);
-            let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
+            #[cfg(test)]
+            LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+            let scope = memo.nearest(
+                dirty.id(),
+                |id| live_scopes.contains(&id) && tree.contains(id),
+                |id| {
+                    #[cfg(test)]
+                    LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
+                    tree.get(id).and_then(crate::tree::ElementNode::parent)
+                },
+            );
             self.defer_dirty_element(scope, dirty);
+        }
+        if let Some(queues) = self.build_scope_queues.as_mut() {
+            queues.scope_memo = memo;
         }
     }
 
@@ -1236,6 +1269,12 @@ impl BuildOwner {
         LAYOUT_SCOPE_CLASSIFICATIONS.with(std::cell::Cell::get)
     }
 
+    /// Resets and returns the parent-link steps scope classification took.
+    #[cfg(test)]
+    pub(crate) fn take_layout_scope_hops() -> usize {
+        LAYOUT_SCOPE_HOPS.with(|count| count.replace(0))
+    }
+
     /// Acquire an [`ElementOwner`](super::ElementOwner) split-borrow
     /// handle for the duration of an Element lifecycle traversal.
     ///
@@ -1266,10 +1305,14 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
             lifecycle_handle: &self.lifecycle_handle,
+            window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -1558,7 +1601,7 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        tree.replace_child_with(parent, slot, recovery_view.0.as_ref(), &mut element_owner);
+        tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
         element_owner.commit_staged_lifecycle_panic(staged);
     }
 
@@ -1803,10 +1846,14 @@ impl BuildOwner {
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
                     lifecycle_handle: &self.lifecycle_handle,
+                    window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2024,10 +2071,14 @@ impl BuildOwner {
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
                     lifecycle_handle: &self.lifecycle_handle,
+                    window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2450,10 +2501,14 @@ impl BuildOwner {
                 layout_builder_registry: &self.layout_builder_registry,
                 focus_manager: &self.focus_manager,
                 lifecycle_handle: &self.lifecycle_handle,
+                window_handle: &self.window_handle,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                haptics_handle: &self.haptics_handle,
+                drag_and_drop: &self.drag_and_drop,
+                texture_registry: &self.texture_registry,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
@@ -2660,10 +2715,14 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
             lifecycle_handle: &self.lifecycle_handle,
+            window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -3822,7 +3881,7 @@ mod tests {
     /// A refused admission leaves the caller's focus manager, even its last
     /// strong reference, open with its nodes still focusable.
     fn exhausted_owner_tag_refusal_retains_the_supplied_focus_manager() {
-        use flui_interaction::routing::FocusNode;
+        use flui_interaction::focus::FocusNode;
         let manager = FocusManager::new();
         let node = FocusNode::with_debug_label("survives-refusal");
         let _attachment = manager

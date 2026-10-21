@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::settings::GestureSettings;
+use flui_interaction::gesture::GestureSettings;
 use flui_interaction::{LongPressGestureRecognizer, PointerDispatch, RecognizerSet};
 use flui_testing::HeadlessBinding;
 use flui_testing::replay::PointerScript;
@@ -35,7 +35,7 @@ fn long_press_probe(
     let fired = Arc::new(AtomicBool::new(false));
     let in_callback = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
-        .settings(GestureSettings::touch_defaults().with_long_press_timeout(timeout))
+        .settings(GestureSettings::default().with_long_press_timeout(timeout))
         .on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst))
         .build();
     (recognizer, fired)
@@ -51,7 +51,7 @@ fn replay_against(
 ) {
     let mut recognizers = RecognizerSet::default();
     recognizers.attach(recognizer);
-    let route: flui_interaction::routing::GlobalPointerHandler = Rc::new(move |event| {
+    let route: flui_interaction::pointer::GlobalPointerHandler = Rc::new(move |event| {
         recognizers.dispatch(PointerDispatch::at_root(event));
     });
     binding

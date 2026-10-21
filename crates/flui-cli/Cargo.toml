@@ -89,13 +89,18 @@ toml = "1.1"
 # Utilities
 which = { workspace = true }
 
+# `flui run --agent`'s launch token, and `flui mcp`'s connection to the app's
+# development endpoint (a named pipe or Unix socket, ADR-0095 §3).
+getrandom = { workspace = true }
+interprocess = { workspace = true }
+
 # Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
 # remove`. `console` alone draws the bar, the glyphs and the spinner;
 # `dialoguer` without its default features is the prompts and nothing else
 # (no password editor, no fuzzy matcher).
 console = "0.16"
 dialoguer = { version = "0.12", default-features = false }
-zip = { version = "8.6.0", default-features = false }
+zip = { workspace = true }
 
 
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):

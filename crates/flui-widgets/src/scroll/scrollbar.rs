@@ -27,7 +27,7 @@ use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView, ViewExt};
 
 use crate::scroll::ScrollController;
-use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
+use crate::{AnimatedBuilder, ColoredBox, DragSlot, GestureDetector, Positioned, Stack};
 
 /// Minimum thumb extent in logical pixels.
 const MIN_THUMB_PX: f64 = 18.0;
@@ -45,7 +45,7 @@ const DEFAULT_THUMB_WIDTH_PX: f64 = 6.0;
 ///
 /// ```rust,ignore
 /// let controller = ScrollController::new();
-/// controller.update_dimensions(400.0, 0.0, 800.0);
+/// controller.update_dimensions(400.0, 0.0, 800.0)?;
 ///
 /// Scrollbar::new()
 ///     .controller(controller.clone())
@@ -150,7 +150,7 @@ impl StatelessView for Scrollbar {
             // can sit outside `[min_scroll_extent, max_scroll_extent]` whenever
             // a `Scrollable` sharing this controller uses `BouncingScrollPhysics`
             // and is mid-overscroll — that drag path does not route through
-            // this widget's own thumb-drag clamp (see `on_pan_update` below),
+            // this widget's own thumb-drag clamp (see the drag `on_update` below),
             // so `offset_fraction` alone can fall outside `[0.0, 1.0]`.
             let thumb_top = (available_track * offset_fraction).clamp(0.0, available_track);
 
@@ -174,7 +174,7 @@ impl StatelessView for Scrollbar {
                 // `scroll_extent / available_track` ratio.
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_pan_update(move |_cx, details| {
+                    .drag(DragSlot::pan().on_update(move |_cx, details| {
                         let delta_track_px = details.delta.dy;
                         if available_track > 0.0 {
                             let content_delta =
@@ -184,7 +184,7 @@ impl StatelessView for Scrollbar {
                             // fling or programmatic animation before changing pixels.
                             ctrl_drag.jump_to(proposed);
                         }
-                    })
+                    }))
                     .child(ColoredBox::new(thumb_color));
 
                 let positioned_thumb = Positioned::new(thumb_gesture)

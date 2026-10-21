@@ -171,6 +171,7 @@ pub struct Switch {
     on_changed: Option<SwitchChangeCallback>,
     active_thumb_color: Option<Color>,
     motion: MotionSpec,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl std::fmt::Debug for Switch {
@@ -199,6 +200,7 @@ impl Switch {
             on_changed: None,
             active_thumb_color: None,
             motion: MotionSpec::default(),
+            identifier: None,
         }
     }
 
@@ -218,6 +220,15 @@ impl Switch {
     #[must_use]
     pub fn active_thumb_color(mut self, color: Color) -> Self {
         self.active_thumb_color = Some(color);
+        self
+    }
+
+    /// Names the switch's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the switch's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -380,7 +391,7 @@ impl ViewState<Switch> for SwitchState {
             });
         }
 
-        Semantics::new()
+        crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
             .switch(view.value)
             .enabled(interactive)
             .child(ink_well)

@@ -245,7 +245,7 @@ pub(crate) type TransitionRegistry = Rc<super::lifecycle::TerminalMap<RouteId, T
 /// `None` when no `VsyncScope` is above the navigator. There is no wall-clock
 /// fallback: a route owns a `DrivenController` built on this optional registry.
 /// Missing clocks settle finite runs and park infinite repeats (ADR-0175).
-pub(crate) type RouteVsync = Rc<Mutex<Option<Vsync>>>;
+pub(crate) type RouteVsync = Rc<RefCell<Option<Vsync>>>;
 
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
 /// entry through it; the entries live on the navigator, not the route
@@ -315,9 +315,9 @@ pub(crate) type PopPacingRegistry = Rc<super::lifecycle::TerminalMap<RouteId, Po
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
-/// Its own mutex, deliberately: it must be lockable while the history's mutex is
+/// Its own cell, deliberately: it must be writable while the history's mutex is
 /// held by an in-progress flush.
-pub(crate) type RouteCommandQueue = Rc<Mutex<VecDeque<RouteCommand>>>;
+pub(crate) type RouteCommandQueue = Rc<RefCell<VecDeque<RouteCommand>>>;
 
 /// The `RouteId`-keyed maps a navigator owns and every binding shares.
 ///
@@ -342,10 +342,57 @@ pub(crate) struct RouteRegistries {
     /// (ADR-0221). Not keyed by route: a route reads it once, at install, to
     /// adopt the builder of its kind. Written by `NavigatorState` from
     /// `init_state` and `did_change_dependencies`.
-    transition_hooks: Mutex<AdoptedTransitions>,
+    ///
+    /// `None` until the navigator resolves them: before it mounts, and while
+    /// it re-resolves after an ambient change. A route installed meanwhile
+    /// waits in `awaiting_hooks` and adopts what arrives (ADR-0221 D2).
+    transition_hooks: Mutex<Option<AdoptedTransitions>>,
+    /// Routes installed while `transition_hooks` was `None`.
+    awaiting_hooks: super::lifecycle::TerminalVec<AwaitingAdoption>,
+}
+
+/// What a route finds when it looks for its page-transition hook at install.
+pub(crate) enum HookLookup {
+    /// The navigator has not resolved its hooks yet.
+    Unresolved,
+    /// The hooks are resolved; `None` when none of this route's kind is in
+    /// scope.
+    Resolved(Option<AdoptedTransition>),
+}
+
+/// What a route installed before its navigator resolved the page-transition
+/// hooks does with the hook of its kind, once there is one.
+type Adoption = Box<dyn FnOnce(Option<AdoptedTransition>)>;
+
+/// A route waiting for the navigator to resolve its page-transition hooks.
+struct AwaitingAdoption {
+    group: TransitionGroup,
+    adopt: Adoption,
 }
 
 impl RouteRegistries {
+    /// Take the overlay entries of `routes` out of the registry, then remove
+    /// each from its overlay with the registry's lock released: an entry's
+    /// builder may own captures whose `Drop` is user code. Each removal runs,
+    /// and each entry retires, through `recovery`, which holds the first
+    /// failure.
+    pub(crate) fn retire_entries(
+        &self,
+        routes: &[RouteId],
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
+        let removed: Vec<OverlayEntry> = {
+            let mut entries = self.entries.lock();
+            routes.iter().filter_map(|id| entries.remove(id)).collect()
+        };
+        for entry in removed {
+            if entry.is_attached() {
+                recovery.run(|| entry.remove());
+            }
+            recovery.retire(entry);
+        }
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             closed: AtomicBool::new(false),
@@ -364,7 +411,8 @@ impl RouteRegistries {
             pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            transition_hooks: Mutex::new(AdoptedTransitions::default()),
+            transition_hooks: Mutex::new(None),
+            awaiting_hooks: super::lifecycle::TerminalVec::default(),
         }
     }
 
@@ -372,12 +420,40 @@ impl RouteRegistries {
         self.closed.store(true, Ordering::Release);
     }
 
-    /// Replace the hooks routes installed from now on adopt. The outgoing
-    /// builders are dropped after the lock is released: a builder's `Drop` is
-    /// user code.
-    pub(crate) fn set_transition_hooks(&self, hooks: AdoptedTransitions) {
-        let outgoing = std::mem::replace(&mut *self.transition_hooks.lock(), hooks);
+    /// Mark the hooks unresolved, so a route installed while the navigator
+    /// re-reads them (a builder's `duration` may push) waits for the new ones
+    /// instead of adopting the outgoing ones. The outgoing builders are
+    /// retired with no lock held: a builder's `Drop` is user code.
+    pub(crate) fn suspend_transition_hooks(&self) {
+        let outgoing = self.transition_hooks.lock().take();
         drop(outgoing);
+    }
+
+    /// Resolve the hooks routes adopt, and hand each route that installed
+    /// while they were unresolved the hook of its kind. Nothing is locked
+    /// while the outgoing builders retire or a route adopts.
+    pub(crate) fn set_transition_hooks(&self, hooks: AdoptedTransitions) {
+        let (outgoing, waiting) = {
+            let mut slot = self.transition_hooks.lock();
+            let outgoing = slot.replace(hooks);
+            let waiting = std::mem::take(&mut *self.awaiting_hooks.lock());
+            (outgoing, waiting)
+        };
+        drop(outgoing);
+        for AwaitingAdoption { group, adopt } in waiting {
+            adopt(self.resolved_transition(group));
+        }
+    }
+
+    /// The hook of `group`'s kind, `None` when none is in scope or the hooks
+    /// are unresolved.
+    fn resolved_transition(&self, group: TransitionGroup) -> Option<AdoptedTransition> {
+        let hooks = self.transition_hooks.lock();
+        let hooks = hooks.as_ref()?;
+        match group {
+            TransitionGroup::Page => hooks.page(),
+            TransitionGroup::Default => hooks.popup(),
+        }
     }
 }
 
@@ -388,9 +464,11 @@ impl Drop for RouteRegistries {
         let subtrees = self.subtrees.withdraw();
         let modals = self.modals.withdraw();
         let pop_pacing = self.pop_pacing.withdraw();
-        let hooks =
-            super::lifecycle::Terminal::new(std::mem::take(self.transition_hooks.get_mut()));
-        drop((peers, entries, subtrees, modals, pop_pacing, hooks));
+        // The hooks own user builders; `AdoptedTransitions` retires each slot on
+        // its own, so a panicking builder `Drop` cannot reach the other slot.
+        let hooks = self.transition_hooks.get_mut().take();
+        drop((peers, entries, subtrees, modals, pop_pacing));
+        drop(hooks);
     }
 }
 
@@ -404,12 +482,12 @@ impl Drop for RouteRegistries {
 /// queued command for a route that no longer exists is dropped on drain.
 pub(crate) struct RouteBinding {
     route: RouteId,
-    queue: Weak<Mutex<VecDeque<RouteCommand>>>,
+    queue: Weak<RefCell<VecDeque<RouteCommand>>>,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
     wake: super::lifecycle::Terminal<Rc<dyn Fn()>>,
-    /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
+    /// The navigator's clock. A cell because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
-    vsync: Weak<Mutex<Option<Vsync>>>,
+    vsync: Weak<RefCell<Option<Vsync>>>,
     /// The navigator's `RouteId`-keyed maps, each behind its own mutex — a
     /// different one from the history's, so a route may consult them from inside a
     /// flush.
@@ -493,22 +571,49 @@ impl RouteBinding {
         }
     }
 
-    /// The page-transition builder a route of `group` adopts at install: the
+    /// The page-transition hook a route of `group` adopts at install: the
     /// page slot for [`TransitionGroup::Page`], the popup slot otherwise.
-    /// `None` when no hook of that kind is in scope, or the navigator is gone.
-    pub(crate) fn page_transition(&self, group: TransitionGroup) -> Option<AdoptedTransition> {
-        let registries = self.active_registries()?;
+    pub(crate) fn page_transition(&self, group: TransitionGroup) -> HookLookup {
+        let Some(registries) = self.active_registries() else {
+            return HookLookup::Resolved(None);
+        };
         let hooks = registries.transition_hooks.lock();
-        match group {
-            TransitionGroup::Page => hooks.page.clone(),
-            TransitionGroup::Default => hooks.popup.clone(),
+        match hooks.as_ref() {
+            None => HookLookup::Unresolved,
+            Some(hooks) => HookLookup::Resolved(match group {
+                TransitionGroup::Page => hooks.page(),
+                TransitionGroup::Default => hooks.popup(),
+            }),
         }
+    }
+
+    /// Have `adopt` called with the hook of `group`'s kind once the navigator
+    /// resolves its hooks: at once when it already has. For a route installed
+    /// before its navigator mounted, or while it re-reads the hooks.
+    pub(crate) fn await_page_transition(
+        &self,
+        group: TransitionGroup,
+        adopt: impl FnOnce(Option<AdoptedTransition>) + 'static,
+    ) {
+        let Some(registries) = self.active_registries() else {
+            return;
+        };
+        let hooks = registries.transition_hooks.lock();
+        if hooks.is_none() {
+            registries.awaiting_hooks.lock().push(AwaitingAdoption {
+                group,
+                adopt: Box::new(adopt),
+            });
+            return;
+        }
+        drop(hooks);
+        adopt(registries.resolved_transition(group));
     }
 
     /// The navigator's clock, if it has one.
     pub(crate) fn vsync(&self) -> Option<Vsync> {
         let _authority = self.active_registries()?;
-        self.vsync.upgrade()?.lock().clone()
+        self.vsync.upgrade()?.borrow().clone()
     }
 
     /// Publish this route's primary animation so the route below can drive its
@@ -603,7 +708,7 @@ impl RouteBinding {
         let Some(queue) = self.queue.upgrade() else {
             return;
         };
-        queue.lock().push_back(command);
+        queue.borrow_mut().push_back(command);
         // Outside a flush this applies and flushes now; inside one it is a no-op
         // and the running flush drains the queue before returning.
         (self.wake)();
@@ -616,7 +721,7 @@ impl fmt::Debug for RouteBinding {
             .field("route", &self.route.get())
             .field(
                 "pending",
-                &self.queue.upgrade().map(|queue| queue.lock().len()),
+                &self.queue.upgrade().map(|queue| queue.borrow().len()),
             )
             .finish_non_exhaustive()
     }
@@ -634,13 +739,13 @@ impl fmt::Debug for RouteBinding {
 /// [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 #[derive(Clone, Default)]
 pub struct RouteBindingSlot {
-    inner: Rc<Mutex<Option<RouteBinding>>>,
+    inner: Rc<RefCell<Option<RouteBinding>>>,
     /// The transition family of the framework route that owns this slot, or
     /// `None` for a slot a third-party route constructed itself. Written only
     /// by the crate's `TransitionRoute`, so a route outside this crate cannot
     /// claim to be a pageless popup: a `Navigator` under a `Router` admits a
     /// route only when this reads `Some(TransitionGroup::Default)`.
-    group: Rc<Mutex<Option<TransitionGroup>>>,
+    group: Rc<Cell<Option<TransitionGroup>>>,
 }
 
 impl RouteBindingSlot {
@@ -653,30 +758,30 @@ impl RouteBindingSlot {
     /// Whether the navigator has filled this slot — i.e. the route is pushed.
     #[must_use]
     pub fn is_bound(&self) -> bool {
-        self.inner.lock().is_some()
+        self.inner.borrow().is_some()
     }
 
     /// Filled by `NavigatorHandle::push` / `seed_initial`, before `install()`.
     pub(crate) fn fill(&self, binding: RouteBinding) {
-        let _prev = self.inner.lock().replace(binding);
+        let _prev = self.inner.borrow_mut().replace(binding);
     }
 
     /// The binding, cloned out. `None` for a route that was never pushed, which
     /// is what makes every capability call on an unpushed route inert.
     pub(crate) fn get(&self) -> Option<RouteBinding> {
-        self.inner.lock().clone()
+        self.inner.borrow().clone()
     }
 
     /// Record the owning route's transition family. `TransitionRoute` calls
     /// this at construction and again whenever its family changes.
     pub(crate) fn set_group(&self, group: TransitionGroup) {
-        *self.group.lock() = Some(group);
+        self.group.set(Some(group));
     }
 
     /// The owning route's transition family; `None` when no framework route
     /// wrote one.
     pub(crate) fn group(&self) -> Option<TransitionGroup> {
-        *self.group.lock()
+        self.group.get()
     }
 }
 

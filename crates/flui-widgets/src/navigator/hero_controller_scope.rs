@@ -46,7 +46,7 @@ impl HeroControllerScope {
     pub fn new(controller: Arc<HeroController>, child: impl IntoView) -> Self {
         Self {
             controller: Some(controller),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -54,7 +54,7 @@ impl HeroControllerScope {
     pub fn none(child: impl IntoView) -> Self {
         Self {
             controller: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

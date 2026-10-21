@@ -1,13 +1,36 @@
 //! [`PageView`] — a scrollable list that works page by page, plus its
-//! [`PageController`] and [`PageScrollPhysics`].
+//! [`PageController`].
 //!
 //! # Composition
 //!
-//! `PageView` composes a [`Scrollable`] with [`PageScrollPhysics`] and a
+//! `PageView` composes a [`Scrollable`] with a [`PageSnap`] policy and a
 //! [`PageController`], `viewport_builder`-ing a [`Viewport`] over a single
 //! [`SliverFillViewport`]: one sliver whose children each fill a
 //! `viewport_fraction`-sized page, over a plain eager child list (see
-//! [`PageView`]'s own docs).
+//! [`PageView`]'s own docs). A drag along the axis, a press on a moving
+//! pager and an assistive scroll all settle on a page through the policy.
+//!
+//! # Alternatives
+//!
+//! A swipe is a path: the constructor takes the pager's
+//! [`GestureAlternatives`] (ADR-0216). Commands that name [`PageIntent`] are
+//! answered by the pager, by turning one page; a pager whose owner keeps the
+//! selection (a tab view) names an intent of its own and answers it above the
+//! pager. The alternatives make the pager a row of focus traversal with one
+//! custom action per command for assistive technology, the commands' keys
+//! while focus is in the row, and a path for one pointer, so a finger, a
+//! mouse, a dwell or a switch device turns a page without a swipe: a control
+//! per command, or the companion widget (page dots, a tab bar, Previous and
+//! Next buttons) that already draws them.
+//!
+//! # Keys
+//!
+//! While the pager holds the focus ([`PageView::autofocus`], or a drag on
+//! it), an arrow along the axis turns one page (following the
+//! reading direction on a horizontal axis), PageDown/PageUp and
+//! Space/Shift+Space turn one page in reading order on either axis, and
+//! Home/End go to the first and last page. A key that cannot move the pager
+//! bubbles to the enclosing scrollable.
 //!
 //! # Deferred / not modelled (v1)
 //!
@@ -23,7 +46,7 @@
 //!   `crates/flui-widgets/ARCHITECTURE.md`).
 //! - **Non-snapping mode, `reverse`, end padding, implicit scrolling, page
 //!   storage restoration, and `viewport_fraction > 1.0` centering** are not
-//!   modeled — [`PageScrollPhysics`] is always applied (page snapping is the
+//!   modeled — [`PageSnap`] is always applied (page snapping is the
 //!   only supported mode) and [`DimensionChangePolicy::KeepFractionalPage`]
 //!   already documents the `viewport_fraction > 1.0` gap it inherits.
 //!   [`PageView::cache_extent`]'s default keeps no neighbouring pages laid out,
@@ -41,10 +64,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-use flui_animation::ArcCurve;
-use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
+use flui_animation::{ArcCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
+use flui_interaction::PointerKindSet;
 use flui_rendering::view::{
     CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
 };
@@ -56,115 +79,17 @@ use flui_view::{
 };
 use parking_lot::Mutex;
 
-use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::localization::{
+    BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
+    axis_direction_from_axis_reverse_and_directionality,
+};
+use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{
-    ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
-    SharedScrollPhysics, SliverFillViewport, Viewport,
+    PageSnap, ScrollController, ScrollMetrics, Scrollable, SliverFillViewport, Viewport,
+    ViewportFraction,
 };
 use crate::support::{ValueCallback, value_callback};
-
-// ============================================================================
-// PageScrollPhysics
-// ============================================================================
-
-/// Scroll physics that snap a [`PageView`] to page boundaries after a drag or
-/// fling.
-///
-/// The target page is picked with a velocity-vs-tolerance ±half-page bias,
-/// rounded to the nearest whole page, and sprung to via
-/// [`SpringSimulation`], resting within half a device pixel. The `ScrollPhysics` trait has no
-/// `parent`-chaining (see `scroll_physics.rs`'s module docs), so out-of-range
-/// handling is delegated to [`boundary`](Self::boundary), which this type owns
-/// directly.
-#[derive(Debug, Clone)]
-pub struct PageScrollPhysics {
-    /// Fraction of the viewport one logical page occupies. Must match the
-    /// [`PageController`] driving the same [`PageView`] — the `ScrollMetrics`
-    /// snapshot carries no such field, so this physics must be told
-    /// separately.
-    pub viewport_fraction: f64,
-    /// Boundary-clamping and out-of-range ballistic physics this delegates
-    /// to. Defaults to [`ClampingScrollPhysics`].
-    pub boundary: SharedScrollPhysics,
-    /// Spring configuration for the page-to-page snap (damping ratio 1.1, mass
-    /// 0.5, stiffness 100) — NOT `BouncingScrollPhysics`'s bouncier tuning.
-    pub spring: SpringDescription,
-    /// Below this absolute velocity (logical px/s), the target-page pick
-    /// applies no directional bias — the drag settles to the nearest page
-    /// rather than committing to next/previous. A fixed logical-pixel
-    /// threshold, like the minimum fling velocities of
-    /// `ClampingScrollPhysics`/`BouncingScrollPhysics`; only the rest
-    /// tolerance scales with [`ScrollMetrics::device_pixel_ratio`].
-    pub velocity_tolerance_px_per_sec: f64,
-}
-
-impl PageScrollPhysics {
-    /// Page-snapping physics for a [`PageView`] whose pages occupy
-    /// `viewport_fraction` of the viewport.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `viewport_fraction <= 0.0`.
-    #[must_use]
-    pub fn new(viewport_fraction: f64) -> Self {
-        assert!(
-            viewport_fraction > 0.0,
-            "PageScrollPhysics viewport_fraction must be > 0.0 (got {viewport_fraction})"
-        );
-        Self {
-            viewport_fraction,
-            boundary: Arc::new(ClampingScrollPhysics::new()),
-            spring: SpringDescription::with_damping_ratio(0.5, 100.0, 1.1)
-                .expect("BUG: default page spring is in the admitted domain"),
-            velocity_tolerance_px_per_sec: 20.0,
-        }
-    }
-}
-
-impl ScrollPhysics for PageScrollPhysics {
-    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
-        self.boundary
-            .apply_boundary_conditions(metrics, proposed_pixels)
-    }
-
-    fn create_ballistic_simulation(
-        &self,
-        metrics: &ScrollMetrics,
-        velocity_px_per_sec: f64,
-    ) -> Option<Box<dyn Simulation>> {
-        // Out of range and not heading back in: defer entirely to the
-        // boundary physics.
-        if (velocity_px_per_sec <= 0.0 && metrics.pixels <= metrics.min_scroll_extent)
-            || (velocity_px_per_sec >= 0.0 && metrics.pixels >= metrics.max_scroll_extent)
-        {
-            return self
-                .boundary
-                .create_ballistic_simulation(metrics, velocity_px_per_sec);
-        }
-
-        let mut page = metrics.page(self.viewport_fraction);
-        if velocity_px_per_sec < -self.velocity_tolerance_px_per_sec {
-            page -= 0.5;
-        } else if velocity_px_per_sec > self.velocity_tolerance_px_per_sec {
-            page += 0.5;
-        }
-        let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
-
-        if (target - metrics.pixels).abs() > f64::EPSILON {
-            let spring = SpringSimulation::new(
-                self.spring,
-                metrics.pixels,
-                target,
-                velocity_px_per_sec,
-                metrics.ballistic_tolerance()?,
-            )
-            .ok()?;
-            Some(Box::new(spring))
-        } else {
-            None
-        }
-    }
-}
+use crate::{Action, ActionOutcome, Actions, GestureAlternatives, Intent, MediaQuery};
 
 // ============================================================================
 // PageController
@@ -178,7 +103,7 @@ impl ScrollPhysics for PageScrollPhysics {
 pub struct PageController {
     scroll: ScrollController,
     initial_page: usize,
-    viewport_fraction: f64,
+    viewport_fraction: ViewportFraction,
 }
 
 impl Default for PageController {
@@ -188,29 +113,21 @@ impl Default for PageController {
 }
 
 impl PageController {
-    /// A controller starting at page `0` with `viewport_fraction: 1.0`.
+    /// A controller starting at page `0`, each page as long as the viewport.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_params(0, 1.0)
+        Self::with_params(0, ViewportFraction::FULL)
     }
 
     /// A controller starting at `initial_page`, with pages occupying
     /// `viewport_fraction` of the viewport.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `viewport_fraction <= 0.0`.
     #[must_use]
-    pub fn with_params(initial_page: usize, viewport_fraction: f64) -> Self {
-        assert!(
-            viewport_fraction > 0.0,
-            "PageController viewport_fraction must be > 0.0 (got {viewport_fraction})"
-        );
+    pub fn with_params(initial_page: usize, viewport_fraction: ViewportFraction) -> Self {
         let scroll = ScrollController::new();
         scroll
             .position()
             .set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction,
+                viewport_fraction: viewport_fraction.get(),
                 initial_page: Some(initial_page as f64),
             });
         Self {
@@ -229,7 +146,7 @@ impl PageController {
     /// The fraction of the viewport each page occupies.
     #[must_use]
     pub fn viewport_fraction(&self) -> f64 {
-        self.viewport_fraction
+        self.viewport_fraction.get()
     }
 
     /// The current fractional page, or `None` before the controlled
@@ -253,7 +170,7 @@ impl PageController {
             return Some(cached);
         }
         let metrics = ScrollMetrics::from(&position);
-        Some(metrics.page(self.viewport_fraction))
+        Some(metrics.page(self.viewport_fraction()))
     }
 
     /// Jumps to `page` without animation.
@@ -275,11 +192,11 @@ impl PageController {
         }
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
-            let pixels = metrics.pixels_from_page(self.viewport_fraction, page_f);
+            let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
             position.jump_to(pixels);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction: self.viewport_fraction,
+                viewport_fraction: self.viewport_fraction(),
                 initial_page: Some(page_f),
             });
         }
@@ -311,11 +228,11 @@ impl PageController {
         }
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
-            let pixels = metrics.pixels_from_page(self.viewport_fraction, page_f);
+            let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
             self.scroll.animate_to(pixels, duration, curve);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction: self.viewport_fraction,
+                viewport_fraction: self.viewport_fraction(),
                 initial_page: Some(page_f),
             });
         }
@@ -368,6 +285,74 @@ impl PageController {
 }
 
 // ============================================================================
+// PageIntent
+// ============================================================================
+
+/// How long a [`PageIntent`]'s page turn takes.
+const TURN: Duration = Duration::from_millis(300);
+
+/// Turn the enclosing [`PageView`] one page, in page order (the reading
+/// order on a horizontal axis).
+///
+/// The pager answers it for everything inside it: the commands of its
+/// [`GestureAlternatives`] name it. A turn animates over 300 ms, and lands at
+/// once under reduced motion. At the first or the last page the turn past it
+/// is not performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PageIntent {
+    /// Show the page after the current one.
+    Next,
+    /// Show the page before the current one.
+    Previous,
+}
+
+impl Intent for PageIntent {}
+
+/// Answers [`PageIntent`] for everything inside a [`PageView`] of `pages`
+/// pages.
+struct PageAction {
+    controller: PageController,
+    pages: usize,
+    /// Under reduced motion a turn lands at once.
+    reduced_motion: bool,
+}
+
+impl PageAction {
+    /// The page `intent` turns to from the one showing, if there is one.
+    fn target(&self, intent: PageIntent) -> Option<usize> {
+        let current = self.controller.page()?.round();
+        if !current.is_finite() {
+            return None;
+        }
+        let current = current.max(0.0) as usize;
+        match intent {
+            PageIntent::Next => current.checked_add(1).filter(|page| *page < self.pages),
+            PageIntent::Previous => current.checked_sub(1),
+        }
+    }
+}
+
+impl Action<PageIntent> for PageAction {
+    /// Past either end the intent is not enabled, so a key there bubbles on.
+    fn is_enabled(&self, intent: &PageIntent) -> bool {
+        self.target(*intent).is_some()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
+        let Some(page) = self.target(*intent) else {
+            return ActionOutcome::NotPerformed;
+        };
+        if self.reduced_motion {
+            self.controller.jump_to_page(page);
+        } else {
+            self.controller
+                .animate_to_page(page, TURN, ArcCurve::new(curves::EASE_IN_OUT));
+        }
+        ActionOutcome::Performed
+    }
+}
+
+// ============================================================================
 // PageView (configuration)
 // ============================================================================
 
@@ -379,7 +364,7 @@ type OnPageChanged = ValueCallback<usize>;
 ///
 /// Each child fills [`PageController::viewport_fraction`] of the viewport
 /// along [`PageView::scroll_direction`]. `PageView` is pure composition over
-/// [`Scrollable`] + [`PageScrollPhysics`] + [`Viewport`] +
+/// [`Scrollable`] with a [`PageSnap`] policy + [`Viewport`] +
 /// [`SliverFillViewport`] — no new render objects. A horizontal
 /// `scroll_direction` resolves its `AxisDirection` from the ambient
 /// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
@@ -388,6 +373,26 @@ type OnPageChanged = ValueCallback<usize>;
 /// See the module docs for the v1 limits (eager children, listener-based
 /// `on_page_changed` delivered after the frame, no non-snapping mode, `reverse`
 /// or end padding).
+///
+/// ```rust
+/// use flui_widgets::{
+///     Alternative, ControlSpec, GestureAlternatives, GestureCommand, PageIntent, PageView,
+///     SizedBox, Text,
+/// };
+///
+/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+///     ControlSpec::new(
+///         GestureCommand::new("Previous page", PageIntent::Previous),
+///         Text::new("<"),
+///     )
+///     .control(GestureCommand::new("Next page", PageIntent::Next), Text::new(">")),
+/// ))
+/// .expect("two distinct labels");
+/// let pager = PageView::new(
+///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
+///     alternatives,
+/// );
+/// ```
 #[derive(Clone, StatefulView)]
 pub struct PageView {
     /// `None` when the caller never called [`PageView::controller`] — in
@@ -399,18 +404,26 @@ pub struct PageView {
     scroll_direction: Axis,
     on_page_changed: Option<OnPageChanged>,
     cache_extent: Option<(f64, CacheExtentStyle)>,
+    allowed_devices: PointerKindSet,
+    autofocus: bool,
     children: Vec<BoxedView>,
+    alternatives: GestureAlternatives,
 }
 
 impl PageView {
-    /// A horizontally-scrolling page view over `children`. By default
-    /// [`PageView::cache_extent`] keeps no neighbouring pages laid out.
-    pub fn new(children: impl ViewSeq) -> Self {
+    /// A horizontally-scrolling page view over `children`, its pages turned
+    /// without a swipe through `alternatives`, whose commands name
+    /// [`PageIntent`] or an intent the surroundings answer. By default [`PageView::cache_extent`] keeps no
+    /// neighbouring pages laid out.
+    pub fn new(children: impl ViewSeq, alternatives: GestureAlternatives) -> Self {
         Self {
+            alternatives,
             controller: None,
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
             cache_extent: Some((0.0, CacheExtentStyle::Viewport)),
+            allowed_devices: PointerKindSet::all(),
+            autofocus: false,
             children: super::sliver_list::wrap_in_repaint_boundaries(children.into_boxed_vec()),
         }
     }
@@ -458,6 +471,22 @@ impl PageView {
         self
     }
 
+    /// Admit only drags and presses of these pointer kinds (default: all).
+    /// See [`Scrollable::allowed_devices`].
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
+        self
+    }
+
+    /// Take the keyboard focus when mounted, so the page keys work without a
+    /// click first (default `false`). See the module docs for the keys.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
+        self
+    }
+
     /// Set how far beyond the visible page(s) to keep neighboring pages laid
     /// out and painted ([`Viewport::cache_extent`] passthrough).
     ///
@@ -480,7 +509,9 @@ impl std::fmt::Debug for PageView {
             .field("scroll_direction", &self.scroll_direction)
             .field("has_on_page_changed", &self.on_page_changed.is_some())
             .field("cache_extent", &self.cache_extent)
+            .field("allowed_devices", &self.allowed_devices)
             .field("children", &self.children.len())
+            .field("alternatives", &self.alternatives)
             .finish_non_exhaustive()
     }
 }
@@ -500,6 +531,11 @@ impl std::fmt::Debug for PageView {
 /// [`dispose`](ViewState::dispose).
 pub struct PageViewState {
     controller: PageController,
+    /// The page policy for `controller`'s fraction. One `Arc` for the life of
+    /// the controller: the scroll owner compares policies by identity, so a
+    /// fresh one per build would replace the owner (and end its run) on every
+    /// rebuild.
+    snap: SharedSnapPolicy,
     /// Shared, mutable slot for the current callback. `did_update_view`
     /// writes it on every rebuild; delivery reads it when the post-frame
     /// callback runs, so a page recorded before a rebuild reaches the
@@ -653,12 +689,18 @@ impl PageViewState {
                 last_reported.store(current_page, Ordering::SeqCst);
                 if has_callback.load(Ordering::Acquire) {
                     pending.lock().push_back(current_page as usize);
-                    rebuild.schedule(RebuildReason::StateChange);
                 }
+                // The page label assistive technology reads follows the page.
+                rebuild.schedule(RebuildReason::StateChange);
             }
         }));
         self.page_listener = Some((listenable, listener_id));
     }
+}
+
+/// The page policy for pages of `controller`'s fraction of the viewport.
+fn page_snap(controller: &PageController) -> SharedSnapPolicy {
+    Arc::new(PageSnap::new(controller.viewport_fraction))
 }
 
 impl StatefulView for PageView {
@@ -668,6 +710,7 @@ impl StatefulView for PageView {
         let controller = self.controller.clone().unwrap_or_default();
         PageViewState {
             last_reported_page: Arc::new(AtomicI64::new(controller.initial_page() as i64)),
+            snap: page_snap(&controller),
             controller,
             on_page_changed: Rc::new(RefCell::new(self.on_page_changed.clone())),
             has_callback: Arc::new(AtomicBool::new(self.on_page_changed.is_some())),
@@ -705,12 +748,24 @@ impl ViewState<PageView> for PageViewState {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false);
         let children = view.children.clone();
         let cache_extent = view.cache_extent;
-        let physics: SharedScrollPhysics = Arc::new(PageScrollPhysics::new(viewport_fraction));
-
-        Scrollable::new()
+        let page_count = view.children.len();
+        let mut scrollable = Scrollable::new()
             .controller(controller.scroll_controller())
-            .physics(physics)
-            .scroll_direction(scroll_direction)
+            .snap_policy(Arc::clone(&self.snap))
+            .allowed_devices(view.allowed_devices)
+            .autofocus(view.autofocus)
+            .scroll_direction(scroll_direction);
+        if page_count > 0 {
+            let page = usize::try_from(self.last_reported_page.load(Ordering::Relaxed))
+                .unwrap_or(0)
+                .min(page_count - 1);
+            let label = match BoxedWidgetsLocalizations::maybe_of(ctx) {
+                Some(localizations) => localizations.page_label(page + 1, page_count),
+                None => DefaultWidgetsLocalizations.page_label(page + 1, page_count),
+            };
+            scrollable = scrollable.semantic_label(label);
+        }
+        let scrollable = scrollable
             // The inner `Viewport` below is built with this SAME
             // `axis_direction`. Handing it to `Scrollable` explicitly (rather
             // than relying on `Scrollable`'s own ambient-`Directionality`
@@ -737,7 +792,14 @@ impl ViewState<PageView> for PageViewState {
                     viewport = viewport.cache_extent(extent, style);
                 }
                 viewport.boxed()
-            }))
+            }));
+        Actions::new(view.alternatives.clone().child(scrollable))
+            .action(PageAction {
+                controller,
+                pages: page_count,
+                reduced_motion: MediaQuery::motion_of(ctx)
+                    == Some(flui_animation::MotionPolicy::Reduce),
+            })
             .boxed()
     }
 
@@ -774,6 +836,7 @@ impl ViewState<PageView> for PageViewState {
         self.controller = new_controller.clone();
 
         if controller_swapped {
+            self.snap = page_snap(&self.controller);
             // Remove from the OLD listenable specifically — never from
             // whatever `self.controller` resolves to AFTER this assignment
             // (a different notifier, whose own `ListenerId` counter could

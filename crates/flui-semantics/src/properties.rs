@@ -263,7 +263,11 @@ pub enum StringAttributeType {
 // SemanticsSortKey
 // ============================================================================
 
-/// Sort key for ordering semantics nodes.
+/// Sort key for ordering siblings within a semantics boundary.
+///
+/// Keyed content precedes unkeyed content. Unnamed groups precede named groups;
+/// group names sort lexically, then finite orders numerically. Equal keys keep
+/// declarative order. Assembly refuses non-finite orders before publication.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticsSortKey {
     /// The order value.
@@ -289,6 +293,12 @@ impl SemanticsSortKey {
 
 impl PartialOrd for SemanticsSortKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.order.partial_cmp(&other.order)
+        self.name.partial_cmp(&other.name).and_then(|order| {
+            if order.is_eq() {
+                self.order.partial_cmp(&other.order)
+            } else {
+                Some(order)
+            }
+        })
     }
 }

@@ -31,17 +31,15 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::BuildDuringLayoutCell;
-// Only the test-utils registration helper names the concrete cell; the registry
+// Only the `testing` registration helper names the concrete cell; the registry
 // itself is payload-blind.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::Mutex;
@@ -84,7 +82,7 @@ pub(crate) struct LayoutBuilderEntry {
     /// not only `LayoutBuilder`. Servicing needs `needs_build`/`has_published`/
     /// `commit` and never the payload — reading that is the owning element's
     /// job, and only it knows the concrete cell type.
-    pub(crate) cell: Arc<dyn BuildDuringLayoutCell>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
+    pub(crate) cell: Rc<dyn BuildDuringLayoutCell>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
 }
 
 /// Registry of live build-during-layout nodes, keyed by render id.
@@ -117,7 +115,7 @@ impl LayoutBuilderRegistry {
         self.len.load(Ordering::Acquire) == 0
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
@@ -143,14 +141,14 @@ impl LayoutBuilderRegistry {
 impl BuildOwner {
     fn unchanged_layout_builder_registrations(
         &self,
-        scheduled: &HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
+        scheduled: &HashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
     ) -> HashSet<ElementId> {
         self.layout_builder_registry.with_entries(|registry| {
             scheduled
                 .iter()
                 .filter_map(|(element, (render_id, cell))| {
                     registry.get(render_id).and_then(|entry| {
-                        (entry.element == *element && Arc::ptr_eq(&entry.cell, cell))
+                        (entry.element == *element && Rc::ptr_eq(&entry.cell, cell))
                             .then_some(*element)
                     })
                 })
@@ -244,9 +242,9 @@ impl BuildOwner {
         // Prune stale entries and collect the ones that need a build, in one
         // pass over the registry. Both the registry lock and the pipeline
         // borrow are released before `build_scope` runs.
-        let mut scheduled: HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
+        let mut scheduled: HashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();
-        let mut live_entries: HashMap<ElementId, (RenderId, Arc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
+        let mut live_entries: HashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             HashMap::new();
         let mut live_scopes = HashSet::new();
         pipeline.with(|pipeline_owner| {
@@ -265,9 +263,9 @@ impl BuildOwner {
                         return false;
                     }
                     live_scopes.insert(entry.element);
-                    live_entries.insert(entry.element, (*render_id, Arc::clone(&entry.cell)));
+                    live_entries.insert(entry.element, (*render_id, Rc::clone(&entry.cell)));
                     if entry.cell.needs_build() {
-                        scheduled.insert(entry.element, (*render_id, Arc::clone(&entry.cell)));
+                        scheduled.insert(entry.element, (*render_id, Rc::clone(&entry.cell)));
                     }
                     true
                 });
@@ -415,6 +413,44 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        self.settle_layout_with_builders(tree, pipeline)?;
+        Self::run_settled_frame(pipeline)
+    }
+
+    /// The rest of a frame after [`Self::settle_layout_with_builders`]:
+    /// layout of whatever is still dirty, compositing, paint and semantics,
+    /// with no further build-during-layout servicing.
+    ///
+    /// # Errors
+    ///
+    /// The pipeline's first error.
+    pub fn run_settled_frame(
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        pipeline.with_mut(|pipeline_owner| {
+            let (owner, result) = pipeline_owner.take_idle().run_frame();
+            *pipeline_owner = owner;
+            result
+        })
+    }
+
+    /// The build-during-layout fixpoint of
+    /// [`Self::run_frame_with_layout_builders`] alone: lay out and service
+    /// layout builders and lazy slivers until the tree settles, without
+    /// compositing, painting or assembling semantics.
+    ///
+    /// A frame that must act on the settled tree before paint — move focus off
+    /// a node the build removed — runs this, does its work, and then
+    /// [`Self::run_settled_frame`].
+    ///
+    /// # Errors
+    ///
+    /// The first layout error of a pass.
+    pub fn settle_layout_with_builders(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<()> {
         let mut lazy_passes: usize = 0;
         let mut lazy_budget_exhausted = false;
         let converged = {
@@ -487,12 +523,7 @@ impl BuildOwner {
             Ok(false) => report_non_convergence(),
             Ok(true) => {}
         }
-
-        pipeline.with_mut(|pipeline_owner| {
-            let (owner, result) = pipeline_owner.take_idle().run_frame();
-            *pipeline_owner = owner;
-            result
-        })
+        Ok(())
     }
 }
 
@@ -519,7 +550,7 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// Exists because the seam ships **inert** — no widget registers
 /// into it until `LayoutBuilder` lands — so the only way for `flui-testing` / `flui-app` to prove
 /// their frame paths actually run the seam is to plant an entry by hand.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 impl BuildOwner {
     /// Override the per-frame lazy-band pass budget (default six passes).
     /// Test-only: a budget of one lets a harness
@@ -532,19 +563,19 @@ impl BuildOwner {
     /// Plant a layout-builder entry and hand back the cell its (future) render
     /// object would publish into.
     ///
-    /// Returns the `Arc` so a caller in another crate need not depend on
+    /// Returns the `Rc` so a caller in another crate need not depend on
     /// `flui-objects` to name the cell type.
     pub fn register_layout_builder_for_test(
         &mut self,
         render_id: RenderId,
         element: ElementId,
-    ) -> Arc<LayoutConstraintsCell> {
-        let cell = Arc::new(LayoutConstraintsCell::new());
+    ) -> Rc<LayoutConstraintsCell> {
+        let cell = Rc::new(LayoutConstraintsCell::new());
         self.layout_builder_registry.insert(
             render_id,
             LayoutBuilderEntry {
                 element,
-                cell: Arc::clone(&cell) as Arc<dyn BuildDuringLayoutCell>, // coercion into the registry's erased cell handle, justified at its declaration
+                cell: Rc::clone(&cell) as Rc<dyn BuildDuringLayoutCell>, // coercion into the registry's erased cell handle, justified at its declaration
             },
         );
         cell

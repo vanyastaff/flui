@@ -12,7 +12,7 @@ use flui_interaction::{
         make_down_event_for_id_with_button, make_move_event, make_up_event,
         make_up_event_for_id_with_button,
     },
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 #[test]
@@ -40,11 +40,92 @@ fn tap_builder_lifecycle_contract() {
             "replacing_builder_callback_preserves_retirement_failure",
             replacing_builder_callback_preserves_retirement_failure,
         ),
+        (
+            "a_tap_joins_only_contacts_of_buttons_it_reports",
+            a_tap_joins_only_contacts_of_buttons_it_reports,
+        ),
+        (
+            "an_undecided_press_shows_before_its_release",
+            an_undecided_press_shows_before_its_release,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             eprintln!("tap contract `{name}` failed");
             std::panic::resume_unwind(payload);
         }
+    }
+}
+
+/// A press its arena has not decided shows as pressed 100 ms after Down,
+/// before its release; the up and the tap still wait for the win. A press
+/// another member takes before then showed nothing and hears nothing, not
+/// even a cancellation: a cancel only ends a down that was sent.
+fn an_undecided_press_shows_before_its_release() {
+    use flui_interaction::gesture::{GestureArenaMember, GestureContest};
+    struct Rival;
+    impl GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
+    }
+    /// What happens after Down: wait this long, then the rival takes the
+    /// contact or the press is released and swept.
+    #[derive(Clone, Copy, Debug)]
+    enum Then {
+        Released,
+        Taken,
+    }
+    let rows: [(u64, Then, &[&str]); 4] = [
+        (150, Then::Released, &["down", "up", "tap"]),
+        (150, Then::Taken, &["down", "cancel"]),
+        (50, Then::Taken, &[]),
+        (50, Then::Released, &["down", "up", "tap"]),
+    ];
+    for (wait, then, heard) in rows {
+        let clock = flui_interaction::ManualClock::new();
+        let arena = GestureArena::binding_driven(std::sync::Arc::new(clock.clone()));
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let entry = |name: &'static str| {
+            let log = Rc::clone(&log);
+            move || log.borrow_mut().push(name)
+        };
+        let (on_down, on_up, on_tap, on_cancel) =
+            (entry("down"), entry("up"), entry("tap"), entry("cancel"));
+        let recognizer = TapGestureRecognizer::builder(arena.clone())
+            .on_tap_down(move |_| on_down())
+            .on_tap_up(move |_| on_up())
+            .on_tap(move |_| on_tap())
+            .on_tap_cancel(move |_| on_cancel())
+            .build();
+        let rival = Rc::new(Rival);
+        let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+        let pointer = down.pointer_id().expect("fixture contact identity");
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        let _rival_entry = arena.add(pointer, &rival);
+        arena.close(pointer);
+        arena.drain_deferred_resolutions();
+        assert!(
+            log.borrow().is_empty(),
+            "an undecided press shows nothing yet"
+        );
+        clock.advance(std::time::Duration::from_millis(wait));
+        arena.poll_deadlines();
+        let shown: &[&str] = if wait >= 100 { &["down"] } else { &[] };
+        assert_eq!(&*log.borrow(), shown, "{wait} ms undecided, still held");
+        match then {
+            Then::Taken => {
+                let erased: Rc<dyn GestureArenaMember> = rival.clone();
+                arena.accept(pointer, &erased);
+            }
+            Then::Released => {
+                let up =
+                    make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+                recognizer.handle_event(PointerDispatch::at_root(&up));
+                arena.sweep(pointer);
+            }
+        }
+        arena.drain_deferred_resolutions();
+        assert_eq!(&*log.borrow(), heard, "{then:?} after {wait} ms");
+        assert!(arena.is_empty());
     }
 }
 
@@ -156,7 +237,7 @@ fn tap_phase_payloads_preserve_button_families_and_spaces() {
 
 fn live_settings_apply_to_next_contact() {
     let arena = GestureArena::new();
-    let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
+    let source = GestureSettingsSource::new(GestureSettings::default());
     let taps = Rc::new(Cell::new(0));
     let recognizer = TapGestureRecognizer::builder(arena.clone())
         .settings(source.provider())
@@ -172,7 +253,7 @@ fn live_settings_apply_to_next_contact() {
 
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     source.replace(
-        GestureSettings::touch_defaults()
+        GestureSettings::default()
             .try_with_touch_slop(2.0)
             .expect("valid slop"),
     );
@@ -197,7 +278,7 @@ fn live_settings_apply_to_next_contact() {
         "next contact captures the new 2 px tolerance"
     );
 
-    source.replace(GestureSettings::touch_defaults());
+    source.replace(GestureSettings::default());
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     recognizer.handle_event(PointerDispatch::at_root(&moved));
     arena.close(pointer);
@@ -286,6 +367,10 @@ fn panicking_cancel_callback_cannot_strand_tap_tracking() {
     let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
+    // The cancel only ends a press whose down was sent: the sole member wins
+    // at close, which sends it.
+    arena.close(down.pointer_id().expect("fixture contact identity"));
+    arena.drain_deferred_resolutions();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recognizer.cancel()));
     assert!(failure.is_err());
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
@@ -295,6 +380,53 @@ fn panicking_cancel_callback_cannot_strand_tap_tracking() {
     arena.drain_deferred_resolutions();
     assert_eq!(cancels.get(), 1);
     assert_eq!(taps.get(), 1);
+}
+
+/// A tap with callbacks only for the secondary button stays out of a primary
+/// contact's arena, so it cannot hold a primary drag back (a context menu's
+/// secondary click beside a dismiss drag); a secondary press it does join.
+fn a_tap_joins_only_contacts_of_buttons_it_reports() {
+    let arena = GestureArena::new();
+    let opened = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_secondary_tap({
+            let opened = opened.clone();
+            move |_| opened.set(opened.get() + 1)
+        })
+        .build();
+    let primary = make_down_event_for_id_with_button(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::PRIMARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.add_pointer(PointerDispatch::at_root(&primary));
+    assert!(
+        !arena.is_open(PointerId::new(std::num::NonZeroU64::MIN)),
+        "no member joined the primary contact"
+    );
+    let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero"));
+    let secondary = make_down_event_for_id_with_button(
+        pointer,
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::SECONDARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.add_pointer(PointerDispatch::at_root(&secondary));
+    assert!(arena.is_open(pointer), "the secondary press joined");
+    arena.close(pointer);
+    let up = make_up_event_for_id_with_button(
+        pointer,
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::SECONDARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(opened.get(), 1, "the secondary click is reported");
 }
 
 fn cancel_reuses_tap() {
@@ -321,7 +453,8 @@ fn cancel_reuses_tap() {
     recognizer.handle_event(PointerDispatch::at_root(&up));
     arena.drain_deferred_resolutions();
     assert_eq!(taps.get(), 1);
-    assert_eq!(cancels.get(), 1);
+    // The cancel came before the press showed, so no cancel is owed.
+    assert_eq!(cancels.get(), 0);
 }
 
 fn cancel_during_up_suppresses_tap() {

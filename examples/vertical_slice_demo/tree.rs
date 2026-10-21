@@ -41,7 +41,7 @@
 //! content-dimension feedback loop existed).
 //!
 //! Drag-only: there is no fling/ballistic simulation. The pan gesture's
-//! release velocity (`on_pan_end`) is intentionally left unwired — hand-
+//! release velocity (the drag slot's `on_end`) is intentionally left unwired — hand-
 //! rolling ballistics in the demo was ruled out, and a real fling belongs to
 //! the same Business.1 item.
 //!
@@ -109,7 +109,7 @@ pub const BACK_BUTTON_LABEL: &str = "< Back";
 /// synthetic pointer gestures through the mounted `GestureDetector`s: taps
 /// for the counter and the animated box, a drag for the list. `scroll_offset`
 /// is kept in sync with [`DemoHomeState`]'s internal `ScrollController` by
-/// the drag's `on_pan_update` callback (see the module doc's drag-to-scroll
+/// the drag slot's `on_update` callback (see the module doc's drag-to-scroll
 /// wiring section above) — the render path itself reads the controller's
 /// live `ScrollPosition` directly (`ListView::position`), not this cell; the
 /// cell exists as a `pub` read/seed escape hatch for callers that construct a
@@ -338,7 +338,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             // only where a hit-testable descendant (an item's `Text`/padding)
             // happens to sit — same reasoning as the "+" button above.
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_update(move |_cx, details: DragUpdateDetails| {
+            .drag(DragSlot::pan().on_update(move |_cx, details: DragUpdateDetails| {
                 // Scroll-drag convention (matches `Scrollable`'s own pan-update
                 // wiring in `scrollable.rs`): a downward finger drag (positive
                 // delta on the scroll axis) moves the viewport toward the
@@ -350,7 +350,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
                 scroll_controller_for_drag.jump_to(proposed);
                 scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
-            })
+            }))
             .child(
                 SizedBox::height(LIST_BOX_HEIGHT).child(
                     // `ListView::position` (Business.1's now-delivered

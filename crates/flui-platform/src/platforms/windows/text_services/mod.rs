@@ -39,6 +39,7 @@
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
 mod document;
+mod input_scope;
 #[cfg(test)]
 mod probe;
 #[cfg(test)]
@@ -70,6 +71,7 @@ use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
 use super::com_apartment::ComApartment;
+use super::platform::WindowRef;
 
 #[cfg(test)]
 thread_local! {
@@ -140,6 +142,9 @@ enum Serving {
 /// One window's TSF connection; see the module doc.
 pub(super) struct TextServices {
     hwnd: HWND,
+    /// The window with its identity, for the documents, which TSF may keep
+    /// past the window.
+    window: WindowRef,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
@@ -224,7 +229,7 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 }
 
 impl TextServices {
-    /// Activate TSF for `hwnd`'s thread and associate the empty document
+    /// Activate TSF for `window`'s thread and associate the empty document
     /// with the window. The thread must be the window's owner thread, inside
     /// the single-threaded COM apartment `apartment` holds, which these
     /// services keep entered until they are dropped.
@@ -234,9 +239,10 @@ impl TextServices {
     /// The COM error of the step that failed; the caller falls back to the
     /// `WM_CHAR` path.
     pub(super) fn activate(
-        hwnd: HWND,
+        window: WindowRef,
         apartment: Rc<ComApartment>,
     ) -> windows_core::Result<Rc<Self>> {
+        let hwnd = window.hwnd();
         // SAFETY: plain COM calls on this STA thread with no pointer
         // arguments of ours; each result is checked before the next step.
         let (thread_manager, client_id, empty) = unsafe {
@@ -259,7 +265,8 @@ impl TextServices {
         // Owned before anything runs application code: from here a failure
         // drops the services, and their drop deactivates TSF.
         let services = Rc::new_cyclic(|me| Self {
-            hwnd,
+            hwnd: window.hwnd(),
+            window,
             thread_manager,
             client_id,
             empty,
@@ -372,6 +379,26 @@ impl TextServices {
             services.raise_failure();
         });
         calls.retire(services);
+        if let Some(payload) = calls.into_failure() {
+            log_failure(payload);
+        }
+    }
+
+    /// The window moved, or its DPI changed: the focused field's text sits
+    /// somewhere else on the screen. The field's store is told, and reports
+    /// `OnLayoutChange` by its own rule, when no lock is held and its gate is
+    /// open, since TSF answers with a synchronous lock request; an input
+    /// method then moves its candidate window with the text. The store and
+    /// the sink are application code and a user-installed `tracing`
+    /// subscriber: from the window procedure a failure there is logged, not
+    /// raised.
+    pub(super) fn window_moved(&self) {
+        let Some(store) = self.focused_state().map(|state| Rc::clone(&state.store)) else {
+            return;
+        };
+        let mut calls = OwnerCalls::new();
+        calls.run(|| store.screen_moved());
+        calls.retire(store);
         if let Some(payload) = calls.into_failure() {
             log_failure(payload);
         }
@@ -593,7 +620,7 @@ impl TextServices {
     }
 
     fn open_document(&self, store: Rc<dyn TextStore>) -> windows_core::Result<()> {
-        let state = DocumentState::new(store, self.hwnd, self.me.clone());
+        let state = DocumentState::new(store, self.window, self.me.clone());
         let tsf_store: ITextStoreACP = TsfStore::new(Rc::clone(&state)).into();
         let mut context = None;
         let mut edit_cookie = 0;

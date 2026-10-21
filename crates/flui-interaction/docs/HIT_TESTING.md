@@ -62,7 +62,7 @@ the same observation. `PointerMove::try_map_positions` changes checked positions
 directly rather than passing converted histories through source admission again
 ([ADR-0184](../../../docs/adr/ADR-0184-coordinate-mapping-preserves-pointer-readings.md)).
 The global event stays unchanged. A computed non-finite local position refuses
-that transformed event (`transform_pointer_event` in `routing/hit_test.rs`).
+that transformed event (`transform_pointer_event` in `pointer/hit_test.rs`).
 The mounted `pointer_delivery_preserves_source_and_sample_families` row checks
 both coordinate spaces and distinct sample families.
 
@@ -95,7 +95,7 @@ moving focal points and checks finite, horizon and behind-plane refusal.
 `MouseTracker` diffs the regions under a device against the previous hit
 path. It delivers all exits first, in hit-test (leaf-first) order, then all
 enters in reverse hit-test order (outermost region first), then the cursor
-change callback (`DeviceWork::invoke`, `routing/mouse_tracker.rs`). The cursor
+change callback (`DeviceWork::invoke`, `pointer/mouse_tracker.rs`). The cursor
 is `HitTestResult::resolve_cursor`: the first entry along the leaf-first path
 whose request is `CursorRequest::Icon`, including an explicit `CursorIcon::Default`
 arrow. `CursorRequest::Defer` leaves the choice to the next entry; an entirely

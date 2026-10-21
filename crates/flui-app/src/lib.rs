@@ -55,6 +55,12 @@ pub use app::{
     AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling, RootRenderElement,
     RootRenderView, run_app, run_app_with_config,
 };
+// The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
+// per runtime; the serialiser for its records lives in `flui-testing`.
+pub use app::{
+    DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
+    PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
+};
 // The app's font registration door (ADR-0092 §2).
 pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
@@ -100,7 +106,7 @@ pub use app::{ExitPolicy, WindowPolicy};
 #[cfg(not(target_os = "ios"))]
 pub use app::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
-    request_presentation_close,
+    request_presentation_close, window_handle,
 };
 // `open_secondary_window` additionally needs the desktop GPU renderer path,
 // so it is narrower than the policy enums above: desktop only (matching

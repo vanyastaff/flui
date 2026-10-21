@@ -1,8 +1,17 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
-  current code: `flui_testing::replay::PointerScript` replay of pointer events, with no recordings.
+- **Status:** Accepted (2026-10-13); §8 amended (2026-10-18): Android injects through the shell's
+  `input` and `uinput` commands, not instrumentation; §1 amended (2026-10-19): pointer input held
+  for a commit is recorded where it is dispatched or discarded. §1–§6 are implemented; §4's native codec is in
+  `crates/flui-platform/tests/native_recording/`, with the `native-capture` feature to record on a
+  native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
+  readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
+  haptics and IME rows pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
+  is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
+  implemented on Windows: `cargo xtask device windows-input` injects touch and pen
+  (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records
+  each session and holds it against its golden native recording; the precision touchpad is
+  journaled but certified only by a hardware recording, and the other OSes are pending.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the
@@ -25,15 +34,43 @@ and put `serde` on the Stable contract crate.
 ## Decision
 
 1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
-   replay needs, in one order. `InputTap` in `flui-app` observes `&InputRecord`, a
-   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences`, `Gap` and `End` rows, which the
+   replay needs, in one order. `InputTap` observes `&InputRecord`, a
+   `#[non_exhaustive]` enum of `Input`, `Decision`, `Deadline`, `Preferences`, `Gap` and `End` rows, which the
    runtime emits on its owner thread in the order it applied them; the writer serialises exactly
-   that sequence. An `Input` row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
-   the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
-   as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
-   their own, are replayable. The header holds devices, scale factors, the
-   behavior values in effect (the gesture preset and the `SystemPreferences` revision), the
-   clocks and a major format version. Each preference revision the runtime applies while
+   that sequence. The tap and its registry live beside the emitting runtime in `flui-runtime`
+   (`UiRuntime::input_taps`, so a headless host records what a runner does); an application
+   installs one per runtime through `flui-app`'s `AppConfig::with_input_tap`, which re-exports
+   the tap and record types. An `Input` row holds the `InputSurface`/`WindowId` it addressed
+   (the window, or a surface embedded in it, ADR-0207 §5), `t` (the `EventTime`), the arrival
+   time, the dispatch result and the `InputSequenceId` dispatch placed it in. Pointer input a
+   presentation holds until its tree is committed (ADR-0048) gets its row where the runtime
+   dispatches it: with the time it arrived, the event as dispatched (held moves folded into it)
+   and that dispatch's sequence, ahead of the verdicts the dispatch reaches. Held input the
+   runtime never dispatches (refused, folded into a later move, superseded, evicted, or dropped
+   when the window hides, loses the contact or closes) gets its row where it is discarded, with
+   the outcome `Queued` and no sequence; replay does not apply it, since the recorded runtime
+   never delivered it (rows
+   `a_pointer_held_for_the_first_commit_records_the_sequence_its_dispatch_minted`,
+   `a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered`). Held input is recorded
+   only when a tap was registered at its arrival. The arena's
+   verdicts (the decisions `GestureObserver` reports, each naming its contest's sequence) are
+   recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no
+   input of their own, are replayable. A `Decision` row names its member by a number the
+   recording gives each member in the order it first sees it (its join), never by its type: two
+   members of one type stay apart, and the type name is only an annotation. A deadline the arena
+   polls is a `Deadline` row naming the contest it was polled for (pointer and sequence) and the
+   member, ahead of the verdicts it made (row
+   `a_polled_deadline_records_its_contest_before_its_verdicts`). A recording names
+   sequences, embedded surfaces and members by value, since a reader cannot mint them; a replay
+   resolves an embedded surface against the ones its host embedded in the same order. The
+   header holds devices, scale factors, the behavior values in effect (each window's per-kind
+   gesture values, as values and never a preset's name, and the `SystemPreferences` revision
+   with its values), the clocks and a major format version; replay restores the windows' scales,
+   gesture values and preferences before its first row (rows
+   `a_recording_replays_under_its_recorded_gesture_values`, `a_replay_starts_at_the_recorded_scale`).
+   The runtime reports what a recording starts from (`UiRuntime::recording_start`), and an
+   application's `InputTapFactory` is handed it for each runtime, so a runner's header holds what
+   a headless host's does (row `a_factory_tap_ends_its_recording_when_the_runtime_goes_away`). Each preference revision the runtime applies while
    recording (ADR-0172: applied before the next input, seen by new sequences) is recorded as a
    `Preferences` row at its position in the stream, and replay applies it at the same position,
    so host-owned values are part of the replayed timeline (row
@@ -109,8 +146,9 @@ and put `serde` on the Stable contract crate.
    decisions that depended on that text. Rows: replaying a redacted assistive `SetValue` fails
    with `NonReplayable`; the same recording made with `--keep-text` replays to its decisions.
 6. **Scripts.** `PointerScript` is built from per-device consuming builders — `TouchScript`,
-   `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each `Into<PointerScript>`;
-   `build() -> Result<_, ScriptError>` checks down/up pairing. The output is an owned
+   `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each converting into a
+   `PointerScript` through `build() -> Result<_, ScriptError>` (and `TryFrom`), which checks
+   down/up pairing: an unpaired script is an error, never a panicking conversion. The output is an owned
    `Vec<HostInput>` on virtual time with a readable text form beside its JSON Lines. Every row of
    the arena ownership table and the scroll-channel table has at least a touch and a mouse
    script. Harness finders look nodes up in the semantics tree by role and label; a "run until
@@ -122,8 +160,14 @@ and put `serde` on the Stable contract crate.
    per-sequence clock choice, QPC on Win32, monotonic order, counter wrap), the `Scroll` and
    `PanZoom` grammar, DnD, haptics and IME event order. Each feature adds its own rows.
 8. **Native injection.** `cargo xtask device <os>-input` exists for every OS: `SendInput` and
-   `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, instrumentation
-   on Android, uinput/libei on Linux, WebDriver BiDi on the web. It certifies translation (native
+   `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, the shell's
+   `input` and `uinput` commands on Android, uinput/libei on Linux, WebDriver BiDi on the web.
+   Android does not use instrumentation: an event injected through `Instrumentation` or
+   `UiAutomation` enters the input dispatcher after `InputReader`, so it never carries the device
+   classification, motion ranges, tool type and hover the backend translates, and it needs a test
+   APK and runner. `input` reaches the system's virtual touchscreen, stylus, mouse and keyboard;
+   `uinput` creates a kernel device the real `InputReader` reads (a pen with pressure, tilt and
+   hover, a touchpad in pointer mode), which is what certifying the translation needs. It certifies translation (native
    input in, expected `HostInput` out), needs an interactive desktop, and its result is quoted in
    the PR. Paths no injector reaches — the Windows precision touchpad through DirectManipulation
    and macOS trackpad gestures — are certified only by recordings taken on hardware.
@@ -147,9 +191,12 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   "N events in one frame" and "an event between vsyncs".
 - `flui-platform` native codec rows: `win32_pointer_info_recordings_decode_to_their_host_input`
   and the per-OS equivalents, run on Linux CI over pure decoders.
-- `assert_backend_conforms` runs for the headless backend in CI; for Win32, macOS, iOS,
-  Android, Linux and the web it runs on a native host or device only, as do all
-  `xtask device` checks.
+- `assert_backend_conforms` runs in CI for the headless backend and for the shared decoders
+  each of Win32, AppKit, UIKit, Android and the web feeds, with that backend's clock shape,
+  contact kinds and availability table (`every_backend_passes_the_conformance_table` in
+  `flui-platform`); each row also fails against a backend broken for it
+  (`each_conformance_row_fails_against_a_broken_backend`). The OS translation in front of the
+  decoders runs on a native host or device only, as do all `xtask device` checks.
 
 ## Alternatives rejected
 

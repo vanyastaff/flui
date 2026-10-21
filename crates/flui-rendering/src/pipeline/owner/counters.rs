@@ -29,6 +29,10 @@ pub struct PipelineCounters {
     /// [`PipelineOwner::layout_roots_total`](super::PipelineOwner::layout_roots_total)
     /// reports.
     pub layout_roots: u64,
+    /// Render nodes the layout-invalidation walks marked on their way to a
+    /// relayout boundary. A walk that reaches a path an earlier walk already
+    /// settled stops there, so sibling marks share one ancestor walk.
+    pub layout_mark_steps: u64,
     /// Render nodes whose layout actually ran: past the clean-child
     /// short-circuit that serves a cached geometry. Intrinsic queries do not
     /// count.
@@ -60,6 +64,9 @@ impl PipelineCounters {
         Self {
             layout_passes: self.layout_passes.saturating_sub(earlier.layout_passes),
             layout_roots: self.layout_roots.saturating_sub(earlier.layout_roots),
+            layout_mark_steps: self
+                .layout_mark_steps
+                .saturating_sub(earlier.layout_mark_steps),
             nodes_laid_out: self.nodes_laid_out.saturating_sub(earlier.nodes_laid_out),
             nodes_painted: self.nodes_painted.saturating_sub(earlier.nodes_painted),
             layers_produced: self.layers_produced.saturating_sub(earlier.layers_produced),
@@ -85,6 +92,7 @@ impl AddAssign for PipelineCounters {
     fn add_assign(&mut self, rhs: Self) {
         self.layout_passes = self.layout_passes.saturating_add(rhs.layout_passes);
         self.layout_roots = self.layout_roots.saturating_add(rhs.layout_roots);
+        self.layout_mark_steps = self.layout_mark_steps.saturating_add(rhs.layout_mark_steps);
         self.nodes_laid_out = self.nodes_laid_out.saturating_add(rhs.nodes_laid_out);
         self.nodes_painted = self.nodes_painted.saturating_add(rhs.nodes_painted);
         self.layers_produced = self.layers_produced.saturating_add(rhs.layers_produced);

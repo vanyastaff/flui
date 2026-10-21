@@ -1,0 +1,713 @@
+//! Button-aware tap recognition with one arena identity per contact.
+
+use super::{
+    callback_containment::{CallbackSequence, finish_containment, invoke_callback},
+    contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
+    recognizer::{CancelOutcome, GestureRecognizer},
+};
+use crate::events::PointerButton;
+use crate::gesture::details::{TapDownDetails, TapUpDetails};
+use crate::gesture::observer::GestureContest;
+use crate::ids::PointerId;
+use crate::{
+    containment::RoutePanic,
+    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    gesture::settings::GestureSettingsProvider,
+    pointer::PointerDispatch,
+};
+use core::time::Duration;
+use flui_foundation::geometry::Offset;
+use flui_platform_api::EventTime;
+use flui_platform_api::input_capabilities::PointerKindSet;
+use smallvec::SmallVec;
+use std::{
+    cell::{Cell, RefCell},
+    rc::{Rc, Weak},
+};
+
+/// The three supported button families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TapButton {
+    /// Primary mouse button or touch contact.
+    Primary,
+    /// Secondary mouse button.
+    Secondary,
+    /// Auxiliary mouse button.
+    Tertiary,
+}
+impl TryFrom<PointerButton> for TapButton {
+    type Error = PointerButton;
+    fn try_from(button: PointerButton) -> Result<Self, Self::Error> {
+        match button {
+            PointerButton::PRIMARY => Ok(Self::Primary),
+            PointerButton::SECONDARY => Ok(Self::Secondary),
+            PointerButton::AUXILIARY => Ok(Self::Tertiary),
+            other => Err(other),
+        }
+    }
+}
+impl TapButton {
+    /// Map a supported raw pointer button to its tap family.
+    pub fn from_pointer_button(button: PointerButton) -> Option<Self> {
+        Self::try_from(button).ok()
+    }
+}
+/// Callback for movement or cancellation in local and root coordinates.
+pub type TapCallback = Rc<dyn Fn(TapDetails)>;
+/// Callback for the admitted Down snapshot.
+pub type TapDownCallback = Rc<dyn Fn(TapDownDetails)>;
+/// Callback for a successful release or completed tap.
+pub type TapUpCallback = Rc<dyn Fn(TapUpDetails)>;
+/// Position and admitted device kind at movement or cancellation.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct TapDetails {
+    /// Position in the root coordinate space.
+    pub global_position: Offset<f64>,
+    /// Position in the recognizer coordinate space.
+    pub local_position: Offset<f64>,
+    /// Device kind frozen at admission.
+    pub kind: PointerKind,
+    /// The contact this movement or cancellation belongs to.
+    pub pointer: PointerId,
+}
+
+#[derive(Default)]
+#[expect(clippy::struct_field_names)]
+struct TapCallbacks {
+    on_tap_down: Option<TapDownCallback>,
+    on_tap_move: Option<TapCallback>,
+    on_tap_up: Option<TapUpCallback>,
+    on_tap: Option<TapUpCallback>,
+    on_tap_cancel: Option<TapCallback>,
+    on_secondary_tap_down: Option<TapDownCallback>,
+    on_secondary_tap_up: Option<TapUpCallback>,
+    on_secondary_tap: Option<TapUpCallback>,
+    on_secondary_tap_cancel: Option<TapCallback>,
+    on_tertiary_tap_down: Option<TapDownCallback>,
+    on_tertiary_tap_up: Option<TapUpCallback>,
+    on_tertiary_tap: Option<TapUpCallback>,
+    on_tertiary_tap_cancel: Option<TapCallback>,
+}
+impl TapCallbacks {
+    /// Whether any callback listens to `button`: a recognizer that would
+    /// report nothing for a press of it stays out of that contact's arena,
+    /// so a secondary-click recognizer never delays a primary drag.
+    fn handles(&self, button: TapButton) -> bool {
+        match button {
+            TapButton::Primary => {
+                self.on_tap_down.is_some()
+                    || self.on_tap_move.is_some()
+                    || self.on_tap_up.is_some()
+                    || self.on_tap.is_some()
+                    || self.on_tap_cancel.is_some()
+            }
+            TapButton::Secondary => {
+                self.on_secondary_tap_down.is_some()
+                    || self.on_secondary_tap_up.is_some()
+                    || self.on_secondary_tap.is_some()
+                    || self.on_secondary_tap_cancel.is_some()
+            }
+            TapButton::Tertiary => {
+                self.on_tertiary_tap_down.is_some()
+                    || self.on_tertiary_tap_up.is_some()
+                    || self.on_tertiary_tap.is_some()
+                    || self.on_tertiary_tap_cancel.is_some()
+            }
+        }
+    }
+
+    fn down(&self, button: TapButton) -> Option<TapDownCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_down.clone(),
+            TapButton::Secondary => self.on_secondary_tap_down.clone(),
+            TapButton::Tertiary => self.on_tertiary_tap_down.clone(),
+        }
+    }
+    fn up(&self, button: TapButton) -> Option<TapUpCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_up.clone(),
+            TapButton::Secondary => self.on_secondary_tap_up.clone(),
+            TapButton::Tertiary => self.on_tertiary_tap_up.clone(),
+        }
+    }
+    fn tap(&self, button: TapButton) -> Option<TapUpCallback> {
+        match button {
+            TapButton::Primary => self.on_tap.clone(),
+            TapButton::Secondary => self.on_secondary_tap.clone(),
+            TapButton::Tertiary => self.on_tertiary_tap.clone(),
+        }
+    }
+    /// The cancel callback of a sequence whose down was sent: a cancel never
+    /// arrives without the down it ends, so a pressed counter stays balanced.
+    fn cancel_after_down(&self, sequence: &TapSequence) -> Option<TapCallback> {
+        sequence
+            .down_sent
+            .then(|| self.cancel(sequence.button))
+            .flatten()
+    }
+    fn cancel(&self, button: TapButton) -> Option<TapCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_cancel.clone(),
+            TapButton::Secondary => self.on_secondary_tap_cancel.clone(),
+            TapButton::Tertiary => self.on_tertiary_tap_cancel.clone(),
+        }
+    }
+}
+impl Drop for TapCallbacks {
+    fn drop(&mut self) {
+        super::callback_containment::retire_callbacks!(self;
+            on_tap_down, on_tap_move, on_tap_up, on_tap, on_tap_cancel,
+            on_secondary_tap_down, on_secondary_tap_up, on_secondary_tap, on_secondary_tap_cancel,
+            on_tertiary_tap_down, on_tertiary_tap_up, on_tertiary_tap, on_tertiary_tap_cancel
+        );
+    }
+}
+
+/// Configure callbacks before they become immutable. Use a `Weak` through an
+/// external slot when a callback needs to reach its recognizer.
+#[must_use]
+pub struct TapGestureRecognizerBuilder {
+    arena: GestureArena,
+    settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
+    callbacks: TapCallbacks,
+}
+impl std::fmt::Debug for TapGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TapGestureRecognizerBuilder")
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+impl TapGestureRecognizerBuilder {
+    /// Choose a fixed profile or a read-only provider for new contacts.
+    /// Active contacts retain their admitted settings through completion.
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
+        self.callbacks.on_tap_down = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tap_move(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+        self.callbacks.on_tap_move = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_tap_up = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_tap = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tap_cancel(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+        self.callbacks.on_tap_cancel = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_secondary_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
+        self.callbacks.on_secondary_tap_down = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_secondary_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_secondary_tap_up = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_secondary_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_secondary_tap = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_secondary_tap_cancel(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+        self.callbacks.on_secondary_tap_cancel = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tertiary_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
+        self.callbacks.on_tertiary_tap_down = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tertiary_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_tertiary_tap_up = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tertiary_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
+        self.callbacks.on_tertiary_tap = Some(Rc::new(callback));
+        self
+    }
+    /// Register a callback before building the recognizer.
+    pub fn on_tertiary_tap_cancel(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+        self.callbacks.on_tertiary_tap_cancel = Some(Rc::new(callback));
+        self
+    }
+    /// Allocate the owner-local recognizer with immutable callbacks.
+    #[must_use]
+    pub fn build(self) -> Rc<TapGestureRecognizer> {
+        Rc::new_cyclic(|this| TapGestureRecognizer {
+            arena: self.arena,
+            this: this.clone(),
+            sequences: RefCell::new(TapSequences::default()),
+            settings: self.settings,
+            allowed_devices: self.allowed_devices,
+            callbacks: self.callbacks,
+        })
+    }
+}
+
+/// How long a press waits for its arena before it shows as pressed: the
+/// down callback then runs although a drag may still take the contact, and a
+/// cancellation follows it if one does.
+const PRESS_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Recognizes primary, secondary and tertiary taps after their arena verdict.
+///
+/// The down callback runs when the arena gives the press to the tap, or
+/// 100 ms after the Down while it is still undecided, whichever
+/// comes first; the up and the tap wait for the win. A contact that stops
+/// being a tap hears a cancellation, whether or not its down showed.
+pub struct TapGestureRecognizer {
+    arena: GestureArena,
+    this: Weak<Self>,
+    sequences: RefCell<TapSequences>,
+    settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
+    callbacks: TapCallbacks,
+}
+impl std::fmt::Debug for TapGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TapGestureRecognizer")
+            .field(
+                "live_sequences",
+                &self.sequences.try_borrow().map(|s| s.live.len()).ok(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+struct TapSequence {
+    member: Rc<TapArenaMember>,
+    id: ContactId,
+    down: TapDownDetails,
+    pointer: PointerId,
+    button: TapButton,
+    up: Option<TapUpDetails>,
+    accepted: bool,
+    /// The down callback ran, at the win or at the press timeout.
+    down_sent: bool,
+    delivering: bool,
+}
+#[derive(Default)]
+struct TapSequences {
+    last_id: Cell<u64>,
+    current: Option<ContactId>,
+    live: SmallVec<[TapSequence; 2]>,
+}
+impl TapSequences {
+    fn index(&self, id: ContactId) -> Option<usize> {
+        self.live.iter().position(|sequence| sequence.id == id)
+    }
+    fn remove(&mut self, id: ContactId) -> Option<TapSequence> {
+        if self.current == Some(id) {
+            self.current = None;
+        }
+        let index = self.index(id)?;
+        Some(self.live.remove(index))
+    }
+}
+struct TapArenaMember {
+    contact: PrimaryContact,
+    entry: RefCell<Option<GestureArenaEntry>>,
+    recognizer: Weak<TapGestureRecognizer>,
+    sequence: ContactId,
+}
+impl GestureArenaMember for TapArenaMember {
+    fn accept_gesture(&self, _: GestureContest) {
+        if let Some(recognizer) = self.recognizer.upgrade() {
+            recognizer.accept_sequence(self.sequence);
+        }
+    }
+    fn reject_gesture(&self, _: GestureContest) {
+        if let Some(recognizer) = self.recognizer.upgrade() {
+            recognizer.reject_sequence(self.sequence);
+        }
+    }
+    fn deadline(&self) -> Option<EventTime> {
+        self.contact.deadline()
+    }
+    fn poll_deadline(&self, now: EventTime) {
+        if self
+            .contact
+            .deadline()
+            .is_some_and(|deadline| now >= deadline)
+            && let Some(recognizer) = self.recognizer.upgrade()
+        {
+            recognizer.deliver_pressed(self.sequence);
+        }
+    }
+}
+impl Drop for TapArenaMember {
+    fn drop(&mut self) {
+        // A lifted sequence can still await a held verdict after its contact
+        // finished; its independently retained weak token must withdraw too.
+        if let Some(entry) = self.entry.get_mut().take() {
+            entry.withdraw_deferred();
+        }
+    }
+}
+impl TapGestureRecognizer {
+    /// Start configuring an owner-local recognizer.
+    pub fn builder(arena: GestureArena) -> TapGestureRecognizerBuilder {
+        TapGestureRecognizerBuilder {
+            arena,
+            settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
+            callbacks: TapCallbacks::default(),
+        }
+    }
+    fn current_member(&self) -> Option<Rc<TapArenaMember>> {
+        let sequences = self.sequences.borrow();
+        let id = sequences.current?;
+        Some(sequences.live[sequences.index(id)?].member.clone())
+    }
+    fn is_live(&self, id: ContactId) -> bool {
+        self.sequences.borrow().index(id).is_some()
+    }
+    fn accept_sequence(&self, id: ContactId) {
+        {
+            let mut sequences = self.sequences.borrow_mut();
+            let Some(index) = sequences.index(id) else {
+                return;
+            };
+            sequences.live[index].accepted = true;
+        }
+        self.deliver_if_won(id);
+    }
+    /// Losing the arena ends a live sequence the way a slop excursion does:
+    /// its owner hears the cancellation, so a press it is showing can end.
+    fn reject_sequence(&self, id: ContactId) {
+        let retired = self.sequences.borrow_mut().remove(id);
+        if let Some(retired) = retired {
+            let details = TapDetails {
+                global_position: retired.down.global_position,
+                local_position: retired.down.local_position,
+                kind: retired.down.kind,
+                pointer: retired.pointer,
+            };
+            invoke_callback(
+                self.callbacks.cancel_after_down(&retired),
+                || {
+                    retired.member.contact.withdraw();
+                },
+                |callback| callback(details),
+            );
+        }
+    }
+    /// The press timeout elapsed with the arena undecided: the press shows
+    /// as pressed now; the release and the tap still wait for the win.
+    fn deliver_pressed(&self, id: ContactId) {
+        let pressed = {
+            let mut sequences = self.sequences.borrow_mut();
+            let Some(index) = sequences.index(id) else {
+                return;
+            };
+            let sequence = &mut sequences.live[index];
+            if sequence.down_sent {
+                return;
+            }
+            sequence.down_sent = true;
+            (sequence.down, sequence.button, Rc::clone(&sequence.member))
+        };
+        let (down, button, member) = pressed;
+        member.contact.disarm_deadline();
+        if self.is_live(id) {
+            invoke_callback(
+                self.callbacks.down(button),
+                || {},
+                |callback| callback(down),
+            );
+        }
+    }
+    /// Deliver what the win owes: the down, unless the press timeout already
+    /// sent it, and once released, the up and the tap.
+    fn deliver_if_won(&self, id: ContactId) {
+        let delivery = {
+            let mut sequences = self.sequences.borrow_mut();
+            let Some(index) = sequences.index(id) else {
+                return;
+            };
+            let sequence = &mut sequences.live[index];
+            if !sequence.accepted || sequence.delivering {
+                return;
+            }
+            let down = (!sequence.down_sent).then_some(sequence.down);
+            sequence.down_sent = true;
+            if sequence.up.is_some() {
+                sequence.delivering = true;
+            }
+            (
+                down,
+                sequence.up,
+                sequence.button,
+                Rc::clone(&sequence.member),
+            )
+        };
+        let (down, up, button, member) = delivery;
+        if down.is_some() && up.is_none() {
+            member.contact.disarm_deadline();
+        }
+        let mut run = CallbackSequence::new();
+        if let Some(down) = down
+            && self.is_live(id)
+        {
+            run.call(self.callbacks.down(button), |callback| callback(down));
+        }
+        if let Some(up) = up {
+            if self.is_live(id) {
+                run.call(self.callbacks.up(button), |callback| callback(up));
+            }
+            if self.is_live(id) {
+                run.call(self.callbacks.tap(button), |callback| callback(up));
+            }
+            let retired = self.sequences.borrow_mut().remove(id);
+            drop(retired);
+        }
+        drop(member);
+        run.finish();
+    }
+    fn cancel_sequence(&self, id: ContactId, details: TapDetails) {
+        let retired = self.sequences.borrow_mut().remove(id);
+        if let Some(retired) = retired {
+            invoke_callback(
+                self.callbacks.cancel_after_down(&retired),
+                || {
+                    retired.member.contact.cancel();
+                },
+                |callback| callback(details),
+            );
+        }
+    }
+    fn button(event: &PointerEvent) -> Option<TapButton> {
+        match event {
+            PointerEvent::Down(data) => TapButton::from_pointer_button(data.button()),
+            PointerEvent::Up(data) => TapButton::from_pointer_button(data.button()),
+            _ => None,
+        }
+    }
+}
+impl GestureRecognizer for TapGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
+    fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
+        let pointer = dispatch.local.pointer_id();
+        let _span = tracing::info_span!(
+            "tap.add_pointer",
+            pointer = ?pointer,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
+        );
+        let PointerEvent::Down(_) = dispatch.local else {
+            return;
+        };
+        let Some(button) = Self::button(dispatch.local) else {
+            return;
+        };
+        if !self.callbacks.handles(button) {
+            return;
+        }
+        if self.sequences.borrow().current.is_some() {
+            return;
+        }
+        let id = {
+            let sequences = self.sequences.borrow();
+            let Some(id) = ContactId::next(&sequences.last_id) else {
+                return;
+            };
+            id
+        };
+        let member = Rc::new_cyclic(|this: &Weak<TapArenaMember>| {
+            let member: Weak<dyn GestureArenaMember> = this.clone();
+            TapArenaMember {
+                contact: PrimaryContact::new(ArenaMembership::new(self.arena.clone(), member)),
+                entry: RefCell::new(None),
+                recognizer: self.this.clone(),
+                sequence: id,
+            }
+        });
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(dispatch.local));
+        if member.contact.begin(dispatch, &settings).is_err() {
+            return;
+        }
+        *member.entry.borrow_mut() = member.contact.entry();
+        let Some(snapshot) = member.contact.current() else {
+            return;
+        };
+        let down = TapDownDetails {
+            global_position: snapshot.global,
+            local_position: snapshot.local,
+            kind: snapshot.kind,
+            pointer: snapshot.pointer,
+        };
+        {
+            let mut sequences = self.sequences.borrow_mut();
+            sequences.current = Some(id);
+            sequences.live.push(TapSequence {
+                member: Rc::clone(&member),
+                id,
+                down,
+                pointer: snapshot.pointer,
+                button,
+                up: None,
+                accepted: false,
+                down_sent: false,
+                delivering: false,
+            });
+        }
+        // A press still undecided after the press timeout shows as pressed;
+        // one the arena gives it sooner hears its down at the win.
+        if self.is_live(id) {
+            let _ = member.contact.arm_deadline(PRESS_TIMEOUT);
+        }
+    }
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let _span = tracing::info_span!(
+            "tap.handle_event",
+            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
+        );
+        let Some(member) = self.current_member() else {
+            return;
+        };
+        let Some(snapshot) = member.contact.current() else {
+            return;
+        };
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| member.contact.tracks(pointer))
+        {
+            return;
+        }
+        let details = TapDetails {
+            local_position: dispatch.local.position().unwrap_or(snapshot.local),
+            global_position: dispatch.global.position().unwrap_or(snapshot.global),
+            kind: snapshot.kind,
+            pointer: snapshot.pointer,
+        };
+        match dispatch.local {
+            PointerEvent::Move(_) => {
+                if snapshot
+                    .measured_travel(dispatch)
+                    .any(|travel| snapshot.settings.exceeds_hit_slop(snapshot.kind, travel))
+                {
+                    self.cancel_sequence(member.sequence, details);
+                } else {
+                    invoke_callback(
+                        self.callbacks.on_tap_move.clone(),
+                        || {},
+                        |callback| callback(details),
+                    );
+                }
+            }
+            PointerEvent::Up(_) => {
+                let Some(button) = Self::button(dispatch.local) else {
+                    return;
+                };
+                let mismatch = {
+                    let mut sequences = self.sequences.borrow_mut();
+                    let Some(index) = sequences.index(member.sequence) else {
+                        return;
+                    };
+                    let sequence = &mut sequences.live[index];
+                    if sequence.button == button {
+                        sequence.up = Some(TapUpDetails {
+                            global_position: details.global_position,
+                            local_position: details.local_position,
+                            kind: details.kind,
+                            pointer: details.pointer,
+                        });
+                        sequences.current = None;
+                        false
+                    } else {
+                        true
+                    }
+                };
+                if mismatch {
+                    self.cancel_sequence(member.sequence, details);
+                } else {
+                    member.contact.finish(ContactEnd::Contending);
+                    self.deliver_if_won(member.sequence);
+                }
+            }
+            PointerEvent::Cancel(_) => self.cancel_sequence(
+                member.sequence,
+                TapDetails {
+                    local_position: snapshot.local,
+                    global_position: snapshot.global,
+                    kind: snapshot.kind,
+                    pointer: snapshot.pointer,
+                },
+            ),
+            _ => {}
+        }
+    }
+    fn cancel(&self) -> CancelOutcome {
+        let live = {
+            let mut sequences = self.sequences.borrow_mut();
+            sequences.current = None;
+            std::mem::take(&mut sequences.live)
+        };
+        if live.is_empty() {
+            return CancelOutcome::Idle;
+        }
+        let incoming = std::thread::panicking();
+        let mut first = None;
+        for sequence in live {
+            let candidate = RoutePanic::capture(|| {
+                invoke_callback(
+                    self.callbacks.cancel_after_down(&sequence),
+                    || {
+                        sequence.member.contact.cancel();
+                    },
+                    |callback| {
+                        callback(TapDetails {
+                            global_position: sequence.down.global_position,
+                            local_position: sequence.down.local_position,
+                            kind: sequence.down.kind,
+                            pointer: sequence.pointer,
+                        });
+                    },
+                );
+            });
+            RoutePanic::preserve_first(&mut first, candidate, "tap cancellation");
+        }
+        finish_containment(first, incoming);
+        CancelOutcome::Cancelled
+    }
+}
+impl GestureArenaMember for TapGestureRecognizer {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
+}

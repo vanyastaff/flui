@@ -11,6 +11,8 @@
 //!   type. Replaces the legacy `impl_stateful_view!` declarative
 //!   macro (also deleted here).
 //!
+//! - [`macro@Inspect`] — emit `impl Inspect` for a struct or an enum;
+//!   re-exported beside the trait as `flui_foundation::inspect::Inspect`.
 //! - [`macro@Routable`] — emit `impl Routable` for a route enum from its
 //!   `#[route("…")]` patterns; re-exported beside the trait by
 //!   `flui_widgets` and its prelude.
@@ -48,6 +50,7 @@
 
 mod derive_diagnosticable;
 mod derive_inherited_data;
+mod derive_inspect;
 mod derive_routable;
 mod derive_stateful;
 mod derive_stateless;
@@ -86,6 +89,19 @@ use syn::{DeriveInput, parse_macro_input};
 /// the derive site rather than as a cascade of unrelated errors deep
 /// inside `StatelessBehavior`'s type machinery.
 ///
+/// # Inspection
+///
+/// `#[view(inspect)]` fills `View::inspect` from the type's own `Inspect`, so a view that also
+/// derives `Inspect` shows its fields in the element tree's snapshot (ADR-0242 §3):
+///
+/// ```rust,ignore
+/// #[derive(Clone, StatelessView, Inspect)]
+/// #[view(inspect)]
+/// struct Greeting { name: String }
+/// ```
+///
+/// `StatefulView` takes the same attribute.
+///
 /// # Keyed widgets
 ///
 /// The default `View::key()` returns `None`. Authors who need a
@@ -107,7 +123,7 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// A `#[view(key = "<expr>")]` derive attribute that auto-wires a
 /// field-named key is a deferred ergonomics improvement.
-#[proc_macro_derive(StatelessView)]
+#[proc_macro_derive(StatelessView, attributes(view))]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateless::expand(&input)
@@ -179,7 +195,7 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 /// See [`macro@StatelessView`] for the generated-code path strategy
 /// (Cargo-resolved runtime paths) and keyed-widget workaround
 /// notes — the same patterns apply.
-#[proc_macro_derive(StatefulView)]
+#[proc_macro_derive(StatefulView, attributes(view))]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateful::expand(&input)
@@ -282,6 +298,23 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_diagnosticable::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Emit `impl Inspect` (`flui_foundation::inspect`) for a struct or an enum (ADR-0242 §4).
+///
+/// Re-exported as `flui_foundation::inspect::Inspect`, beside the trait, which documents the
+/// attributes. Runtime paths resolve through `flui-sdk` first, then `flui-foundation`, then the
+/// `flui` facade, so a package that names only the SDK can derive it.
+///
+/// A field whose type has no value mapping is a compile error naming the ways out (`skip`,
+/// `with`, `debug`, or a `ToValue` impl); a union is refused, because which of its fields is
+/// live is unknown.
+#[proc_macro_derive(Inspect, attributes(inspect))]
+pub fn derive_inspect(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_inspect::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

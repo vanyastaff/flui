@@ -38,10 +38,10 @@ use std::num::NonZeroUsize;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
-    SetSize, TableShape,
+    AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
+    SemanticsNode, SemanticsOwner, SemanticsTree, SetSize, TableShape,
 };
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     pipeline::{
@@ -105,6 +105,23 @@ impl PipelineOwner<Semantics> {
         );
 
         self.scheduler.enter_phase(PhaseKind::Semantics);
+        // Assembly runs authored code (configurations, Flow delegates). Every
+        // return leaves the phase itself; an unwind leaves it here, so a host
+        // that catches the panic keeps an owner routing marks normally.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_semantics_in_phase()
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    /// The body of [`Self::run_semantics`], entered with the phase set.
+    fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
+        let mut callbacks = AssemblyCallbacks::default();
 
         // Sort shallow-first. Roots dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
@@ -127,21 +144,65 @@ impl PipelineOwner<Semantics> {
 
         if should_build {
             if let Some(owner) = self.semantics_owner.as_mut() {
-                // Mark-scoped graft first; anything it cannot prove falls
-                // back to the classic full rebuild (see the module doc).
-                // A partial graft aborted midway is safe for the same
-                // reason: the fallback clears and rebuilds the arena.
-                let grafted = !tree_is_empty
-                    && try_graft_pass(&self.render_tree, self.root_id, owner, &marked);
-                if !grafted {
-                    let built = match assemble_semantics_root(&self.render_tree, self.root_id) {
-                        Ok(built) => built,
-                        Err(error) => {
-                            let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
-                            return Err(crate::error::RenderError::semantics(error.to_string()));
+                // Stage every anchor and all authored key scopes before reserving
+                // identities or touching the current arena. A failed later anchor
+                // cannot partially commit an earlier subtree.
+                let mut regions = AssemblyRegions::default();
+                let grafts = (!tree_is_empty)
+                    .then(|| {
+                        plan_graft_pass(
+                            &self.render_tree,
+                            self.root_id,
+                            owner,
+                            &marked,
+                            &mut regions,
+                        )
+                    })
+                    .flatten();
+                let planned = if let Some(grafts) = grafts {
+                    Ok(SemanticsPlan::Graft(grafts))
+                } else {
+                    // A failed graft proposal can discard configurations, but
+                    // their handlers remain owned until the whole pass verdict.
+                    regions.visited.clear();
+                    regions.authored.clear();
+                    regions.duplicate = None;
+                    regions.invalid_sort_key = None;
+                    assemble_semantics_root(&self.render_tree, self.root_id, &mut regions)
+                        .map(|root| SemanticsPlan::Rebuild(root.map(Box::new)))
+                };
+                let mut planned = match planned {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        regions.callbacks.rejected = true;
+                        let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                        return Err(crate::error::RenderError::semantics(error.to_string()));
+                    }
+                };
+                if let SemanticsPlan::Rebuild(Some(root)) = &mut planned {
+                    reconcile_collections(root);
+                }
+                // Exit the phase before rejected configurations retire their
+                // callback captures. Their destruction is authored code too.
+                if let Err(error) = self.semantics_regions.prepare(&regions, &self.render_tree) {
+                    regions.callbacks.rejected = true;
+                    let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                    retire_rejected_plan(planned);
+                    return Err(crate::error::RenderError::semantics(error.to_string()));
+                }
+                match planned {
+                    SemanticsPlan::Rebuild(built) => {
+                        rebuild_semantics_owner(
+                            owner,
+                            built.map(|node| *node),
+                            &self.semantics_regions,
+                        );
+                    }
+                    SemanticsPlan::Graft(grafts) => {
+                        for (anchor, built) in grafts {
+                            apply_graft(owner, anchor, built, &self.semantics_regions);
                         }
-                    };
-                    rebuild_semantics_owner(owner, built);
+                    }
                 }
                 let published = owner.flush();
                 let diagnostics = owner.take_diagnostics();
@@ -150,6 +211,7 @@ impl PipelineOwner<Semantics> {
                     .extend(diagnostics.iter().copied());
                 self.semantics_diagnostics.extend(diagnostics);
                 self.counters.semantics_nodes_updated += published as u64;
+                callbacks = std::mem::take(&mut regions.callbacks);
             } else if pending_count > 0 {
                 // With no owner installed the pass returns early. Keep the
                 // warning so enabled-without-owner wiring
@@ -178,20 +240,324 @@ impl PipelineOwner<Semantics> {
         // entries land on dirty.needs_semantics for the NEXT run_semantics.
         let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
 
+        // Losing/filtered handlers retire only after accepted work and phase
+        // completion. An unwind during assembly uses the same RAII custody.
+        drop(callbacks);
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RegionPlacement {
+    BeforeChildren,
+    AfterChildren,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RegionSource {
+    host: RenderId,
+    placement: RegionPlacement,
+    key: flui_semantics::SemanticsRegionKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticsSource {
+    Render(RenderId),
+    Region(RegionSource),
+}
+
+/// The pipeline keeps the authority across accessibility disable/enable and
+/// owner replacement. Only a successfully assembled scope retires missing keys.
+#[derive(Debug, Default)]
+pub(super) struct RegionIdentities {
+    source: flui_semantics::SemanticsIdentitySource,
+    retained: FxHashMap<RegionSource, flui_semantics::SemanticsRegionId>,
+}
+
+#[derive(Default)]
+struct AssemblyRegions {
+    visited: FxHashSet<RenderId>,
+    authored: FxHashSet<RegionSource>,
+    duplicate: Option<RegionSource>,
+    invalid_sort_key: Option<RenderId>,
+    callbacks: AssemblyCallbacks,
+}
+
+/// Pins executable ownership before folding can replace a receiver's handler
+/// or discard a blocked, clipped or fallback contributor. Topology and metadata
+/// remain ordinary temporary values; only the opaque captures need this custody.
+#[derive(Default)]
+struct AssemblyCallbacks {
+    handlers: Vec<flui_semantics::SemanticsActionHandler>,
+    rejected: bool,
+}
+
+impl AssemblyCallbacks {
+    fn retain(&mut self, config: &SemanticsConfiguration) {
+        self.handlers
+            .extend(config.registered_action_handlers().cloned());
+    }
+}
+
+impl Drop for AssemblyCallbacks {
+    fn drop(&mut self) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if self.rejected {
+            recovery.inherit_failure();
+        }
+        for handler in std::mem::take(&mut self.handlers) {
+            recovery.retire(handler);
+        }
+        recovery.finish();
+    }
+}
+
+impl RegionIdentities {
+    fn prepare(
+        &mut self,
+        regions: &AssemblyRegions,
+        tree: &RenderTree,
+    ) -> Result<(), SemanticsAssemblyError> {
+        if let Some(host) = regions.invalid_sort_key {
+            return Err(SemanticsAssemblyError::InvalidSortKey { host });
+        }
+        if let Some(source) = regions.duplicate {
+            return Err(SemanticsAssemblyError::DuplicateRegion {
+                host: source.host,
+                key: source.key.0,
+            });
+        }
+        let missing: Vec<_> = regions
+            .authored
+            .iter()
+            .copied()
+            .filter(|source| !self.retained.contains_key(source))
+            .collect();
+        let ids = self
+            .source
+            .allocate(missing.len())
+            .map_err(|_| SemanticsAssemblyError::RegionIdentityExhausted)?;
+        self.retained.retain(|source, _| {
+            tree.contains(source.host)
+                && (!regions.visited.contains(&source.host) || regions.authored.contains(source))
+        });
+        self.retained.extend(missing.into_iter().zip(ids));
         Ok(())
     }
 }
 
 struct BuiltSemanticsNode {
-    source_render_id: RenderId,
+    source: SemanticsSource,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
     children: Vec<BuiltSemanticsNode>,
 }
 
+enum SemanticsPlan {
+    Rebuild(Option<Box<BuiltSemanticsNode>>),
+    Graft(Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>),
+}
+
+/// A set an ancestor in the built tree contains, as a member below it sees it.
+#[derive(Clone, Copy)]
+struct SetScope {
+    /// The render node that declared it; a region declares sets of its own.
+    host: Option<RenderId>,
+    size: SetSize,
+    origin: SemanticsCollectionOrigin,
+    /// A member below would read this set's total as its own: withhold it.
+    omit_total: bool,
+}
+
+/// Holds every place a node declares to the sets and tables it actually sits
+/// in once the tree is built, so a node the clip dropped imposes no scope.
+///
+/// AccessKit pairs a position with the size of the nearest included ancestor
+/// that declares one (`size_of_set_from_container`) and a cell with the
+/// nearest table. So:
+///
+/// - a position past its own known set's size is not published ("item 8 of
+///   3"), nor a cell or row outside its known table ("row 5 of 3");
+/// - an unknown or separately authored set, or a member of one, must not
+///   acquire an unrelated total through that walk ("item 12 of 5"): the totals
+///   of the known sets above it are withheld rather than a sentinel invented.
+fn reconcile_collections(root: &mut BuiltSemanticsNode) {
+    fn visit(
+        node: &mut BuiltSemanticsNode,
+        sets: &mut Vec<SetScope>,
+        tables: &mut Vec<TableShape>,
+    ) {
+        ensure_stack(|| {
+            // A position is held to its own set's size only: one numbered for
+            // another set is that set's, and the total is withheld below.
+            let member_of_nearest = node.config.position_in_set().is_some()
+                && member_matches(node.config.index_origin(), sets.last());
+            hold_places_to_scopes(
+                &mut node.config,
+                sets.last().copied().filter(|_| member_of_nearest),
+                tables.last().copied(),
+            );
+            let own = node.config.size_of_set().map(|size| SetScope {
+                host: match node.source {
+                    SemanticsSource::Render(id) => Some(id),
+                    SemanticsSource::Region(_) => None,
+                },
+                size,
+                origin: node
+                    .config
+                    .collection_origin()
+                    .unwrap_or(SemanticsCollectionOrigin::Authored),
+                omit_total: false,
+            });
+            let unknown_scope = own.is_some_and(|scope| scope.size == SetSize::Unknown);
+            let unmatched_member = node.config.position_in_set().is_some() && !member_of_nearest;
+            if unknown_scope || unmatched_member {
+                for scope in sets.iter_mut() {
+                    scope.omit_total |= matches!(scope.size, SetSize::Known(_));
+                }
+            }
+            let own_table = node.config.table_shape();
+            if let Some(scope) = own {
+                sets.push(scope);
+            }
+            if let Some(table) = own_table {
+                tables.push(table);
+            }
+            for child in &mut node.children {
+                visit(child, sets, tables);
+            }
+            if own_table.is_some() {
+                tables.pop();
+            }
+            if own.is_some()
+                && sets
+                    .pop()
+                    .expect("BUG: the scope pushed for this node is on top")
+                    .omit_total
+            {
+                node.config.omit_collection_total();
+            }
+        });
+    }
+    visit(root, &mut Vec::new(), &mut Vec::new());
+}
+
+/// Whether a member's position belongs to the nearest set above it: a lazy
+/// host's stamp to that host, an authored position to an authored set.
+fn member_matches(origin: Option<SemanticsIndexOrigin>, nearest: Option<&SetScope>) -> bool {
+    let Some(scope) = nearest.filter(|scope| matches!(scope.size, SetSize::Known(_))) else {
+        return false;
+    };
+    match origin {
+        Some(SemanticsIndexOrigin::Collection(host)) => scope.host == Some(host),
+        Some(SemanticsIndexOrigin::Authored) | None => {
+            scope.origin == SemanticsCollectionOrigin::Authored
+        }
+    }
+}
+
+/// Clear the places `config` declares that its nearest set and table cannot
+/// hold. Assembly re-runs on every mark, so a drop is logged at debug level
+/// only, where a warning would repeat.
+fn hold_places_to_scopes(
+    config: &mut SemanticsConfiguration,
+    set: Option<SetScope>,
+    table: Option<TableShape>,
+) {
+    if let Some(index) = config.position_in_set()
+        && let Some(SetSize::Known(size)) = set.map(|set| set.size)
+        && index >= size
+    {
+        tracing::debug!(
+            index,
+            size,
+            "a semantics position is past its set's size; not published"
+        );
+        config.clear_position_in_set();
+    }
+    if let Some(cell) = config.cell_position()
+        && !cell_fits(cell, table)
+    {
+        tracing::debug!(
+            ?cell,
+            ?table,
+            "a semantics cell does not lie inside its table; not published"
+        );
+        config.clear_cell_position();
+    }
+    if let Some(row) = config.row_index()
+        && !row_fits(row, table)
+    {
+        tracing::debug!(
+            row = row.get(),
+            ?table,
+            "a semantics row is not one of its table's; not published"
+        );
+        config.clear_row_index();
+    }
+}
+
+/// Whether a cell, with its spans, lies inside the table it sits in. A known
+/// extent bounds it; an unknown one cannot be exceeded.
+fn cell_fits(cell: flui_semantics::CellPosition, table: Option<TableShape>) -> bool {
+    let within = |first: NonZeroUsize, span: NonZeroUsize, extent: SetSize| match extent {
+        SetSize::Known(count) => first
+            .get()
+            .checked_add(span.get() - 1)
+            .is_some_and(|last| last <= count),
+        _ => true,
+    };
+    table.is_none_or(|table| {
+        within(cell.row(), cell.row_span(), table.rows())
+            && within(cell.column(), cell.column_span(), table.columns())
+    })
+}
+
+/// Whether a row is one of the rows of the table it sits in.
+fn row_fits(row: NonZeroUsize, table: Option<TableShape>) -> bool {
+    table.is_none_or(|table| match table.rows() {
+        SetSize::Known(count) => row.get() <= count,
+        _ => true,
+    })
+}
+
+/// Whether `config` declares a set or a table, whose members' places
+/// [`reconcile_collections`] holds to it.
+fn declares_collection_scope(config: &SemanticsConfiguration) -> bool {
+    config.size_of_set().is_some() || config.table_shape().is_some()
+}
+
+fn has_collection_metadata(root: &BuiltSemanticsNode) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if declares_collection_scope(&node.config) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Release draft metadata while the validation error retains first-failure
+/// authority. Configuration callbacks are opaque ownership (ADR-0127).
+fn retire_rejected_plan(plan: SemanticsPlan) {
+    let mut nodes: Vec<BuiltSemanticsNode> = match plan {
+        SemanticsPlan::Rebuild(root) => root.into_iter().map(|node| *node).collect(),
+        SemanticsPlan::Graft(grafts) => grafts.into_iter().map(|(_, node)| node).collect(),
+    };
+    let mut recovery = flui_foundation::panic::PanicRecovery::new();
+    recovery.inherit_failure();
+    while let Some(node) = nodes.pop() {
+        nodes.extend(node.children);
+        node.config.retire(&mut recovery.scope());
+    }
+    recovery.finish();
+}
+
 struct PendingSemanticsNode {
-    source_render_id: RenderId,
+    source: SemanticsSource,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
@@ -201,7 +567,7 @@ struct PendingSemanticsNode {
 impl PendingSemanticsNode {
     fn form(self) -> BuiltSemanticsNode {
         BuiltSemanticsNode {
-            source_render_id: self.source_render_id,
+            source: self.source,
             config: self.config,
             rect: self.rect,
             reveal_rect: self.reveal_rect,
@@ -213,6 +579,15 @@ impl PendingSemanticsNode {
 enum SemanticsFragment {
     Pending(PendingSemanticsNode),
     Formed(BuiltSemanticsNode),
+}
+
+/// A subtree's contribution and its still-unconsumed sibling barrier.
+/// Transparent render wrappers forward the barrier; a formed boundary consumes
+/// descendant barriers while keeping its own directive for its parent.
+#[derive(Default)]
+struct SemanticsFragments {
+    nodes: Vec<SemanticsFragment>,
+    blocks_previous_siblings: bool,
 }
 
 /// The clips an ancestor chain imposes on a node, in ROOT coordinates.
@@ -368,8 +743,12 @@ fn intersect_clips(a: Option<Rect<f64>>, b: Option<Rect<f64>>) -> Option<Rect<f6
 /// walk cannot infer.
 fn visits_child_for_semantics(node: &RenderNode, child_slot: usize) -> bool {
     match node {
-        RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(child_slot),
-        RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(child_slot),
+        RenderNode::Box(entry) => entry
+            .render_object()
+            .visits_child_for_semantics(child_slot, entry.state().geometry().unwrap_or(Size::ZERO)),
+        RenderNode::Sliver(entry) => entry
+            .render_object()
+            .visits_child_for_semantics(child_slot, entry.state().absolute_paint_size()),
     }
 }
 
@@ -429,22 +808,19 @@ struct SemanticsAssemblyContext {
     parent_requires_explicit_node: bool,
     merge_into_ancestor: bool,
     has_reveal_ancestor: bool,
-    /// The size of the nearest set an ancestor contains, if any declares one.
-    /// A position is announced against it, so it must fit.
-    nearest_set: Option<SetSize>,
-    /// The shape of the nearest table an ancestor is. A cell is announced
-    /// against it, so it must lie inside.
-    nearest_table: Option<TableShape>,
-    /// Whether an ancestor contains a set whose size is known. A member of a
-    /// set whose size is not known declares no position under one: AccessKit
-    /// reads a set's size from the nearest ancestor that declares one, so the
-    /// consumer would walk past the unknown set, find the outer set's size and
-    /// announce "item 12 of 5".
-    enclosing_known_set: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum SemanticsAssemblyError {
+    #[error("render object {host:?} authored a non-finite semantics sort order")]
+    InvalidSortKey { host: RenderId },
+    #[error(
+        "render object {host:?} authored duplicate semantics region key {key} in one contribution list"
+    )]
+    DuplicateRegion { host: RenderId, key: u64 },
+
+    #[error("synthetic semantics identity space exhausted")]
+    RegionIdentityExhausted,
     #[error("semantics root render object {root:?} is missing from the render tree")]
     MissingRootRenderObject { root: RenderId },
 
@@ -460,6 +836,7 @@ enum SemanticsAssemblyError {
 fn assemble_semantics_root(
     tree: &RenderTree,
     root: Option<RenderId>,
+    regions: &mut AssemblyRegions,
 ) -> Result<Option<BuiltSemanticsNode>, SemanticsAssemblyError> {
     let Some(root) = root else {
         return Ok(None);
@@ -475,15 +852,13 @@ fn assemble_semantics_root(
             parent_requires_explicit_node: false,
             merge_into_ancestor: false,
             has_reveal_ancestor: false,
-            nearest_set: None,
-            nearest_table: None,
-            enclosing_known_set: false,
         },
         false,
+        regions,
     )
     .ok_or(SemanticsAssemblyError::MissingRootRenderObject { root })?;
 
-    extract_formed_root(root, fragments).map(Some)
+    extract_formed_root(root, fragments.nodes).map(Some)
 }
 
 fn extract_formed_root(
@@ -510,7 +885,8 @@ fn build_semantics_fragments(
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
-) -> Option<Vec<SemanticsFragment>> {
+    regions: &mut AssemblyRegions,
+) -> Option<SemanticsFragments> {
     ensure_stack(|| {
         build_semantics_fragments_impl(
             tree,
@@ -519,6 +895,7 @@ fn build_semantics_fragments(
             clips,
             context,
             ancestor_blocks_user_actions,
+            regions,
         )
     })
 }
@@ -568,10 +945,6 @@ fn assembly_decisions(
             is_root: false,
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
-            nearest_set: config.size_of_set().or(context.nearest_set),
-            nearest_table: config.table_shape().or(context.nearest_table),
-            enclosing_known_set: context.enclosing_known_set
-                || matches!(config.size_of_set(), Some(SetSize::Known(_))),
             has_reveal_ancestor: context.has_reveal_ancestor
                 || (config.effective_actions_as_bits()
                     & flui_semantics::SemanticsAction::ScrollIntoView.value()
@@ -591,44 +964,13 @@ fn build_semantics_fragments_impl(
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
-) -> Option<Vec<SemanticsFragment>> {
+    regions: &mut AssemblyRegions,
+) -> Option<SemanticsFragments> {
     #[cfg(test)]
     ASSEMBLY_VISITS.with(|counter| counter.set(counter.get() + 1));
 
     let node = tree.get(id)?;
-    let mut config = described_configuration(tree, node);
-    // A position the node declares itself (an `IndexedSemantics`, a
-    // `Semantics`) is held to the same rule as a stamped one.
-    if let Some(index) = config.position_in_set()
-        && !position_fits(index, context)
-    {
-        tracing::debug!(
-            index,
-            set = ?context.nearest_set,
-            "a semantics position does not fit the set it sits in; not published"
-        );
-        config.clear_position_in_set();
-    }
-    if let Some(cell) = config.cell_position()
-        && !cell_fits(cell, context.nearest_table)
-    {
-        tracing::debug!(
-            ?cell,
-            table = ?context.nearest_table,
-            "a semantics cell does not lie inside its table; not published"
-        );
-        config.clear_cell_position();
-    }
-    if let Some(row) = config.row_index()
-        && !row_fits(row, context.nearest_table)
-    {
-        tracing::debug!(
-            row = row.get(),
-            table = ?context.nearest_table,
-            "a semantics row is not one of its table's; not published"
-        );
-        config.clear_row_index();
-    }
+    let mut config = describe_semantics_configuration(id, node, regions);
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     config.set_has_reveal_ancestor(context.has_reveal_ancestor);
@@ -652,7 +994,35 @@ fn build_semantics_fragments_impl(
 
     let decisions = assembly_decisions(&config, context);
 
+    regions.visited.insert(id);
+    let authored = match node {
+        RenderNode::Box(entry) => entry
+            .render_object()
+            .semantics_regions(entry.state().geometry().unwrap_or(Size::ZERO)),
+        RenderNode::Sliver(entry) => entry
+            .render_object()
+            .semantics_regions(entry.state().absolute_paint_size()),
+    };
+    for region in authored
+        .before_children
+        .iter()
+        .chain(&authored.after_children)
+    {
+        regions.callbacks.retain(&region.config);
+    }
+
     let mut child_fragments = Vec::with_capacity(node.children().len());
+    let mut children_block_previous = append_region_fragments(
+        &mut child_fragments,
+        authored.before_children,
+        id,
+        RegionPlacement::BeforeChildren,
+        transform,
+        clips,
+        decisions.child_context,
+        blocks_user_actions,
+        regions,
+    );
     if !node_excludes_semantics_subtree(node) {
         // The generation this node's last layout stamped onto the children it
         // laid out; anything else was not part of that pass.
@@ -683,18 +1053,39 @@ fn build_semantics_fragments_impl(
                 continue;
             };
             let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
-            let mut fragments = build_semantics_fragments(
+            let fragments = build_semantics_fragments(
                 tree,
                 child_id,
                 child_transform,
                 clips.descend(local_paint, local_semantics),
                 decisions.child_context,
                 blocks_user_actions,
+                regions,
             )
             .unwrap_or_default();
-            child_fragments.append(&mut fragments);
+            if fragments.blocks_previous_siblings {
+                // Every handler in discarded drafts is pinned by AssemblyCallbacks
+                // until phase completion, outside the pipeline borrow.
+                child_fragments.clear();
+                children_block_previous = true;
+            }
+            child_fragments.extend(fragments.nodes);
         }
     }
+    children_block_previous |= append_region_fragments(
+        &mut child_fragments,
+        authored.after_children,
+        id,
+        RegionPlacement::AfterChildren,
+        transform,
+        clips,
+        decisions.child_context,
+        blocks_user_actions,
+        regions,
+    );
+
+    let blocks_previous_siblings =
+        config.blocks_previous_siblings() || (!decisions.forms_node && children_block_previous);
 
     // A node the semantics clip leaves nothing of publishes no node, but its
     // children have already been walked under their own clips above.
@@ -708,9 +1099,12 @@ fn build_semantics_fragments_impl(
         // Skipped when the node is dropped rather than merely transparent: a
         // clipped-away row has no position to announce.
         if !clipped.dropped {
-            offer_semantic_index_to_fragments(node, context, &mut child_fragments);
+            offer_semantic_index_to_fragments(node, &mut child_fragments);
         }
-        return Some(child_fragments);
+        return Some(SemanticsFragments {
+            nodes: child_fragments,
+            blocks_previous_siblings,
+        });
     }
 
     let children = merge_child_fragments(
@@ -724,27 +1118,119 @@ fn build_semantics_fragments_impl(
     // stamped index before that ran would make the stamp win, since `absorb`
     // does not overwrite a value the parent already holds, and hand-indexed
     // content inside a lazy list would become impossible.
-    apply_lazy_child_semantic_index(node, context, &mut config);
+    apply_lazy_child_semantic_index(node, &mut config, &children);
     let pending = PendingSemanticsNode {
-        source_render_id: id,
+        source: SemanticsSource::Render(id),
         config,
         rect,
         reveal_rect,
         children,
     };
 
-    Some(vec![if decisions.forms_node {
-        SemanticsFragment::Formed(pending.form())
-    } else {
-        SemanticsFragment::Pending(pending)
-    }])
+    Some(SemanticsFragments {
+        nodes: vec![if decisions.forms_node {
+            SemanticsFragment::Formed(pending.form())
+        } else {
+            SemanticsFragment::Pending(pending)
+        }],
+        blocks_previous_siblings,
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "uses the same assembly context as real child fragments"
+)]
+fn append_region_fragments(
+    fragments: &mut Vec<SemanticsFragment>,
+    authored: Vec<flui_semantics::SemanticsRegion>,
+    host: RenderId,
+    placement: RegionPlacement,
+    transform: Matrix4,
+    clips: SemanticsClips,
+    context: SemanticsAssemblyContext,
+    blocks_user_actions: bool,
+    regions: &mut AssemblyRegions,
+) -> bool {
+    let mut blocks_previous = false;
+    for region in authored {
+        if region
+            .config
+            .sort_key()
+            .is_some_and(|key| !key.order.is_finite())
+        {
+            regions.invalid_sort_key = Some(host);
+        }
+        let source = RegionSource {
+            host,
+            placement,
+            key: region.key,
+        };
+        if !regions.authored.insert(source) {
+            regions.duplicate = Some(source);
+        }
+        let Some(reveal_rect) = transformed_rect(transform * region.transform, region.rect) else {
+            continue;
+        };
+        let clipped = clips.apply(reveal_rect, context.has_reveal_ancestor);
+        if clipped.dropped {
+            continue;
+        }
+        let mut config = region.config;
+        if config.blocks_previous_siblings() {
+            fragments.clear();
+            blocks_previous = true;
+        }
+        config.set_semantics_boundary(true);
+        config.set_blocks_user_actions(blocks_user_actions || config.blocks_user_actions());
+        config.set_has_reveal_ancestor(context.has_reveal_ancestor);
+        if clipped.hidden {
+            config.set_hidden(true);
+        }
+        let decisions = assembly_decisions(&config, context);
+        let pending = PendingSemanticsNode {
+            source: SemanticsSource::Region(source),
+            config,
+            rect: clipped.rect,
+            reveal_rect,
+            children: Vec::new(),
+        };
+        fragments.push(if decisions.forms_node {
+            SemanticsFragment::Formed(pending.form())
+        } else {
+            SemanticsFragment::Pending(pending)
+        });
+    }
+    blocks_previous
 }
 
 fn merge_child_fragments(
     config: &mut SemanticsConfiguration,
-    fragments: Vec<SemanticsFragment>,
+    mut fragments: Vec<SemanticsFragment>,
     suppress_conflicts: bool,
 ) -> Vec<BuiltSemanticsNode> {
+    // Stable sorting preserves declarative order for equal keys and unkeyed
+    // siblings. Sort before folding, so merged labels follow reading order too.
+    fragments.sort_by(|a, b| {
+        fn key(fragment: &SemanticsFragment) -> Option<&flui_semantics::SemanticsSortKey> {
+            match fragment {
+                SemanticsFragment::Formed(node) => node.config.sort_key(),
+                SemanticsFragment::Pending(node) => node.config.sort_key(),
+            }
+        }
+        match (key(a), key(b)) {
+            (Some(a), Some(b)) => a.name.cmp(&b.name).then_with(|| {
+                if a.order == b.order {
+                    std::cmp::Ordering::Equal
+                } else {
+                    a.order.total_cmp(&b.order)
+                }
+            }),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
     let conflicts = (!suppress_conflicts).then(|| mark_configuration_conflicts(config, &fragments));
     let mut children = Vec::with_capacity(fragments.len());
 
@@ -795,22 +1281,36 @@ fn mark_configuration_conflicts(
     conflicts
 }
 
-fn rebuild_semantics_owner(owner: &mut SemanticsOwner, root: Option<BuiltSemanticsNode>) {
+fn rebuild_semantics_owner(
+    owner: &mut SemanticsOwner,
+    root: Option<BuiltSemanticsNode>,
+    regions: &RegionIdentities,
+) {
     owner.clear();
 
     let Some(root) = root else {
         return;
     };
 
-    let root_id = insert_built_semantics_node(owner, root);
+    let root_id = insert_built_semantics_node(owner, root, regions);
     owner.set_root(Some(root_id));
 }
 
 /// Splits an assembled node into its arena representation and its children.
-fn semantics_node_parts(built: BuiltSemanticsNode) -> (SemanticsNode, Vec<BuiltSemanticsNode>) {
-    let mut node = SemanticsNode::new()
-        .with_source_render_id(built.source_render_id)
-        .with_config(built.config);
+fn semantics_node_parts(
+    built: BuiltSemanticsNode,
+    regions: &RegionIdentities,
+) -> (SemanticsNode, Vec<BuiltSemanticsNode>) {
+    let mut node = match built.source {
+        SemanticsSource::Render(id) => SemanticsNode::new().with_source_render_id(id),
+        SemanticsSource::Region(source) => SemanticsNode::new().with_region_id(
+            *regions
+                .retained
+                .get(&source)
+                .expect("BUG: region identities are reserved before tree mutation"),
+        ),
+    }
+    .with_config(built.config);
     node.set_rect(built.rect);
     node.set_reveal_rect(built.reveal_rect);
     (node, built.children)
@@ -819,11 +1319,12 @@ fn semantics_node_parts(built: BuiltSemanticsNode) -> (SemanticsNode, Vec<BuiltS
 fn insert_built_semantics_node(
     owner: &mut SemanticsOwner,
     built: BuiltSemanticsNode,
+    regions: &RegionIdentities,
 ) -> flui_foundation::SemanticsId {
-    let (node, children) = semantics_node_parts(built);
+    let (node, children) = semantics_node_parts(built, regions);
     let id = owner.insert(node);
     for child in children {
-        let child_id = insert_built_semantics_node(owner, child);
+        let child_id = insert_built_semantics_node(owner, child, regions);
         owner.add_child(id, child_id);
     }
     id
@@ -833,20 +1334,16 @@ fn insert_built_semantics_node(
 // Mark-scoped graft (see the module doc for the model and its guarantees)
 // ============================================================================
 
-/// Attempts the mark-scoped pass: re-assemble only the anchored subtrees the
-/// marks can influence, grafting each into the persistent arena. Returns
-/// `false` when any precondition cannot be proven — the caller then runs the
-/// classic full rebuild, which also makes a partially-applied graft safe
-/// (the fallback clears the arena wholesale).
-fn try_graft_pass(
+/// Plans all marked subtrees without mutating the persistent arena. If any
+/// precondition fails the caller discards this plan and assembles the full tree.
+fn plan_graft_pass(
     tree: &RenderTree,
     pipeline_root: Option<RenderId>,
-    owner: &mut SemanticsOwner,
+    owner: &SemanticsOwner,
     marked: &[RenderId],
-) -> bool {
-    let Some(pipeline_root) = pipeline_root else {
-        return false;
-    };
+    regions: &mut AssemblyRegions,
+) -> Option<Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>> {
+    let pipeline_root = pipeline_root?;
     let marked_set: FxHashSet<RenderId> = marked.iter().copied().collect();
 
     // Resolve every mark to its anchor. A mark whose ancestor chain holds
@@ -854,9 +1351,7 @@ fn try_graft_pass(
     // never published) forces the full rebuild.
     let mut anchors: FxHashSet<RenderId> = FxHashSet::default();
     for &mark in &marked_set {
-        let Some(anchor) = anchor_for(tree, owner.tree(), &marked_set, mark) else {
-            return false;
-        };
+        let anchor = anchor_for(tree, owner.tree(), &marked_set, mark)?;
         anchors.insert(anchor);
     }
 
@@ -866,27 +1361,20 @@ fn try_graft_pass(
     // own anchor would sit above it and swallow this one), which is what
     // makes the recomputed context and the "nothing above changes" argument
     // in the module doc hold.
-    let survivors: Vec<RenderId> = anchors
-        .iter()
-        .copied()
-        .filter(|&anchor| {
-            let mut cursor = tree.parent(anchor);
-            while let Some(ancestor) = cursor {
-                if anchors.contains(&ancestor) {
-                    return false;
-                }
-                cursor = tree.parent(ancestor);
+    let survivors = anchors.iter().copied().filter(|&anchor| {
+        let mut cursor = tree.parent(anchor);
+        while let Some(ancestor) = cursor {
+            if anchors.contains(&ancestor) {
+                return false;
             }
-            true
-        })
-        .collect();
-
-    for anchor in survivors {
-        if !graft_anchor(tree, pipeline_root, owner, anchor) {
-            return false;
+            cursor = tree.parent(ancestor);
         }
-    }
-    true
+        true
+    });
+
+    survivors
+        .map(|anchor| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
+        .collect()
 }
 
 /// The nearest ancestor of `mark` (strictly above it) that is unmarked and
@@ -933,6 +1421,7 @@ fn assembly_inputs_for(
     tree: &RenderTree,
     pipeline_root: RenderId,
     target: RenderId,
+    regions: &mut AssemblyRegions,
 ) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
     let mut chain = vec![target];
     let mut cursor = target;
@@ -950,9 +1439,6 @@ fn assembly_inputs_for(
         parent_requires_explicit_node: false,
         merge_into_ancestor: false,
         has_reveal_ancestor: false,
-        nearest_set: None,
-        nearest_table: None,
-        enclosing_known_set: false,
     };
     let mut blocks_user_actions = false;
     let mut transform = Matrix4::IDENTITY;
@@ -964,14 +1450,18 @@ fn assembly_inputs_for(
             // Inside a merge only a nested merger forms its own node; any
             // other target there contradicts its arena presence.
             if context.merge_into_ancestor
-                && !assembly_decisions(&described_configuration(tree, node), context).forms_node
+                && !assembly_decisions(
+                    &describe_semantics_configuration(id, node, regions),
+                    context,
+                )
+                .forms_node
             {
                 return None;
             }
             return Some((context, transform, clips, blocks_user_actions));
         }
 
-        let mut config = described_configuration(tree, node);
+        let mut config = describe_semantics_configuration(id, node, regions);
         blocks_user_actions = blocks_user_actions || config.blocks_user_actions();
         config.set_blocks_user_actions(blocks_user_actions);
         if node_excludes_semantics_subtree(node) {
@@ -999,36 +1489,97 @@ fn assembly_inputs_for(
 /// arena in place of the anchor's previous subtree: the anchor's arena slot
 /// (and thus its parent's children list and its published identity) is
 /// preserved; everything below is replaced.
-fn graft_anchor(
+fn plan_graft_anchor(
     tree: &RenderTree,
     pipeline_root: RenderId,
-    owner: &mut SemanticsOwner,
+    owner: &SemanticsOwner,
     anchor: RenderId,
-) -> bool {
-    let Some(anchor_sid) = owner
+    regions: &mut AssemblyRegions,
+) -> Option<(flui_foundation::SemanticsId, BuiltSemanticsNode)> {
+    let anchor_sid = owner
         .tree()
-        .find_by_accessibility_id(AccessibilityNodeId::from(anchor))
-    else {
-        return false;
-    };
-    let Some((context, transform, clips, blocks_user_actions)) =
-        assembly_inputs_for(tree, pipeline_root, anchor)
-    else {
-        return false;
-    };
-    let Some(mut fragments) =
-        build_semantics_fragments(tree, anchor, transform, clips, context, blocks_user_actions)
-    else {
-        return false;
-    };
+        .find_by_accessibility_id(AccessibilityNodeId::from(anchor))?;
+    if collection_affects_graft(owner.tree(), anchor_sid) {
+        return None;
+    }
+    let (context, transform, clips, blocks_user_actions) =
+        assembly_inputs_for(tree, pipeline_root, anchor, regions)?;
+    let fragments = build_semantics_fragments(
+        tree,
+        anchor,
+        transform,
+        clips,
+        context,
+        blocks_user_actions,
+        regions,
+    )?;
+    if fragments.blocks_previous_siblings {
+        return None;
+    }
+    let mut fragments = fragments.nodes;
     // The anchor formed a node last pass under this exact context and
     // config, so it must form exactly one again; anything else means an
     // assumption broke and the full rebuild is the honest answer.
     let built = match (fragments.pop(), fragments.is_empty()) {
-        (Some(SemanticsFragment::Formed(built)), true) if built.source_render_id == anchor => built,
-        _ => return false,
+        (Some(SemanticsFragment::Formed(built)), true)
+            if built.source == SemanticsSource::Render(anchor) =>
+        {
+            built
+        }
+        _ => return None,
     };
 
+    if has_collection_metadata(&built) {
+        return None;
+    }
+    // A changed key affects siblings outside this graft. Rebuild from the
+    // declarative tree to restore their source order before a stable re-sort.
+    if owner.tree().get(anchor_sid)?.config().sort_key() != built.config.sort_key() {
+        return None;
+    }
+    Some((anchor_sid, built))
+}
+
+/// A collection change can affect a counted ancestor outside the graft. Inspect
+/// only this anchor's ancestors and replaced subtree, not unrelated branches.
+fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::SemanticsId) -> bool {
+    let mut seen = FxHashSet::default();
+    let mut cursor = Some(anchor);
+    while let Some(id) = cursor {
+        if !seen.insert(id) {
+            return true;
+        }
+        let Some(node) = tree.get(id) else {
+            return true;
+        };
+        if declares_collection_scope(node.config()) {
+            return true;
+        }
+        cursor = node.parent();
+    }
+    seen.clear();
+    let mut pending = vec![anchor];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            return true;
+        }
+        let Some(node) = tree.get(id) else {
+            return true;
+        };
+        if declares_collection_scope(node.config()) {
+            return true;
+        }
+        pending.extend(node.children());
+    }
+    false
+}
+
+fn apply_graft(
+    owner: &mut SemanticsOwner,
+    anchor_sid: flui_foundation::SemanticsId,
+    built: BuiltSemanticsNode,
+    regions: &RegionIdentities,
+) {
     let old_children: Vec<flui_foundation::SemanticsId> = owner
         .tree()
         .children(anchor_sid)
@@ -1037,18 +1588,22 @@ fn graft_anchor(
         let _ = owner.tree_mut().remove(child);
     }
 
-    let (node, children) = semantics_node_parts(built);
-    if !owner.tree_mut().replace_node(anchor_sid, node) {
-        return false;
-    }
+    let (node, children) = semantics_node_parts(built, regions);
+    assert!(
+        owner.tree_mut().replace_node(anchor_sid, node),
+        "BUG: a staged graft retains its anchor slot"
+    );
     for child in children {
-        let child_sid = insert_built_semantics_node(owner, child);
+        let child_sid = insert_built_semantics_node(owner, child, regions);
         owner.add_child(anchor_sid, child_sid);
     }
-    true
 }
 
-fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration {
+fn describe_semantics_configuration(
+    id: RenderId,
+    node: &RenderNode,
+    regions: &mut AssemblyRegions,
+) -> SemanticsConfiguration {
     let mut config = SemanticsConfiguration::new();
     match node {
         RenderNode::Box(entry) => {
@@ -1062,82 +1617,11 @@ fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration
                 .describe_semantics_configuration(&mut config);
         }
     }
-    config
-}
-
-/// A node's own configuration, and the size of the set it contains when it is
-/// a lazy sliver.
-///
-/// The size is the container's to declare, not the item's: AccessKit reads
-/// "of 100" from the nearest ancestor that declares one
-/// (`size_of_set_from_container`), so a size stamped on each item reaches no
-/// adapter. The host stamps the delegate's declared member count beside each
-/// materialised child's position, and the sliver that holds them reads it back
-/// here: the count of *members*, which for a delegate that interleaves
-/// separators is not the number of render children, and which is
-/// [`SetSize::Unknown`] under an unresolved `ItemCount::Unknown` rather than the
-/// number of rows built.
-///
-/// A sliver with no member in it declares nothing: there is no set to size.
-fn described_configuration(tree: &RenderTree, node: &RenderNode) -> SemanticsConfiguration {
-    let mut config = describe_semantics_configuration(node);
-    if config.size_of_set().is_none()
-        && let Some(size) = stamped_set_size(tree, node)
-    {
-        config.set_size_of_set(size);
+    regions.callbacks.retain(&config);
+    if config.sort_key().is_some_and(|key| !key.order.is_finite()) {
+        regions.invalid_sort_key = Some(id);
     }
     config
-}
-
-/// The size of the set a lazy sliver's children are members of.
-///
-/// A sliver stamps all its children or none, and every one carries the
-/// mapping's size, a separator or a header that is no member included: a
-/// window of the list that happens to hold no member still sits in a set of
-/// known size. One look at the first child therefore tells a sliver from the
-/// rest of the tree, which this runs for on every node.
-fn stamped_set_size(tree: &RenderTree, node: &RenderNode) -> Option<SetSize> {
-    let first = tree.get(*node.children().first()?)?;
-    Some(stamped_sliver_parent_data(first)?.semantic_set_size)
-}
-
-/// Whether a cell, with its spans, lies inside the table it sits in. A known
-/// extent bounds it; an unknown one cannot be exceeded.
-fn cell_fits(cell: flui_semantics::CellPosition, table: Option<TableShape>) -> bool {
-    let within = |first: NonZeroUsize, span: NonZeroUsize, extent: SetSize| match extent {
-        SetSize::Known(count) => first
-            .get()
-            .checked_add(span.get() - 1)
-            .is_some_and(|last| last <= count),
-        _ => true,
-    };
-    table.is_none_or(|table| {
-        within(cell.row(), cell.row_span(), table.rows())
-            && within(cell.column(), cell.column_span(), table.columns())
-    })
-}
-
-/// Whether a row is one of the rows of the table it sits in.
-fn row_fits(row: NonZeroUsize, table: Option<TableShape>) -> bool {
-    table.is_none_or(|table| match table.rows() {
-        SetSize::Known(count) => row.get() <= count,
-        _ => true,
-    })
-}
-
-/// Whether a position may be announced where `context` places it.
-///
-/// The consumer pairs a position with the size of the nearest ancestor that
-/// declares one. Against a set of known size the position must be one of its
-/// members, and a set of unknown size declares none for the consumer to find,
-/// so it would read an enclosing set's size instead: "item 8 of 3" and
-/// "item 12 of 5" are announcements that are plausible and false.
-fn position_fits(index: usize, context: SemanticsAssemblyContext) -> bool {
-    match context.nearest_set {
-        Some(SetSize::Known(size)) => index < size,
-        Some(SetSize::Unknown) => !context.enclosing_known_set,
-        _ => true,
-    }
 }
 
 /// The configuration a fragment carries, formed or not.
@@ -1148,33 +1632,57 @@ fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfigurat
     }
 }
 
+/// Whether one logical item already declares its place among the members of
+/// its set, at any depth: an explicit `IndexedSemantics` absorbed into a
+/// descendant boundary is that item's member as much as one folded into its
+/// root. A nested set's members belong to that set, so the search stops at a
+/// node that declares a set of its own.
+fn item_declares_position(
+    config: &SemanticsConfiguration,
+    children: &[BuiltSemanticsNode],
+) -> bool {
+    fn within(node: &BuiltSemanticsNode) -> bool {
+        node.config.position_in_set().is_some()
+            || (node.config.size_of_set().is_none() && node.children.iter().any(within))
+    }
+    config.position_in_set().is_some()
+        || (config.size_of_set().is_none() && children.iter().any(within))
+}
+
+/// Record the position `node`'s host stamped, as that host's member.
+fn stamp_position(node: &RenderNode, config: &mut SemanticsConfiguration, index: usize) {
+    match node.parent() {
+        Some(host) => config.set_collection_index(host, index),
+        None => config.set_position_in_set(index),
+    }
+}
+
 /// Hand a transparent stamped node's position down to the fragments it
 /// forwards, so the node that does form for this item carries it.
 ///
 /// The stamped node forms no semantics node of its own — a `Padding` or an
 /// `Align` at the item's root, which is what a builder most often returns —
-/// so its position would be lost where it is. Only offered where nothing
-/// already declared one, at every level: an explicit `IndexedSemantics`
-/// anywhere in the item wins, the same rule the contributing path follows.
-fn offer_semantic_index_to_fragments(
-    node: &RenderNode,
-    context: SemanticsAssemblyContext,
-    fragments: &mut [SemanticsFragment],
-) {
-    let Some(index) = stamped_position(node, context) else {
+/// so its position would be lost where it is. One logical item is one member:
+/// a position already declared anywhere in it is that member's, and otherwise
+/// only the first fragment carries it, so a row that forms two controls does
+/// not announce both as "item 1".
+fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
+    let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
     };
-    // One logical item is one member: a position already declared anywhere in
-    // it is that member's, and otherwise only the first fragment carries it,
-    // so a row that forms two controls does not announce both as "item 1".
-    if fragments
-        .iter_mut()
-        .any(|fragment| fragment_config(fragment).position_in_set().is_some())
-    {
+    let declared = fragments.iter().any(|fragment| match fragment {
+        SemanticsFragment::Pending(pending) => {
+            item_declares_position(&pending.config, &pending.children)
+        }
+        SemanticsFragment::Formed(formed) => {
+            item_declares_position(&formed.config, &formed.children)
+        }
+    });
+    if declared {
         return;
     }
     if let Some(first) = fragments.first_mut() {
-        fragment_config(first).set_position_in_set(index);
+        stamp_position(node, fragment_config(first), index);
     }
 }
 
@@ -1184,13 +1692,6 @@ fn stamped_sliver_parent_data(
 ) -> Option<&crate::parent_data::SliverMultiBoxAdaptorParentData> {
     node.parent_data()
         .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
-}
-
-/// The position the host stamped on this node, when it is a member of its set
-/// and may declare it ([`position_fits`]).
-fn stamped_position(node: &RenderNode, context: SemanticsAssemblyContext) -> Option<usize> {
-    let index = stamped_sliver_parent_data(node)?.semantic_index?;
-    position_fits(index, context).then_some(index)
 }
 
 /// Publish a lazy sliver child's position in the set, from the index its host
@@ -1204,28 +1705,25 @@ fn stamped_position(node: &RenderNode, context: SemanticsAssemblyContext) -> Opt
 /// no node and cannot go stale against the row it describes.
 ///
 /// Applied AFTER the fold, so this is a genuine fallback: an explicit
-/// `IndexedSemantics` on the item is a non-boundary configuration absorbed by
-/// the row during the fold, and `absorb` does not overwrite a position the
-/// receiver already holds. Applying the stamp earlier would make it win and
-/// hand-indexed content inside a lazy list impossible. The explicit position is
-/// that of its own numbering, while the container's size is the delegate's: a
-/// caller hand-numbering a different set than the one the delegate
-/// materialises numbers it against that size, and a delegate's own mapping
-/// (`SemanticSetMapping`) is the way to number a set differently.
+/// `IndexedSemantics` anywhere in the item, folded into the row or formed as a
+/// descendant boundary, keeps its own position and the stamp is not applied.
+/// Explicit numbering belongs to an authored set, not to the host's, so
+/// [`reconcile_collections`] withholds the host's total rather than pairing
+/// the two.
 ///
 /// A `semantic_index` of `None` publishes nothing — the child occupies a
 /// logical index without being a member of the set, which is what a separator
 /// is.
 fn apply_lazy_child_semantic_index(
     node: &RenderNode,
-    context: SemanticsAssemblyContext,
     config: &mut SemanticsConfiguration,
+    children: &[BuiltSemanticsNode],
 ) {
-    if config.position_in_set().is_some() {
+    let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
-    }
-    if let Some(index) = stamped_position(node, context) {
-        config.set_position_in_set(index);
+    };
+    if !item_declares_position(config, children) {
+        stamp_position(node, config, index);
     }
 }
 

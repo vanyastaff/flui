@@ -24,19 +24,20 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusNode, KeyEventResult};
+use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{
-    ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, DirectionalFocusAction,
-    DirectionalFocusIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent, chain_at, resolve,
+    ActionChainProvider, Actions, ActivateIntent, ActivationPressIntent, BackIntent,
+    CopySelectionTextIntent, DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, Intent,
+    NextFocusAction, NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
+    SelectAllTextIntent, ShowContextMenuIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 use crate::support::{command_modifiers, event_callback};
@@ -54,8 +55,9 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// `SingleActivator::character("c").control()` matches Ctrl+C and *only*
 /// Ctrl+C: an event with an extra Shift held does not match, because each
 /// modifier must be equal. Key-repeat events match by default; opt out with
-/// [`allow_repeats(false)`](Self::allow_repeats). Only key-down
-/// events ever match.
+/// [`allow_repeats(false)`](Self::allow_repeats). An activator matches
+/// key-down events, or only the key's release once built with
+/// [`on_release`](Self::on_release).
 ///
 /// Matching uses ordinary Control/Alt/Meta/Shift dimensions. Explicit AltGraph
 /// excludes Control/Alt aliases while preserving Meta/Shift; incidental locks,
@@ -69,6 +71,7 @@ pub struct SingleActivator {
     alt: bool,
     meta: bool,
     include_repeats: bool,
+    on_release: bool,
 }
 
 impl SingleActivator {
@@ -82,6 +85,7 @@ impl SingleActivator {
             alt: false,
             meta: false,
             include_repeats: true,
+            on_release: false,
         }
     }
 
@@ -143,8 +147,44 @@ impl SingleActivator {
         self
     }
 
+    /// Match the key's release instead of its key-down — Space activates a
+    /// control when it comes up, so holding it shows the control pressed
+    /// first. The modifiers are those held at the release. A release
+    /// arrives once per press, so the repeat policy does not apply to it.
+    #[must_use]
+    pub fn on_release(mut self) -> Self {
+        self.on_release = true;
+        self
+    }
+
+    /// The logical key that triggers the activator.
+    #[must_use]
+    pub fn trigger(&self) -> &Key {
+        &self.trigger
+    }
+
+    /// The modifiers a press must hold, as a menu's shortcut hint shows
+    /// them. A character trigger that ignores Shift
+    /// ([`character_ignoring_shift`](Self::character_ignoring_shift)) reports
+    /// it without Shift.
+    #[must_use]
+    pub fn modifiers(&self) -> Modifiers {
+        [
+            (Modifiers::CONTROL, self.control),
+            (Modifiers::SHIFT, self.shift.unwrap_or(false)),
+            (Modifiers::ALT, self.alt),
+            (Modifiers::META, self.meta),
+        ]
+        .into_iter()
+        .filter(|(_, held)| *held)
+        .fold(Modifiers::NONE, |modifiers, (modifier, _)| {
+            modifiers | modifier
+        })
+    }
+
     /// Whether `event` triggers this activator: a key-down (or allowed repeat)
-    /// of exactly the trigger key under exactly the required modifiers.
+    /// of exactly the trigger key under exactly the required modifiers — or,
+    /// for an [`on_release`](Self::on_release) activator, that key's release.
     ///
     /// An ASCII letter trigger matches either case: the trigger names the
     /// key, not the character, while a
@@ -153,10 +193,15 @@ impl SingleActivator {
     #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
         let modifiers = command_modifiers(event.modifiers);
-        event.state() == KeyState::Down
+        let phase = if self.on_release {
+            event.state() == KeyState::Up
+        } else {
+            event.state() == KeyState::Down
+                && (self.include_repeats || event.repeat() == KeyRepeat::First)
+        };
+        phase
             && event.composition != ImeComposition::Active
-            && (self.include_repeats || event.repeat() == KeyRepeat::First)
-            && trigger_matches(&self.trigger, &event.key)
+            && (trigger_matches(&self.trigger, &event.key) || self.matches_latin_position(event))
             && modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
@@ -164,6 +209,105 @@ impl SingleActivator {
             && modifiers.contains(Modifiers::ALT) == self.alt
             && modifiers.contains(Modifiers::META) == self.meta
     }
+
+    /// Whether a command chord typed on a layout without Latin letters is the
+    /// chord's Latin letter or digit by its physical key: Ctrl+С on a Russian
+    /// layout is Ctrl+C. Only a Control or Meta activator qualifies, and only
+    /// when the layout produced a non-ASCII character, so a layout that has
+    /// the letter (AZERTY, Dvorak) keeps matching by what the key produced.
+    ///
+    /// [`overlaps`](Self::overlaps) cannot see this branch: which character a
+    /// layout puts on a physical key is not known from the activators alone,
+    /// so Ctrl+C beside Ctrl+с is not reported as a duplicate, and the first
+    /// match wins. The Latin chord already covers that layout.
+    fn matches_latin_position(&self, event: &KeyEvent) -> bool {
+        let Key::Character(produced) = &event.key else {
+            return false;
+        };
+        let Key::Character(trigger) = &self.trigger else {
+            return false;
+        };
+        (self.control || self.meta)
+            && !produced.as_str().is_ascii()
+            && latin_of_code(event.code).is_some_and(|latin| {
+                let shifted = event.modifiers.contains(Modifiers::SHIFT);
+                let wanted = trigger.as_str();
+                wanted.eq_ignore_ascii_case(latin)
+                    || (shifted && shifted_latin(latin).is_some_and(|symbol| wanted == symbol))
+            })
+    }
+
+    /// Whether one key event can trigger both `self` and `other`, by the
+    /// rules of [`matches`](Self::matches): letters without case, an ignored
+    /// Shift beside either Shift state, and a first key-down whatever the
+    /// repeat policy.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let shift = match (self.shift, other.shift) {
+            (Some(ours), Some(theirs)) => ours == theirs,
+            _ => true,
+        };
+        self.on_release == other.on_release
+            && self.control == other.control
+            && self.alt == other.alt
+            && self.meta == other.meta
+            && shift
+            && (trigger_matches(&self.trigger, &other.trigger)
+                || trigger_matches(&other.trigger, &self.trigger))
+    }
+}
+
+/// The letter, digit or punctuation mark a US layout puts on the physical key
+/// `code`.
+fn latin_of_code(code: Code) -> Option<&'static str> {
+    let name = code.as_str();
+    if let Some(tail) = name
+        .strip_prefix("Key")
+        .or_else(|| name.strip_prefix("Digit"))
+    {
+        return (tail.len() == 1).then_some(tail);
+    }
+    Some(match name {
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Minus" => "-",
+        "Equal" => "=",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Backquote" => "`",
+        "Backslash" => "\\",
+        _ => return None,
+    })
+}
+
+/// The symbol a US layout puts on the same key as `plain` under Shift.
+fn shifted_latin(plain: &str) -> Option<&'static str> {
+    Some(match plain {
+        "1" => "!",
+        "2" => "@",
+        "3" => "#",
+        "4" => "$",
+        "5" => "%",
+        "6" => "^",
+        "7" => "&",
+        "8" => "*",
+        "9" => "(",
+        "0" => ")",
+        "[" => "{",
+        "]" => "}",
+        "-" => "_",
+        "=" => "+",
+        "," => "<",
+        "." => ">",
+        "/" => "?",
+        ";" => ":",
+        "'" => "\"",
+        "`" => "~",
+        "\\" => "|",
+        _ => return None,
+    })
 }
 
 /// `pressed` is `trigger`, an ASCII letter compared without case.
@@ -204,7 +348,7 @@ impl CallbackShortcuts {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             bindings: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -302,7 +446,7 @@ impl Shortcuts {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             bindings: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             focus_node: None,
         }
     }
@@ -317,6 +461,16 @@ impl Shortcuts {
     #[must_use]
     pub fn shortcut(mut self, activator: SingleActivator, intent: impl Intent) -> Self {
         self.bindings.push((activator, Rc::new(intent)));
+        self
+    }
+
+    /// Bind `activator` to an intent another owner shares.
+    pub(crate) fn shared_shortcut(
+        mut self,
+        activator: SingleActivator,
+        intent: Rc<dyn Intent>,
+    ) -> Self {
+        self.bindings.push((activator, intent));
         self
     }
 }
@@ -414,19 +568,34 @@ impl ViewState<Shortcuts> for ShortcutsState {
 // Default focus traversal
 // ============================================================================
 
-/// Installs the standard keyboard bindings for a subtree: Tab and Shift+Tab
-/// move the focus, Enter, Space and Select activate the focused control
-/// ([`ActivateIntent`]), and Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS and
-/// iOS) copy, cut and paste in the focused text field
-/// ([`CopySelectionTextIntent`], [`PasteTextIntent`]). Ctrl+A (Cmd+A on Apple
-/// platforms) selects all its text ([`SelectAllTextIntent`]).
+/// Installs the standard keyboard bindings for a subtree:
+///
+/// | Key | Intent | Repeats |
+/// |---|---|---|
+/// | Tab, Shift+Tab | [`NextFocusIntent`], [`PreviousFocusIntent`] | yes |
+/// | Enter, Select (key-down) | [`ActivateIntent`] | no |
+/// | Space key-down / Space release | [`ActivationPressIntent`] / [`ActivateIntent`] | no |
+/// | Escape | [`DismissIntent`] | no |
+/// | Alt+Left, `BrowserBack` (Cmd+[, `BrowserBack` on macOS and iOS) | [`BackIntent`] | no |
+/// | unmodified arrows | [`DirectionalFocusIntent`] | yes |
+/// | Menu, Shift+F10 (neither on macOS and iOS; Menu alone on Android) | [`ShowContextMenuIntent`] | no |
+///
+/// Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS and iOS) copy, cut and paste in
+/// the focused text field ([`CopySelectionTextIntent`], [`PasteTextIntent`]),
+/// and Ctrl+A (Cmd+A on Apple platforms) selects all its text
+/// ([`SelectAllTextIntent`]).
+///
+/// Holding Enter activates once: a control is activated once per physical
+/// press. Space activates on its release, as WinUI and the web do, so a
+/// control can show itself pressed while Space is held. Apple platforms go
+/// back with Cmd+[ because Option+Left moves the caret by word there.
 ///
 /// The application root is where these bindings are meant to be installed.
 /// Numpad Enter reaches FLUI as the
 /// same logical `Enter`, so one binding covers both; `GameButtonA` has no
-/// logical key in FLUI's key model and is not bound. Unmodified arrows move
-/// geometrically after the focused control declines them; `Escape` → dismiss
-/// bindings are not installed yet.
+/// logical key in FLUI's key model and is not bound. An intent nothing in the
+/// focused chain answers — Back on the first page, Escape with no modal
+/// surface — leaves the key unhandled for the host.
 ///
 /// A clipboard chord resolves at the primary focus like every other binding
 /// here: an `EditableText` answers it on its own node, and with no text field
@@ -481,6 +650,143 @@ fn clipboard_activators(platform: TargetPlatform) -> [(SingleActivator, Clipboar
         (chord("x"), ClipboardBinding::Cut),
         (chord("v"), ClipboardBinding::Paste),
     ]
+}
+
+/// The chords that go back one page on `platform`: Cmd+[ on macOS and iOS,
+/// where Option+Left moves by word, Alt+Left elsewhere; `BrowserBack`
+/// everywhere (the mouse's back button arrives as one).
+fn back_activators(platform: TargetPlatform) -> [SingleActivator; 2] {
+    let chord = match platform {
+        TargetPlatform::MacOS | TargetPlatform::iOS => SingleActivator::character("[").meta(),
+        _ => SingleActivator::named(NamedKey::ArrowLeft).alt(),
+    };
+    [chord, SingleActivator::named(NamedKey::BrowserBack)]
+}
+
+impl ShowContextMenuIntent {
+    /// The keys [`DefaultFocusTraversal`] binds to this intent on
+    /// `platform`: the Menu key everywhere but Apple platforms, which have
+    /// none, and Shift+F10 on the desktop platforms that use it (Windows,
+    /// Linux, Fuchsia). Where the list is empty, a menu's keyboard path is its
+    /// focus-revealed control (ADR-0216 §2). A menu shows these as its
+    /// shortcut hint.
+    #[must_use]
+    pub fn default_keys(platform: TargetPlatform) -> Vec<SingleActivator> {
+        let once = |activator: SingleActivator| activator.allow_repeats(false);
+        match platform {
+            TargetPlatform::MacOS | TargetPlatform::iOS => Vec::new(),
+            TargetPlatform::Android => vec![once(SingleActivator::named(NamedKey::ContextMenu))],
+            _ => vec![
+                once(SingleActivator::named(NamedKey::ContextMenu)),
+                once(SingleActivator::named(NamedKey::F10).shift()),
+            ],
+        }
+    }
+}
+
+/// What a key a gesture command must not take already does on a platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReservedKey {
+    /// Tab and Shift+Tab move focus; Enter, Space and Select activate.
+    Traversal,
+    /// Escape cancels, closes or returns to rest: never a model effect.
+    Escape,
+    /// Goes back one page.
+    Back,
+    /// Closes the window or the tab.
+    Close,
+    /// Types, moves the caret or edits in a focused text field.
+    TextEditing,
+}
+
+/// The reserved meaning `activator` already has on `platform`, if any: a
+/// gesture command bound to it would steal traversal, Escape, Back, closing
+/// or text editing (ADR-0216 §1).
+pub(crate) fn reserved_key(
+    platform: TargetPlatform,
+    activator: &SingleActivator,
+) -> Option<ReservedKey> {
+    let apple = matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS);
+    let command = if apple {
+        activator.meta && !activator.control
+    } else {
+        activator.control && !activator.meta
+    };
+    let shift = activator.shift.unwrap_or(false);
+    if back_activators(platform)
+        .iter()
+        .any(|back| back.trigger == activator.trigger && same_modifiers(back, activator))
+    {
+        return Some(ReservedKey::Back);
+    }
+    match &activator.trigger {
+        Key::Named(NamedKey::Escape) => Some(ReservedKey::Escape),
+        Key::Named(NamedKey::Tab | NamedKey::Enter | NamedKey::Select) => {
+            Some(ReservedKey::Traversal)
+        }
+        Key::Named(
+            NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::ArrowUp
+            | NamedKey::ArrowDown
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::PageUp
+            | NamedKey::PageDown
+            | NamedKey::Backspace
+            | NamedKey::Delete
+            | NamedKey::Insert,
+        ) => Some(ReservedKey::TextEditing),
+        Key::Named(NamedKey::F4) if activator.alt || activator.control => {
+            (!apple).then_some(ReservedKey::Close)
+        }
+        Key::Character(text) => {
+            let letter = text.as_str().to_ascii_lowercase();
+            if text.as_str() == " " && !activator.control && !activator.alt && !activator.meta {
+                return Some(ReservedKey::Traversal);
+            }
+            if !activator.control && !activator.alt && !activator.meta {
+                // Unmodified or Shift-only: what the key types.
+                return Some(ReservedKey::TextEditing);
+            }
+            if command && !activator.alt && letter == "w" {
+                return Some(ReservedKey::Close);
+            }
+            if apple && command && letter == "q" {
+                return Some(ReservedKey::Close);
+            }
+            if command
+                && !activator.alt
+                && matches!(letter.as_str(), "a" | "c" | "x" | "v" | "z" | "y")
+            {
+                return Some(ReservedKey::TextEditing);
+            }
+            // Control+letter moves and deletes in Apple text fields, the
+            // Emacs bindings of the Cocoa text system.
+            if apple
+                && activator.control
+                && !activator.meta
+                && !activator.alt
+                && matches!(
+                    letter.as_str(),
+                    "a" | "b" | "d" | "e" | "f" | "h" | "k" | "n" | "o" | "p" | "t" | "v" | "y"
+                )
+            {
+                return Some(ReservedKey::TextEditing);
+            }
+            // Option+letter types a character on Apple keyboards.
+            (apple && activator.alt && !activator.meta && !activator.control && !shift)
+                .then_some(ReservedKey::TextEditing)
+        }
+        _ => None,
+    }
+}
+
+fn same_modifiers(a: &SingleActivator, b: &SingleActivator) -> bool {
+    a.control == b.control
+        && a.alt == b.alt
+        && a.meta == b.meta
+        && a.shift.unwrap_or(false) == b.shift.unwrap_or(false)
 }
 
 fn command_activator(platform: TargetPlatform, key: &str) -> SingleActivator {
@@ -557,6 +863,7 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             .as_ref()
             .expect("BUG: DefaultFocusTraversal built before init_state")
             .clone();
+        let once = |activator: SingleActivator| activator.allow_repeats(false);
         let mut shortcuts = Shortcuts::new(view.child.clone())
             .focus_node(Rc::clone(&self.keys))
             .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
@@ -564,10 +871,27 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
                 SingleActivator::named(NamedKey::Tab).shift(),
                 PreviousFocusIntent,
             )
-            .shortcut(SingleActivator::named(NamedKey::Enter), ActivateIntent)
-            .shortcut(SingleActivator::character(" "), ActivateIntent)
-            .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent)
+            .shortcut(
+                once(SingleActivator::named(NamedKey::Enter)),
+                ActivateIntent,
+            )
+            .shortcut(once(SingleActivator::character(" ")), ActivationPressIntent)
+            .shortcut(SingleActivator::character(" ").on_release(), ActivateIntent)
+            .shortcut(
+                once(SingleActivator::named(NamedKey::Select)),
+                ActivateIntent,
+            )
+            .shortcut(
+                once(SingleActivator::named(NamedKey::Escape)),
+                DismissIntent,
+            )
             .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
+        for activator in back_activators(self.platform) {
+            shortcuts = shortcuts.shortcut(once(activator), BackIntent);
+        }
+        for activator in ShowContextMenuIntent::default_keys(self.platform) {
+            shortcuts = shortcuts.shortcut(activator, ShowContextMenuIntent);
+        }
         for (key, direction) in [
             (NamedKey::ArrowUp, flui_interaction::FocusDirection::Up),
             (NamedKey::ArrowDown, flui_interaction::FocusDirection::Down),
@@ -601,3 +925,194 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
 }
 
 // The mounted `Shortcuts` suites live in `crates/flui-widgets/tests/shortcuts.rs`.
+
+/// The gesture key collision table (ADR-0216 §1): every platform's default
+/// gesture keys and the reserved keys they must avoid. Only the running
+/// platform's bindings are reachable through a mounted tree, so the other
+/// platforms' rows are checked here, on the tables themselves.
+#[cfg(test)]
+mod collision_tests {
+    use super::{ReservedKey, ShowContextMenuIntent, SingleActivator, reserved_key};
+    use flui_foundation::geometry::Axis;
+    use flui_platform_api::TargetPlatform;
+    use flui_platform_api::keyboard::NamedKey;
+
+    const PLATFORMS: [TargetPlatform; 7] = [
+        TargetPlatform::Android,
+        TargetPlatform::iOS,
+        TargetPlatform::Linux,
+        TargetPlatform::MacOS,
+        TargetPlatform::Windows,
+        TargetPlatform::Fuchsia,
+        TargetPlatform::Unknown,
+    ];
+
+    #[test]
+    fn gesture_key_collision_table() {
+        for platform in PLATFORMS {
+            let menu_keys = ShowContextMenuIntent::default_keys(platform);
+            for key in &menu_keys {
+                assert_eq!(
+                    reserved_key(platform, key),
+                    None,
+                    "{platform:?}: the menu key {key:?} takes nothing reserved"
+                );
+            }
+            let apple = matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS);
+            assert_eq!(
+                menu_keys.is_empty(),
+                apple,
+                "{platform:?}: only Apple platforms have no menu key"
+            );
+
+            // A widget's command keys bind through its command, which drops
+            // a reserved one: each must survive on every platform.
+            for key in crate::scroll::refresh_keys(platform) {
+                assert_eq!(
+                    reserved_key(platform, &key),
+                    None,
+                    "{platform:?}: the refresh key {key:?} takes nothing reserved"
+                );
+            }
+            // A widget's own keys answer only what bubbles past a focused
+            // field, which keeps its typing and caret keys
+            // (`keys_typed_in_a_field_inside_the_viewer_stay_in_the_field`);
+            // traversal, Escape, Back and closing they never take.
+            let own_keys = crate::scroll::zoom_keys(platform)
+                .into_iter()
+                .map(|(key, _)| key)
+                .chain(
+                    [
+                        (Axis::Vertical, false),
+                        (Axis::Horizontal, false),
+                        (Axis::Horizontal, true),
+                    ]
+                    .into_iter()
+                    .flat_map(|(axis, rtl)| {
+                        let (next, previous) = crate::scroll::anchor_keys(axis, rtl);
+                        [
+                            SingleActivator::named(next),
+                            SingleActivator::named(previous),
+                        ]
+                    }),
+                );
+            for key in own_keys {
+                let reserved = reserved_key(platform, &key);
+                assert!(
+                    matches!(reserved, None | Some(ReservedKey::TextEditing)),
+                    "{platform:?}: the widget key {key:?} takes {reserved:?}"
+                );
+            }
+        }
+
+        let command = |key: &str| SingleActivator::character(key).control();
+        let apple_command = |key: &str| SingleActivator::character(key).meta();
+        let rows: [(TargetPlatform, SingleActivator, Option<ReservedKey>); 21] = [
+            (
+                TargetPlatform::Windows,
+                SingleActivator::named(NamedKey::Escape),
+                Some(ReservedKey::Escape),
+            ),
+            (
+                TargetPlatform::MacOS,
+                SingleActivator::named(NamedKey::Escape).shift(),
+                Some(ReservedKey::Escape),
+            ),
+            (
+                TargetPlatform::Linux,
+                SingleActivator::named(NamedKey::Tab),
+                Some(ReservedKey::Traversal),
+            ),
+            (
+                TargetPlatform::Linux,
+                SingleActivator::named(NamedKey::Enter),
+                Some(ReservedKey::Traversal),
+            ),
+            (
+                TargetPlatform::Android,
+                SingleActivator::character(" "),
+                Some(ReservedKey::Traversal),
+            ),
+            (
+                TargetPlatform::Windows,
+                SingleActivator::named(NamedKey::ArrowLeft).alt(),
+                Some(ReservedKey::Back),
+            ),
+            (
+                TargetPlatform::MacOS,
+                SingleActivator::character("[").meta(),
+                Some(ReservedKey::Back),
+            ),
+            (
+                TargetPlatform::iOS,
+                SingleActivator::named(NamedKey::BrowserBack),
+                Some(ReservedKey::Back),
+            ),
+            (
+                TargetPlatform::Windows,
+                command("w"),
+                Some(ReservedKey::Close),
+            ),
+            (
+                TargetPlatform::Windows,
+                SingleActivator::named(NamedKey::F4).alt(),
+                Some(ReservedKey::Close),
+            ),
+            (
+                TargetPlatform::MacOS,
+                apple_command("w"),
+                Some(ReservedKey::Close),
+            ),
+            (
+                TargetPlatform::MacOS,
+                apple_command("q"),
+                Some(ReservedKey::Close),
+            ),
+            (
+                TargetPlatform::Linux,
+                SingleActivator::character("x"),
+                Some(ReservedKey::TextEditing),
+            ),
+            (
+                TargetPlatform::Linux,
+                command("z"),
+                Some(ReservedKey::TextEditing),
+            ),
+            (
+                TargetPlatform::MacOS,
+                apple_command("v"),
+                Some(ReservedKey::TextEditing),
+            ),
+            (
+                TargetPlatform::Windows,
+                SingleActivator::named(NamedKey::Delete),
+                Some(ReservedKey::TextEditing),
+            ),
+            (
+                TargetPlatform::MacOS,
+                SingleActivator::character("e").alt(),
+                Some(ReservedKey::TextEditing),
+            ),
+            (
+                TargetPlatform::MacOS,
+                command("d"),
+                Some(ReservedKey::TextEditing),
+            ),
+            // What a command may take.
+            (TargetPlatform::Windows, command("d"), None),
+            (TargetPlatform::MacOS, command("w"), None),
+            (
+                TargetPlatform::Linux,
+                SingleActivator::named(NamedKey::F2),
+                None,
+            ),
+        ];
+        for (platform, activator, expected) in rows {
+            assert_eq!(
+                reserved_key(platform, &activator),
+                expected,
+                "{platform:?}: {activator:?}"
+            );
+        }
+    }
+}

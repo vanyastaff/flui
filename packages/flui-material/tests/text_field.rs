@@ -44,7 +44,7 @@ use flui_sdk::widgets::{SizedBox, TextEditingController};
 /// Tapping anywhere in the decorated area focuses the field, which reaches
 /// the composed `InputDecorator` (the active-indicator color/width flips to
 /// the focused branch) — and unfocusing reverts it. Exercises the full
-/// production path: `GestureDetector::on_tap` → `FocusNode::request_focus` →
+/// production path: the press's `Listener` → `FocusNode::request_focus` →
 /// `MaterialTextFieldState`'s own node listener →
 /// `rebuild_handle().schedule(reason)` → a headless `tick()`.
 ///
@@ -96,9 +96,16 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
          indicator color, got: {focused}"
     );
 
-    // Round trip: unfocusing must revert it.
+    // Round trip: unfocusing must revert it, and the press's tap, which the
+    // field's double-tap holds for the double-tap time, takes no focus back.
     focus_node.unfocus();
-    laid.tick();
+    for _ in 0..40 {
+        laid.pump_for(std::time::Duration::from_millis(16));
+    }
+    assert!(
+        !focus_node.has_focus(),
+        "a focus moved on after the press stays moved"
+    );
 
     let reverted = laid
         .render_property(decorated_box, "decoration")
@@ -408,4 +415,49 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
         "the error line is a polite live region\n{}",
         tree.describe()
     );
+}
+
+// ============================================================================
+// Input purpose — the field's text store reports what the field is for
+// ============================================================================
+
+/// `TextField::input_purpose` and `TextFormField::input_purpose` reach the
+/// text store the input method reads, and a rebuild that changes it reaches
+/// the store too.
+///
+/// Mutation red-check: drop `.input_purpose(view.input_purpose)` where
+/// `TextField` builds its `EditableText` — the store keeps reporting `Text`.
+pub fn the_input_purpose_reaches_the_text_store() {
+    use flui_material::TextFormField;
+    use flui_sdk::platform::TextInputPurpose;
+
+    let controller = TextEditingController::new();
+    let focus_node = FocusNode::with_debug_label("purpose");
+    let mut harness = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+        ThemeData::light(),
+        SizedBox::new(300.0, 100.0).child(
+            TextField::new(controller)
+                .focus_node(Rc::clone(&focus_node))
+                .input_purpose(TextInputPurpose::Email),
+        ),
+    ));
+    let _ = focus_node.request_focus();
+    harness.tick();
+    let store = harness.active_text_store().expect("focused store");
+    assert_eq!(store.status().purpose, TextInputPurpose::Email);
+
+    let form_controller = TextEditingController::new();
+    let form_focus = FocusNode::with_debug_label("form purpose");
+    let mut form = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+        ThemeData::light(),
+        SizedBox::new(300.0, 100.0).child(
+            TextFormField::new(form_controller)
+                .focus_node(Rc::clone(&form_focus))
+                .input_purpose(TextInputPurpose::Phone),
+        ),
+    ));
+    let _ = form_focus.request_focus();
+    form.tick();
+    let store = form.active_text_store().expect("focused form store");
+    assert_eq!(store.status().purpose, TextInputPurpose::Phone);
 }

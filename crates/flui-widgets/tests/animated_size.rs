@@ -16,11 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
-use flui_animation::Vsync;
+use flui_animation::{ArcCurve, MotionSpec, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
-use flui_widgets::{AnimatedSize, SizedBox, VsyncScope};
+use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox, VsyncScope};
 use parking_lot::Mutex;
 
 /// A 100 ms run pumped in 20 ms frames spans the run in five steps.
@@ -61,7 +61,9 @@ impl ViewState<SizeProbe> for SizeProbeState {
     fn build(&self, _view: &SizeProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         let side = *self.side.lock();
         let alignment = *self.alignment.lock();
-        let mut animated = AnimatedSize::new(RUN)
+        let mut animated = AnimatedSize::new()
+            .duration(RUN)
+            .curve(curves::LINEAR)
             .alignment(alignment)
             .child(SizedBox::new(side, side));
         if let Some(on_end) = self.on_end.clone() {
@@ -81,7 +83,10 @@ pub(crate) fn an_active_size_run_migrates_between_registries() {
     let tree = |registry, side| {
         VsyncScope::new(
             registry,
-            AnimatedSize::new(RUN).child(SizedBox::new(side, side)),
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
+                .child(SizedBox::new(side, side)),
         )
     };
     let mut laid = lay_out_animated(tree(old.clone(), 20.0), loose(200.0), old.clone());
@@ -167,22 +172,22 @@ pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
     let probe = {
         let side = Rc::clone(&side);
         SignalProbe::new(move |ProbeSignals { count, .. }| {
-            AnimatedSize::new(RUN)
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
                 .on_end(move |cx| count.update(cx, |value| *value += 1))
                 .child(SizedBox::square(side.get()))
         })
     };
     let vsync = Vsync::new();
-    let mut app = lay_out_animated(
-        VsyncScope::new(vsync.clone(), probe.view()),
-        loose(200.0),
-        vsync,
-    );
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(vsync.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), vsync.clone());
     assert_eq!(probe.value(), Ok(0), "mount does not complete a run");
 
     for (target, completions) in [(100.0, 1), (40.0, 2)] {
         side.set(target);
-        app.pump();
+        app.pump_widget(root());
         assert_eq!(probe.value(), Ok(completions - 1));
         let ((), log) = flui_testing::log_capture::capture(|| {
             for _ in 0..8 {
@@ -226,7 +231,10 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 let generation = generation.get();
                 let events = Rc::clone(&events);
                 let panic_pending = Rc::clone(&panic_pending);
-                let size = AnimatedSize::new(RUN).child(SizedBox::square(side.get()));
+                let size = AnimatedSize::new()
+                    .duration(RUN)
+                    .curve(curves::LINEAR)
+                    .child(SizedBox::square(side.get()));
                 if delivery == "late" && generation == 1 {
                     return size.boxed();
                 }
@@ -239,13 +247,11 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             })
         };
         let registry = Vsync::new();
-        let mut app = lay_out_animated(
-            VsyncScope::new(registry.clone(), probe.view()),
-            loose(200.0),
-            registry.clone(),
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(registry.clone(), probe.view());
+        let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
         side.set(100.0);
-        app.pump();
+        app.pump_widget(root());
         let mut clock = MotionClock::new();
         for millis in [20, 120] {
             registry.tick_all(&clock.frame(Duration::from_millis(millis)));
@@ -265,7 +271,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 "unmounted" => mounted.set(false),
                 _ => {}
             }
-            app.pump();
+            app.pump_widget(root());
         }));
         assert_eq!(result.is_err(), delivery == "panicking");
         if let Err(payload) = result {
@@ -290,7 +296,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             assert!((width(&app) - 100.0).abs() < 1.0);
             let before = probe.value().expect("mounted signal");
             side.set(40.0);
-            app.pump();
+            app.pump_widget(root());
             for millis in [140, 240] {
                 registry.tick_all(&clock.frame(Duration::from_millis(millis)));
             }
@@ -306,4 +312,325 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             assert_eq!(*events.borrow(), completed_events, "no replay");
         }
     }
+}
+
+/// By default a resize follows a critically damped spring: it never
+/// overshoots, is still short of the target where a 200 ms curve would have
+/// arrived, settles exactly, and a retarget mid-flight starts from the size
+/// shown.
+pub(crate) fn animated_size_defaults_to_a_critically_damped_spring() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    let mut previous = width(&laid);
+    let mut samples = Vec::new();
+    for _ in 0..11 {
+        laid.pump_for(FRAME);
+        let shown = width(&laid);
+        assert!(
+            shown >= previous - 1e-9 && shown <= 100.0 + 1e-9,
+            "monotonic, no overshoot: {shown}"
+        );
+        previous = shown;
+        samples.push(shown);
+    }
+    assert!(
+        previous < 99.0,
+        "a spring is still short of the target after 220 ms, got {samples:?}"
+    );
+    laid.pump_widget(tree(60.0));
+    assert!(
+        (width(&laid) - previous).abs() < 1e-6,
+        "a retarget starts from the size shown"
+    );
+    for _ in 0..40 {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        (width(&laid) - 60.0).abs() < 1e-6,
+        "settles on the new size"
+    );
+}
+
+fn spring(stiffness: f64, ratio: f64) -> SpringDescription {
+    SpringDescription::with_damping_ratio(1.0, stiffness, ratio).expect("a valid spring")
+}
+
+/// A resize retargeted mid-flight carries the laid-out size's velocity into
+/// the new run instead of restarting from rest.
+pub(crate) fn size_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(180.0));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    let h = Duration::from_micros(100);
+    let previous = width(&laid);
+    laid.pump_for(h);
+    let seam = width(&laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 100.0, "the size was growing: {arriving}");
+    laid.pump_widget(tree(60.0));
+    assert!(
+        (width(&laid) - seam).abs() < 1e-9,
+        "no jump at the retarget"
+    );
+    laid.pump_for(h);
+    let departing = (width(&laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < arriving * 0.02,
+        "the size velocity was lost: {arriving} -> {departing}"
+    );
+}
+
+/// An underdamped spring overshoots the new size, then settles exactly on it.
+pub(crate) fn an_underdamped_spring_overshoots_the_new_size_and_settles() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .spring(spring(400.0, 0.3))
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    let mut widest = 0.0_f64;
+    for _ in 0..100 {
+        laid.pump_for(FRAME);
+        widest = widest.max(width(&laid));
+    }
+    assert!(
+        widest > 110.0,
+        "the spring overshoots 100, peaked at {widest}"
+    );
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-9,
+        "settles on the new size"
+    );
+    assert!(!registry.has_running(), "and stops");
+}
+
+/// Under reduced motion even a spring far too slow to settle within any
+/// probe lands on the new size in the first frame.
+pub(crate) fn a_slow_spring_lands_on_the_new_size_under_reduced_motion() {
+    use flui_animation::MotionOverride;
+
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .spring(spring(0.001, 1.0))
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.set_motion_override(MotionOverride::Reduce);
+    laid.pump_widget(tree(100.0));
+    laid.pump_for(Duration::ZERO);
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-9,
+        "lands on 100 in the first frame, got {}",
+        width(&laid)
+    );
+}
+
+/// A rebuild that changes only the motion while a resize is in flight keeps
+/// the size shown, and the run still lands on the target.
+pub(crate) fn a_motion_change_mid_resize_keeps_the_size_shown() {
+    let registry = Vsync::new();
+    let tree = |motion: MotionSpec, side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .motion(motion)
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let spring = MotionSpec::Spring(spring(400.0, 1.0));
+    let curve = MotionSpec::Curve {
+        duration: Duration::from_millis(300),
+        curve: ArcCurve::new(curves::EASE_IN),
+    };
+    let mut laid = lay_out_animated(tree(spring.clone(), 20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(spring, 100.0));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    let shown = width(&laid);
+    assert!(shown > 30.0 && shown < 90.0, "mid-flight, got {shown}");
+    laid.pump_widget(tree(curve, 100.0));
+    assert!(
+        (width(&laid) - shown).abs() < 1e-9,
+        "the motion change kept {shown}, got {}",
+        width(&laid)
+    );
+    laid.pump_for(Duration::from_millis(1));
+    assert!(
+        (width(&laid) - shown).abs() < 1.0,
+        "no jump on the next frame either: {shown} -> {}",
+        width(&laid)
+    );
+    for _ in 0..20 {
+        laid.pump_for(FRAME);
+    }
+    assert!((width(&laid) - 100.0).abs() < 1e-9, "lands on the target");
+}
+
+/// A spring that finishes before the next layout completes the resize once:
+/// the size at its target is not run again.
+pub(crate) fn a_spring_finishing_before_layout_completes_once() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_animation::MotionClock;
+    use flui_view::SignalWriteExt;
+    use std::cell::Cell;
+
+    let side = Rc::new(Cell::new(20.0));
+    let probe = {
+        let side = Rc::clone(&side);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new()
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let registry = Vsync::new();
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(registry.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
+    side.set(100.0);
+    app.pump_widget(root());
+    // The registry runs the spring to rest without an intervening layout.
+    let mut clock = MotionClock::new();
+    let mut millis = 20;
+    while registry.has_running() || millis == 20 {
+        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        millis += 16;
+    }
+    assert!(!registry.has_running(), "the spring finished");
+    for _ in 0..6 {
+        app.pump_for(FRAME);
+    }
+    assert!((width(&app) - 100.0).abs() < 1e-9, "the resize landed");
+    assert!(!registry.has_running(), "nothing runs at the target");
+    assert_eq!(probe.value(), Ok(1), "one resize completes once");
+}
+
+/// A resize thousands of pixels long comes to rest in geometry units: its
+/// last moving frame is already within a hundredth of a pixel or so of the
+/// target, so landing does not jump.
+pub(crate) fn a_long_spring_resize_lands_without_a_jump() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, 10.0)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(100_000.0), registry.clone());
+    laid.pump_widget(tree(50_000.0));
+    let mut previous = width(&laid);
+    for _ in 0..200 {
+        laid.pump_for(FRAME);
+        let shown = width(&laid);
+        if shown == 50_000.0 {
+            assert!(
+                (shown - previous).abs() < 0.05,
+                "landing jumped from {previous} to {shown}"
+            );
+            return;
+        }
+        previous = shown;
+    }
+    panic!("the resize never landed, last shown {previous}");
+}
+
+/// A curve resize follows the same motion segment as every implicit value,
+/// starting and arriving at rest: a linear 100 ms run at a quarter of its
+/// duration shows `3t² − 2t³ = 0.15625` of the span, not the raw 0.25.
+pub(crate) fn a_curve_resize_follows_the_motion_segment() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    laid.pump_for(FRAME);
+    assert!((width(&laid) - 20.0).abs() < 1e-9, "the first tick anchors");
+    laid.pump_for(RUN / 4);
+    let shown = width(&laid);
+    assert!(
+        (shown - (20.0 + 80.0 * 0.15625)).abs() < 1e-6,
+        "a quarter of the way shows the segment value 32.5, got {shown}"
+    );
+}
+
+/// One rebuild that changes both the child size and the motion (here to an
+/// instant one) retargets the run in flight once: the run it displaced never
+/// reached its old target, so only the last resize completes.
+pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::SignalWriteExt;
+    use std::cell::{Cell, RefCell};
+
+    let side = Rc::new(Cell::new(20.0));
+    let motion = Rc::new(RefCell::new(MotionSpec::Spring(spring(400.0, 1.0))));
+    let probe = {
+        let side = Rc::clone(&side);
+        let motion = Rc::clone(&motion);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new()
+                .motion(motion.borrow().clone())
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let registry = Vsync::new();
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(registry.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
+    side.set(100.0);
+    app.pump_widget(root());
+    for _ in 0..3 {
+        app.pump_for(FRAME);
+    }
+    assert!(width(&app) > 20.0 && width(&app) < 100.0, "mid-flight");
+    assert_eq!(probe.value(), Ok(0));
+
+    side.set(60.0);
+    *motion.borrow_mut() = MotionSpec::Curve {
+        duration: Duration::from_micros(100),
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    app.pump_widget(root());
+    for _ in 0..6 {
+        app.pump_for(FRAME);
+    }
+    assert!((width(&app) - 60.0).abs() < 1e-9, "landed on the new size");
+    assert_eq!(
+        probe.value(),
+        Ok(1),
+        "one completion for one displayed resize"
+    );
 }

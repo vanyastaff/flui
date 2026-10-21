@@ -338,10 +338,12 @@ that keeps file and line in a panic; both stay.
    other three old runs fold into the unified one. The `cargo nextest list` comparison was not
    run locally, so the first wide run's log is the measured check. The facade step is covered by `test` now that `test` runs `cargo xtask test`
    (`TEST_SCOPE`); the `signals` step goes with the first reactive step (ADR-0085).
-3. **Rebalanced feature-matrix shards (deferred).** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
-   36203822844. The implementation measures `k/5` (five shards) and keeps it if the slowest shard drops under
-   10 min; `tools/xtask/src/tasks.rs`'s `feature_matrix_stage` owns the shard count. Not adopted
-   yet: the measurement needs CI runs (C8).
+3. **Rebalanced feature-matrix shards.** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
+   36203822844, and 11, 22 and 18 min on 39224963640. `k/5` is adopted: replaying that run's
+   per-command times through five contiguous blocks puts the slowest near 15 min, while `k/4`
+   and `k/6` leave the engine, `flui-sdk` and the facade in one block (about 20 and 18 min).
+   The shard list lives in `ci.yml`'s matrix; the first five-shard run on main is the measured
+   check.
 4. **Cache budget.** One cache per feature resolution, not per job: `clippy`, `fast-lane` and
    `test` share `workspace-tests`; `test-features`, the feature-matrix shards and `doc` keep their
    own. Implemented in part: `fast-lane` and `test` share `workspace-tests-v2` (renamed because
@@ -464,16 +466,14 @@ pinning test can read them:
 
 | Test | Asserts | Fails today because |
 |---|---|---|
-| `classify::a_standalone_crate_is_tooling` | the manifest and a source file of a crate with its own `[workspace]` (`tools/spike` in a temporary repository) classify as `Mode::None` with a reason naming the standalone manifest | they are "no package owns" → `Mode::Full` (`classify.rs:613-619`) |
 | `lane_args::whole_workspace_pr_takes_the_wide_lane` | a PR changing `tools/xtask/src/change_scope/classify.rs` gets `lane=wide` | today `heavy=false mode=full` |
 | `lane_args::heavy_triggers_on_a_pr_take_the_wide_lane_not_full` | `Cargo.lock`, `.github/workflows/ci.yml`, `deny.toml` on a PR → `wide`; the same with `--full-ci-label true` → `extended` | there is no `wide`: the result is `heavy=true` |
 | `lane_args::events_pick_their_lane` | `push` → `full`, `schedule` → `extended`, `workflow_dispatch` → `extended`, `merge_group` → `full`, `pull_request` with `--full-ci-label true` → `extended` | `--event` does not exist |
 | `lane_args::fast_lane_builds_the_test_scope_and_filters` | `packages/flui-material/src/lib.rs` → `test_args` equals `TEST_SCOPE` plus `-E 'package(flui) \| package(flui-material) \| package(flui-web-counter)'` | `test_args` is `-p flui -p flui-material ...` |
 | `lane_args::platform_only_scope_has_no_test_args` | `crates/flui-platform/src/lib.rs` with a scope of only `flui-platform` (dependents stubbed out of the graph) → `test_args` is empty, with no `-E` | passes today; pins the empty case so the filterset change cannot emit `-E ''` |
 | `aggregator::wide_lane_skips_platform_jobs` | lane `wide` with `gpu-test` skipped is green; with `clippy` skipped is red | no `wide` lane |
-| `aggregator::extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red` | lane `full` may skip `macos-ci`; lane `extended` may not | no `extended` lane |
 | `aggregator::lane_lists_match_the_job_conditions` | `WIDE_JOBS`, `FULL_JOBS`, `EXTENDED_JOBS` equal the jobs whose `if:` has each literal form | replaces `heavy_jobs_list_matches_the_jobs_gated_on_heavy` (`aggregator.rs:375`) |
-| `aggregator::a_narrow_lane_on_main_or_nightly_is_red` | `push`/`merge_group` on `fast` or `wide`, and `schedule`/`workflow_dispatch` on `full`, are red even when every job the lane skips did skip: `ci-verify` checks the lane against the event outside `Lane::decide` | the old shell set `heavy` from the event itself |
+| `aggregator::a_narrow_lane_on_main_or_dispatch_is_red` | `push`/`merge_group`/`workflow_dispatch` on `tooling` or `wide` are red even when every job the lane skips did skip: `ci-verify` checks the lane against the event outside `Lane::decide` | the old shell set `heavy` from the event itself |
 | `aggregator::jobs_outside_the_lane_lists_have_their_own_condition` | `deps`, `fast-lane`, `fast-lane-ios` and `standalone` each carry the exact `if:` the aggregator assumes for it, so swapping two passes no test | only membership in a known set was checked |
 
 The existing tests that pin `heavy` (`classify.rs:733-760`, `aggregator.rs:394-547`) are

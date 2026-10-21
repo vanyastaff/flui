@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
 use flui_platform_api::{
     EventTime,
@@ -21,7 +21,7 @@ pub(crate) mod native_actions {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::a11y::Role;
     use flui_testing::{
@@ -207,6 +207,10 @@ pub(crate) mod native_actions {
         );
         fixture.pump();
         assert!(fixture.node.borrow().has_primary_focus());
+        assert!(
+            fixture.node.borrow().has_visible_focus(),
+            "focus assistive technology moved is shown, as on any control"
+        );
         assert_eq!(
             fixture
                 .ui_runtime
@@ -1395,7 +1399,7 @@ pub(crate) mod text_store {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
         TextStoreRead, Utf16Offset,
@@ -1778,6 +1782,53 @@ pub(crate) mod text_store {
                 new_end: at(3),
             }],
             "the platform hears of the application's edit after the lock"
+        );
+    }
+
+    /// A read the store answers `NoLayout` (the application changed the text
+    /// and the frame has not laid it out) owes the input method a layout
+    /// notification once the layout exists, even when the caret rect ends up
+    /// where it was: the cursor-area loop only sends a rect that moved.
+    ///
+    /// Red-check: drop `settle_owed_layout` from `CursorAreaLoop::fire` — the
+    /// observer hears nothing after the frame.
+    pub(crate) fn a_no_layout_answer_is_followed_by_a_layout_notification() {
+        use flui_platform_api::text_store::{TextStoreError, TextStoreObserver, Utf16Range};
+        struct Layouts(Rc<std::cell::Cell<usize>>);
+        impl TextStoreObserver for Layouts {
+            fn text_changed(&self, _: flui_platform_api::text_store::TextChange) {}
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {
+                self.0.set(self.0.get() + 1);
+            }
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::with_text("ab");
+        let (mut harness, _focus) = focused(&controller);
+        controller.set_selection(0, 0);
+        harness.tick();
+        let field = store(&harness);
+        let heard = Rc::new(std::cell::Cell::new(0));
+        field.set_observer(Some(Rc::new(Layouts(Rc::clone(&heard)))));
+        // The caret is back at the start of different text: its rect is the one
+        // already sent.
+        controller.set_text("ba");
+        controller.set_selection(0, 0);
+        let refused = read(&field, |session| {
+            session.rect_for_range(Utf16Range::new(at(0), at(1)).expect("ordered"))
+        });
+        assert_eq!(
+            refused.err(),
+            Some(TextStoreError::NoLayout),
+            "not laid out yet"
+        );
+        let before = heard.get();
+        harness.tick();
+        harness.tick();
+        field.set_observer(None);
+        assert!(
+            heard.get() > before,
+            "the observer was told that layout exists"
         );
     }
 
@@ -2358,7 +2409,7 @@ pub(crate) mod text_store {
 pub(crate) mod event_cx {
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -2626,4 +2677,56 @@ pub(crate) fn disabling_the_field_retires_its_selection_contact() {
 }
 pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
     selection_retarget(true);
+}
+
+/// The purpose a field is built with is the purpose its text store reports,
+/// follows a rebuild that changes it, and is independent of obscuring.
+///
+/// Red-check: leave `did_update_view` without the purpose cell — the store
+/// keeps reporting the first purpose after the swap.
+pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
+    use flui_platform_api::text_store::TextInputPurpose;
+    use flui_widgets::SizedBox;
+
+    let controller = TextEditingController::new();
+    let focus = FocusNode::new();
+    let field = |purpose, obscured| {
+        SizedBox::new(60.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus))
+                .input_purpose(purpose)
+                .obscure_text(obscured),
+        )
+    };
+    let mut harness = crate::common::harness::mount_with_ime(field(TextInputPurpose::Email, false));
+    let _ = focus.request_focus();
+    harness.tick();
+    let status = || {
+        harness
+            .active_text_store()
+            .expect("the focused field is the active IME client")
+            .status()
+    };
+    assert_eq!(status().purpose, TextInputPurpose::Email);
+    assert!(!status().protected);
+
+    harness.swap_root(field(TextInputPurpose::Url, false));
+    harness.tick();
+    let after = harness
+        .active_text_store()
+        .expect("still the active IME client")
+        .status();
+    assert_eq!(after.purpose, TextInputPurpose::Url, "a rebuild changes it");
+
+    harness.swap_root(field(TextInputPurpose::Url, true));
+    harness.tick();
+    let obscured = harness
+        .active_text_store()
+        .expect("still the active IME client")
+        .status();
+    assert!(obscured.protected, "obscuring protects the field");
+    assert_eq!(
+        obscured.purpose,
+        TextInputPurpose::Url,
+        "and leaves its purpose alone"
+    );
 }

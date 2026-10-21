@@ -163,6 +163,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         hint: _,
         tooltip: _,
         placeholder: _,
+        identifier: _,
         text_direction: _,
         custom_actions: _,
         scroll_position: _,
@@ -272,6 +273,19 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::TextInput,
             |a| a.placeholder = Some("Search".into()),
             |n| n.placeholder() == Some("Search"),
+        ),
+        Row::new(
+            "identifier",
+            R::Button,
+            |a| a.identifier = Some("send-button".into()),
+            // The adapters' `AutomationId`, read by no screen reader: the node
+            // stays unnamed and undescribed.
+            |n| {
+                n.author_id() == Some("send-button")
+                    && n.label().is_none()
+                    && n.description().is_none()
+                    && n.value().is_none()
+            },
         ),
         Row::new(
             "text direction",

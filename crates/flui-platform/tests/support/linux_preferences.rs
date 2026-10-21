@@ -4,7 +4,7 @@
 
 pub mod linux {
     use flui_platform::{Platform, PlatformProxy, WinitPlatform};
-    use flui_platform_api::MotionPreference;
+    use flui_platform_api::{MotionPreference, WindowAppearance};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -19,6 +19,8 @@ pub mod linux {
 
     struct State {
         value: AtomicU32,
+        /// The portal's `color-scheme`: 1 prefers dark, 2 prefers light.
+        scheme: AtomicU32,
         failing: AtomicBool,
         failed: tokio::sync::Notify,
     }
@@ -47,6 +49,11 @@ pub mod linux {
             }
             if !self.gnome && namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                 Ok(self.state.value.load(Ordering::SeqCst).into())
+            } else if !self.gnome
+                && namespace == "org.freedesktop.appearance"
+                && key == "color-scheme"
+            {
+                Ok(self.state.scheme.load(Ordering::SeqCst).into())
             } else if self.gnome
                 && namespace == "org.gnome.desktop.interface"
                 && key == "enable-animations"
@@ -94,9 +101,14 @@ pub mod linux {
         "unsupported",
         "no-service",
         "late-proxy",
+        "color-scheme",
     ];
 
     async fn emit_change(connection: &zbus::Connection, value: u32) {
+        emit_setting(connection, "reduced-motion", value).await;
+    }
+
+    async fn emit_setting(connection: &zbus::Connection, key: &str, value: u32) {
         connection
             .emit_signal(
                 None::<&str>,
@@ -105,12 +117,25 @@ pub mod linux {
                 "SettingChanged",
                 &(
                     "org.freedesktop.appearance",
-                    "reduced-motion",
+                    key,
                     zbus::zvariant::Value::from(value),
                 ),
             )
             .await
             .expect("native setting change");
+    }
+
+    /// Where a live case stands, as the owner has observed it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Live {
+        /// The first turn, with the portal's initial reduced motion.
+        Seed,
+        /// The fixture changed the setting to full motion.
+        Changing,
+        /// Full motion is accepted and the portal's reads fail.
+        Failing,
+        /// The reads succeed again; the retained retry brings reduced motion.
+        Recovering,
     }
 
     struct RetireCheck {
@@ -129,6 +154,7 @@ pub mod linux {
         let live = matches!(case, "live" | "recovery" | "restart");
         let recovery = case == "recovery";
         let restart = case == "restart";
+        let scheme = case == "color-scheme";
         let initial = match case {
             "full" => 0,
             "unknown-number" => 42,
@@ -143,6 +169,7 @@ pub mod linux {
         };
         let state = Arc::new(State {
             value: AtomicU32::new(initial),
+            scheme: AtomicU32::new(u32::from(scheme)),
             failing: AtomicBool::new(false),
             failed: tokio::sync::Notify::new(),
         });
@@ -186,11 +213,19 @@ pub mod linux {
         let (late_send, late_receive) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let late_proxy = case == "late-proxy";
         let (step, mut steps) = tokio::sync::mpsc::unbounded_channel();
+        // Set once both failed reads finished, before the inspecting wake.
+        let failed_reads = Arc::new(AtomicBool::new(false));
+        let failed_reads_done = Arc::clone(&failed_reads);
         let connection = service.clone();
         let update = runtime.spawn(async move {
             let Ok(proxy) = begin.await else {
                 return None;
             };
+            if scheme {
+                state.scheme.store(2, Ordering::SeqCst);
+                emit_setting(&connection, "color-scheme", 2).await;
+                return None;
+            }
             state.value.store(0, Ordering::SeqCst);
             if restart {
                 connection
@@ -227,6 +262,7 @@ pub mod linux {
                 // finished. A wake immediately after the first error reply
                 // could race source admission and pass with broken cleanup.
                 state.failed.notified().await;
+                failed_reads_done.store(true, Ordering::SeqCst);
                 proxy
                     .wake()
                     .expect("inspect accepted value after failed read");
@@ -245,6 +281,8 @@ pub mod linux {
             std::process::exit(2);
         });
         let refused = Arc::new(AtomicBool::new(false));
+        let scheme_seen = Arc::new(AtomicBool::new(false));
+        let scheme_witness = Arc::clone(&scheme_seen);
         let delivery_failed = Arc::new(AtomicBool::new(false));
         let callback_failed = Arc::clone(&delivery_failed);
         let capture = RetireCheck {
@@ -271,50 +309,100 @@ pub mod linux {
                     foreign.is_err(),
                     "foreign reads cannot become a second source"
                 );
-                if live {
+                if scheme {
+                    let window = owner
+                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
+                        .try_ready()?;
+                    assert_eq!(
+                        window.appearance(),
+                        WindowAppearance::Dark,
+                        "the first window must observe the portal's dark scheme"
+                    );
+                    let proxy = owner.proxy();
+                    let observed = Arc::downgrade(&window);
+                    let seen = Arc::clone(&scheme_witness);
+                    window.on_appearance_changed(Box::new(move || {
+                        if observed
+                            .upgrade()
+                            .is_some_and(|window| window.appearance() == WindowAppearance::Light)
+                        {
+                            seen.store(true, Ordering::SeqCst);
+                            proxy.request_quit().expect("color-scheme owner quit");
+                        }
+                    }));
+                    start
+                        .send(owner.proxy())
+                        .expect("start color-scheme change");
+                } else if live {
                     let proxy = owner.proxy();
                     let mut start = Some(start);
-                    let mut phase = 0;
+                    let mut phase = Live::Seed;
                     owner.on_wake(Box::new(move || {
                         let _ = &capture;
                         let motion = reader
                             .preferences()
                             .expect("live owner observation")
                             .motion();
-                        let expected_motion = if start.is_some() || (recovery && phase == 3) {
-                            MotionPreference::Reduce
-                        } else {
-                            MotionPreference::NoPreference
-                        };
-                        if motion != Some(expected_motion) {
-                            eprintln!("owner delivered {motion:?}; expected {expected_motion:?}");
+                        let fail = |expected: MotionPreference| {
+                            eprintln!(
+                                "owner delivered {motion:?} in {phase:?}; expected {expected:?}"
+                            );
                             callback_failed.store(true, Ordering::SeqCst);
                             proxy.request_quit().expect("stop failed observation");
-                            return;
-                        }
-                        if let Some(start) = start.take() {
-                            assert_eq!(motion, Some(MotionPreference::Reduce));
-                            start.send(proxy.clone()).expect("start live update");
-                            phase = 1;
-                        } else if recovery && phase < 3 {
-                            assert_eq!(
-                                motion,
-                                Some(MotionPreference::NoPreference),
-                                "failed refresh cannot replace accepted motion"
-                            );
-                            step.send(()).expect("advance recovery fixture");
-                            phase += 1;
-                        } else {
-                            assert_eq!(
-                                motion,
-                                Some(if recovery {
+                        };
+                        // A turn may also come from another owner-turn source (a
+                        // display change, a host notice): every turn must see the
+                        // accepted value, and a phase ends on what the owner
+                        // observes, never on how many turns it had.
+                        phase = match (phase, motion) {
+                            (Live::Seed, Some(MotionPreference::Reduce)) => {
+                                start
+                                    .take()
+                                    .expect("BUG: the seed turn runs once")
+                                    .send(proxy.clone())
+                                    .expect("start live update");
+                                Live::Changing
+                            }
+                            (Live::Seed, _) => {
+                                fail(MotionPreference::Reduce);
+                                return;
+                            }
+                            // The full update is not accepted yet.
+                            (Live::Changing, Some(MotionPreference::Reduce)) => Live::Changing,
+                            (Live::Changing, Some(MotionPreference::NoPreference)) if recovery => {
+                                step.send(()).expect("advance recovery fixture");
+                                Live::Failing
+                            }
+                            (Live::Changing, Some(MotionPreference::NoPreference)) => {
+                                proxy.request_quit().expect("live owner quit");
+                                Live::Changing
+                            }
+                            // Failed refresh cannot replace accepted motion.
+                            (Live::Failing, Some(MotionPreference::NoPreference)) => {
+                                if failed_reads.load(Ordering::SeqCst) {
+                                    step.send(()).expect("advance recovery fixture");
+                                    Live::Recovering
+                                } else {
+                                    Live::Failing
+                                }
+                            }
+                            // The retained retry has not run yet.
+                            (Live::Recovering, Some(MotionPreference::NoPreference)) => {
+                                Live::Recovering
+                            }
+                            (Live::Recovering, Some(MotionPreference::Reduce)) => {
+                                proxy.request_quit().expect("live owner quit");
+                                Live::Recovering
+                            }
+                            (Live::Changing | Live::Failing | Live::Recovering, _) => {
+                                fail(if phase == Live::Recovering {
                                     MotionPreference::Reduce
                                 } else {
                                     MotionPreference::NoPreference
-                                })
-                            );
-                            proxy.request_quit().expect("live owner quit");
-                        }
+                                });
+                                return;
+                            }
+                        };
                     }))?;
                 } else {
                     if late_proxy {
@@ -350,6 +438,12 @@ pub mod linux {
             assert!(
                 refused.load(Ordering::SeqCst),
                 "callback retirement sees closed preference admission"
+            );
+        }
+        if scheme {
+            assert!(
+                scheme_seen.load(Ordering::SeqCst),
+                "a live color-scheme change must reach the window"
             );
         }
         println!("Linux preference case {case} passed");

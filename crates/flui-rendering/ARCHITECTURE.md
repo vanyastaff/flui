@@ -4,6 +4,11 @@ This document is the per-crate architecture record for `flui-rendering`. It reco
 
 Deeper write-ups for layout and hit-testing, and the render test harness guide, live alongside this file under [`docs/`](docs/).
 
+Viewport offsets own position and detached layout proposals. Descendant reveal
+is authorized through registered semantics ancestry, independently of cache
+residency; offsets expose no unused implicit-scrolling policy flag
+([ADR-0225](../../docs/adr/ADR-0225-viewport-reveal-authority.md)).
+
 ---
 
 ## Module map
@@ -17,6 +22,29 @@ Deeper write-ups for layout and hit-testing, and the render test harness guide, 
 | Child storage | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage; the parent stores `Vec<RenderId>`. |
 | Concrete render objects | [`flui-objects`](../flui-objects/src/) crate | `Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …; this crate keeps only the protocol/pipeline machinery. |
 | Compositing layers | `flui-layer` crate | A sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
+
+Cross-axis sliver tracks use dedicated typed
+parent data for content versus positively weighted flex allocation, while
+positions remain canonical render-tree state
+([ADR-0228](../../docs/adr/ADR-0228-cross-axis-sliver-tracks.md)).
+
+Authored accessible regions cross the render/semantics boundary through the
+normal box/sliver adapters ([ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md)).
+The pipeline retains their presentation-local identity authority across semantics
+owner replacement. A pass stages all graft anchors, validates key scopes and
+reserves complete identity batches before mutating the current arena.
+`harness_custom_paint_region_failure_keeps_all_anchors_and_retries` observes
+mutation-free refusal and retry through `PipelineOwner::run_frame`.
+Rejected drafts release topology buffers and retain opaque configuration
+ownership under ADR-0127 while preserving the primary validation error.
+Raw action ownership is pinned before folding, including blocked/custom actions
+and temporary ancestor descriptions, and survives a graft-to-rebuild fallback.
+This prevents an overwritten receiver or omitted contributor from destroying
+captures before the complete pass verdict. Healthy temporary pins retire after
+publication and phase completion; no second geometry/topology cache is created.
+`harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+checks forced merge, overwritten receiver callbacks, single and competing
+destructor risks, unchanged publication and retry.
 
 Render-subtree relocation is deliberately narrow: only `PipelineOwner<Idle>` can detach, attach, or release a
 batch. Detach returns an opaque, non-cloneable `DetachedRenderSubtrees` token
@@ -36,6 +64,53 @@ the public widget composition.
 ---
 
 ## Mapping decisions
+
+### Transform ancestry storage belongs to the presentation
+
+`PipelineOwner::transform_to` borrows a reusable path buffer from its owner,
+then releases the cache borrow before applying authored paint transforms.
+Composition remains outermost-first. Read-only reentrant queries can take
+separate buffers; RAII returns storage on refusal and unwinding. The pool moves
+through pipeline phase transitions with the owner. The process-isolated public
+test `committed_transform_queries_reuse_ancestry_storage` counts zero allocation
+requests for warmed valid and invalid ancestry queries at depths 1, 12 and 100,
+including a phase transition. The `hit_test_matrix` retains coordinate behavior.
+
+### Sibling barriers travel through transparent wrappers
+
+A subtree returns semantic fragments together with a preceding-sibling barrier.
+Assembly clears earlier contributions in presentation order before applying
+reading-order keys. Transparent wrappers forward the barrier; a formed boundary
+consumes its descendant barriers and forwards only its own directive. Filtered
+callback captures remain in the assembly operation's existing custody until the
+phase ends. A graft that would affect siblings outside its anchor falls back to
+full assembly. `a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary`
+checks published content, updates and stale platform action refusal through real
+widgets. See ADR-0226.
+
+### Reading-order keys are resolved before fragment folding
+
+Semantics assembly stably orders keyed sibling fragments by group name and
+finite numeric order before merging labels or forming explicit children.
+Unkeyed fragments follow keyed ones and retain their declarative order. Signed
+zeroes compare equally. A changed graft anchor key invalidates that graft and
+rebuilds from declarative order, so removing or equalizing keys cannot retain an
+obsolete sorted order. Non-finite keys reject the draft before identity
+reservation or publication. The widget consumer
+`semantics_sort_keys_reorder_published_siblings_after_local_updates` and rendering
+row `nonfinite_reading_order_is_refused_before_publication` pin these contracts.
+
+### Single-child baseline forwarding uses committed layout edges
+
+The driver adds each forwarded child's vertical layout offset and bounds the
+walk by its arena's node count. A wrapper need not mirror child baselines or
+truncate valid nesting at a fixed depth. Paint effects do not alter layout
+baselines. [ADR-0234](../../docs/adr/ADR-0234-layout-baseline-composition.md)
+records the contract and its distinction from multi-child baseline selection.
+The objects harness rows
+`harness_single_child_layouts_preserve_live_and_dry_baselines` and
+`harness_deep_proxy_nesting_preserves_live_baselines` exercise actual parent
+alignment and hypothetical queries through the public pipeline.
 
 ### UI subscriptions retain invalidation independently of external pressure
 
@@ -222,78 +297,58 @@ children still share one picture. The facade readback test
 `canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
 clip, an unclipped child, and the resumed parent run through a real frame and GPU.
 
-### A lazy list's rows carry their position; its container carries the size
+### Set positions belong to members and totals belong to collection containers
 
-**Rule:** a screen reader announces "item 12 of 100" from two nodes: the position on the item and
-the size on the nearest ancestor the platform keeps (`accesskit_consumer`'s
-`size_of_set_from_container`). Wrapping every materialised item in an `IndexedSemantics` widget to
-carry either costs a node per item (a three-item `ListView` went from 8 render nodes to 11), so
-neither is a wrapper.
+The sparse host stamps `SliverSlot { logical, semantic }` into each resident's
+parent data. A missing semantic position denotes a non-member, such as a
+separator. Automatic membership retains the host's generational `RenderId` and
+does not allocate an indexing render node. Explicit `IndexedSemantics` inside a
+row's semantics boundary takes precedence after fragment folding.
 
-**The position is derived.** Each item's position comes from the index the sliver already stamps in
-`SliverMultiBoxAdaptorParentData`: zero extra nodes, and an index the band walk keeps in step with
-the row's real position rather than one captured at build time. What blocked a derivation from the
-*logical* index alone is that it announces non-members as members: `SliverList::separated`
-interleaves separators at odd logical indices, so the real items would get positions 1, 3, 5. The
-semantic index is carried BESIDE the logical one, as `SliverSlot { logical, semantic, set_size }`,
-minted by the host, inherited through however many component elements sit between it and the
-child's first render descendant, and stamped together at both stamp sites. `semantic: None` marks
-a child that occupies a logical index without being a member. The values travel as one because the
-failure being prevented is their drifting apart.
+The effective `SemanticSetMapping` separately installs its declared total on the
+lazy host. That host forms a real List/Grid semantics boundary, included by
+AccessKit's common filter. Neither resident count, render-child count nor an
+unknown-length layout probe supplies a total. `SliverSlot` and per-child parent
+data carry no total. AccessKit receives the position on the member and the count
+on its container.
 
-**The size is the container's.** The sliver that holds the stamped children reads the set size
-back from them (`described_configuration`) and declares it on its own configuration; a
-non-boundary configuration is absorbed by the nearest ancestor boundary, so the size lands on the
-scroll container, which publishes as a list. The total is the delegate's DECLARED item count: the
-count of members, not of render children, which for a delegate that interleaves separators is not
-the number of items a caller indexes and would announce "item 2 of 5" on a three-item list. It is
-`SetSize::Unknown` under an unresolved `ItemCount::Unknown`, where the count is only known after a
-probe walk and charging every mount for one is not worth it; an unknown size publishes no size,
-never the number of rows built. Every child carries the mapping's size, a separator or a header
-that is no member included, so a window of a virtualized list that holds no member still sits in a
-set of its declared size and keeps its container. Equal sizes do not make two slivers one set: two
-lists of three rows each restart their positions at zero, so each sliver is its own container.
-Slivers one caller composed into a single set (`SemanticSetMapping::composed_at`) keep their own
-containers too, each with the whole set's size and the positions it continues from.
+Authored indexes belong to the nearest authored collection; lazy membership names
+its actual host. AccessKit's ancestor lookup cannot express an unknown nested
+set that stops a known outer total. The projection conservatively withholds
+managed ancestor totals that would give such a member an unrelated count. It
+retains the original declaration, so later replacement restores the count.
+Collection-sensitive grafts fall back to complete assembly; unrelated grafts
+inspect only their ancestors and replaced subtree. See ADR-0227.
 
-**A position is held to the set it sits in.** The consumer pairs a position with the nearest
-size above it that is declared. The assembly context carries the nearest set a node sits in
-(`nearest_set`) and whether any enclosing set has a known size (`enclosing_known_set`), both folded
-from each ancestor's configuration the same way when a graft recomputes its inputs. A position,
-stamped or declared by the node itself, is published only if it fits: against a known set it must
-be one of its members, and under an unknown set there must be no known set above, whose size the
-consumer would read instead ("item 12 of 2"). Without an enclosing known set the rows of an
-unknown set keep their positions: "item 12" with no total. A cell, with its spans, and a row are
-held to the nearest table the same way (`nearest_table`): one outside a known extent is not
-published, since the consumer would read "row 5 of 3".
-
-**One logical item is one member.** A stamped item whose own node forms none (a `Padding` over a
-`Column`) hands its position to the fragments it forwards; only the first carries it, so a row
-that forms two controls does not announce both as "item 1", and a position declared anywhere in
-the item is its member's.
-
-**Placement and precedence.** An `IndexedSemantics` goes *inside* the row's semantics container,
-not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR boundary, so a
-wrapper above the container would index the node that forms above the row. `IndexedSemantics` and
-`RenderIndexedSemantics` remain public and take precedence: the stamped index is applied only
-where nothing declared one, and only *after* the fragment fold, since an `IndexedSemantics` inside
-the row is absorbed by the row during that fold. Applying it earlier would make the stamp win,
-because `absorb` does not overwrite a value the receiver already holds. A hand-numbered row keeps
-its own number against the container's size, the delegate's: numbering a different set than the
-one the delegate materialises is what a delegate's own mapping is for.
-
-A row that is hidden (a cache row beyond the viewport) carries its position on a hidden wrapper
-the consumer drops, as it drops the row.
-
-**Test.** `collection_semantics` in `crates/flui-widgets/tests` reads each case the way an adapter
-does: a five-item list, a hundred-item list scrolled to row 40, an unknown length, separators,
-an unknown set inside a known one and a known one inside a known one, composed slivers, two sets
-in one scroll view, a hand-numbered row, a position past its set, a declared unknown set inside a
-known one and a window with no member. The `lazy row` fixtures of
-`cargo xtask device windows-a11y` read the pair from UI Automation.
+Widget rows
+`lazy_collection_totals_reach_the_real_consumer_after_incremental_updates`,
+`collection_consumer_preserves_unknown_and_explicit_nested_sets` and
+`collection_consumer_uses_member_totals_for_separated_and_composed_delegates`
+feed actual delivered incremental packets to `accesskit_consumer::Tree` and call
+`size_of_set_from_container(common_filter)`. They cover virtualization, growth,
+empty/repopulate, separators, composition, independent and nested sets, explicit
+index precedence and authored collections. The isolated render-object row
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
-(`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including that
-an unchanged index requests no semantics update.
+continues to cover direct index replacement.
+
+A stamped item whose own node forms none (a `Padding` over a `Column`) hands
+its position to the fragments it forwards. One logical item is one member: only
+the first fragment carries it, so a row that forms two controls does not
+announce both as "item 1", and a position declared anywhere in the item, a
+descendant boundary included, is that member's and suppresses the stamp.
+
+The same post-assembly pass (`reconcile_collections`) holds every place to the
+set and table it actually sits in once the tree is built, so a node the clip
+dropped imposes no scope. A position past its known set's size, and a cell, its
+spans or a row outside its known table, is not published: the consumer would
+read "item 8 of 3" or "row 5 of 3". A set is any node that declares a size, a
+lazy host, an authored `SemanticsCollection` or a `Semantics` with
+`size_of_set`; a role-less one publishes as a List.
+
+`collection_semantics` in `crates/flui-widgets/tests` reads tables, trees,
+levels, sorted headers, hand-built lists and these limits the way an adapter
+does, and the `lazy row`, `tree item level` and `sorted column` fixtures of
+`cargo xtask device windows-a11y` read them from UI Automation.
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
@@ -362,7 +417,7 @@ asymmetry is not removable *at the stamp* — requiring one instead of accepting
 regresses `harness_merge_semantics_collapses_descendant_boundaries` (verified: the descendant's
 `is_button` is lost), which is the same objection that deferred this gate in the first place.
 
-It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot)` lets
+It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot, size)` lets
 a parent drop a child it structurally does not present, independently of layout history. The stamp
 answers "did this pass place you"; the visitor answers "do I present you at all". `RenderTheater`
 was the reachable case and overrides it from `skip_count` — see
@@ -377,13 +432,13 @@ and requeues nothing, so the stale capture is grafted and the update is gone for
 now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
 case it had only been warning about.
 
-**Unasserted:** no test pins this. That covers the paint gate, the hit-test gate and the capture
-eviction; the semantics gate is pinned by
+**Pinned:** the hit-test gate by
+`harness_placed_generation_gate_excludes_a_dropped_child_from_hits` and the semantics gate by
 `harness_placed_generation_gate_excludes_a_dropped_child_from_semantics`
-(`crates/flui-objects/tests/render_object_harness.rs`). A test for any of the three needs **two
-frames**: a child never laid out at all has size zero and paints nothing
-regardless, so a single-frame version passes with the gate removed. `FrameRun::run_frame_again`
-exists for it.
+(`crates/flui-objects/tests/render_object_harness.rs`). **Unasserted:** the paint gate and the
+capture eviction. A test for any of them needs **two frames**: a child never laid out at all has
+size zero and paints nothing regardless, so a single-frame version passes with the gate removed.
+`FrameRun::run_frame_again` exists for it.
 
 ### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
 
@@ -1061,7 +1116,7 @@ Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Pain
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
 
-**Note:** `hit_test_raw` is part of the `RenderObject<P>` trait, but the current pipeline owner does not invoke it directly -- hit testing is dispatched at the `RenderView` layer outside the frame pipeline. The catch_unwind helper around hit_test will land when hit testing is wired through the pipeline.
+Hit testing runs outside the frame pipeline and isolates per node instead: `PipelineOwner::hit_test` visits every node inside one `catch_unwind` (`contain_node` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs)) covering all of its user hooks — `hit_test_transform`, the expanded area, `hit_test` itself (path clippers, flow delegates), the entry's targets. A node that panics is a miss: what its subtree added is dropped, it blocks nothing below, and its siblings and ancestors still decide. The first payload is held until the path is complete, then resumed from `hit_test`, so `result` already holds every other hit; later payloads are retained. `RendererBinding::hit_test_in_view` catches that resume and returns it in `ViewHitTest::Answered`, and the runtime delivers the event to the path before reporting it. A tree whose layout is withdrawn or checked out answers `ViewHitTest::TreeBusy` rather than an empty path. Pinned by `a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path` (`hit_test_matrix`) and `a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic` (`flui-runtime`'s `owner_input_contract`). A pointer Down that finds the tree busy is still admitted with an empty route; refusing it belongs to the gesture binding's contact admission.
 
 ### Phase ORDERING lives in the type system; one runtime COMPLETENESS gate remains
 
@@ -1165,6 +1220,86 @@ signature is unchanged.
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
+
+### Expanded hit areas are resolved after the visual walk
+
+**Kind.** A hit test names the pointer kind asking (`PipelineOwner::hit_test`'s `kind`),
+and both walks pass it to `hit_slop_area(size, kind)`: a `RenderHitSlop` sizes its
+minimum target for that kind's preset, so a finger and a mouse on one window get their
+own areas (ADR-0212 §4). flui-testing's `a_mouse_and_a_touch_get_their_own_preset_and_min_target`
+pins it through the runtime's input path.
+
+**Rule.** A node reporting `RenderObject::hit_slop_area` never takes a position in the
+visual walk. When the walk passes through one whose area holds the position its bounds
+missed, it records the node and its distance to that position. `PipelineOwner::hit_test`
+then re-walks once per candidate, nearest first and topmost first on a tie, forcing only
+that node to take the hit (probing its child at the nearest point of its bounds, then at
+its centre), and adopts the first path that passes two checks: the visual path hit no
+entry with a pointer target off the candidate's path, and every visual entry off that
+path lies in the candidate's composited layer (nearest repaint boundary at or above each
+node). A visual hit on a node whose `blocks_hit_slop` holds (an absorbing
+`RenderAbsorbPointer`, which is what a modal barrier is) skips resolution entirely.
+
+**Why "off the candidate's path".** A slop must never steal a point that hit another
+layer's content, but a point that hit only the candidate's ancestors — the transparent
+gap between list items that are each their own layer — hit no other content, so it goes to
+the nearest slop. Comparing only the deepest visual entry's layer rejected that gap.
+
+**Why a re-walk, not a wider bounds check.** Testing the area inside the walk would let
+the topmost area win even over a target hit visually beneath it. The walk is the only
+place a hit is known not to be visual, so the decision waits until the visual result is complete. The cost is one hook
+call per visited box when no node has slop; a candidate costs one extra walk.
+
+**Boundaries.** Ancestor bounds still clip the area (the walk never reaches a node an
+ancestor rejected), so a gap outside every list item's own bounds stays unreachable.
+Anything above that takes the position and blocks stops the re-walk before the candidate.
+Semantics geometry ignores the area.
+
+**Known limits.** Distance is measured to the candidate's bounding rect in its own local
+space: it is not comparable across differently scaled subtrees, and it ignores a child's
+shape (a circle is measured to its box). The pointer kind is not known at hit-test time,
+so `min_target` is the scope's single profile, not per kind. A `HitSlop` reads its
+default `min_target` from the scope's provider on every hit test, so a live host update
+applies with no rebuild. Covered by the `hit_slop::` rows of the widgets'
+`pointer_and_gesture_recognition` table and `harness_hit_slop_extends_the_child_hit_area`.
+
+### Input regions follow what paint draws, mapped once per reporter
+
+**Rule.** `PipelineOwner::input_regions` walks from the root with paint's own gates — a
+child its parent did not lay out this pass, a child the parent does not present
+(`visits_child_for_semantics`), a node that skips paint, a node still needing layout, a
+sliver that is not visible — and asks each node for `describe_input_regions`. A node that
+reported regions has its transform and clip composed along its path from the root, through
+`RenderNode::apply_paint_transform` (the same mapping semantics and coordinate queries use)
+and each ancestor's `describe_approximate_paint_clip`, starting from the root's box as the
+window (ADR-0217 §5).
+
+**Why per reporter, not per node.** Regions are rare and the walk runs on every composited
+frame. Composing a matrix at every node would cost a 4×4 product per node for a feature
+most trees never use; composing only along a reporter's path costs a plain traversal plus
+`depth` steps per reporter.
+
+**Drops.** A region whose corners (or whose composed transform) are not finite is dropped
+with a `flui_rendering::input_regions` warning, never clamped from infinity; so is one
+with a corner at or behind the perspective horizon (`w <= 1e-9`), whose corner quotients
+can be finite yet describe a mirrored or unbounded shape. An unmappable clip refuses
+coverage. Device-pixel projection, `i32` checks and the OS diff are the backend's
+(`flui_platform_api::input_regions::ProjectedInputRegions`).
+
+**Delivery.** The runtime collects the set when it builds a scene and hands it to
+`PlatformWindow::set_input_regions` when the sink accepts that scene, and again on a scale
+change or a window move, which need not composite a frame. Pinned by the widgets'
+`input_regions` table (`a_transformed_region_reports_its_bounding_box`,
+`a_clipped_region_reports_the_intersection`, `a_scale_change_resends_unchanged_logical_regions`,
+`a_display_change_at_equal_scale_resends_regions`,
+`a_degenerate_transform_drops_the_region_with_a_diagnostic`,
+`a_region_crossing_the_perspective_horizon_is_dropped`) and `harness_input_regions`.
+
+**Followers.** A follower's composite-resolved offset (`last_follower_offsets`, the shift
+paint and hit-testing apply) is composed at the follower, and a follower resolved to hidden
+contributes nothing (`harness_input_regions_follow_a_follower_to_its_resolved_position`).
+Slivers report in their paint coordinates at their absolute paint size
+(`a_sliver_reports_its_painted_area_as_an_input_region`).
 
 ### Suspended layout distinguishes accepted input from retained work
 
@@ -1371,7 +1506,7 @@ control, checking published extents and the cached items' committed geometry.
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and
+lives in `flui-interaction` (`crates/flui-interaction/src/pointer/mouse_tracker.rs`) and
 the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
@@ -1426,6 +1561,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 |---|---|---|
 | `layout_passes` | `run_layout`, after `take_layout_batch_shallow_first` | non-empty layout batches; a pass with no dirty entry adds nothing |
 | `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
+| `layout_mark_steps` | `DirtyTracker::commit_needs_layout`, per node it marks | nodes the layout-invalidation walks marked; a walk stops where an earlier one settled the path, so N sibling marks cost N + depth (`sibling_layout_marks_share_one_ancestor_walk`, `tests/layout_dirty_root.rs`) |
 | `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
 | `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a grafted boundary is not a paint |
 | `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `graft`'s patched indices | layers created fresh this pass, including a layer a composited-layer update patches into a grafted boundary |
@@ -1480,11 +1616,24 @@ These deep-dives stay as companion documents (not under the per-crate template d
 ### Hit traversal refuses transforms without a computed finite inverse
 
 At both node-hook and context-child boundaries the pipeline maps failed
-`HitTestResult::with_paint_transform` admission to a miss (ADR-0113). It never
+`Matrix4::try_inverse` admission to a miss (ADR-0113). It never
 uses the forward matrix as a substitute for the inverse. Refusal occurs before
 the descendant callback, so the rejected subtree contributes no entries and
 cannot block a healthy sibling. Successful scopes keep their existing unwind
 restoration.
+
+At the node hook the walk inverts `hit_test_transform` once: the inverse goes
+onto the result (`HitTestResult::with_inverse_transform`) and maps the
+position, so the node's `hit_test` receives its position in the transformed
+space. `RenderTransform`, `RenderContainer`, `RenderRotatedBox` and
+`RenderAnimatedTransform` hit-test that position directly and invert nothing;
+an animated transform reads its sample once per visit, in `hit_test_transform`.
+
+The default `RenderBox::hit_test` follows the arity: a leaf is hit inside its
+own size, and anything that can have children is hit only through one, tested
+topmost first at its layout offset — a parent that keeps the default neither
+swallows its children's hits nor claims its empty space
+(`default_parent_hit_test_reaches_its_children`).
 
 The public `hit_test_matrix` rows in `tests/hit_test_pipeline.rs` include
 `nested_tiny_transforms_emit_the_correct_local_hit_point` (real nested

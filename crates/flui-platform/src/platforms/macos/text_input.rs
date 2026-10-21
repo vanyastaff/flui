@@ -31,13 +31,13 @@
 //!
 //! [`PlatformTextInput::set_ime_cursor_area`] receives the framework's window
 //! coordinates — top-left origin, Y down, the convention
-//! [`PlatformWindow::bounds`] and AppKit pointer conversion's Y flip establish — while
+//! [`WindowState`] and AppKit pointer conversion's Y flip establish — while
 //! `convertRectToScreen:` speaks AppKit's window base coordinates, bottom-left
 //! origin, Y up. `first_rect_for_character_range:actualRange:` is where the two
 //! meet, and it flips the axis before converting; without that flip the
 //! candidate window would sit mirrored about the window's vertical centre.
 //!
-//! [`PlatformWindow::bounds`]: crate::traits::PlatformWindow::bounds
+//! [`WindowState`]: crate::traits::WindowState
 
 use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
@@ -638,12 +638,12 @@ pub(super) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
 /// window site) even though the state they touch is main-thread-only by AppKit's
 /// delivery contract.
 pub(super) struct MacOSTextInput {
-    /// The window whose content view owns the composition state.
+    /// The window's `FLUIContentView`, which owns the composition state.
     ///
     /// Not retained: the capability borrows the window it was discovered from,
-    /// as every other per-window capability on this backend does. `closed` is
-    /// what keeps a late call safe.
-    ns_window: *mut AnyObject,
+    /// as every other per-window capability on this backend does, and the view
+    /// lives as long as that window. `closed` is what keeps a late call safe.
+    view: *mut AnyObject,
 
     /// Set once the window has closed (see `MacOSWindow`): the same liveness
     /// gate `HasWindowHandle::window_handle` consults, so a capability clone
@@ -660,7 +660,7 @@ pub(super) struct MacOSTextInput {
 }
 
 // SAFETY: the same argument as `MacOSWindow`'s own `unsafe impl Send`/`Sync`:
-// `ns_window` is a raw AppKit pointer that is only ever messaged from inside
+// `view` is a raw AppKit pointer that is only ever messaged from inside
 // `route_on_owner`, which runs the body on the window's owner lane; the
 // remaining fields are `Arc`/`&'static`/`bool`. The residual — a capability
 // clone outliving its window — is why `closed` is consulted in both bodies: the
@@ -675,13 +675,13 @@ unsafe impl Sync for MacOSTextInput {}
 
 impl MacOSTextInput {
     pub(super) fn new(
-        ns_window: *mut AnyObject,
+        view: *mut AnyObject,
         closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
         owner: &'static dispatch::Queue,
         owner_is_main: bool,
     ) -> Self {
         Self {
-            ns_window,
+            view,
             closed,
             owner,
             owner_is_main,
@@ -693,12 +693,7 @@ impl MacOSTextInput {
         self.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Run `body` against the window's live content view.
-    ///
-    /// The content view is fetched per call rather than cached: `liquid_glass`
-    /// replaces it (and `clear_liquid_glass` replaces it again with a fresh
-    /// `FLUIContentView` holding fresh state), so a cached id would be stale
-    /// after either call.
+    /// Run `body` against the window's `FLUIContentView`.
     fn with_content_view<R: Send>(&self, body: impl FnOnce(&ViewContext) -> R + Send) -> Option<R> {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
@@ -708,18 +703,13 @@ impl MacOSTextInput {
                 tracing::trace!("text input call on a closed window; dropped");
                 return None;
             }
-            // SAFETY: `ns_window` is alive for the lifetime of the window this
+            // SAFETY: `view` is alive for the lifetime of the window this
             // capability was discovered from, and the body runs on the owner
             // thread — inline on the OS main thread for a main-lane owner, or
             // dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent. `content_view` is the window's own, and
-            // `with_view_context` verifies it is a FLUIContentView before reading
-            // the context ivar (the content view is an NSVisualEffectView while
-            // liquid glass is applied, and carries no such ivar at all).
-            unsafe {
-                let content_view: *mut AnyObject = msg_send![this.ns_window, contentView];
-                super::view::with_view_context(content_view, body)
-            }
+            // view is touched. `with_view_context` checks the class before
+            // reading the context ivar.
+            unsafe { super::view::with_view_context(this.view, body) }
         })
     }
 }
@@ -766,11 +756,11 @@ impl PlatformTextInput for MacOSTextInput {
 }
 
 impl std::fmt::Debug for MacOSTextInput {
-    // Hand-written for the same reason `MacOSWindow`'s is: the NSWindow pointer
+    // Hand-written for the same reason `MacOSWindow`'s is: the NSView pointer
     // and the dispatch lane have no useful Debug form.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSTextInput")
-            .field("ns_window", &(self.ns_window as usize))
+            .field("view", &(self.view as usize))
             .field("closed", &self.is_closed())
             .finish_non_exhaustive()
     }

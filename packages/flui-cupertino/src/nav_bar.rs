@@ -39,8 +39,8 @@
 //!   scroll-under border lerp never applies.
 //! - **Blur** (`BackdropFilter`). A blur is only wanted when the resolved
 //!   background's alpha is not `0xFF` — moot today since this V1 has no
-//!   translucent-background path to trigger it, and `flui-widgets` has no
-//!   `BackdropFilter` primitive yet regardless.
+//!   translucent-background path to trigger it, and `flui-widgets`'
+//!   `BackdropFilter`/`BackdropGroup` are not on the `flui-sdk` surface yet.
 //! - **Hero transition between nav bars** — the push/pop hand-off where two
 //!   nav bars visually merge. Out of this component's scope; each nav bar is
 //!   independently mounted per route.
@@ -211,7 +211,7 @@ impl StatelessView for CupertinoNavigationBar {
             .background_color
             .unwrap_or_else(|| theme.bar_background_color())
             .resolve(ctx);
-        let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
+        let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().top);
 
         let mut layers: Vec<BoxedView> = Vec::new();
         if let Some(middle) = &self.middle {

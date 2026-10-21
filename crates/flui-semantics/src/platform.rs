@@ -56,8 +56,10 @@ pub type AccessibilityActivationListener = Arc<dyn Fn(bool) + Send + Sync>;
 /// acts on the snapshot it last read — so a handler resolves rather than
 /// assumes, and treats a miss as a graceful drop.
 ///
-/// The request also carries [`ActionRequest::target_tree`], which is what will
-/// address the right presentation once more than one window publishes a tree.
+/// The request also carries [`ActionRequest::target_tree`]. A window publishes one tree,
+/// [`TreeId::ROOT`](accesskit::TreeId::ROOT), and the presentation the request is stamped
+/// with decides which window it reaches; a request for any other tree is refused when it is
+/// decoded ([`ActionDecodeError::UnknownTree`](crate::ActionDecodeError::UnknownTree)).
 pub type AccessibilityActionListener = Arc<dyn Fn(ActionRequest) + Send + Sync>;
 
 /// Platform capability for exposing one window's accessibility tree.

@@ -1,14 +1,15 @@
 //! Independent multi-drag delivery and cancellation recovery.
 use flui_foundation::geometry::{Matrix4, Offset};
-use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_interaction::recognizers::{
+use flui_interaction::gesture::GestureContest;
+use flui_interaction::gesture::{GestureArena, GestureArenaMember};
+use flui_interaction::gesture::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
     MultiDragUpdateDetails,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     GestureRecognizer, HitTestEntry, HitTestResult, InteractionLane, PointerId, RenderId,
 };
@@ -25,8 +26,8 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
 
     struct Rival;
     impl GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     struct ObservedHandle(Rc<RefCell<Vec<MultiDragUpdateDetails>>>);
     impl MultiDragHandle for ObservedHandle {
@@ -108,13 +109,13 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
             "contested contacts await movement"
         );
         route.dispatch(&stamp(
-            make_move_event_for_id(first, Offset::new(130.0, 260.0), PointerKind::Touch)
+            make_move_event_for_id(first, Offset::new(128.0, 250.0), PointerKind::Touch)
                 .expect("move"),
             10,
         ));
         assert!(
             updates.borrow().is_empty(),
-            "sub-slop sample does not start a client"
+            "a sample within the slop in root pixels does not start a client"
         );
         for (pointer, global) in [
             (first, Offset::new(180.0, 320.0)),

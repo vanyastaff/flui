@@ -129,33 +129,41 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
             return;
         }
         let shown = shown(&*self.from, &*self.to, self.progress.value());
-        // The new anchors are in place before the restart publishes its
-        // progress. Outgoing values (user types, whose destructors may panic
-        // or reenter) retire only once the state is consistent: after the
-        // restart commits, or after a refused restart puts both back.
-        // Every user call (interpolation, clone) runs before the first
-        // anchor changes, so a panic there leaves the state untouched.
-        // The outgoing values sit in terminal slots while the restart runs: a
-        // listener failing during its delivery unwinds past them.
+        // The new anchors are installed by the restart's admission callback,
+        // so they change exactly when the run does: a motion whose curve
+        // fails during preparation leaves both the anchors and the run as
+        // they were. Outgoing values (user types, whose destructors may panic
+        // or reenter) retire only once the state is consistent. Every user
+        // call (interpolation, clone) runs before the restart starts, so a
+        // panic there leaves the state untouched. The outgoing values sit in
+        // terminal slots while the restart delivers: a listener failing
+        // there unwinds past them.
         let target = new_view.target.clone();
-        let mut outgoing_from = Terminal::new(std::mem::replace(&mut *self.from, shown));
-        let mut outgoing_to = Terminal::new(std::mem::replace(&mut *self.to, target));
-        let (retired_from, retired_to) = if self.progress.restart(0.0, 1.0, &new_view.motion) {
-            (outgoing_from, outgoing_to)
-        } else {
-            (
+        // The incoming values wait in terminal slots too: a refused restart
+        // never runs the callback, and they must retire on their own, not as
+        // captures of a dropped closure.
+        let mut incoming_from = Terminal::new(shown);
+        let mut incoming_to = Terminal::new(target);
+        let mut outgoing: Option<(Terminal<T>, Terminal<T>)> = None;
+        let (from_slot, to_slot) = (&mut self.from, &mut self.to);
+        self.progress.restart_then(0.0, 1.0, &new_view.motion, || {
+            outgoing = Some((
                 Terminal::new(std::mem::replace(
-                    &mut *self.from,
-                    outgoing_from.take_value(),
+                    &mut **from_slot,
+                    incoming_from.take_value(),
                 )),
-                Terminal::new(std::mem::replace(&mut *self.to, outgoing_to.take_value())),
-            )
-        };
+                Terminal::new(std::mem::replace(&mut **to_slot, incoming_to.take_value())),
+            ));
+        });
         // Each value retires on its own, so a second panicking destructor
         // cannot run while the first unwinds; the first failure resumes.
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.retire(retired_from);
-        recovery.retire(retired_to);
+        if let Some((retired_from, retired_to)) = outgoing {
+            recovery.retire(retired_from);
+            recovery.retire(retired_to);
+        }
+        recovery.retire(incoming_from);
+        recovery.retire(incoming_to);
         recovery.finish();
     }
 

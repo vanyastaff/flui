@@ -1,20 +1,20 @@
 //! Turns a [`Scope`] into the lane a CI run takes and the cargo arguments
-//! `cargo xtask check-changed` runs -- the one place the lane and the scoped
+//! a CI job runs for it -- the one place the lane and the scoped
 //! test policy live.
 //!
 //! The lane ([`Lane::decide`]) comes from the event and
 //! the classification: `docs` and `tooling` compile nothing, `wide` runs every
-//! Linux PR jobs over the workspace in parallel; `full` adds Linux checks,
-//! and nightly/manual `extended` uses the same Linux coverage. A pull request
+//! Linux PR job over the workspace in parallel; `full` (main, the merge queue
+//! and a manual run) adds Linux checks. A pull request
 //! that compiles anything takes `wide`: one serial job over the changed crates
 //! measured slower than the parallel jobs over everything (35 against 18
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
-//! for this repository. The scoped arguments, `check-changed`'s:
+//! for this repository. The scoped arguments:
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
-//! - the facade's catalogs and `persist`, none on by default, join the run
-//!   when `flui` is in scope (`--features flui/material,flui/cupertino,flui/persist`);
+//! - the facade's catalogs, none on by default, join the run
+//!   when `flui` is in scope (`--features flui/material,flui/cupertino`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
@@ -36,10 +36,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-/// The facade's design-system features and `persist`, none on by default
-/// (ADR-0088 §6): every scoped step that selects `flui` names them, so the
-/// Notes example and the storage seam are built where the facade is tested.
-const FACADE_CATALOGS: [&str; 3] = ["flui/material", "flui/cupertino", "flui/persist"];
+/// The facade's design-system features, none on by default (ADR-0088 §6):
+/// every scoped step that selects `flui` names them, so the Notes example is
+/// built where the facade is tested.
+const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
@@ -52,8 +52,6 @@ pub(super) enum Event {
     Push,
     #[value(name = "merge_group")]
     MergeGroup,
-    #[value(name = "schedule")]
-    Schedule,
     #[value(name = "workflow_dispatch")]
     WorkflowDispatch,
 }
@@ -63,15 +61,14 @@ pub(super) enum Event {
 pub(super) enum Lane {
     /// Documentation only: `checks`, `plan`.
     Docs,
-    /// Repository tooling or a standalone crate: `deps` and `standalone` too.
+    /// Repository tooling: `deps` too.
     Tooling,
     /// A pull request that compiles anything: every Linux job over the whole
     /// workspace (`HEAVY_JOBS`).
     Wide,
-    /// `main` and the merge queue: `wide` plus additional Linux jobs (`FULL_JOBS`).
+    /// `main`, the merge queue and a manual run: `wide` plus additional Linux
+    /// jobs (`FULL_JOBS`).
     Full,
-    /// Nightly and dispatch: Linux full coverage.
-    Extended,
 }
 
 impl Lane {
@@ -81,15 +78,13 @@ impl Lane {
             Self::Tooling => "tooling",
             Self::Wide => "wide",
             Self::Full => "full",
-            Self::Extended => "extended",
         }
     }
 
     /// The lane for a run: the event first, then what the change touches.
     pub(super) fn decide(event: Event, mode: Mode, heavy_required: bool) -> Self {
         match event {
-            Event::Schedule | Event::WorkflowDispatch => Self::Extended,
-            Event::Push | Event::MergeGroup => Self::Full,
+            Event::Push | Event::MergeGroup | Event::WorkflowDispatch => Self::Full,
             Event::PullRequest if heavy_required => Self::Wide,
             Event::PullRequest => match mode {
                 Mode::Full | Mode::Packages => Self::Wide,
@@ -100,8 +95,8 @@ impl Lane {
     }
 }
 
-/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode`,
-/// `cross_ios` and `standalone`), one field per output, in output order.
+/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode` and
+/// `heavy_required`), one field per output, in output order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneArgs {
     pub(super) lane: Lane,
@@ -123,14 +118,11 @@ pub(super) struct LaneArgs {
     pub(super) hack_args: String,
     pub(super) doc_args: String,
     pub(super) doctest_args: String,
-    /// Standalone crate directories the change touches (own `[workspace]`,
-    /// outside every member's graph), space-separated.
-    pub(super) standalone: String,
 }
 
 impl LaneArgs {
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 20] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 19] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -156,7 +148,6 @@ impl LaneArgs {
             ("hack_args", self.hack_args.clone()),
             ("doc_args", self.doc_args.clone()),
             ("doctest_args", self.doctest_args.clone()),
-            ("standalone", self.standalone.clone()),
         ]
     }
 }
@@ -278,7 +269,7 @@ fn feature_gated_dependents<'a>(
     found
 }
 
-/// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
+/// The lane for `scope` on `event`, and its scoped arguments.
 pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Result<LaneArgs> {
     let full = scope.mode == Mode::Full;
     let compiles = matches!(scope.mode, Mode::Packages | Mode::Full);
@@ -430,7 +421,6 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         hack_args,
         doc_args,
         doctest_args,
-        standalone: scope.standalone.join(" "),
     })
 }
 
@@ -468,13 +458,12 @@ mod tests {
     }
 
     fn events_pick_their_lane() {
-        use Event::{MergeGroup, PullRequest, Push, Schedule, WorkflowDispatch};
+        use Event::{MergeGroup, PullRequest, Push, WorkflowDispatch};
         for mode in [Mode::Docs, Mode::None, Mode::Packages, Mode::Full] {
             for heavy in [false, true] {
                 assert_eq!(Lane::decide(Push, mode, heavy), Lane::Full);
                 assert_eq!(Lane::decide(MergeGroup, mode, heavy), Lane::Full);
-                assert_eq!(Lane::decide(Schedule, mode, heavy), Lane::Extended);
-                assert_eq!(Lane::decide(WorkflowDispatch, mode, heavy), Lane::Extended);
+                assert_eq!(Lane::decide(WorkflowDispatch, mode, heavy), Lane::Full);
             }
             assert_eq!(Lane::decide(PullRequest, mode, true), Lane::Wide);
         }
@@ -488,7 +477,7 @@ mod tests {
             ],
             [Lane::Docs, Lane::Tooling, Lane::Wide, Lane::Wide]
         );
-        let names: Vec<String> = [PullRequest, Push, MergeGroup, Schedule, WorkflowDispatch]
+        let names: Vec<String> = [PullRequest, Push, MergeGroup, WorkflowDispatch]
             .iter()
             .map(|e| {
                 clap::ValueEnum::to_possible_value(e)
@@ -499,23 +488,17 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            [
-                "pull_request",
-                "push",
-                "merge_group",
-                "schedule",
-                "workflow_dispatch"
-            ],
+            ["pull_request", "push", "merge_group", "workflow_dispatch"],
             "github.event_name spellings"
         );
     }
 
-    fn a_package_change_takes_the_wide_lane_and_scopes_check_changed() {
+    fn a_package_change_takes_the_wide_lane_and_scopes_its_tests() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
             a.test_args,
-            "-p flui -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
+            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
         );
     }
 
@@ -525,7 +508,6 @@ mod tests {
             packages: vec!["flui-platform".to_owned()],
             seeds: vec!["flui-platform".to_owned()],
             manifests: Vec::new(),
-            standalone: Vec::new(),
             heavy_required: false,
             reason: String::new(),
         };
@@ -534,29 +516,13 @@ mod tests {
         assert!(a.platform, "its own leg runs it");
     }
 
-    fn a_standalone_crate_runs_the_tooling_lane() {
-        let only_standalone = Scope {
-            mode: Mode::None,
-            packages: Vec::new(),
-            seeds: Vec::new(),
-            manifests: Vec::new(),
-            standalone: vec!["tools/spike".to_owned()],
-            heavy_required: false,
-            reason: String::new(),
-        };
-        let a = lane_args(repo(), &only_standalone, Event::PullRequest).expect("lane args");
-        assert_eq!(
-            (a.lane, a.standalone.as_str(), a.pkg_args.as_str()),
-            (Lane::Tooling, "tools/spike", "")
-        );
-    }
-
     fn a_changed_manifest_gets_the_per_feature_pass() {
         // the package itself for its changed manifest, and the facade, whose
-        // edge to it only exists under the `material` feature
+        // edge to it only exists under the `material` feature, with the
+        // facade's dependents that have features of their own
         assert_eq!(
             args(&["packages/flui-material/Cargo.toml"]).hack_args,
-            "-p flui -p flui-material"
+            "-p flui -p flui-interaction-gallery -p flui-material"
         );
     }
 
@@ -604,7 +570,7 @@ mod tests {
         // compile that edge, which the facade's default build never does
         assert_eq!(
             args(&["packages/flui-material/src/lib.rs"]).hack_args,
-            "-p flui"
+            "-p flui -p flui-interaction-gallery"
         );
     }
 
@@ -620,7 +586,7 @@ mod tests {
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(
             a.doctest_args,
-            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino,flui/persist"
+            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
         );
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
         assert!(a.packages.contains("flui-web-counter"));
@@ -636,7 +602,10 @@ mod tests {
 
     fn rustdoc_covers_the_scope_with_its_testing_features() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
-        assert!(a.doc_args.starts_with("-p flui -p flui-material"));
+        assert!(
+            a.doc_args
+                .starts_with("-p flui -p flui-interaction-gallery -p flui-material")
+        );
         assert!(a.doc_args.contains("--features flui/testing"));
         // a testing feature of a package outside the scope would be rejected by cargo
         assert!(!a.doc_args.contains("flui-rendering/testing"));
@@ -648,26 +617,25 @@ mod tests {
         // half of the facade is neither documented nor doctested
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(
-            a.doc_args
-                .contains("flui/material,flui/cupertino,flui/persist"),
+            a.doc_args.contains("flui/material,flui/cupertino"),
             "{}",
             a.doc_args
         );
         assert!(
             a.doctest_args
-                .ends_with(" --features flui/material,flui/cupertino,flui/persist"),
+                .ends_with(" --features flui/material,flui/cupertino"),
             "{}",
             a.doctest_args
         );
         // a feature of a package outside the selection would be rejected by cargo
-        let devtools = args(&["packages/flui-devtools/src/lib.rs"]);
-        assert!(!devtools.packages.split(' ').any(|n| n == "flui"));
-        assert!(devtools.doctest_args.starts_with("-p flui-devtools"));
+        // (the CLI is a package the facade does not depend on)
+        let cli = args(&["crates/flui-cli/src/main.rs"]);
+        assert!(!cli.packages.split(' ').any(|n| n == "flui"));
         assert!(
-            !devtools.doc_args.contains("flui/") && !devtools.doctest_args.contains("flui/"),
+            !cli.doc_args.contains("flui/") && !cli.doctest_args.contains("flui/"),
             "{} / {}",
-            devtools.doc_args,
-            devtools.doctest_args
+            cli.doc_args,
+            cli.doctest_args
         );
     }
 
@@ -705,8 +673,7 @@ mod tests {
         assert!(
             a.doc_args.starts_with("--workspace --features ")
                 && a.doc_args.contains("flui/testing")
-                && a.doc_args
-                    .contains("flui/material,flui/cupertino,flui/persist")
+                && a.doc_args.contains("flui/material,flui/cupertino")
         );
         assert_eq!(
             (
@@ -715,7 +682,7 @@ mod tests {
                 a.packages.as_str()
             ),
             (
-                "--workspace --features flui/material,flui/cupertino,flui/persist",
+                "--workspace --features flui/material,flui/cupertino",
                 "",
                 ""
             )
@@ -742,7 +709,6 @@ mod tests {
                 &a.hack_args,
                 &a.doc_args,
                 &a.doctest_args,
-                &a.standalone,
             ];
             assert!(empty.iter().all(|v| v.is_empty()), "{files:?}: {a:?}");
             assert!(
@@ -769,16 +735,12 @@ mod tests {
                 ),
                 ("events_pick_their_lane", events_pick_their_lane as fn()),
                 (
-                    "a_package_change_takes_the_wide_lane_and_scopes_check_changed",
-                    a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
+                    "a_package_change_takes_the_wide_lane_and_scopes_its_tests",
+                    a_package_change_takes_the_wide_lane_and_scopes_its_tests as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",
                     platform_only_scope_has_no_test_args as fn(),
-                ),
-                (
-                    "a_standalone_crate_runs_the_tooling_lane",
-                    a_standalone_crate_runs_the_tooling_lane as fn(),
                 ),
                 (
                     "a_changed_manifest_gets_the_per_feature_pass",

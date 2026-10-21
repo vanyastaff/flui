@@ -9,6 +9,12 @@ use flui_runtime::owner::{
 };
 use flui_runtime::ui_runtime::UiRuntime;
 
+use crate::HostInputExt as _;
+
+// Host input is plain data: it crosses from an adapter thread to its owner
+// and into recordings (ADR-0207 §8).
+static_assertions::assert_impl_all!(flui_runtime::HostInput: Send, Clone);
+
 fn key(code: Code) -> PlatformInput {
     PlatformInput::Keyboard(KeyEventBuilder::new(code).build())
 }
@@ -159,8 +165,8 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     );
 }
 
-struct Effects {
-    input: PresentationDispatcher,
+pub(super) struct Effects {
+    pub(super) input: PresentationDispatcher,
     trace: Rc<RefCell<Vec<&'static str>>>,
     nested_input: Cell<bool>,
     wakes: Cell<usize>,
@@ -218,8 +224,7 @@ impl OwnerEffects for Effects {
     fn resize_surface(
         &self,
         _: flui_foundation::PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
+        _: flui_foundation::geometry::WindowMetrics,
     ) {
         self.trace.borrow_mut().push("resize");
     }
@@ -236,7 +241,7 @@ impl OwnerEffects for Effects {
     }
 }
 
-fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
+pub(super) fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
     let owner = OwnerHost::new();
     let runtime = crate::owner_publication::runtime();
     runtime.synchronize_window_snapshot(
@@ -294,7 +299,7 @@ fn keyboard_preserves_accepted_order_and_shares_the_callback_budget() {
             let _callback = owner.begin_callback(&effects).expect("native callback");
             for index in 0..80 {
                 assert_eq!(
-                    frame.deliver(&effects),
+                    frame.deliver(crate::VSYNC, &effects),
                     Ok(if index < 32 {
                         Delivery::Driven
                     } else {
@@ -332,16 +337,15 @@ fn queued_resize_and_input_remain_ordered_across_native_callbacks() {
     {
         let _callback = owner.begin_callback(&effects).expect("callback");
         for _ in 0..32 {
-            frame.deliver(&effects).expect("frame");
+            frame.deliver(crate::VSYNC, &effects).expect("frame");
         }
         for width in [810.0, 820.0] {
             effects
                 .input
                 .observe(
-                    flui_runtime::owner::WindowObservation::Metrics {
-                        size: flui_foundation::geometry::Size::new(width, 600.0),
-                        scale_factor: 1.0,
-                    },
+                    flui_runtime::owner::WindowObservation::Metrics(crate::window_metrics(
+                        width, 600.0, 1.0,
+                    )),
                     &effects,
                 )
                 .expect("metrics");
@@ -370,7 +374,7 @@ fn non_keyboard_input_reports_deferred_delivery_when_carried_work_uses_the_budge
     {
         let _callback = owner.begin_callback(&effects).expect("callback");
         for _ in 0..80 {
-            frame.deliver(&effects).expect("frame");
+            frame.deliver(crate::VSYNC, &effects).expect("frame");
         }
     }
     assert_eq!(
@@ -396,14 +400,13 @@ fn reentrant_keyboard_is_queued_until_the_frame_returns() {
     owner
         .frame_dispatcher(address)
         .expect("frame authority")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("frame");
     assert_eq!(*effects.trace.borrow(), ["frame", "queued key"]);
     assert_eq!(effects.wakes.get(), 0);
 }
 
 fn pending_metrics_do_not_cross_ordered_operations() {
-    use flui_foundation::geometry::Size;
     use flui_runtime::owner::{RuntimeOperation, WindowObservation};
 
     for barrier in [
@@ -426,12 +429,12 @@ fn pending_metrics_do_not_cross_ordered_operations() {
         {
             let _callback = owner.begin_callback(&effects).expect("native callback");
             for _ in 0..32 {
-                frame.deliver(&effects).expect("consume callback budget");
+                frame
+                    .deliver(crate::VSYNC, &effects)
+                    .expect("consume callback budget");
             }
-            let metrics = |width| WindowObservation::Metrics {
-                size: Size::new(width, 600.0),
-                scale_factor: 1.0,
-            };
+            let metrics =
+                |width| WindowObservation::Metrics(crate::window_metrics(width, 600.0, 1.0));
             effects
                 .input
                 .observe(metrics(800.0), &effects)
@@ -448,7 +451,9 @@ fn pending_metrics_do_not_cross_ordered_operations() {
                         .expect("input barrier");
                 }
                 "frame" => {
-                    frame.deliver(&effects).expect("frame barrier");
+                    frame
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("frame barrier");
                 }
                 "lifecycle" => {
                     owner
@@ -567,7 +572,7 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
     ] {
         assert_eq!(
             installed[0].0.observe(observation, &effects),
-            Ok(Delivery::Driven)
+            Ok(InputOutcome::Handled)
         );
     }
     assert_eq!(
@@ -584,6 +589,314 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
     assert!(
         effects.trace.borrow().is_empty(),
         "observations do not fabricate frames"
+    );
+}
+
+/// Records what a presentation publishes to assistive technology, which is
+/// attached from the start.
+#[derive(Default)]
+struct RecordingBridge {
+    updates: std::sync::Mutex<Vec<accesskit::TreeUpdate>>,
+}
+
+impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
+    fn publish(&self, update: accesskit::TreeUpdate) {
+        self.updates.lock().expect("updates").push(update);
+    }
+    fn is_active(&self) -> bool {
+        true
+    }
+    fn set_activation_listener(
+        &self,
+        _: flui_semantics::platform::AccessibilityActivationListener,
+    ) {
+    }
+    fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
+}
+
+/// `HostInput::Accessibility` takes the accessibility bridge's path: it waits
+/// in the runtime's command inbox and is decoded and invoked by the addressed
+/// presentation's semantics owner at the next owner turn's Idle drain
+/// (ADR-0207, amendment). A request for a node the presentation never
+/// published runs nothing; a panicking handler wakes the owner for the
+/// requests behind it; a request queued before a frame is applied, and
+/// recorded, before that frame; a full inbox refuses the request.
+fn accessibility_input_reaches_the_semantics_owner() {
+    use flui_runtime::presentation::PresentationWindow;
+    use flui_runtime::{HostInput, InputRecord};
+    use flui_widgets::{Row, Semantics, SizedBox};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let bridge = std::sync::Arc::new(RecordingBridge::default());
+    let window = flui_platform::headless_platform()
+        .open_window(flui_platform::WindowOptions::default())
+        .expect("headless window");
+    let wakes = std::sync::Arc::new(AtomicUsize::new(0));
+    let runtime = UiRuntime::new(
+        PresentationWindow::new(
+            window,
+            Some(std::sync::Arc::clone(&bridge) as std::sync::Arc<_>),
+        ),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            {
+                let wakes = std::sync::Arc::clone(&wakes);
+                std::sync::Arc::new(move || {
+                    wakes.fetch_add(1, Ordering::Relaxed);
+                })
+            },
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let clicks = Rc::new(Cell::new(0));
+    let clicked = Rc::clone(&clicks);
+    runtime
+        .attach_root_widget_with_size(
+            &Row::new((
+                Semantics::new()
+                    .container(true)
+                    .label("Send")
+                    .on_click(move |_cx| clicked.set(clicked.get() + 1))
+                    .child(SizedBox::new(10.0, 10.0)),
+                Semantics::new()
+                    .container(true)
+                    .label("Boom")
+                    .on_click(|_cx| {
+                        // Typed `()`: a handler that only diverges has no outcome.
+                        if std::hint::black_box(true) {
+                            std::panic::panic_any("assistive handler failure");
+                        }
+                    })
+                    .child(SizedBox::new(10.0, 10.0)),
+            )),
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    struct Sink;
+    impl flui_runtime::sink::FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (40, 40)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    }
+    let mut runtime = runtime;
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    let node = |label: &str| {
+        bridge
+            .updates
+            .lock()
+            .expect("updates")
+            .iter()
+            .flat_map(|update| update.nodes.iter())
+            .find(|(_, node)| node.label() == Some(label))
+            .map(|(id, _)| *id)
+            .expect("the node was published")
+    };
+    let (send, boom) = (node("Send"), node("Boom"));
+    let taps = runtime.input_taps().clone();
+
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Effects {
+        input: owner
+            .presentation_dispatcher(address)
+            .expect("input authority"),
+        trace: Rc::new(RefCell::new(Vec::new())),
+        nested_input: Cell::new(false),
+        wakes: Cell::new(0),
+    };
+    let click = |target_node| {
+        HostInput::Accessibility(accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node,
+            data: None,
+        })
+    };
+    let dispatch = |node| effects.input.dispatch(click(node), &effects);
+    let owner_turn = || {
+        owner
+            .runtime_dispatcher(address.ui_runtime_id)
+            .expect("runtime authority")
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            .expect("background turn");
+    };
+    for (node, ran) in [(accesskit::NodeId(u64::MAX), 0), (send, 1)] {
+        assert_eq!(
+            dispatch(node),
+            Ok(InputOutcome::Queued),
+            "the request waits in the inbox, as the bridge's does"
+        );
+        assert_eq!(clicks.get(), 0, "nothing runs before the next owner turn");
+        owner_turn();
+        assert_eq!(
+            clicks.get(),
+            ran,
+            "the next turn's Idle drain ran the node's handler, or nothing for an unpublished node"
+        );
+        clicks.set(0);
+    }
+
+    // A panicking handler: the request behind it is woken for, not stranded.
+    assert_eq!(dispatch(boom), Ok(InputOutcome::Queued));
+    assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
+    let woken = wakes.load(Ordering::Relaxed);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(owner_turn));
+    assert!(failed.is_err(), "the handler's panic resumes");
+    assert_eq!(clicks.get(), 0, "the request behind it waits");
+    assert!(
+        wakes.load(Ordering::Relaxed) > woken,
+        "the drain woke the owner for the accepted tail"
+    );
+    owner_turn();
+    assert_eq!(clicks.get(), 1, "the woken turn ran the request behind it");
+    clicks.set(0);
+
+    // A request queued before a frame is applied, and recorded, before it.
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let tap = taps
+        .install({
+            let rows = Rc::clone(&rows);
+            move |record: &InputRecord| {
+                if let InputRecord::Input(row) = record {
+                    rows.borrow_mut().push(match row.input {
+                        HostInput::Accessibility(_) => "accessibility",
+                        HostInput::Frame { .. } => "frame",
+                        _ => "other",
+                    });
+                }
+            }
+        })
+        .expect("registration");
+    assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
+    owner
+        .frame_dispatcher(address)
+        .expect("frames")
+        .deliver(crate::VSYNC, &effects)
+        .expect("frame");
+    assert_eq!(clicks.get(), 1, "the frame applied the queued request");
+    assert_eq!(*rows.borrow(), ["accessibility", "frame"]);
+    tap.finish().expect("complete recording");
+    clicks.set(0);
+
+    // A full inbox refuses the request; the drain makes room again.
+    let mut admitted = 0;
+    let refused = loop {
+        match dispatch(accesskit::NodeId(u64::MAX)) {
+            Ok(InputOutcome::Queued) => admitted += 1,
+            other => break other,
+        }
+        assert!(admitted <= 4096, "the inbox is bounded");
+    };
+    assert_eq!(refused, Err(flui_runtime::owner::DispatchError::InboxFull));
+    assert!(admitted > 0, "it admitted requests until it was full");
+    owner_turn();
+    assert_eq!(
+        dispatch(send),
+        Ok(InputOutcome::Queued),
+        "the drain made room"
+    );
+    owner_turn();
+    assert_eq!(clicks.get(), 1);
+}
+
+/// A 40x40 leaf whose hit test panics.
+#[derive(Debug)]
+struct PanicOnHit;
+impl flui_foundation::Diagnosticable for PanicOnHit {}
+
+impl flui_rendering::traits::RenderBox for PanicOnHit {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        panic!("render object hit test failed");
+    }
+}
+
+/// A view's hit test says when its tree cannot answer, instead of handing
+/// back an empty path that reads as "nothing is here", and contains a render
+/// object's panic: the path to every other target is complete, and the panic
+/// is the caller's to report once the event reached it.
+fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
+    use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
+    use flui_rendering::traits::RenderObject;
+
+    let binding = flui_runtime::renderer_binding::RenderingBinding::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let pipeline = binding.root_pipeline_owner();
+    let healthy = pipeline.with_mut(|owner| {
+        let root = owner.set_root_render_object(Box::new(flui_objects::RenderStack::new())
+            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+        let healthy = owner
+            .insert_child_render_object(
+                root,
+                Box::new(flui_objects::RenderColoredBox::red(40.0, 40.0)),
+            )
+            .expect("healthy child attaches");
+        owner
+            .insert_child_render_object(root, Box::new(PanicOnHit))
+            .expect("panicking child attaches");
+        owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::tight(
+            flui_foundation::geometry::Size::new(100.0, 100.0),
+        )));
+        let (returned, frame) = owner.take_idle().run_frame();
+        frame.expect("the tree paints");
+        *owner = returned;
+        healthy
+    });
+    let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
+    let kind = flui_interaction::events::PointerKind::Touch;
+
+    pipeline.withdraw_layout();
+    let mut result = flui_interaction::pointer::HitTestResult::new();
+    assert!(matches!(
+        binding.hit_test_in_view(&mut result, position, kind, 0),
+        ViewHitTest::TreeBusy
+    ));
+    assert!(result.is_empty(), "a busy tree leaves the result untouched");
+
+    pipeline.publish_layout();
+    let ViewHitTest::Answered { panic } = binding.hit_test_in_view(&mut result, position, kind, 0)
+    else {
+        panic!("a published layout answers");
+    };
+    assert_eq!(
+        panic
+            .as_deref()
+            .and_then(flui_foundation::panic::payload_text),
+        Some("render object hit test failed")
+    );
+    assert_eq!(
+        result.path().first().map(|entry| entry.target),
+        Some(healthy),
+        "the panicking child above is a miss; the one below it is hit"
     );
 }
 
@@ -620,6 +933,14 @@ fn owner_input_contract() {
             (
                 "reentrant_keyboard_is_queued_until_the_frame_returns",
                 reentrant_keyboard_is_queued_until_the_frame_returns as fn(),
+            ),
+            (
+                "accessibility_input_reaches_the_semantics_owner",
+                accessibility_input_reaches_the_semantics_owner as fn(),
+            ),
+            (
+                "a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic",
+                a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic as fn(),
             ),
         ],
     );

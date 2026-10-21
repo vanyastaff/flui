@@ -37,7 +37,11 @@
 //!
 //! * **Per-route `FocusScope` — landed (ADR-0026).** The page is wrapped in
 //!   `FocusScope::with_external_node` and the current route's scope is installed
-//!   through the enclosing scope's first-focus history chain. Still absent:
+//!   through the enclosing scope's first-focus history chain. Only the current
+//!   route's scope admits focus (the navigator enables the new top first, then
+//!   disables the others), a navigator's first route takes no focus until the
+//!   first Tab, and the scope answers `BackIntent` (pop) and, for a dismissible
+//!   barrier, `DismissIntent` (`route_keys.rs`). Still absent:
 //!   `traversalEdgeBehavior` (no node-layer flag) and a `requestFocus = false`
 //!   opt-out.
 //! * **Routes beneath are hidden from semantics, the barrier has none of its
@@ -74,21 +78,22 @@ use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
 use super::back_gesture::BackGestureDetector;
-use super::binding::{RouteBindingSlot, TransitionGroup};
+use super::binding::{HookLookup, RouteBindingSlot, TransitionGroup};
 use super::hero::{HeroHandle, HeroRegistry, HeroScope, HeroTag};
 use super::local_history::{LocalHistoryHandle, LocalHistoryRegistry, LocalHistoryScope};
 use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
-use super::page_transitions::transitions_of;
+use super::page_transitions::{AdoptedTransition, transitions_of};
 use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
+use super::route_keys::route_keys;
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, unit_end_animation, unit_start_animation,
 };
-use flui_interaction::routing::FocusScopeNode;
+use flui_interaction::focus::FocusScopeNode;
 
 use crate::{
     AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
@@ -187,6 +192,11 @@ struct ModalInner {
     /// over this, and the route lifecycle promotes it through native
     /// first-focus history while the route is current.
     focus_scope: super::lifecycle::Terminal<Rc<FocusScopeNode>>,
+
+    /// Whether the route has been the top route before. Its first entry is a
+    /// provisional focus (an `autofocus` control may replace it); a return to
+    /// it restores the focus the user left, which is final.
+    entered: AtomicBool,
 }
 
 impl Drop for ModalInner {
@@ -281,6 +291,7 @@ impl ModalInner {
                 pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
                 local_history: super::lifecycle::Terminal::new(self.local_history_handle()),
                 back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
+                dismissible: self.barrier_dismissible.load(Ordering::Relaxed),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -301,8 +312,16 @@ impl ModalInner {
     /// focus into it, so focus lands in the current route. The scope itself resolves its owning
     /// presentation and updates enclosing-scope history; there is no global
     /// active-scope override.
-    fn activate_focus_scope(&self) {
-        let _ = self.focus_scope.set_first_focus();
+    fn activate_focus_scope(&self, take_focus: bool) {
+        let first_entry = !self.entered.swap(true, Ordering::Relaxed);
+        if !take_focus {
+            return;
+        }
+        let _ = if first_entry {
+            self.focus_scope.set_provisional_first_focus()
+        } else {
+            self.focus_scope.set_first_focus()
+        };
     }
 
     /// The page-facing local-history capability: the registry plus this
@@ -407,6 +426,9 @@ struct ModalScope {
     /// detector — a per-route, construction-time flag (`ModalRoute::back_gesture`),
     /// never toggled mid-life.
     back_gesture_enabled: bool,
+    /// Whether Escape pops this route: the barrier is dismissible. Fixed at
+    /// construction, like the barrier itself.
+    dismissible: bool,
 }
 
 impl Clone for ModalScope {
@@ -423,6 +445,7 @@ impl Clone for ModalScope {
             local_history: super::lifecycle::Terminal::new(self.local_history.clone()),
             subtree: self.subtree.clone(),
             back_gesture_enabled: self.back_gesture_enabled,
+            dismissible: self.dismissible,
         }
     }
 }
@@ -527,7 +550,11 @@ impl ViewState<ModalScope> for ModalScopeState {
         } else {
             anchored
         };
-        (view.transitions)(ctx, &primary, &secondary, anchored)
+        route_keys(
+            NavigatorHandle::maybe_of(ctx),
+            view.dismissible,
+            (view.transitions)(ctx, &primary, &secondary, anchored),
+        )
     }
 }
 
@@ -549,6 +576,21 @@ struct ExplicitTransition {
     transitions: bool,
     duration: bool,
     reverse_duration: bool,
+}
+
+impl ExplicitTransition {
+    /// The durations an adopted hook sets: none for what the route set itself.
+    /// An explicit entrance duration also stands for the exit unless the exit
+    /// was set too, as it does without a hook.
+    fn adopted_durations(
+        self,
+        adopted: &AdoptedTransition,
+    ) -> (Option<Duration>, Option<Duration>) {
+        let duration = (!self.duration).then_some(adopted.duration);
+        let reverse =
+            (!self.duration && !self.reverse_duration).then_some(adopted.reverse_duration);
+        (duration, reverse)
+    }
 }
 
 impl<T> Drop for ModalRoute<T> {
@@ -589,6 +631,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             heroes: super::lifecycle::Terminal::new(HeroRegistry::new()),
             pop_entries: super::lifecycle::Terminal::new(PopEntryRegistry::new()),
             local_history: super::lifecycle::Terminal::new(LocalHistoryRegistry::new()),
+            entered: AtomicBool::new(false),
             focus_scope: super::lifecycle::Terminal::new(FocusScopeNode::with_debug_label(
                 "ModalRoute Focus Scope",
             )),
@@ -663,38 +706,84 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     /// the controller is built from the durations (ADR-0221 D2). A route given
     /// `.transitions(…)` keeps it; an explicit duration keeps its own value;
     /// with no hook in scope the route keeps its jump cut.
-    fn adopt_ambient_transition(&mut self) {
+    ///
+    /// Returns the route's family when the navigator has not resolved its
+    /// hooks yet (the route was pushed before the navigator mounted, or while
+    /// it re-reads them): [`await_ambient_transition`](Self::await_ambient_transition)
+    /// then finishes the adoption once the controller exists.
+    fn adopt_ambient_transition(&mut self) -> Option<TransitionGroup> {
         if self.explicit.transitions {
-            return;
+            return None;
         }
-        let Some(slot) = self.transition.binding_slot() else {
-            return;
-        };
+        let slot = self.transition.binding_slot()?;
         let group = slot.group().unwrap_or_default();
         // This runs inside the locked history flush, so it calls no builder
         // method: the navigator read the durations when it took the hook.
-        let Some(adopted) = slot
-            .get()
-            .and_then(|binding| binding.page_transition(group))
-        else {
-            return;
+        let binding = slot.get()?;
+        let adopted = match binding.page_transition(group) {
+            HookLookup::Unresolved => return Some(group),
+            HookLookup::Resolved(adopted) => adopted?,
         };
-        let duration = (!self.explicit.duration).then_some(adopted.duration);
-        // An explicit entrance duration also stands for the exit unless the
-        // exit was set too, as it does without a hook.
-        let reverse = (!self.explicit.duration && !self.explicit.reverse_duration)
-            .then_some(adopted.reverse_duration);
+        let (duration, reverse) = self.explicit.adopted_durations(&adopted);
         self.transition.adopt_durations(duration, reverse);
         let _prev = std::mem::replace(
             &mut *self.inner.transitions.lock(),
             transitions_of(adopted.builder),
         );
+        None
+    }
+
+    /// Adopt the hook of `group`'s kind once the navigator resolves its hooks,
+    /// for a route installed before there was one. The controller exists by
+    /// now, so the durations reach its next run: a route pushed before its
+    /// navigator mounted has no clock to play its entrance on, and its exit
+    /// plays the hook's.
+    fn await_ambient_transition(&self, group: TransitionGroup) {
+        let Some(binding) = self
+            .transition
+            .binding_slot()
+            .and_then(RouteBindingSlot::get)
+        else {
+            return;
+        };
+        let inner = Rc::downgrade(&*self.inner);
+        let explicit = self.explicit;
+        binding.await_page_transition(group, move |adopted| {
+            let (Some(adopted), Some(inner)) = (adopted, inner.upgrade()) else {
+                return;
+            };
+            let (duration, reverse) = explicit.adopted_durations(&adopted);
+            if let Some(controller) = inner
+                .transition
+                .get()
+                .and_then(TransitionHandle::controller)
+            {
+                if let Some(duration) = duration {
+                    controller.set_duration(duration);
+                }
+                if let Some(reverse) = reverse {
+                    controller.set_reverse_duration(reverse);
+                }
+            }
+            let _prev = std::mem::replace(
+                &mut *inner.transitions.lock(),
+                transitions_of(adopted.builder),
+            );
+        });
     }
 
     /// The transition family — see [`TransitionGroup`].
     pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
         self.transition =
             super::lifecycle::Terminal::new(self.transition.take_value().group(group));
+        self
+    }
+
+    /// Whether the route below may coordinate its secondary animation with this one.
+    pub(crate) fn can_transition_from(mut self, allow: bool) -> Self {
+        self.transition = super::lifecycle::Terminal::new(
+            self.transition.take_value().can_transition_from(allow),
+        );
         self
     }
 
@@ -810,8 +899,26 @@ impl ModalHandle {
     /// remembers. Called by the navigator from
     /// `apply`, **outside** the history lock: this moves the primary focus, and
     /// the listeners that fire are user code.
-    pub(crate) fn activate_focus_scope(&self) {
-        self.inner.activate_focus_scope();
+    pub(crate) fn activate_focus_scope(&self, take_focus: bool) {
+        self.inner.activate_focus_scope(take_focus);
+    }
+
+    /// Drop the first-focus intents of scopes inside this route (a nested
+    /// navigator's route pushed while this one was covered), which the
+    /// route's own [`activate_focus_scope`](Self::activate_focus_scope)
+    /// supersedes. Called before the route becomes focusable again.
+    pub(crate) fn supersede_inner_first_focus(&self) {
+        self.inner.focus_scope.supersede_inner_first_focus();
+    }
+
+    /// Whether the keyboard focus may sit inside this route. Only the current
+    /// route is focusable; turning it off for a route that holds the focus
+    /// releases it, so the navigator enables the new top first.
+    pub(crate) fn set_focusable(&self, focusable: bool) {
+        self.inner
+            .focus_scope
+            .as_focus_node()
+            .set_descendants_are_focusable(focusable);
     }
 
     pub(crate) fn drain_local_history(&self) {
@@ -952,8 +1059,11 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     /// `push_bound` just before the flush, so the only thing left here is
     /// publishing `maintain_state` onto it.
     fn install(&mut self) {
-        self.adopt_ambient_transition();
+        let unresolved = self.adopt_ambient_transition();
         self.transition.install();
+        if let Some(group) = unresolved {
+            self.await_ambient_transition(group);
+        }
         // Order: the controller must exist before the proxies can point at it
         // (transition install, then the two proxies), and the relay subscribes to the proxies, so it goes last.
         self.inner.sync_animation_proxies();

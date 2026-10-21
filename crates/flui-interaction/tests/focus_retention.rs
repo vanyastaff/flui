@@ -7,7 +7,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_interaction::__runtime::{CloseMode, close_focus};
-use flui_interaction::routing::{
+use flui_interaction::focus::{
     FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, KeyEventResult,
 };
 use flui_platform_api::{
@@ -205,7 +205,8 @@ struct CommitFocusDiagnostic;
 
 impl tracing::Subscriber for CommitFocusDiagnostic {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+        metadata.target().ends_with("::focus::manager")
+            && *metadata.level() == tracing::Level::TRACE
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -376,6 +377,29 @@ fn directional_edges_match_linear_scope_outcomes() {
                 }
             }
         }
+    }
+}
+
+fn directional_navigation_enters_a_scope_with_nothing_focused() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::FocusDirection;
+    for (direction, expected) in [
+        (FocusDirection::Down, 0),
+        (FocusDirection::Right, 0),
+        (FocusDirection::Up, 1),
+        (FocusDirection::Left, 1),
+    ] {
+        let manager = FocusManager::new();
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+        nodes[1].set_rect(Rect::new(0.0, 20.0, 10.0, 30.0));
+        let _attachments = [
+            manager.root_scope().attach_node(&nodes[0]).expect("first"),
+            manager.root_scope().attach_node(&nodes[1]).expect("last"),
+        ];
+        assert!(manager.primary_focus().is_none());
+        assert!(manager.focus_in_direction(direction), "{direction:?}");
+        assert!(nodes[expected].has_primary_focus(), "{direction:?}");
     }
 }
 
@@ -895,7 +919,7 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
     let global: Rc<dyn Fn(&PointerEvent)> = Rc::new(move |_| {
         let _ = &global_capture;
     });
-    let cursor: flui_interaction::routing::CursorChangeCallback = Rc::new(move |_, _| {
+    let cursor: flui_interaction::pointer::CursorChangeCallback = Rc::new(move |_, _| {
         let _ = &cursor_capture;
     });
     let binding = GestureBinding::new();
@@ -932,7 +956,7 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
 fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
     use flui_interaction::__runtime::{CloseWindow, close_dispatch, presentation_dispatch};
     use flui_interaction::InteractionLane;
-    use flui_interaction::routing::{MouseEnterCallback, MouseRegionCallbacks};
+    use flui_interaction::pointer::{MouseEnterCallback, MouseRegionCallbacks};
 
     let (payload_capture, payload_probe) = capture();
     let (enter_capture, enter_probe) = capture();
@@ -1163,7 +1187,7 @@ fn nested_close_retirement_cannot_compete_with_the_earlier_observer_failure() {
 }
 
 fn assert_nested_close_preserves_observer_failure(panicking_retirement: bool) {
-    use flui_interaction::routing::FocusRequestOutcome;
+    use flui_interaction::focus::FocusRequestOutcome;
 
     let manager = FocusManager::new();
     let node = FocusNode::with_debug_label("nested close destination");
@@ -1207,7 +1231,8 @@ struct StaleFocusDiagnosticPanic;
 
 impl tracing::Subscriber for StaleFocusDiagnosticPanic {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+        metadata.target().ends_with("::focus::manager")
+            && *metadata.level() == tracing::Level::TRACE
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -1327,7 +1352,7 @@ fn earlier_observer_failure_retains_the_retired_queued_last_owner() {
 }
 
 fn assert_queued_retirement_recovery(earlier_failure: bool) {
-    use flui_interaction::routing::FocusRequestOutcome;
+    use flui_interaction::focus::FocusRequestOutcome;
 
     let manager = FocusManager::new();
     let first = FocusNode::with_debug_label("first");
@@ -1557,6 +1582,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "directional scope edges",
             directional_edges_match_linear_scope_outcomes,
+        ),
+        (
+            "directional entry with nothing focused",
+            directional_navigation_enters_a_scope_with_nothing_focused,
         ),
         (
             "subscription ownership and independent listeners",
@@ -1847,7 +1876,7 @@ fn scoped_keys_revoke_before_their_dispatch_turn() {
     let replacement = Rc::new(RefCell::new(None));
     let calls = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&calls);
-    let later: flui_interaction::routing::KeyEventHandler = Rc::new(move |_| {
+    let later: flui_interaction::focus::KeyEventHandler = Rc::new(move |_| {
         log.borrow_mut().push("later");
         KeyEventResult::Handled
     });

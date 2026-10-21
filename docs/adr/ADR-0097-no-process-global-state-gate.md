@@ -6,9 +6,12 @@
   application builds and owns its registry). The asset `INTERNER` is also removed:
   ADR-0121 makes each name owned shared data instead of a process-wide arena.
   `TIME_DILATION` is removed: ADR-0176 places playback on presentation clocks.
-  Removal of `ERROR_VIEW_BUILDER` and the decoded-image `CACHE` remains Proposed.
+  The decoded-image `CACHE` is removed: each `flui_assets::AssetRegistry` keeps the decoded
+  images of the loads it bridges, which the application owns and registers for memory
+  reclaim. Removal of `ERROR_VIEW_BUILDER` remains Proposed.
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
+- **Amended:** 2026-10-19 — the decoded-image cache moved into the asset registry.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),
@@ -46,7 +49,7 @@ re-checked:
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:90-93` | `thread_local!` routing table |
-| `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/routing/interaction_lane.rs:739-741` | `thread_local!` lane registries |
+| `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs:739-741` | `thread_local!` lane registries |
 
 Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/src/key.rs:59`;
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,

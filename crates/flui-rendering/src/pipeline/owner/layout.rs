@@ -59,7 +59,9 @@ impl PipelineOwner<Layout> {
             // This allows new nodes to be added during layout (routed
             // to mid_layout_marks; drained back at end of
             // iteration below).
-            let dirty_nodes = self.scheduler.take_layout_batch_shallow_first();
+            let dirty_nodes = self
+                .scheduler
+                .take_layout_batch_shallow_first(&self.render_tree);
             if !dirty_nodes.is_empty() {
                 self.counters.layout_passes += 1;
             }
@@ -182,6 +184,7 @@ impl PipelineOwner<Layout> {
                                         | crate::RenderError::TextContextBusy
                                 ),
                             );
+                            self.scheduler.recycle_layout_batch(dirty_nodes);
                             return Err(e);
                         }
                         let kind = LayoutFailureKind::of(&e);
@@ -236,6 +239,7 @@ impl PipelineOwner<Layout> {
                                 // even on the error path so they survive
                                 // across phase invocations.
                                 let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+                                self.scheduler.recycle_layout_batch(dirty_nodes);
                                 return Err(e);
                             }
                         }
@@ -256,6 +260,7 @@ impl PipelineOwner<Layout> {
                 // its previous layers would show the stale pixels.
                 self.mark_needs_paint(dirty_node.id);
             }
+            self.scheduler.recycle_layout_batch(dirty_nodes);
 
             // exit_phase clears debug_doing_layout AND drains
             // mid_layout_marks back into `dirty` so the outer while
@@ -478,6 +483,8 @@ impl PipelineOwner<Layout> {
         id: RenderId,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
+        // Layout clears flags and fills caches under any stamped walk path.
+        self.scheduler.forget_layout_walks();
         // Steps 1–3: collect subtree ids, pre-acquire disjoint &mut borrows,
         // and wrap them in a SubtreeArena for O(1) by-id lookup during the
         // recursive walk.  The unsafe aliasing machinery lives entirely inside
@@ -531,7 +538,7 @@ impl PipelineOwner<Layout> {
         //
         // ONE mark, on the dirty root, not one per laid-out node. The arena
         // walks the subtree of `id`, so every node that laid out is under it,
-        // and `try_graft_pass` re-assembles a marked node's whole subtree —
+        // and `plan_graft_pass` re-assembles a marked node's whole subtree —
         // marking each descendant as well would be strictly redundant while
         // costing a `fire_need_visual_update` per node (each of which asks the
         // platform to redraw) and a per-node ancestor walk in the graft, i.e.

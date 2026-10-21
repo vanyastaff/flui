@@ -3,12 +3,10 @@
 //! This crate contains all ready-to-use render objects, organized into domain
 //! families. It sits directly above the [`flui_rendering`] engine crate (which
 //! owns traits, pipeline, arena, protocol, and contexts) and validates that the
-//! engine's custom-object-authoring API is complete — 92 real objects compiling
-//! from outside the engine crate proves the authoring surface needs no additions.
-//! (Counted from `RENDER_OBJECT_TYPES` in
-//! `tests/render_object_harness.rs`, mechanically kept in sync with this
-//! crate's exports by `catalog_covers_every_render_object_name`; re-run that
-//! count if this comment drifts again.)
+//! engine's custom-object-authoring API through real consumers outside the
+//! engine crate. `RENDER_OBJECT_TYPES` in `tests/render_object_harness.rs`
+//! tracks exported concrete types; `render_object_types_match_exports` checks
+//! that inventory. Behavioral harness rows separately pin their contracts.
 //!
 //! # Organization
 //!
@@ -23,14 +21,14 @@
 //!
 //! # Flat public surface
 //!
-//! All 92 render-object types are re-exported flat from this crate root so the consumer
+//! Render-object types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
 //! [`RenderBox`]: flui_rendering::traits::RenderBox
 //! [`RenderSliver`]: flui_rendering::traits::RenderSliver
 
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // Crate-specific relaxations (same rationale as flui-rendering):
 #![expect(clippy::too_many_arguments)]
@@ -43,6 +41,7 @@ mod opacity_sample;
 mod proxy;
 mod shimmer;
 mod sliver;
+mod subscription;
 mod text;
 
 // --- flat re-exports (layout) ---
@@ -60,19 +59,21 @@ pub use layout::{
     RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
     RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
-    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap,
+    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap, SizeMotion,
+    SizeMotionHandle,
 };
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
     ClipGeometry, ClipSourceToken, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval,
     PathClipConfiguration, RenderAnimatedDecoratedBox, RenderAnimatedOpacity,
-    RenderAnimatedTransform, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
-    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
-    RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
-    RenderPaintAnchor, RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary,
-    RenderSemanticsAnnotations, RenderShaderMask, RenderShimmerMask, RenderSkeleton,
-    RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor, TransformMotion,
+    RenderAnimatedTransform, RenderAnnotatedRegion, RenderBackdropFilter, RenderClip,
+    RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRSuperellipse, RenderClipRect,
+    RenderColoredBox, RenderCustomPaint, RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer,
+    RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel,
+    RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
+    RenderShimmerMask, RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry,
+    SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,
@@ -81,7 +82,8 @@ pub use shimmer::{ShimmerBand, ShimmerSweep};
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
-    MetaDataPayload, MouseRegionCallback, RenderAbsorbPointer, RenderIgnorePointer, RenderListener,
+    HitShape, MetaDataPayload, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
+    RenderContentShape, RenderHitSlop, RenderIgnorePointer, RenderInputRegion, RenderListener,
     RenderMetaData, RenderMouseRegion, RenderOffstage,
 };
 
@@ -89,17 +91,20 @@ pub use interaction::{
 pub use text::{RenderEditable, RenderIcon, RenderParagraph};
 
 // --- flat re-exports (image) ---
-pub use image::{ImageAlignment, ImageFit, RenderImage};
+pub use image::{RenderImage, RenderTexture};
 
 // --- flat re-exports (sliver) ---
 pub use sliver::{
-    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
-    RenderShrinkWrappingViewport, RenderSliverAnimatedOpacity, RenderSliverFillRemaining,
-    RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
-    RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
-    RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverIgnorePointer,
-    RenderSliverList, RenderSliverMainAxisGroup, RenderSliverOffstage, RenderSliverOpacity,
-    RenderSliverPadding, RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
-    RenderSliverToBoxAdapter, RenderViewport, SnapAction, SnapCommand, StretchTriggerSignal,
+    FloatingHeaderSnapConfiguration, InvalidSliverCrossAxisExtent,
+    OverScrollHeaderStretchConfiguration, RenderShrinkWrappingViewport,
+    RenderSliverAnimatedOpacity, RenderSliverConstrainedCrossAxis, RenderSliverCrossAxisGroup,
+    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
+    RenderSliverFillRemainingWithScrollable, RenderSliverFillViewport, RenderSliverFixedExtentList,
+    RenderSliverFloatingPersistentHeader, RenderSliverFloatingPinnedPersistentHeader,
+    RenderSliverGrid, RenderSliverIgnorePointer, RenderSliverList, RenderSliverMainAxisGroup,
+    RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding,
+    RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
+    RenderSliverSemanticsAnnotations, RenderSliverToBoxAdapter, RenderViewport, SnapAction,
+    SnapCommand, StretchTriggerSignal,
 };
 pub use sliver::{Placement, PlacementSlot};

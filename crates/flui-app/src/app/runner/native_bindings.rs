@@ -2,13 +2,13 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_foundation::{PresentationAddress, geometry::Size};
+use flui_foundation::PresentationAddress;
 use flui_runtime::ui_runtime::UiRuntime;
 
 use crate::app::close_request::{CloseRequestRouter, PreparedCloseRequest};
 use crate::app::window_registry::{PreparedWindowRegistration, RegistryError, WindowRegistry};
 
-use super::frame_driver::{FrameDrivers, PreparedFrame};
+use super::frame_driver::{FrameDriverLease, FrameDrivers, PreparedFrame};
 use super::native_retirement::NativeRetirement;
 
 #[derive(Clone)]
@@ -18,6 +18,13 @@ struct NativeState {
     text_sizing: RefCell<Vec<Rc<super::native_text_sizing::NativeTextSizing>>>,
     windows: RefCell<WindowRegistry>,
     drivers: RefCell<FrameDrivers>,
+    /// Resizes that arrived while their driver was leased, one per presentation.
+    pending_resizes: RefCell<
+        Vec<(
+            PresentationAddress,
+            flui_foundation::geometry::WindowMetrics,
+        )>,
+    >,
     close_requests: Arc<CloseRequestRouter>,
     retirement: NativeRetirement,
 }
@@ -129,6 +136,7 @@ impl NativeBindings {
             text_sizing: RefCell::new(Vec::new()),
             windows: RefCell::new(WindowRegistry::new()),
             drivers: RefCell::new(FrameDrivers::new(retirement.clone())),
+            pending_resizes: RefCell::new(Vec::new()),
             close_requests: Arc::new(CloseRequestRouter::new()),
             retirement,
         }))
@@ -146,25 +154,56 @@ impl NativeBindings {
         self.0.windows.borrow().contains_address(address)
     }
 
+    /// Lease the presentation's driver, first applying a resize that arrived
+    /// while it was out.
+    fn checkout(&self, address: PresentationAddress) -> Option<FrameDriverLease> {
+        let mut lease = self.0.drivers.borrow().checkout_presentation(address)?;
+        let deferred = self
+            .0
+            .pending_resizes
+            .borrow()
+            .iter()
+            .find(|resize| resize.0 == address)
+            .copied();
+        if let Some(deferred @ (_, metrics)) = deferred {
+            lease.resize(metrics);
+            // Taken once it has applied: a resize that panics is tried again at
+            // the next checkout, and a newer one deferred meanwhile stays.
+            self.0
+                .pending_resizes
+                .borrow_mut()
+                .retain(|resize| *resize != deferred);
+        }
+        Some(lease)
+    }
+
     pub(super) fn frame_address(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
-        let lease = self.0.drivers.borrow().checkout_presentation(address);
-        if let Some(mut lease) = lease {
+        if let Some(mut lease) = self.checkout(address) {
             lease.wake(runtime);
         }
     }
 
     pub(super) fn installed(&self, address: PresentationAddress) {
-        let lease = self.0.drivers.borrow().checkout_presentation(address);
-        if let Some(mut lease) = lease {
+        if let Some(mut lease) = self.checkout(address) {
             lease.installed();
         }
     }
 
-    pub(super) fn resize(&self, address: PresentationAddress, size: Size<f64>, scale_factor: f64) {
-        let lease = self.0.drivers.borrow().checkout_presentation(address);
-        if let Some(mut lease) = lease {
-            lease.resize(size, scale_factor);
+    /// Resize the presentation's surface. A driver that is out on a frame
+    /// takes the resize when it is next checked out, so its surface is never
+    /// left at the old size; a later resize replaces one still waiting.
+    pub(super) fn resize(
+        &self,
+        address: PresentationAddress,
+        metrics: flui_foundation::geometry::WindowMetrics,
+    ) {
+        if let Some(mut lease) = self.checkout(address) {
+            lease.resize(metrics);
+            return;
         }
+        let mut pending = self.0.pending_resizes.borrow_mut();
+        pending.retain(|resize| resize.0 != address);
+        pending.push((address, metrics));
     }
 
     pub(super) fn fence_presentation(&self, address: PresentationAddress) {
@@ -194,6 +233,10 @@ impl NativeBindings {
             self.0.retirement.text_sizing(sizing);
         }
         self.0.windows.borrow_mut().remove_presentation(address);
+        self.0
+            .pending_resizes
+            .borrow_mut()
+            .retain(|resize| resize.0 != address);
         self.0.drivers.borrow_mut().retire_presentation(address);
         self.0
             .retirement

@@ -35,6 +35,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use flui_foundation::memory::MemoryPressureLevel;
+
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo,
     TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
@@ -101,6 +103,10 @@ pub(crate) struct CachedTexture {
     pub view: TextureView,
     /// Number of times this texture has been used
     pub use_count: usize,
+    /// Whether the last finished frame drew this texture: what a moderate
+    /// memory-pressure trim keeps between frames, when every `use_count` has
+    /// been reset.
+    pub drawn_last_frame: bool,
     /// Size in bytes (for memory tracking)
     pub size_bytes: usize,
     /// UV rectangle for atlas entries.
@@ -124,6 +130,7 @@ impl CachedTexture {
         Self {
             view,
             use_count: 0,
+            drawn_last_frame: false,
             size_bytes,
             uv_rect: None,
         }
@@ -138,6 +145,7 @@ impl CachedTexture {
         Self {
             view: atlas_view,
             use_count: 0,
+            drawn_last_frame: false,
             size_bytes,
             uv_rect: Some(uv_rect),
         }
@@ -194,7 +202,9 @@ pub(crate) struct TextureCache {
     ///
     /// Images with both dimensions <= `ATLAS_MAX_DIMENSION` are packed here.
     /// When the atlas is full, allocation falls back to standalone textures.
-    atlas: crate::atlas::TextureAtlas,
+    /// Created on the first atlas-eligible upload, and released under critical
+    /// memory pressure until the next one.
+    atlas: Option<crate::atlas::TextureAtlas>,
     /// Set when an atlas allocation fails (the shelf packer is full). Read at
     /// the frame boundary by [`Self::end_frame_maintenance`] to decide whether
     /// to reclaim the atlas; cleared once the atlas is reset.
@@ -208,19 +218,6 @@ impl TextureCache {
     /// * `device` - WGPU device for creating textures (Arc for safe sharing)
     /// * `queue` - WGPU queue for uploading texture data (Arc for safe sharing)
     pub(crate) fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
-        let atlas = crate::atlas::TextureAtlas::new(
-            &device,
-            crate::atlas::ATLAS_DEFAULT_SIZE,
-            crate::atlas::ATLAS_DEFAULT_SIZE,
-            IMAGE_TEXTURE_FORMAT,
-        );
-
-        tracing::debug!(
-            size = crate::atlas::ATLAS_DEFAULT_SIZE,
-            threshold = crate::atlas::ATLAS_MAX_DIMENSION,
-            "Texture atlas initialized"
-        );
-
         Self {
             textures: HashMap::new(),
             cache_hits: 0,
@@ -228,9 +225,36 @@ impl TextureCache {
             device,
             queue,
             max_memory_bytes: 100 * 1024 * 1024, // 100 MB default
-            atlas,
+            atlas: None,
             atlas_full: false,
         }
+    }
+
+    /// The shared atlas in `slot`, created on first use. Takes the fields, not
+    /// `self`, so it can run while an entry of `textures` is borrowed.
+    fn atlas_in<'a>(
+        slot: &'a mut Option<crate::atlas::TextureAtlas>,
+        device: &Device,
+    ) -> &'a mut crate::atlas::TextureAtlas {
+        slot.get_or_insert_with(|| {
+            tracing::debug!(
+                size = crate::atlas::ATLAS_DEFAULT_SIZE,
+                threshold = crate::atlas::ATLAS_MAX_DIMENSION,
+                "Texture atlas initialized"
+            );
+            crate::atlas::TextureAtlas::new(
+                device,
+                crate::atlas::ATLAS_DEFAULT_SIZE,
+                crate::atlas::ATLAS_DEFAULT_SIZE,
+                IMAGE_TEXTURE_FORMAT,
+            )
+        })
+    }
+
+    /// Whether the atlas's GPU texture is allocated.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn holds_atlas_texture(&self) -> bool {
+        self.atlas.is_some()
     }
 
     /// Load texture from RGBA bytes
@@ -277,11 +301,12 @@ impl TextureCache {
 
                 // Try atlas for small images (icons, thumbnails)
                 if crate::atlas::fits_in_atlas(width, height) {
-                    if let Some((image_id, rect)) = self.atlas.allocate(width, height) {
+                    let atlas = Self::atlas_in(&mut self.atlas, &self.device);
+                    if let Some((image_id, rect)) = atlas.allocate(width, height) {
                         // Upload to atlas sub-region
-                        self.atlas.upload_image(queue, image_id, data);
+                        atlas.upload_image(queue, image_id, data);
 
-                        let (atlas_w, atlas_h) = self.atlas.dimensions();
+                        let (atlas_w, atlas_h) = atlas.dimensions();
                         let (min_uv, max_uv) = rect.uv_coords(atlas_w, atlas_h);
                         let uv_rect = [min_uv[0], min_uv[1], max_uv[0], max_uv[1]];
 
@@ -289,7 +314,7 @@ impl TextureCache {
                         // NOTE: wgpu::Texture is not Clone, so we create a fresh
                         // view each time.  All atlas entries share the same
                         // underlying GPU allocation — the view is lightweight.
-                        let atlas_view = self.atlas.create_view();
+                        let atlas_view = atlas.create_view();
 
                         let cached_texture =
                             CachedTexture::new_atlas(atlas_view, width, height, uv_rect);
@@ -307,11 +332,12 @@ impl TextureCache {
                     // Atlas full — fall through to standalone texture, and flag
                     // the atlas for frame-boundary reclamation (see
                     // `end_frame_maintenance`).
+                    let utilization = atlas.utilization();
                     self.atlas_full = true;
                     tracing::debug!(
                         width,
                         height,
-                        atlas_utilization = %format!("{:.1}%", self.atlas.utilization() * 100.0),
+                        atlas_utilization = %format!("{:.1}%", utilization * 100.0),
                         "Atlas full, falling back to standalone texture"
                     );
                 }
@@ -421,7 +447,31 @@ impl TextureCache {
     /// frame's counts — see [`Self::end_frame_maintenance`].
     pub(crate) fn reset_use_counters(&mut self) {
         for texture in self.textures.values_mut() {
+            texture.drawn_last_frame = texture.use_count > 0;
             texture.use_count = 0;
+        }
+    }
+
+    /// Give back GPU textures the next frames can upload again, for `level`.
+    ///
+    /// [`Moderate`](MemoryPressureLevel::Moderate) evicts the standalone
+    /// textures the last frame did not draw; the atlas, whose slots are not
+    /// freed one by one, stays. [`Critical`](MemoryPressureLevel::Critical)
+    /// evicts every texture and releases the atlas texture. Each key holds its source
+    /// image, so eviction also releases the decoded pixels the cache pinned;
+    /// a texture still on screen is uploaded again from the scene's own image
+    /// on the next frame. Call between frames, after the last submit:
+    /// submitted GPU work keeps the textures it reads alive.
+    pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
+        if level == MemoryPressureLevel::Moderate {
+            self.textures
+                .retain(|_, texture| texture.is_atlas_entry() || texture.drawn_last_frame);
+        } else {
+            self.textures.clear();
+            // Its GPU texture goes too; the next atlas-eligible upload
+            // allocates a fresh one.
+            self.atlas = None;
+            self.atlas_full = false;
         }
     }
 
@@ -454,7 +504,9 @@ impl TextureCache {
             return false;
         }
         self.textures.retain(|_, t| !t.is_atlas_entry());
-        self.atlas.reset();
+        if let Some(atlas) = &mut self.atlas {
+            atlas.reset();
+        }
         self.atlas_full = false;
         true
     }

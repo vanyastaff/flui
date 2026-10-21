@@ -25,6 +25,7 @@ pub struct PresentationFactory {
     storage: Option<Arc<dyn Storage>>,
     clock: ClockSource,
     text: flui_rendering::TextContextHandle,
+    drag: flui_interaction::drag::DragHandle,
 }
 
 impl std::fmt::Debug for PresentationFactory {
@@ -50,11 +51,23 @@ impl UiRuntime {
             storage: self.storage.clone(),
             clock: self.clock.clone(),
             text: self.text.clone(),
+            drag: self.drag.handle(),
         }
     }
 }
 
 impl PresentationFactory {
+    /// A sender into this runtime's inbox stamped for `presentation_id`.
+    pub(crate) fn command_sender_for(
+        &self,
+        presentation_id: flui_foundation::PresentationId,
+    ) -> UiCommandSender {
+        UiCommandSender {
+            presentation_id,
+            ..self.sender.clone()
+        }
+    }
+
     /// Assembly may call platform code; callers must release host registry borrows.
     ///
     /// # Errors
@@ -72,10 +85,7 @@ impl PresentationFactory {
         let Ok(completion_scope) = self.completion_factory.create() else {
             return Err(window);
         };
-        let command_sender = UiCommandSender {
-            presentation_id,
-            ..self.sender.clone()
-        };
+        let command_sender = self.command_sender_for(presentation_id);
         Ok(PresentationState::new(
             presentation_id,
             Some(device_pixel_ratio),
@@ -92,6 +102,7 @@ impl PresentationFactory {
                 storage: self.storage.clone(),
                 clock: &self.clock,
                 text: self.text.clone(),
+                drag: self.drag.clone(),
             },
         ))
     }

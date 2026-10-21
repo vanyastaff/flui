@@ -485,11 +485,13 @@ impl FlushOutcome {
     ///
     /// Must run **after** the observers have been notified (the pop observation
     /// precedes disposal) and after the caller has removed each route's
-    /// overlay entries.
-    pub(crate) fn dispose_routes(&mut self) {
+    /// overlay entries. A panicking `dispose` does not keep the remaining
+    /// routes from being disposed: `recovery` holds the first failure.
+    pub(crate) fn dispose_routes(&mut self, recovery: &mut flui_foundation::panic::PanicRecovery) {
         for mut entry in self.dying.drain(..) {
-            entry.route.dispose();
+            recovery.run(|| entry.route.dispose());
             entry.state = RouteLifecycle::Disposed;
+            recovery.retire(entry);
         }
     }
 }
@@ -554,7 +556,7 @@ impl RouteHistory {
     /// Whether any route has raised a command that has not been applied.
     ///
     pub(crate) fn has_pending_commands(&self) -> bool {
-        !self.commands.lock().is_empty()
+        !self.commands.borrow().is_empty()
     }
 
     /// How many passes the last `flush` ran.
@@ -574,7 +576,7 @@ impl RouteHistory {
             "BUG: route commands must be applied between flush passes, never during one"
         );
 
-        let drained: Vec<RouteCommand> = self.commands.lock().drain(..).collect();
+        let drained: Vec<RouteCommand> = self.commands.borrow_mut().drain(..).collect();
         let mut changed = false;
 
         for command in drained {

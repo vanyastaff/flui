@@ -51,7 +51,7 @@
 //! inside-layout child update, because FLUI's layout walk holds
 //! `&mut RenderTree` (ADR-0017's rejected alternatives).
 
-use std::{marker::PhantomData, rc::Rc, sync::Arc};
+use std::{marker::PhantomData, rc::Rc};
 
 use flui_animation::AnimationController;
 use flui_objects::{
@@ -175,7 +175,7 @@ pub trait PersistentHeaderRenderObject:
 
     /// Install the shared mailbox this render object publishes shrink state
     /// into on every layout pass.
-    fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>);
+    fn install_shrink_cell(&mut self, cell: Rc<HeaderShrinkCell>);
 
     /// Refresh both extents from a rebuilt delegate.
     fn update_extents(
@@ -223,7 +223,7 @@ macro_rules! persistent_header_render_object {
                 $create(min_extent, max_extent)
             }
 
-            fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
+            fn install_shrink_cell(&mut self, cell: Rc<HeaderShrinkCell>) {
                 self.set_shrink_cell(cell);
             }
 
@@ -264,7 +264,7 @@ macro_rules! persistent_header_render_object {
                 $create(min_extent, max_extent)
             }
 
-            fn install_shrink_cell(&mut self, cell: Arc<HeaderShrinkCell>) {
+            fn install_shrink_cell(&mut self, cell: Rc<HeaderShrinkCell>) {
                 self.set_shrink_cell(cell);
             }
 
@@ -484,7 +484,7 @@ pub(crate) struct PersistentHeaderBehavior<R: PersistentHeaderRenderObject> {
     inner: RenderBehavior<PersistentHeaderView<R>>,
     /// The mailbox shared with the render object. `None` until `on_mount`
     /// mints it and installs it on the freshly created render object.
-    cell: Option<Arc<HeaderShrinkCell>>,
+    cell: Option<Rc<HeaderShrinkCell>>,
 }
 
 impl<R: PersistentHeaderRenderObject> std::fmt::Debug for PersistentHeaderBehavior<R> {
@@ -547,11 +547,12 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         let ctx = ctx_choice.as_ctx();
         let view = core.view().clone();
         let child_view = build_or_recover(core, owner, "PersistentHeaderElement", move || {
-            // `BoxedView` is a newtype over `Box<dyn View>`; unwrap it for
-            // the reconciler, which speaks `Box<dyn View>`.
-            view.delegate
-                .build(ctx, shrink.shrink_offset, shrink.overlaps_content)
-                .0
+            // The reconciler speaks `Box<dyn View>`; the box keeps the
+            // `BoxedView` inside it, and with it the view's identity.
+            Box::new(
+                view.delegate
+                    .build(ctx, shrink.shrink_offset, shrink.overlaps_content),
+            ) as Box<dyn View>
         });
         single_child_views(core, child_view, "PersistentHeaderBehavior")
     }
@@ -576,9 +577,9 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
 
         // Step 2: mint the mailbox and install it on the render object. The
         // element mints (unlike `RenderLayoutBuilder`, whose constructor owns
-        // its cell) because the same `Arc` must also land in the registry
+        // its cell) because the same `Rc` must also land in the registry
         // below — one mailbox, two holders, minted where both are in reach.
-        let cell = Arc::new(HeaderShrinkCell::new());
+        let cell = Rc::new(HeaderShrinkCell::new());
         let installed = core.pipeline_owner().is_some_and(|pipeline| {
             pipeline.with_mut(|owner| {
                 owner
@@ -586,7 +587,7 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
                     .get_mut(render_id)
                     .and_then(|node| node.downcast_render_object_mut::<R>())
                     .map(|render_object| {
-                        render_object.install_shrink_cell(Arc::clone(&cell));
+                        render_object.install_shrink_cell(Rc::clone(&cell));
                     })
                     .is_some()
             })
@@ -612,7 +613,7 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
             return;
         };
 
-        self.cell = Some(Arc::clone(&cell));
+        self.cell = Some(Rc::clone(&cell));
         owner.register_layout_builder(render_id, self_id, cell);
     }
 

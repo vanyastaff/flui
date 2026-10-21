@@ -497,7 +497,7 @@ fn native_operation_retains_owners_after_the_last_external_handle_is_released() 
                     SubmitVerdict::Presented
                 }),
                 prelude: None,
-                resize: Some(Box::new(move |_, _| {
+                resize: Some(Box::new(move |_| {
                     let outgoing = resize_owner.borrow_mut().take();
                     drop(outgoing);
                     assert_eq!(resize_retired.load(Ordering::SeqCst), 0);
@@ -519,11 +519,7 @@ fn native_operation_retains_owners_after_the_last_external_handle_is_released() 
             )
             .unwrap_or_else(|_| panic!("publish complete native window"));
         let failure = catch_unwind(AssertUnwindSafe(move || {
-            operation.resize(
-                address,
-                flui_foundation::geometry::Size::new(80.0, 60.0),
-                1.0,
-            );
+            operation.resize(address, window_metrics(80.0, 60.0, 1.0));
         }))
         .err();
         assert_eq!(
@@ -585,9 +581,8 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
                 installed: None,
                 sink,
                 prelude: None,
-                resize: Some(Box::new(move |size, scale| {
-                    assert_eq!(size, flui_foundation::geometry::Size::new(320.0, 200.0));
-                    assert_eq!(scale, 2.0);
+                resize: Some(Box::new(move |metrics| {
+                    assert_eq!(metrics, window_metrics(320.0, 200.0, 2.0));
                     resize_calls.set(resize_calls.get() + 1);
                     if close {
                         teardown_platform_ui_runtime();
@@ -611,10 +606,7 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
         let resize = || {
             dispatch_platform_ui_runtime(
                 dispatcher,
-                RuntimeTask::Event(RuntimeEvent::Resized {
-                    size: flui_foundation::geometry::Size::new(320.0, 200.0),
-                    scale_factor: 2.0,
-                }),
+                RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(320.0, 200.0, 2.0))),
             )
         };
         let failure = catch_unwind(AssertUnwindSafe(resize)).err();
@@ -645,6 +637,69 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
         teardown_platform_ui_runtime();
         assert_eq!(retired.load(Ordering::SeqCst), 1);
     }
+}
+
+fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
+    let _clear = OwnerHostClearGuard::arm();
+    let mut installation = prepared_runtime();
+    let dispatcher = installation.dispatcher();
+    let sizes = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&sizes);
+    let frame = installation
+        .frame_driver(FrameDriver::Test(TestFrameDriver {
+            installed: None,
+            sink: counting_sink(Arc::new(AtomicUsize::new(0))),
+            prelude: None,
+            resize: Some(Box::new(move |metrics| {
+                seen.borrow_mut().push(metrics);
+                if seen.borrow().len() == 1 {
+                    std::panic::panic_any("deferred resize failure");
+                }
+            })),
+        }))
+        .expect("prepare resize driver");
+    installation
+        .submit()
+        .outcome()
+        .expect("idle host")
+        .expect("published resize driver");
+    let host = super::super::host::APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    // Hold the published driver out on a lease, as a frame in progress does.
+    let drivers = super::FrameDrivers {
+        records: vec![frame.liveness.0.upgrade().expect("live record")],
+        retirement: host.native().retirement(),
+    };
+    let lease = drivers
+        .checkout_presentation(dispatcher.address)
+        .expect("lease the installed driver");
+    let size = |width| window_metrics(width, 200.0, 2.0);
+    host.native().resize(dispatcher.address, size(300.0));
+    host.native().resize(dispatcher.address, size(320.0));
+    assert!(
+        sizes.borrow().is_empty(),
+        "the leased driver is not reached"
+    );
+    drop(lease);
+
+    let frame_now = || dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding));
+    let failure = catch_unwind(AssertUnwindSafe(frame_now)).expect_err("the resize panics");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"deferred resize failure")
+    );
+    assert_eq!(
+        *sizes.borrow(),
+        [size(320.0)],
+        "the latest resize reaches the driver before its next frame"
+    );
+    frame_now().expect("deliver frame");
+    frame_now().expect("deliver frame");
+    assert_eq!(
+        *sizes.borrow(),
+        [size(320.0), size(320.0)],
+        "a resize that panicked is tried again once, and is gone once applied"
+    );
+    teardown_platform_ui_runtime();
 }
 
 fn assert_native_retirement_failures(retire: fn(PresentationDispatcher)) {
@@ -754,6 +809,10 @@ fn installed_frame_driver_contract() {
                 resize_uses_the_installed_driver_lease_through_failure_and_teardown as fn(),
             ),
             (
+                "a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout",
+                a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout as fn(),
+            ),
+            (
                 "a_registered_driver_delivers_the_product_scene",
                 a_registered_driver_delivers_the_product_scene as fn(),
             ),
@@ -809,7 +868,7 @@ fn deadlines_survive_a_sibling_install_and_close() {
             device_recovery_backoff: Arc::new(
                 super::super::device_recovery::new_device_recovery_backoff(),
             ),
-            fallback: Arc::new(FallbackWake::new(web_time::Duration::from_millis(16))),
+            fallback: Arc::new(FallbackWake::new()),
             first_reveal: reveal,
         });
         let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1180,4 +1239,13 @@ fn agent_notification_follows_live_native_initialization() {
         assert_eq!(scenes.load(Ordering::SeqCst), 1, "{case:?}");
         teardown_platform_ui_runtime();
     }
+}
+
+/// A window's metrics from a logical size and scale, as a platform reports them.
+fn window_metrics(width: f64, height: f64, scale: f64) -> flui_foundation::geometry::WindowMetrics {
+    flui_foundation::geometry::WindowMetrics::from_logical(
+        flui_foundation::geometry::Size::new(width, height),
+        scale,
+    )
+    .expect("valid window metrics")
 }

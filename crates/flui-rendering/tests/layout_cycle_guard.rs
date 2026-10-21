@@ -48,11 +48,7 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
         .render_tree_mut()
         .insert_box_child(p1, Box::new(RenderPadding::all(2.0)))
         .expect("p2 insert");
-    pipeline
-        .render_tree_mut()
-        .get_mut(p2)
-        .expect("p2 in tree")
-        .add_child(p1);
+    pipeline.render_tree_mut().append_unlinked_child(p2, p1);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     // P1.perform_layout → layout_child(0) → recurses into P2.

@@ -174,6 +174,9 @@ impl TextStore for LateLayoutStore {
         self.observer.replace(observer.clone());
         self.inner.set_observer(observer);
     }
+    fn screen_moved(&self) {
+        self.inner.screen_moved();
+    }
 }
 
 impl LateLayoutStore {
@@ -411,11 +414,9 @@ fn text_services_probe() {
     let _subscriber = tracing::subscriber::set_default(subscriber);
 
     let platform = super::super::WindowsPlatform::new().expect("platform");
-    let options = WindowOptions {
-        title: "flui tsf probe".into(),
-        size: Size::new(640.0, 200.0),
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("flui tsf probe")
+        .with_size(Size::new(640.0, 200.0));
     let window = platform.open_window(options).expect("window");
     let hwnd = window
         .as_any()

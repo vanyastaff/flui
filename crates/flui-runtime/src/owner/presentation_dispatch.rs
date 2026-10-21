@@ -5,21 +5,41 @@ use std::rc::{Rc, Weak};
 use crate::ui_runtime::UiRuntime;
 use flui_foundation::{
     PresentationAddress,
-    geometry::{EdgeInsets, Size},
+    geometry::{EdgeInsets, WindowMetrics},
 };
-use flui_platform_api::{Brightness, PlatformInput, WindowExecutionState};
+use flui_interaction::InputSurface;
+use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
+
+use crate::HostInput;
+
+/// The display a window is on, as the host derived it from the platform's
+/// snapshot: a value to *set*, including "unknown". It is a type of its own
+/// because a coalesced batch must let a newer "unknown" replace an older known
+/// display; a bare `Option<WindowDisplay>` would be merged as "keep the older
+/// when the newer has nothing".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayUpdate(Option<WindowDisplay>);
+
+impl DisplayUpdate {
+    /// An update that sets the window's display to `display`.
+    #[must_use]
+    pub const fn new(display: Option<WindowDisplay>) -> Self {
+        Self(display)
+    }
+
+    /// The display this update sets.
+    #[must_use]
+    pub const fn get(self) -> Option<WindowDisplay> {
+        self.0
+    }
+}
 
 /// Normalized observations of one native window, without backend-specific types.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum WindowObservation {
-    /// Logical content size and device-pixel ratio changed together.
-    Metrics {
-        /// Logical content size.
-        size: Size<f64>,
-        /// Device pixels per logical pixel.
-        scale_factor: f64,
-    },
+    /// The drawable area and its device-pixel ratio changed together.
+    Metrics(WindowMetrics),
     /// Keyboard focus changed.
     Focus(bool),
     /// Visibility or occlusion changed.
@@ -37,10 +57,19 @@ pub enum WindowObservation {
     },
     /// Pointer entered or left the window.
     Hover(bool),
+    /// The window moved and may now be on another display. Gesture geometry
+    /// is re-read for new contacts when its display changed (ADR-0212 §2), and
+    /// the window is handed its input regions again (ADR-0217 §5).
+    Moved,
     /// Logical content-view safe area changed.
     SafeArea(EdgeInsets),
     /// Normalized system appearance changed.
     Brightness(Brightness),
+    /// The display the window is on, or that display's refresh period, changed.
+    Display(DisplayUpdate),
+    /// The window's published state may have changed. Carries nothing: the
+    /// owner reads the state when it delivers this.
+    State,
 }
 
 impl WindowObservation {
@@ -50,32 +79,107 @@ impl WindowObservation {
         address: PresentationAddress,
         effects: &dyn OwnerEffects,
     ) {
+        runtime.apply_window_observation(address, self, &|metrics| {
+            effects.resize_surface(address, metrics);
+        });
+    }
+}
+
+/// A window observation applied on its own, in arrival order: every
+/// [`WindowObservation`] that never merges into [`PendingWindowState`].
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OrderedObservation {
+    Focus(bool),
+    Visibility(bool),
+    Execution(WindowExecutionState),
+    Snapshot {
+        execution: WindowExecutionState,
+        focused: bool,
+        visible: bool,
+    },
+    Hover(bool),
+    Moved,
+    State,
+}
+
+impl From<OrderedObservation> for WindowObservation {
+    fn from(observation: OrderedObservation) -> Self {
+        match observation {
+            OrderedObservation::Focus(focused) => Self::Focus(focused),
+            OrderedObservation::Visibility(visible) => Self::Visibility(visible),
+            OrderedObservation::Execution(execution) => Self::Execution(execution),
+            OrderedObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            } => Self::Snapshot {
+                execution,
+                focused,
+                visible,
+            },
+            OrderedObservation::Hover(inside) => Self::Hover(inside),
+            OrderedObservation::Moved => Self::Moved,
+            OrderedObservation::State => Self::State,
+        }
+    }
+}
+
+impl UiRuntime {
+    /// Apply one observation of `address`'s window, as
+    /// [`HostInput::Window`] does: `resize_surface` takes accepted surface
+    /// metrics before the logical metrics change. While a tap records, the
+    /// observation is recorded after it applied (ADR-0215 §1).
+    pub fn apply_window_observation(
+        &self,
+        address: PresentationAddress,
+        observation: WindowObservation,
+        resize_surface: &dyn Fn(WindowMetrics),
+    ) {
+        match PendingWindowState::from_observation(observation) {
+            Ok(pending) => pending.apply(self, address, resize_surface),
+            Err(ordered) => self.apply_ordered_observation(address, ordered),
+        }
+    }
+
+    /// Apply an observation that is never merged; while a tap records, it is
+    /// recorded after it applied.
+    pub(super) fn apply_ordered_observation(
+        &self,
+        address: PresentationAddress,
+        observation: OrderedObservation,
+    ) {
         let id = address.presentation_id;
-        match self {
-            Self::Metrics { size, scale_factor } => {
-                PendingWindowState::metrics(size, scale_factor).apply(runtime, address, effects);
+        let recording = self.begin_recorded_input();
+        // What the recording keeps of the observation. A state notification
+        // carries nothing a replay could honour: the owner read this host's
+        // live window. What it did to the presentation is recorded instead, as
+        // the move it was when the content went somewhere else.
+        let mut recorded = Some(WindowObservation::from(observation));
+        let applied = catch_unwind(AssertUnwindSafe(|| match observation {
+            OrderedObservation::Focus(focused) => self.update_window_focus(id, focused),
+            OrderedObservation::Visibility(visible) => self.update_window_visibility(id, visible),
+            OrderedObservation::Execution(execution) => {
+                self.update_window_execution(id, execution);
             }
-            Self::Focus(focused) => runtime.update_window_focus(id, focused),
-            Self::Visibility(visible) => runtime.update_window_visibility(id, visible),
-            Self::Execution(execution) => runtime.update_window_execution(id, execution),
-            Self::Snapshot {
+            OrderedObservation::Snapshot {
                 execution,
                 focused,
                 visible,
             } => {
-                runtime.synchronize_window_snapshot(id, execution, focused, visible);
+                self.synchronize_window_snapshot(id, execution, focused, visible);
             }
-            Self::Hover(inside) => runtime.handle_window_hover_addressed(id, inside),
-            Self::SafeArea(insets) => PendingWindowState {
-                safe_area: Some(insets),
-                ..Default::default()
+            OrderedObservation::Hover(inside) => self.handle_window_hover_addressed(id, inside),
+            OrderedObservation::Moved => self.window_moved(id),
+            OrderedObservation::State => {
+                recorded = None;
+                self.publish_window_state(id, || recorded = Some(WindowObservation::Moved));
             }
-            .apply(runtime, address, effects),
-            Self::Brightness(brightness) => PendingWindowState {
-                brightness: Some(brightness),
-                ..Default::default()
-            }
-            .apply(runtime, address, effects),
+        }));
+        if recording && let Some(recorded) = recorded {
+            self.record_applied(id, HostInput::Window(recorded), InputOutcome::Handled);
+        }
+        if let Err(payload) = applied {
+            std::panic::resume_unwind(payload);
         }
     }
 }
@@ -84,28 +188,43 @@ impl WindowObservation {
 /// operation. Never merged across another window or an ordered event.
 #[derive(Default)]
 pub(super) struct PendingWindowState {
-    metrics: Option<(Size<f64>, f64)>,
+    metrics: Option<WindowMetrics>,
     safe_area: Option<EdgeInsets>,
     brightness: Option<Brightness>,
+    /// The newest display update; an update to "unknown" is still an update.
+    display: Option<DisplayUpdate>,
 }
 
 impl PendingWindowState {
-    fn metrics(size: Size<f64>, scale: f64) -> Self {
+    fn metrics(metrics: WindowMetrics) -> Self {
         Self {
-            // Reject before coalescing so a bad observation cannot replace
-            // an accepted resize still awaiting delivery.
-            metrics: (scale.is_finite() && scale > 0.0).then_some((size, scale)),
+            metrics: Some(metrics),
             ..Self::default()
         }
     }
 
     pub(super) fn from_observation(
         observation: WindowObservation,
-    ) -> Result<Self, WindowObservation> {
+    ) -> Result<Self, OrderedObservation> {
         match observation {
-            WindowObservation::Metrics { size, scale_factor } => {
-                Ok(Self::metrics(size, scale_factor))
+            WindowObservation::Focus(focused) => Err(OrderedObservation::Focus(focused)),
+            WindowObservation::Visibility(visible) => Err(OrderedObservation::Visibility(visible)),
+            WindowObservation::Execution(execution) => {
+                Err(OrderedObservation::Execution(execution))
             }
+            WindowObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            } => Err(OrderedObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            }),
+            WindowObservation::Hover(inside) => Err(OrderedObservation::Hover(inside)),
+            WindowObservation::Moved => Err(OrderedObservation::Moved),
+            WindowObservation::State => Err(OrderedObservation::State),
+            WindowObservation::Metrics(metrics) => Ok(Self::metrics(metrics)),
             WindowObservation::SafeArea(insets) => Ok(Self {
                 safe_area: Some(insets),
                 ..Self::default()
@@ -114,7 +233,10 @@ impl PendingWindowState {
                 brightness: Some(brightness),
                 ..Self::default()
             }),
-            other => Err(other),
+            WindowObservation::Display(update) => Ok(Self {
+                display: Some(update),
+                ..Self::default()
+            }),
         }
     }
 
@@ -122,20 +244,28 @@ impl PendingWindowState {
         self.metrics = newer.metrics.or(self.metrics);
         self.safe_area = newer.safe_area.or(self.safe_area);
         self.brightness = newer.brightness.or(self.brightness);
+        self.display = newer.display.or(self.display);
     }
 
+    /// Apply the pending values together; while a tap records, each applied
+    /// value is recorded as its own observation (ADR-0215 §1).
     pub(super) fn apply(
         mut self,
         runtime: &UiRuntime,
         address: PresentationAddress,
-        effects: &dyn OwnerEffects,
+        resize_surface: &dyn Fn(WindowMetrics),
     ) {
+        let recording = runtime.begin_recorded_input();
         let id = address.presentation_id;
         let mut first = None;
-        if let Some((size, scale)) = self.metrics {
+        // A display update asks for its own redraw, and only when it changes the
+        // display the presentation holds (see `UiRuntime::apply_window_display`).
+        let redraw =
+            self.metrics.is_some() || self.safe_area.is_some() || self.brightness.is_some();
+        if let Some(metrics) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
-                effects.resize_surface(address, size, scale);
-                runtime.set_pipeline_device_pixel_ratio_for(id, scale);
+                resize_surface(metrics);
+                runtime.set_pipeline_device_pixel_ratio_for(id, metrics.scale().get());
             }))
             .err();
             if first.is_some() {
@@ -157,12 +287,12 @@ impl PendingWindowState {
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
-                    if let Some((size, scale)) = self.metrics {
-                        data.size = size;
-                        data.device_pixel_ratio = scale;
+                    if let Some(metrics) = self.metrics {
+                        data.size = metrics.logical();
+                        data.device_pixel_ratio = metrics.scale().get();
                     }
                     if let Some(insets) = self.safe_area {
-                        data.padding = insets;
+                        data.view_padding = insets;
                     }
                     if let Some(brightness) = self.brightness {
                         data.platform_brightness = brightness;
@@ -176,12 +306,38 @@ impl PendingWindowState {
             failure,
             "window state publication",
         );
-        let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            failure,
-            "window state redraw",
-        );
+        if let Some(update) = self.display {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                runtime.apply_window_display(id, update.get());
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window display publication",
+            );
+        }
+        if redraw {
+            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw_of(id))).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window state redraw",
+            );
+        }
+        if recording {
+            let applied = [
+                self.metrics.map(WindowObservation::Metrics),
+                self.safe_area.map(WindowObservation::SafeArea),
+                self.brightness.map(WindowObservation::Brightness),
+                // A display update is not recorded: its `DisplayId` names a
+                // display of this host's platform instance (ADR-0236 §3),
+                // which a replaying host cannot be handed.
+            ];
+            for observation in applied.into_iter().flatten() {
+                runtime.record_applied(id, HostInput::Window(observation), InputOutcome::Handled);
+            }
+        }
         super::finish_retirement(first);
     }
 }
@@ -193,7 +349,8 @@ use super::{Delivery, DispatchError, OwnerCore, OwnerEffects, OwnerHost, Runtime
 pub enum InputOutcome {
     /// The framework handled the input.
     Handled,
-    /// Keyboard input ran synchronously and no framework handler consumed it.
+    /// Keyboard input ran synchronously and no framework handler consumed it,
+    /// or an assistive request reached no handler.
     Unhandled,
     /// Input was accepted for later delivery; suppress native default handling.
     Queued,
@@ -268,7 +425,7 @@ impl PresentationDispatcher {
     ///
     /// # Errors
     /// Refuses an expired host or presentation, or an active publication.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "testing")]
     #[doc(hidden)]
     pub fn test_callback(
         &self,
@@ -288,44 +445,121 @@ impl PresentationDispatcher {
         core.deliver(RuntimeWork::Close(self.address), effects)
     }
 
-    /// Admit a window observation to the owner FIFO. Adjacent pending metrics,
-    /// safe-area and brightness updates for this exact window keep their latest
-    /// values together. Other windows, input, frames and lifecycle events end
-    /// the segment; observations already executing are never replaced.
+    /// Admit one unit of host input to the owner FIFO — the runtime's only
+    /// input path (ADR-0207 §1) — and deliver within the remaining budget.
+    ///
+    /// Older accepted work always precedes it, including across native
+    /// callbacks; a native event that arrives while a callback runs joins the
+    /// queue behind it, never dropped. The runtime unwraps the value: platform
+    /// input goes to the presentation's gesture, focus and text-input owners,
+    /// a window observation updates its metrics and lifecycle, a frame paces
+    /// its gesture sampling at the vsync and then renders.
+    ///
+    /// An AT request takes the path the window's accessibility bridge sends
+    /// it on (ADR-0207, amendment): it is queued in the runtime's command
+    /// inbox and reaches its semantics owner at the next owner turn's Idle
+    /// drain, before that turn's frame begins, and the answer is
+    /// [`InputOutcome::Queued`].
+    ///
+    /// Adjacent pending metrics, safe-area and brightness observations for
+    /// this exact window keep their latest values together; any other input
+    /// ends that segment, and observations already executing are never
+    /// replaced.
+    ///
+    /// Only a keyboard event that ran synchronously and found no handler is
+    /// [`InputOutcome::Unhandled`], which permits the native default. Queued
+    /// input suppresses it because the framework cannot answer synchronously.
     ///
     /// # Errors
-    /// Refuses an expired target or host, or an active publication.
-    pub fn observe(
+    /// Refuses an expired target or host, or an active publication;
+    /// [`DispatchError::InboxFull`] for an AT request the runtime's inbox
+    /// has no room for.
+    pub fn dispatch(
         &self,
-        observation: WindowObservation,
+        input: HostInput,
         effects: &dyn OwnerEffects,
-    ) -> Result<Delivery, DispatchError> {
+    ) -> Result<InputOutcome, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        let work = match PendingWindowState::from_observation(observation) {
-            Ok(state) => RuntimeWork::WindowState(self.address, state),
-            Err(event) => RuntimeWork::Observation(self.address, event),
+        let delivered = match input {
+            HostInput::Platform(input) => {
+                return self.platform_input(&core, InputSurface::Window, input, effects);
+            }
+            HostInput::Window(observation) => {
+                let work = match PendingWindowState::from_observation(observation) {
+                    Ok(state) => RuntimeWork::WindowState(self.address, state),
+                    Err(event) => RuntimeWork::Observation(self.address, event),
+                };
+                core.deliver(work, effects)?
+            }
+            HostInput::Frame { vsync } => {
+                core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
+            }
+            HostInput::Accessibility(request) => {
+                return self.queue_accessibility(&core, request);
+            }
         };
-        core.deliver(work, effects)
+        Ok(match delivered {
+            Delivery::Driven => InputOutcome::Handled,
+            Delivery::Queued => InputOutcome::Queued,
+        })
     }
 
-    /// Append input to the owner FIFO and deliver within the remaining budget.
-    /// Older accepted work always precedes this input, including across native
-    /// callbacks. Queued or refused input suppresses the native default because
-    /// the framework cannot answer it synchronously.
+    /// [`dispatch`](Self::dispatch) platform input a surface of this
+    /// presentation's window reported: the window itself, or a surface
+    /// embedded in it that its gesture binding minted, whose contacts, hover
+    /// and latches stay its own (ADR-0207 §5). The same owner FIFO admits it.
     ///
     /// # Errors
     /// Refuses an expired target or host, or an active publication.
-    pub fn input(
+    pub fn dispatch_on(
         &self,
+        surface: InputSurface,
         input: PlatformInput,
         effects: &dyn OwnerEffects,
     ) -> Result<InputOutcome, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        self.platform_input(&core, surface, input, effects)
+    }
+
+    /// Queue an AT request in the addressed runtime's command inbox, stamped
+    /// for this presentation, as its accessibility bridge does.
+    fn queue_accessibility(
+        &self,
+        core: &OwnerCore,
+        request: accesskit::ActionRequest,
+    ) -> Result<InputOutcome, DispatchError> {
+        let sender = {
+            let state = core.state.try_borrow().map_err(|_| DispatchError::Busy)?;
+            let index = state.authorizer(self.address)?;
+            state.runtimes[index]
+                .factory
+                .command_sender_for(self.address.presentation_id)
+        };
+        // No owner borrow is held: the send wakes the host.
+        match sender.send_accessibility(request) {
+            Ok(()) => Ok(InputOutcome::Queued),
+            Err(crate::ui_runtime::CommandSendError::ChannelFull { .. }) => {
+                Err(DispatchError::InboxFull)
+            }
+            Err(crate::ui_runtime::CommandSendError::OwnerGone { .. }) => {
+                Err(DispatchError::UnknownRuntime)
+            }
+        }
+    }
+
+    fn platform_input(
+        &self,
+        core: &Rc<OwnerCore>,
+        surface: InputSurface,
+        input: PlatformInput,
+        effects: &dyn OwnerEffects,
+    ) -> Result<InputOutcome, DispatchError> {
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let reply = Rc::new(Cell::new(None));
         core.deliver(
             RuntimeWork::Input {
                 address: self.address,
+                surface,
                 input,
                 reply: Rc::clone(&reply),
             },
@@ -357,5 +591,50 @@ impl OwnerHost {
             owner: Rc::downgrade(&self.core),
             address,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::PresentationAddress;
+    use flui_platform_api::Brightness;
+
+    use super::{PendingWindowState, WindowObservation};
+    use crate::ui_runtime::UiRuntime;
+
+    /// A secondary window's appearance batch reschedules that window, not the
+    /// primary.
+    fn a_window_state_batch_redraws_the_window_it_came_from() {
+        let mut runtime = UiRuntime::for_test();
+        let primary = runtime.presentation_id();
+        let secondary = runtime.install_second_presentation_for_test();
+        for id in [primary, secondary] {
+            let _ = runtime.take_redraw_pending_for_test(id);
+        }
+
+        PendingWindowState::from_observation(WindowObservation::Brightness(Brightness::Dark))
+            .expect("appearance is a pending window state")
+            .apply(
+                &runtime,
+                PresentationAddress {
+                    ui_runtime_id: runtime.id(),
+                    presentation_id: secondary,
+                },
+                &|_| {},
+            );
+
+        assert_eq!(runtime.take_redraw_pending_for_test(secondary), Some(true));
+        assert_eq!(runtime.take_redraw_pending_for_test(primary), Some(false));
+    }
+
+    #[test]
+    fn window_state_batches() {
+        crate::table_test::run_table(
+            "window_state_batches",
+            &[(
+                "a_window_state_batch_redraws_the_window_it_came_from",
+                a_window_state_batch_redraws_the_window_it_came_from as fn(),
+            )],
+        );
     }
 }

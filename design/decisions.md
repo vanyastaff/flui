@@ -77,7 +77,7 @@ which the review cited but never studied.
 ### D1. `flui-platform-api` is the contract crate
 
 **Context.** One import, `use flui_platform::traits::PlatformTextInput;`
-(`crates/flui-interaction/src/text_input.rs:27`), is the only `flui_platform` use in
+(`crates/flui-interaction/src/text_input/mod.rs:27`), is the only `flui_platform` use in
 `flui-interaction`'s sources, and it makes winit, tokio and the `windows` crate reachable from
 interaction, rendering, objects, view, widgets and testing. Platform callbacks also require
 `Send` (`crates/flui-platform/src/traits/platform.rs:319` takes `Box<dyn Fn() -> bool + Send>`),
@@ -591,7 +591,7 @@ widgets with roles outside the 33 stuck).
 **Evidence.** Leaks to remove before a freeze: `pub use ::wgpu` (`crates/flui-engine/src/lib.rs:229`),
 `pub use accesskit::{…}` (`crates/flui-testing/src/a11y.rs:36`), `pub use android_activity`
 (`crates/flui-app/src/lib.rs:116`). The legacy `Window::raw_window_handle`
-(`crates/flui-platform/src/window.rs:196`) returns a crate-local enum and is deleted with the
+(on the legacy window trait, since removed by ADR-0237) returns a crate-local enum and is deleted with the
 legacy window family (ADR-0082 §5); `PlatformWindow` already uses the borrowed-handle traits.
 
 **Changed by verification** (confidence 0.75). `#[non_exhaustive]` removes the compiler's

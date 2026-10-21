@@ -1,3 +1,3 @@
-use flui_interaction::arena::run_pointer_lifecycle;
+use flui_interaction::gesture::run_pointer_lifecycle;
 
 fn main() {}

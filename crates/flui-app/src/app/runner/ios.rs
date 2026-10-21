@@ -66,11 +66,6 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
     tracing::info!(title = %config.title, "Starting FLUI application on iOS");
     run_ios(root, config);
 }
@@ -156,6 +151,9 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
+    // The owner's turn starts with the commands application code queued for
+    // its windows: this wake is the one a command asks for.
+    super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
     super::host::drive_native_text_sizing();
     if let Some(mut lease) = lease_controller() {
         lease
@@ -229,13 +227,13 @@ where
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
-            runtime.install_host_storage(&config);
             if let Some(executors) = config.executors.clone() {
                 runtime.install_host_executors(executors);
             }
             runtime.reopen_lifecycles();
             runtime.ensure_execution();
         });
+        super::host::install_host_storage(&config);
         for service in &config.services {
             super::host::start_service(service)?;
         }
@@ -343,6 +341,7 @@ where
     ui_runtime.set_motion_override(config.motion_override);
     ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+    config.install_input_tap(&ui_runtime);
 
     let logical = window.logical_size();
     let owner = APP_RUNTIME
@@ -372,17 +371,23 @@ where
         .dev_agent
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+    let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
-    let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-        renderer,
-        owner_dispatch.address,
-        phys_size.width as u32,
-        phys_size.height as u32,
-    )));
+    let lane = Arc::new(Mutex::new(
+        crate::app::raster_lane::RasterLane::new(
+            renderer,
+            owner_dispatch.address,
+            phys_size.width as u32,
+            phys_size.height as u32,
+        )
+        .with_textures(textures),
+    ));
+
+    super::host::track_raster_lane(lane.lock().reclaim_handle());
 
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -402,10 +407,10 @@ where
 
     // 7. Resize -> typed Resized event; the applier installed above touches
     // the renderer.
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let _ = dispatch_platform_ui_runtime(
             owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
         );
     }));
 
@@ -462,6 +467,9 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
         );
     }));
+    installation.observe_appearance();
+    installation.observe_display();
+    installation.observe_window_state();
     // Register before sampling, so native facts changed during renderer bootstrap
     // cannot be replaced by a synthetic Resumed observation.
     let execution = window.execution_state();
@@ -472,10 +480,9 @@ where
         focused,
         visible,
     });
-    installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-        size: window.logical_size(),
-        scale_factor: window.scale_factor(),
-    });
+    if let Ok(metrics) = window.metrics() {
+        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
+    }
 
     installation.on_close(move || {
         close_this_window(owner_dispatch);
@@ -504,11 +511,12 @@ impl IosFrameDriver {
     pub(super) fn installed() {
         tracing::info!("iOS platform initialized with callbacks");
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         let resize = self.lane.lock().resize_hook();
+        let physical = metrics.physical();
         resize.apply(
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         );
     }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {

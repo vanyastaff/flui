@@ -1,20 +1,16 @@
 //! UIKit touch and Pencil readings in the owned input vocabulary.
 //!
-//! Touch identity and primary admission belong to the receiving view. UIKit reports
-//! force only for Pencil or a force-capable trait environment; unsupported force
-//! remains absent. Native timestamps retain delivery age on the process timeline.
+//! Each `UITouch` is copied into a plain [`NativeReading`] and assembled by the
+//! shared [`pointer_assembly`](crate::shared::pointer_assembly); touch identity
+//! and primary admission belong to the receiving view. UIKit reports force
+//! only for Pencil or a force-capable trait environment; unsupported force
+//! remains absent. Native timestamps keep their uptime on the process
+//! timeline.
 
-use std::collections::HashMap;
-use std::num::NonZeroU64;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{
-    CancelReason, ContactSize, PenOrientation, PenTool, PointerButton, PointerButtons,
-    PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
-    PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal, Pressure,
-};
+use flui_platform_api::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
 use objc2::{msg_send, sel};
 use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::NSProcessInfo;
@@ -23,6 +19,10 @@ use objc2_ui_kit::{
     UITouchType, UITraitEnvironment, UIView,
 };
 
+use crate::shared::pointer_assembly::{
+    ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
+    NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+};
 use crate::traits::PlatformInput;
 
 /// Which native callback delivered a batch.
@@ -34,20 +34,33 @@ pub(super) enum TouchPhase {
     Cancel,
 }
 
+/// The primary Pencil: its hover and its contact are one contact, which keeps
+/// the reserved identity one.
+const PENCIL: NativeContact = NativeContact(0);
+/// The indirect pointer (a trackpad or mouse cursor): one contact for every
+/// `UITouch` UIKit makes for it.
+const CURSOR: NativeContact = NativeContact(1);
+
 /// Contacts admitted by one UIKit view; no address arithmetic mints identities.
 pub(super) struct TouchInputState {
-    contacts: HashMap<usize, PointerInfo>,
-    next_id: Option<NonZeroU64>,
-    hovering: bool,
+    contacts: ContactRegistry,
+    /// The touch the primary Pencil's contact is, while its tip is down.
+    pencil_touch: Option<usize>,
 }
 
 impl Default for TouchInputState {
     fn default() -> Self {
+        // The uptime and the epoch are read back to back: UIKit timestamps and
+        // `Instant` both count the same monotonic uptime.
+        let uptime = NSProcessInfo::processInfo().systemUptime();
+        let clock = NativeClock::new(
+            EventTime::from_nanos(crate::shared::events::event_timestamp_ns()),
+            Duration::try_from_secs_f64(uptime).unwrap_or_default(),
+            None,
+        );
         Self {
-            contacts: HashMap::new(),
-            // One is reserved for the view's Pencil hover recognizer.
-            next_id: NonZeroU64::new(2),
-            hovering: false,
+            contacts: ContactRegistry::new(clock).with_reserved_contact(PENCIL),
+            pencil_touch: None,
         }
     }
 }
@@ -60,166 +73,122 @@ impl TouchInputState {
         recognizer: &UIHoverGestureRecognizer,
         view: &UIView,
     ) -> Vec<PlatformInput> {
-        if self
-            .contacts
-            .values()
-            .any(|contact| contact.id.get() == NonZeroU64::MIN)
-        {
+        if self.pencil_touch.is_some() {
             // Contact samples own this Pencil while its tip is down.
             return Vec::new();
         }
         // SAFETY: UIKit invokes this target with a live gesture recognizer;
         // `state` is its documented enum-valued getter (omitted by the bindings).
         let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
-        let time = EventTime::from_nanos(crate::shared::events::event_timestamp_ns());
-        let info = PointerInfo::new(
-            PointerId::new(NonZeroU64::MIN),
-            PointerKind::Pen { tool: PenTool::Tip },
-        )
-        .with_role(PointerRole::Primary);
+        let time = ReadingTime::epoch(EventTime::from_nanos(
+            crate::shared::events::event_timestamp_ns(),
+        ));
+        let pencil = |action| {
+            NativeReading::new(
+                PENCIL,
+                PointerKind::Pen { tool: PenTool::Tip },
+                action,
+                time,
+            )
+            .with_primary(true)
+        };
         if state == UIGestureRecognizerState::Ended
             || state == UIGestureRecognizerState::Cancelled
             || state == UIGestureRecognizerState::Failed
         {
-            if !std::mem::take(&mut self.hovering) {
-                return Vec::new();
-            }
-            return vec![PlatformInput::Pointer(PointerEvent::Leave(
-                PointerSignal::new(info, time),
-            ))];
+            return self.assemble(&pencil(ReadingAction::Leave));
         }
         if state != UIGestureRecognizerState::Began && state != UIGestureRecognizerState::Changed {
             return Vec::new();
         }
         let location = recognizer.locationInView(Some(view));
-        let Ok(position) = PointerPosition::try_new(Point::new(location.x, location.y)) else {
-            return Vec::new();
-        };
-        let mut sample = PointerSample::new(time, position);
+        let mut sensors = RawSensors::default();
         // Pencil hover angles were added after UIHoverGestureRecognizer itself.
         if recognizer.respondsToSelector(sel!(altitudeAngle))
             && recognizer.respondsToSelector(sel!(azimuthAngleInView:))
-            && let Ok(orientation) = PenOrientation::try_new(
+        {
+            sensors.angles = pen_angles(
                 recognizer.altitudeAngle(),
                 recognizer.azimuthAngleInView(Some(view)),
-            )
-        {
-            sample = sample.with_orientation(orientation);
+            );
         }
+        let moved = pencil(ReadingAction::Move)
+            .at(location.x, location.y, 1.0)
+            .with_sensors(sensors);
         let mut events = Vec::new();
-        if !self.hovering {
-            self.hovering = true;
-            events.push(PlatformInput::Pointer(PointerEvent::Enter(
-                PointerSignal::new(info, time).with_position(position),
-            )));
+        if state == UIGestureRecognizerState::Began {
+            events.extend(self.assemble(&NativeReading {
+                action: ReadingAction::Enter,
+                ..moved
+            }));
         }
-        events.push(PlatformInput::Pointer(PointerEvent::Move(
-            PointerMove::new(info, PointerButtons::NONE, sample),
-        )));
+        events.extend(self.assemble(&moved));
         events
     }
 
     pub(super) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
         let address = std::ptr::from_ref(touch) as usize;
         let kind = pointer_kind(touch);
-        let time = native_time(
-            touch.timestamp(),
-            NSProcessInfo::processInfo().systemUptime(),
-        );
-        let info = if phase == TouchPhase::Down {
-            if self.contacts.contains_key(&address) {
-                return Vec::new();
-            }
-            let role = if self.contacts.values().any(|contact| contact.kind == kind) {
-                PointerRole::Additional
-            } else {
-                PointerRole::Primary
-            };
-            let id = if matches!(kind, PointerKind::Pen { .. }) && role == PointerRole::Primary {
-                // The primary Pencil retains its hover identity across contact.
-                NonZeroU64::MIN
-            } else {
-                let Some(id) = self.next_id else {
-                    return Vec::new();
-                };
-                self.next_id = id.get().checked_add(1).and_then(NonZeroU64::new);
-                id
-            };
-            let info = PointerInfo::new(PointerId::new(id), kind).with_role(role);
-            // Validate position before admitting an undeliverable contact.
-            if pointer_position(touch).is_none() {
-                return Vec::new();
-            }
-            self.contacts.insert(address, info);
-            info
-        } else if matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
-            let Some(info) = self.contacts.remove(&address) else {
-                return Vec::new();
-            };
-            info
+        let contact = if kind == PointerKind::Mouse {
+            CURSOR
+        } else if self.pencil_touch == Some(address)
+            || (phase == TouchPhase::Down
+                && matches!(kind, PointerKind::Pen { .. })
+                && self.pencil_touch.is_none())
+        {
+            self.pencil_touch = Some(address);
+            PENCIL
         } else {
-            let Some(info) = self.contacts.get(&address).copied() else {
-                return Vec::new();
-            };
-            info
+            NativeContact(address as u64)
         };
-
-        if phase == TouchPhase::Cancel {
-            return vec![PlatformInput::Pointer(PointerEvent::Cancel(
-                PointerCancel::new(info, time, CancelReason::Platform),
-            ))];
+        if contact == PENCIL && matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
+            self.pencil_touch = None;
         }
-        let Some(position) = pointer_position(touch) else {
-            return if phase == TouchPhase::Up {
-                vec![PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(info, time, CancelReason::InvalidInput),
-                ))]
-            } else {
-                Vec::new()
-            };
+        let action = match phase {
+            TouchPhase::Down => ReadingAction::Press(PointerButton::PRIMARY),
+            TouchPhase::Move => ReadingAction::Move,
+            TouchPhase::Up => ReadingAction::Release(PointerButton::PRIMARY),
+            TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
         };
+        let view = touch.view();
+        let location = touch.locationInView(view.as_deref());
         let is_pen = matches!(kind, PointerKind::Pen { .. });
         let has_force = is_pen
-            || touch.view().is_some_and(|view| {
+            || view.as_ref().is_some_and(|view| {
                 view.traitCollection().forceTouchCapability() == UIForceTouchCapability::Available
             });
-        let orientation = is_pen.then(|| {
-            let view = touch.view();
-            (
-                touch.altitudeAngle(),
-                touch.azimuthAngleInView(view.as_deref()),
-            )
-        });
-        let sample = touch_sample(
-            position,
-            time,
+        let mut sensors = touch_sensors(
             has_force,
             touch.force(),
             touch.maximumPossibleForce(),
             touch.majorRadius(),
-            orientation,
         );
-        let event = match phase {
-            TouchPhase::Down => PointerEvent::Down(PointerPress::new(
-                info,
-                PointerButton::PRIMARY,
-                PointerButtons::NONE,
-                sample,
-            )),
-            TouchPhase::Move => PointerEvent::Move(PointerMove::new(
-                info,
-                PointerButtons::only(PointerButton::PRIMARY),
-                sample,
-            )),
-            TouchPhase::Up => PointerEvent::Up(PointerRelease::new(
-                info,
-                PointerButton::PRIMARY,
-                PointerButtons::NONE,
-                sample,
-            )),
-            TouchPhase::Cancel => unreachable!("cancel handled before sensor reading"),
+        if is_pen {
+            sensors.angles = pen_angles(
+                touch.altitudeAngle(),
+                touch.azimuthAngleInView(view.as_deref()),
+            );
+        }
+        let reading = NativeReading::new(
+            contact,
+            kind,
+            action,
+            ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
+        )
+        .at(location.x, location.y, 1.0)
+        .with_sensors(sensors);
+        let reading = if contact == PENCIL || contact == CURSOR {
+            reading.with_primary(true)
+        } else {
+            reading
         };
-        vec![PlatformInput::Pointer(event)]
+        self.assemble(&reading)
+    }
+
+    fn assemble(&mut self, reading: &NativeReading) -> Vec<PlatformInput> {
+        decode(&mut self.contacts, reading)
+            .unwrap_or_else(DecodeError::into_inputs)
+            .into_vec()
     }
 }
 
@@ -234,62 +203,59 @@ fn pointer_kind(touch: &UITouch) -> PointerKind {
     }
 }
 
-fn pointer_position(touch: &UITouch) -> Option<PointerPosition> {
-    let view = touch.view();
-    let location = touch.locationInView(view.as_deref());
-    PointerPosition::try_new(Point::new(location.x, location.y)).ok()
+/// Pencil angles, kept only when UIKit reports a valid pair.
+fn pen_angles(altitude: f64, azimuth: f64) -> Option<PenAngles> {
+    PenOrientation::try_new(altitude, azimuth)
+        .is_ok()
+        .then_some(PenAngles::Spherical {
+            altitude: Some(altitude),
+            azimuth: Some(azimuth),
+        })
 }
 
-fn touch_sample(
-    position: PointerPosition,
-    time: EventTime,
-    has_force: bool,
-    force: f64,
-    maximum_force: f64,
-    radius: f64,
-    orientation: Option<(f64, f64)>,
-) -> PointerSample {
-    let mut sample = PointerSample::new(time, position);
+/// A touch's force, normalized by its maximum when the environment reports
+/// force, and its contact diameter in points when UIKit measures a radius.
+fn touch_sensors(has_force: bool, force: f64, maximum_force: f64, radius: f64) -> RawSensors {
     let normalized_force = force / maximum_force;
-    if has_force
-        && maximum_force.is_finite()
-        && maximum_force > 0.0
-        && (0.0..=1.0).contains(&normalized_force)
-        && let Ok(pressure) = Pressure::try_new(normalized_force as f32)
-    {
-        sample = sample.with_pressure(pressure);
+    RawSensors {
+        pressure: (has_force
+            && maximum_force.is_finite()
+            && maximum_force > 0.0
+            && (0.0..=1.0).contains(&normalized_force))
+        .then_some(normalized_force),
+        contact_size: (radius > 0.0 && radius.is_finite()).then_some((radius * 2.0, radius * 2.0)),
+        ..RawSensors::default()
     }
-    if radius > 0.0
-        && let Ok(size) = ContactSize::try_new(Size::new(radius * 2.0, radius * 2.0))
-    {
-        sample = sample.with_contact_size(size);
-    }
-    if let Some((altitude, azimuth)) = orientation
-        && let Ok(orientation) = PenOrientation::try_new(altitude, azimuth)
-    {
-        sample = sample.with_orientation(orientation);
-    }
-    sample
-}
-
-/// UIKit and AppKit use uptime seconds. Preserve the native sample's delivery age.
-fn native_time(timestamp: f64, uptime: f64) -> EventTime {
-    let now = crate::shared::events::event_timestamp_ns();
-    let age = Duration::try_from_secs_f64((uptime - timestamp).max(0.0))
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok());
-    EventTime::from_nanos(age.map_or(now, |age| now.saturating_sub(age)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_platform_api::pointer::{PointerEvent, Pressure};
+
+    /// The Down a Pencil-less touch with `sensors` assembles into.
+    fn down(sensors: RawSensors) -> flui_platform_api::pointer::PointerSample {
+        let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
+        let reading = NativeReading::new(
+            NativeContact(9),
+            PointerKind::Touch,
+            ReadingAction::Press(PointerButton::PRIMARY),
+            ReadingTime::epoch(EventTime::from_nanos(10)),
+        )
+        .at(1.25, 2.5, 1.0)
+        .with_sensors(sensors);
+        decode(&mut contacts, &reading)
+            .expect("valid touch")
+            .iter()
+            .find_map(|input| match input.as_pointer() {
+                Some(PointerEvent::Down(press)) => Some(press.sample),
+                _ => None,
+            })
+            .expect("down")
+    }
 
     #[test]
     fn native_touch_readings_keep_sensor_presence_and_pen_angles() {
-        let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(1.25, 2.5))
-            .expect("finite position");
-        let time = flui_platform_api::EventTime::from_nanos(10);
         for (has_force, force, maximum, expected) in [
             (false, 1.0, 1.0, None),
             (true, 0.0, 4.0, Some(0.0)),
@@ -297,7 +263,7 @@ mod tests {
             (true, 2.0, 0.0, None),
             (true, f64::INFINITY, 4.0, None),
         ] {
-            let sample = touch_sample(position, time, has_force, force, maximum, 3.25, None);
+            let sample = down(touch_sensors(has_force, force, maximum, 3.25));
             assert_eq!(sample.pressure.map(Pressure::get), expected);
             let extent = sample.contact_size.expect("reported radius");
             assert_eq!((extent.get().width, extent.get().height), (6.5, 6.5));
@@ -305,18 +271,14 @@ mod tests {
             assert_eq!(sample.tangential_pressure, None);
             assert_eq!(sample.twist, None);
         }
-        let pen = touch_sample(
-            position,
-            time,
-            true,
-            1.0,
-            4.0,
-            0.0,
-            Some((std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2)),
-        );
+        let pen = down(RawSensors {
+            angles: pen_angles(std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2),
+            ..touch_sensors(true, 1.0, 4.0, 0.0)
+        });
         let orientation = pen.orientation.expect("reported Pencil angles");
         assert_eq!(orientation.altitude(), Some(std::f64::consts::FRAC_PI_4));
         assert_eq!(orientation.azimuth(), Some(std::f64::consts::FRAC_PI_2));
         assert_eq!(pen.contact_size, None);
+        assert_eq!(pen_angles(f64::NAN, 0.0), None);
     }
 }

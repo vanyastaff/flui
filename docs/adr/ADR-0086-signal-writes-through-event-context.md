@@ -108,8 +108,8 @@ lists UI callbacks as `!Send + !Sync`:
   (`crates/flui-platform/src/traits/platform.rs:319`).
 
 The gesture layer is already `!Send`: `TapCallback = Rc<dyn Fn(TapDetails)>`
-(`crates/flui-interaction/src/recognizers/tap.rs:91`) and the drag aliases
-(`crates/flui-interaction/src/recognizers/drag.rs:113-121`).
+(`crates/flui-interaction/src/gesture/recognizers/tap.rs:91`) and the drag aliases
+(`crates/flui-interaction/src/gesture/recognizers/drag.rs:113-121`).
 
 At the original census, one catalog callback was invoked from `build`: `AnimatedSize::build` delivered `on_end`
 (`crates/flui-widgets/src/animated/animated_size.rs:201-209` in that revision).
@@ -244,9 +244,9 @@ classification, with the command above as its census:
 | widgets `interaction/drag_target.rs` | `on_accept`, `on_leave`, `on_move` | event | no (was yes) | the drag session, synchronously inside pointer dispatch, through the target's `WriterSource`; `on_accept` before the draggable's `on_drag_end` |
 | widgets `interaction/drag_target.rs` | `on_will_accept` (`-> bool`) | **query** | no (was yes) | — |
 | widgets `interaction/focus.rs` | `on_focus_change`, `on_key_event` (`-> KeyEventResult`) | event | no | not yet audited |
-| widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_pan_{start,update,end}`, `on_horizontal_drag_{down,start,update,end,cancel}` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, after the frame through the local post-frame lane, but **inside `build`** when the context has no such lane (`drain_semantics_requests`, `gesture_detector.rs:540-543`) |
+| widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_multi_tap`, and the `on_*` callbacks of `DragSlot` (`down`, `start`, `update`, `end`, `cancel`), `TransformSlot` and `ForcePressSlot` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, inside that request's `EventCx` in the semantics-action drain |
 | widgets `interaction/raw_button.rs` | `on_press` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `cx` already) |
-| widgets `interaction/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
+| widgets `scroll/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
 | widgets `interaction/listener.rs` | `on_pointer_{down,up,move,hover,cancel,signal}`, `on_pointer_pan_zoom_update` | event | no | pointer dispatch |
 | widgets `interaction/listener.rs` | `on_scroll_claim`, `on_pointer_pan_zoom_claim` (`-> EventPropagation`) | **query** | no | — |
 | widgets `interaction/mouse_region.rs` | `on_enter`, `on_hover`, `on_exit` | event | no | not yet audited |
@@ -307,7 +307,7 @@ the signatures and production dispatch sites decide the event/query classificati
 | PageView | The `Send + Sync` controller listener only records the page and schedules a rebuild; `build` hands each recorded page to the local post-frame lane, one entry per page, and delivery reads the current callback. No lane: dropped with a warning, never run inside `build`. |
 | Actions and CallbackShortcuts | `Focus::on_key_event` hands its `cx` to `CallbackShortcuts` callbacks and to `Action::invoke`. `Actions::maybe_invoke` is removed: its only possible caller was `build`. InkWell's keyboard activation drops its writer bridge. |
 | DragTarget | The slot (entered drags, callbacks, rebuild handle, writer) is an owner-local `Rc` registered in the interaction lane; hit-test metadata carries only its `LocalPayloadTarget`, which the drag session resolves inside pointer dispatch. `on_accept` runs inside `finish_drag`, before the draggable's `on_drag_end`. `on_will_accept` stays a query and loses `Send + Sync`. |
-| Semantics | Each node's action table and writer are one lane payload; the configuration advertises every action through one `Send + Sync` handler holding the ticket, reused across rebuilds so the configuration compares equal. The handler runs in the UI runtime's semantics-action drain; invoked outside a UI runtime, the action is dropped with a warning. A detached mount advertises none. `GestureDetector` keeps its post-frame bridge onto `on_tap`/`on_long_press`. |
+| Semantics | Each node's action table and writer are one lane payload; the configuration advertises every action through one `Send + Sync` handler holding the ticket, reused across rebuilds so the configuration compares equal. The handler runs in the UI runtime's semantics-action drain; invoked outside a UI runtime, the action is dropped with a warning. A detached mount advertises none. `GestureDetector` runs `on_tap`/`on_long_press` from these handlers, in the drain. |
 
 Callback ownership moved before any `Send` bound was removed: both render objects stay
 `Send + Sync` and carry only tickets. What remains outside this record: `LocalHistoryEntry` is
@@ -357,7 +357,7 @@ compile-time claim of this record is limited to writes into `Signal<T>`.
 
 ### 8. Order and rollback
 
-The changes land one at a time, each with `cargo xtask check-changed` green:
+The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checking a change") green:
 
 1. ADR-0085 §1 (UI runtime routing of `UiCommand::SignalWrite`), with its failing multi-presentation
    test. It does not depend on anything else here.
@@ -530,4 +530,4 @@ Marked **(exists)** where the item is in the repository.
 - `bound_local_state_refuses_build_mutation_then_recovers` covers bound local-state mutation refusal through the public writer-source family.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter
-  signatures; `flui migrate` applied to `examples/` with `cargo xtask check-changed` green.
+  signatures; `flui migrate` applied to `examples/` with the pre-PR checks green.

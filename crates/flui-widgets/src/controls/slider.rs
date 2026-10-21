@@ -1,11 +1,13 @@
 //! A controlled horizontal numeric slider with pointer, keyboard and assistive input.
 
 use crate::support::{ValueCallback, command_modifiers, retirement::Terminal, value_callback};
-use crate::{CustomPaint, Directionality, Focus, GestureDetector, LayoutBuilder, Semantics};
+use crate::{
+    CustomPaint, Directionality, DragSlot, Focus, GestureDetector, LayoutBuilder, Semantics,
+};
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_interaction::{
     events::{Key, KeyState, NamedKey},
-    routing::{FocusNode, KeyEventResult},
+    focus::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_platform_api::keyboard::ImeComposition;
@@ -278,21 +280,24 @@ impl ViewState<Slider> for SliderState {
                 let update = Terminal::new(Rc::clone(&live));
                 let end = Terminal::new(Rc::clone(&live));
                 detector
-                    .on_horizontal_drag_down(move |_cx, details| {
-                        down.down_x.set(Some(details.local_position.dx));
-                    })
                     .on_tap(move |cx| {
                         if let Some(x) = tap.down_x.take() {
                             tap.at_pointer(cx, x);
                         }
                     })
-                    .on_horizontal_drag_start(move |cx, details| {
-                        start.at_pointer(cx, details.local_position.dx);
-                    })
-                    .on_horizontal_drag_update(move |cx, details| {
-                        update.at_pointer(cx, details.local_position.dx);
-                    })
-                    .on_horizontal_drag_end(move |_cx, _details| end.down_x.set(None))
+                    .drag(
+                        DragSlot::horizontal()
+                            .on_down(move |_cx, details| {
+                                down.down_x.set(Some(details.local_position.dx));
+                            })
+                            .on_start(move |cx, details| {
+                                start.at_pointer(cx, details.local_position.dx);
+                            })
+                            .on_update(move |cx, details| {
+                                update.at_pointer(cx, details.local_position.dx);
+                            })
+                            .on_end(move |_cx, _details| end.down_x.set(None)),
+                    )
                     .boxed()
             } else {
                 // Disablement retires the recognizers and any pending contact;

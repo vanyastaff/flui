@@ -70,8 +70,8 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
-//! | `persist` | off | `AppConfig::with_storage_dir`: storage under the per-user data directories for [`view::persist`] documents |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
+//! | `dev-agent` | off | re-exports `flui-devtools` as `devtools`, with its agent server; install it with `AppConfig::with_dev_agent` (`flui run --agent`) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
@@ -167,6 +167,9 @@ pub use flui_app as app;
 /// feature.
 #[cfg(feature = "cupertino")]
 pub use flui_cupertino as cupertino;
+/// The development agent server (`flui-devtools`). Requires the `dev-agent` feature.
+#[cfg(feature = "dev-agent")]
+pub use flui_devtools as devtools;
 pub use flui_foundation as foundation;
 /// Structured diagnostic properties for application-defined types.
 pub use flui_foundation::Diagnosticable;
@@ -180,7 +183,57 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
-pub use flui_platform_api as platform;
+/// The platform contracts and input vocabulary (`flui-platform-api`).
+///
+/// [`input_capabilities`](flui_platform_api::input_capabilities) and
+/// [`haptics`](flui_platform_api::haptics), the second haptic tier with its
+/// requests and outcomes, are unstable and present only under the additive
+/// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
+/// are private, not merely undocumented:
+///
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(feature = "unstable-input", doc = "```")]
+/// use flui::platform::input_capabilities::InputCapabilities;
+/// ```
+///
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(feature = "unstable-input", doc = "```")]
+/// use flui::platform::haptics::HapticPattern;
+/// ```
+pub mod platform {
+    pub use flui_platform_api::*;
+    /// Handle-less input capabilities (ADR-0213); unstable.
+    #[cfg(feature = "unstable-input")]
+    pub mod input_capabilities {
+        pub use flui_platform_api::input_capabilities::{
+            Availability, InputCapabilities, PointerKindSet,
+        };
+    }
+    // Shadows the glob's module of the same name, so the unstable types are
+    // unreachable through the facade without the feature.
+    #[cfg(not(feature = "unstable-input"))]
+    #[expect(
+        hidden_glob_reexports,
+        reason = "hiding the unstable module from the glob is the point (ADR-0213 §5)"
+    )]
+    mod input_capabilities {}
+    /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
+    #[cfg(feature = "unstable-input")]
+    pub mod haptics {
+        pub use flui_platform_api::haptics::{
+            ControlPoint, HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern,
+            HapticPatternBuilder, HapticPatternError, HapticRequest, HapticTicket, HapticTiming,
+            Intensity, ParameterCurve, PatternPlayback, Sharpness, UnitRangeError,
+        };
+    }
+    // The same shadowing for the second haptic tier (ADR-0210 §9).
+    #[cfg(not(feature = "unstable-input"))]
+    #[expect(
+        hidden_glob_reexports,
+        reason = "hiding the unstable module from the glob is the point (ADR-0210 §9)"
+    )]
+    mod haptics {}
+}
 pub use flui_widgets as widgets;
 
 /// The view layer (`flui-view`): View/Element, `BuildContext`, keys,

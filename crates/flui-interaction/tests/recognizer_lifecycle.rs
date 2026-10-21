@@ -1,5 +1,6 @@
 //! Public recognizer cancellation, ownership, and containment contracts.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -8,15 +9,15 @@ use std::{
     time::Duration,
 };
 
-use flui_foundation::{MonotonicClock, panic::payload_text};
+use flui_foundation::panic::payload_text;
 use flui_interaction::{GestureArena, GestureArenaMember, ManualClock, PointerId};
-use web_time::Instant;
+use flui_platform_api::EventTime;
 
 struct Member {
     accepted: Rc<Cell<u32>>,
     rejected: Rc<Cell<u32>>,
     retired: Rc<Cell<u32>>,
-    deadline: Cell<Option<Instant>>,
+    deadline: Cell<Option<EventTime>>,
     queries: Cell<u32>,
     polls: Cell<u32>,
     query_failure: Cell<Option<&'static str>>,
@@ -24,7 +25,7 @@ struct Member {
 }
 
 impl Member {
-    fn new(deadline: Option<Instant>) -> Rc<Self> {
+    fn new(deadline: Option<EventTime>) -> Rc<Self> {
         Rc::new(Self {
             accepted: Rc::new(Cell::new(0)),
             rejected: Rc::new(Cell::new(0)),
@@ -37,7 +38,7 @@ impl Member {
         })
     }
 
-    fn query_deadline(&self) -> Option<Instant> {
+    fn query_deadline(&self) -> Option<EventTime> {
         self.queries.set(self.queries.get() + 1);
         if let Some(failure) = self.query_failure.get() {
             panic!("{failure}");
@@ -47,11 +48,11 @@ impl Member {
 }
 
 impl GestureArenaMember for Member {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepted.set(self.accepted.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejected.set(self.rejected.get() + 1);
         let callback = self.on_reject.borrow_mut().take();
         if let Some(callback) = callback {
@@ -59,11 +60,11 @@ impl GestureArenaMember for Member {
         }
     }
 
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.query_deadline()
     }
 
-    fn poll_deadline(&self, _now: Instant) {
+    fn poll_deadline(&self, _now: EventTime) {
         self.polls.set(self.polls.get() + 1);
         self.deadline.set(None);
     }
@@ -110,7 +111,7 @@ fn dropped_member_without_cancel_leaves_the_arena() {
 fn custom_member_owns_a_deadline() {
     let clock = ManualClock::new();
     let arena = GestureArena::with_clock(Arc::new(clock.clone()));
-    let due = clock.now() + Duration::from_millis(20);
+    let due = arena.now() + Duration::from_millis(20);
     let member = Member::new(Some(due));
     arena.add(PointerId::new(std::num::NonZeroU64::MIN), &member);
 
@@ -189,7 +190,7 @@ fn panicking_deadline_query_does_not_hide_other_deadlines() {
         for pending_query in [false, true] {
             let clock = ManualClock::new();
             let arena = GestureArena::with_clock(Arc::new(clock.clone()));
-            let due = clock.now() + Duration::from_millis(20);
+            let due = arena.now() + Duration::from_millis(20);
             let first = Member::new(Some(due));
             let second = Member::new(Some(due));
             let healthy = Member::new(Some(due));

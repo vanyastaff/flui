@@ -1,0 +1,17 @@
+{"flui_native_recording":1,"backend":"win32","epoch_ns":0,"uptime_ns":112398265000000,"counter":{"count":1123983018323,"frequency":10000000},"reserved_contact":4294967296,"click_settings":{"interval_ns":500000000,"width":4.0,"height":4.0},"devices":[]}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":"move","buttons":[],"time":{"epoch_ns":110000000},"position":[40.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"time":{"tick_ms":{"tick":112398406,"observed_ms":112398406}},"counter":1123984358473,"position":[40.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"release":1},"buttons":[],"time":{"tick_ms":{"tick":112398453,"observed_ms":112398453}},"counter":1123984781624,"position":[40.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"time":{"tick_ms":{"tick":112398484,"observed_ms":112398484}},"counter":1123985186816,"position":[40.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"release":1},"buttons":[],"time":{"tick_ms":{"tick":112398531,"observed_ms":112398531}},"counter":1123985592096,"position":[40.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":"move","buttons":[],"time":{"epoch_ns":328000000},"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"time":{"tick_ms":{"tick":112398609,"observed_ms":112398609}},"counter":1123986440058,"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"press":2},"buttons":[1,2],"time":{"tick_ms":{"tick":112398656,"observed_ms":112398656}},"counter":1123986868900,"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"release":2},"buttons":[1],"time":{"tick_ms":{"tick":112398703,"observed_ms":112398703}},"counter":1123987292641,"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"release":1},"buttons":[],"time":{"tick_ms":{"tick":112398750,"observed_ms":112398750}},"counter":1123987718461,"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"modifiers":["control"],"time":{"tick_ms":{"tick":112398828,"observed_ms":112398828}},"counter":1123988548998,"position":[46.0,40.0]}}
+{"row":"reading","reading":{"contact":4294967296,"kind":"mouse","primary":true,"action":{"release":1},"buttons":[],"modifiers":["control"],"time":{"tick_ms":{"tick":112398875,"observed_ms":112398875}},"counter":1123988973938,"position":[46.0,40.0]}}
+{"row":"wheel","wheel":{"axis":"vertical","distance":120,"position":[46.0,40.0],"time_ns":688000000}}
+{"row":"wheel","wheel":{"axis":"horizontal","distance":120,"position":[46.0,40.0],"time_ns":735000000}}
+{"row":"wheel","wheel":{"axis":"vertical","distance":-60,"position":[46.0,40.0],"time_ns":766000000}}
+{"row":"viewport_abandoned","time":{"tick_ms":{"tick":112399078,"observed_ms":112399078}},"counter":1123991101341,"position":[46.0,40.0]}

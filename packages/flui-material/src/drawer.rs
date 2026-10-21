@@ -69,8 +69,8 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Align, ColoredBox, ConstrainedBox, FadeTransition, GestureDetector, LayoutBuilder, MediaQuery,
-    SizedBox, SlideTransition, Stack,
+    Align, ColoredBox, ConstrainedBox, DragSlot, FadeTransition, GestureDetector, LayoutBuilder,
+    MediaQuery, SizedBox, SlideTransition, Stack,
 };
 
 use crate::material::Material;
@@ -553,9 +553,22 @@ struct DrawerControllerCore {
     alignment: Cell<DrawerAlignment>,
     panel_width: Cell<f64>,
     on_open_changed: RefCell<Option<BoundDrawerCallback>>,
+    /// Rebuilds the drawer, for a drag that ends on a closed panel: no run
+    /// starts or settles then, so no status change rebuilds it to drop the
+    /// panel's content.
+    rebuild: RefCell<Option<flui_sdk::view::RebuildHandle>>,
 }
 
 impl DrawerControllerCore {
+    /// Rebuild the drawer to drop the panel it still shows over a closed
+    /// position.
+    fn rebuild_closed(&self) {
+        let rebuild = self.rebuild.borrow().clone();
+        if let Some(rebuild) = rebuild {
+            rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+        }
+    }
+
     fn replace_callback(&self, callback: Option<BoundDrawerCallback>) {
         let previous = self.on_open_changed.replace(callback);
         drop(previous);
@@ -606,6 +619,7 @@ impl DrawerControllerCore {
     /// crossing `0.5` as the fling animates).
     fn settle(&self, primary_velocity: f64) {
         if self.is_closed() {
+            self.rebuild_closed();
             return;
         }
         let width = self.panel_width.get();
@@ -621,9 +635,13 @@ impl DrawerControllerCore {
     }
 
     /// Only reachable from the open panel's gesture detector; the
-    /// closed-state edge strip wires no `on_horizontal_drag_cancel`.
+    /// closed-state edge strip wires no drag `on_cancel`.
     fn handle_drag_cancel(&self) {
-        if self.is_closed() || self.controller.is_animating() {
+        if self.is_closed() {
+            self.rebuild_closed();
+            return;
+        }
+        if self.controller.is_animating() {
             return;
         }
         if self.controller.value() < 0.5 {
@@ -698,6 +716,7 @@ impl StatefulView for DrawerController {
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
                 on_open_changed: RefCell::new(None),
+                rebuild: RefCell::new(None),
             }),
             controller,
         }
@@ -708,6 +727,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
+        *self.core.rebuild.borrow_mut() = Some(rebuild.clone());
 
         self.did_change_dependencies(ctx);
 
@@ -758,8 +778,8 @@ impl ViewState<DrawerController> for DrawerControllerState {
 
         let media_query = MediaQuery::of(ctx);
         let side_inset = match view.alignment {
-            DrawerAlignment::Start => media_query.padding.left,
-            DrawerAlignment::End => media_query.padding.right,
+            DrawerAlignment::Start => media_query.padding().left,
+            DrawerAlignment::End => media_query.padding().right,
         };
         let drag_area_width = view.edge_drag_width.unwrap_or(EDGE_DRAG_WIDTH + side_inset);
 
@@ -823,17 +843,22 @@ fn drawer_surface(
     // simplification (see the type docs).
     Align::new(outer_alignment(view.alignment)).child(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_cx, _details| {
-                let _ = down_core.controller.stop();
-            })
-            .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
-            .on_horizontal_drag_end(move |_cx, details| {
-                settle_core.settle(match details.reason {
-                    GestureEndReason::Completed => details.fling_velocity().pixels_per_second.dx,
-                    GestureEndReason::Cancelled => 0.0,
-                });
-            })
-            .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
+            .drag(
+                DragSlot::horizontal()
+                    .on_down(move |_cx, _details| {
+                        let _ = down_core.controller.stop();
+                    })
+                    .on_update(move |_cx, details| move_core.move_by(details.primary_delta))
+                    .on_end(move |_cx, details| {
+                        settle_core.settle(match details.reason {
+                            GestureEndReason::Completed => {
+                                details.fling_velocity().pixels_per_second.dx
+                            }
+                            GestureEndReason::Cancelled => 0.0,
+                        });
+                    })
+                    .on_cancel(move |_cx| cancel_core.handle_drag_cancel()),
+            )
             .behavior(if closed {
                 HitTestBehavior::Translucent
             } else {

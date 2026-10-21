@@ -182,7 +182,7 @@ impl PointerContacts {
 /// is what a high-report-rate pointer actually does, and comfortably inside
 /// the velocity tracker's 100ms fit horizon so a short synthetic drag yields
 /// several usable samples. It is deliberately NOT
-/// `flui_interaction::processing::sampling_clock::DEFAULT_SAMPLE_PERIOD`
+/// `flui_interaction::pointer::DEFAULT_SAMPLE_PERIOD`
 /// (16.667ms) — that constant is the *resampling* cadence, the rate at which
 /// coalesced input is replayed toward the frame, a different quantity from
 /// how far apart a test spaces the raw samples it feeds in.
@@ -499,6 +499,12 @@ impl LaidOut {
         self.host.ui_runtime().set_motion_override(preference);
     }
 
+    /// Apply `values` as the host's next system-preference revision; see
+    /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
+    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+        self.host.ui_runtime().set_system_preferences(values);
+    }
+
     /// Close the tree's presentation for `reason`, as the host does once the
     /// close is agreed: its lifecycle observers are told it is detached, its
     /// held input is dropped, and later lifecycle updates are ignored. The
@@ -563,6 +569,30 @@ impl LaidOut {
     /// region's cursor through the presentation's mouse tracker.
     pub fn cursor(&self) -> flui_platform_api::CursorIcon {
         self.host.ui_runtime().window().cursor()
+    }
+
+    /// The window the tree presents into, for what it recorded (the cursor, the input
+    /// regions handed to the OS).
+    pub fn window(&self) -> &crate::HeadlessWindow {
+        self.host.ui_runtime().window()
+    }
+
+    /// Move the window to a monitor of scale `scale_factor` and run a frame at it; see
+    /// [`HeadlessHost::set_scale_factor`](crate::HeadlessHost::set_scale_factor).
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        let host = self.host.ui_runtime_mut();
+        let window = host.primary_window();
+        host.set_scale_factor(window, scale_factor);
+        self.host.pump(Duration::ZERO);
+    }
+
+    /// Move the window to `display` at its current scale; see
+    /// [`HeadlessHost::move_to_display`](crate::HeadlessHost::move_to_display). No frame
+    /// runs.
+    pub fn move_to_display(&mut self, display: Option<flui_platform_api::DisplayId>) {
+        let host = self.host.ui_runtime_mut();
+        let window = host.primary_window();
+        host.move_to_display(window, display);
     }
 
     /// The listener the UI runtime registered on its window for actions assistive
@@ -791,6 +821,33 @@ impl LaidOut {
     #[must_use]
     pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
         a11y_tree(&self.pipeline_owner)
+    }
+
+    /// The published ids of the nodes that declare `anchor`
+    /// ([`Semantics::anchor`](flui_widgets::Semantics::anchor)), in the
+    /// vocabulary of [`a11y_tree`](Self::a11y_tree): how a test finds the
+    /// node a widget named without naming it by label. Empty until
+    /// [`enable_semantics`](Self::enable_semantics) has been called and a
+    /// frame has run, and while no addressable node declares the anchor.
+    #[must_use]
+    pub fn a11y_nodes_named_by(
+        &self,
+        anchor: &flui_semantics::SemanticsAnchor,
+    ) -> Vec<crate::a11y::NodeId> {
+        self.pipeline_owner.with(|owner| {
+            owner
+                .semantics_owner()
+                .map(|semantics| {
+                    semantics
+                        .tree()
+                        .iter()
+                        .filter(|(_, node)| node.config().anchors().contains(anchor))
+                        .filter_map(|(_, node)| node.accessibility_id())
+                        .map(|identity| crate::a11y::NodeId(identity.as_u64()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// Drive one more frame after external state has changed — the headless
@@ -1336,6 +1393,61 @@ impl LaidOut {
         self.host.ui_runtime().sink().layer_tree()
     }
 
+    /// A typed snapshot of the UI runtime's element tree, its root scopes included: each node
+    /// is an element named by the view that created it, linked to its render object.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
+    /// starts at an element that is no longer mounted, and
+    /// [`SnapshotError::Busy`](flui_foundation::inspect::SnapshotError::Busy) when called from
+    /// code the UI runtime is running, such as a `build`.
+    pub fn inspect_elements(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        self.host
+            .ui_runtime()
+            .ui_runtime()
+            .widgets()
+            .inspect_elements(query)
+    }
+
+    /// A typed snapshot of the committed render tree, each node linked to the semantics node
+    /// it contributes while semantics is enabled.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
+    /// starts at a render object that is no longer in the tree, and
+    /// [`SnapshotError::Busy`](flui_foundation::inspect::SnapshotError::Busy) while a frame
+    /// holds the render tree.
+    pub fn inspect_render(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        self.pipeline_owner.inspect_render(query)
+    }
+
+    /// A typed snapshot of [`layer_tree`](Self::layer_tree), the last submitted scene.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Empty`](flui_foundation::inspect::SnapshotError::Empty) before a scene
+    /// was submitted.
+    pub fn inspect_layers(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        let tree = self
+            .layer_tree()
+            .ok_or(flui_foundation::inspect::SnapshotError::Empty)?;
+        flui_foundation::inspect::snapshot(tree, query)
+    }
+
     /// Every draw operation in the last submitted scene's picture layers, in
     /// layer order, each with its recorded transform: what a paint test
     /// samples at a virtual time.
@@ -1500,8 +1612,9 @@ impl LaidOut {
         })
     }
 
-    /// Hit-test at a root-local position and return the canonical data-only
-    /// path, as the UI runtime's input path would route it.
+    /// Hit-test at a root-local position for a pointer of `kind` and return
+    /// the canonical data-only path, as the UI runtime's input path would
+    /// route it.
     ///
     /// Hit-testing runs inside the UI runtime's owner scope: production
     /// (`UiRuntime::enter` around every addressed event) hit-tests and
@@ -1509,13 +1622,17 @@ impl LaidOut {
     /// resolve lane-registered owner-local state (`ClipPath`'s custom path
     /// clipper via `resolve_path_clip_target`), which falls back to the
     /// default (whole-box) clip outside an active lane.
-    pub fn hit_test_pointer(&self, position: Offset) -> flui_rendering::hit_testing::HitTestResult {
+    pub fn hit_test_pointer(
+        &self,
+        position: Offset,
+        kind: flui_interaction::events::PointerKind,
+    ) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
         self.host.ui_runtime().enter(|_| {
             let mut result = HitTestResult::new();
             self.pipeline_owner.with(|owner| {
-                owner.hit_test(position, &mut result);
+                owner.hit_test(position, kind, &mut result);
                 result
             })
         })
@@ -1528,10 +1645,47 @@ impl LaidOut {
         self.host.ui_runtime().dispatch_hover_left();
     }
 
+    /// Replay a script's pointer contacts on this tree: before each step a
+    /// frame advances virtual time by the gap since the previous step, so
+    /// deadlines fire and animations tick, then the step's event goes through
+    /// the UI runtime's input path. The frame after the last step is the
+    /// caller's.
+    pub fn replay(&mut self, script: &crate::replay::PointerScript) {
+        self.replay_with(script, |_, _| {});
+    }
+
+    /// [`replay`](Self::replay), calling `after_step` with each step's index
+    /// once its event was dispatched, for a test that observes the tree in
+    /// the middle of a contact.
+    pub fn replay_with(
+        &mut self,
+        script: &crate::replay::PointerScript,
+        mut after_step: impl FnMut(&mut Self, usize),
+    ) {
+        let mut previous = Duration::ZERO;
+        for (index, step) in script.steps().iter().enumerate() {
+            self.pump_for(step.at().saturating_sub(previous));
+            previous = step.at();
+            if let flui_runtime::HostInput::Platform(flui_platform_api::PlatformInput::Pointer(
+                event,
+            )) = step.to_input(EventTime::from_nanos(0))
+            {
+                dispatch_synthetic_pointer(&self.host, event);
+            }
+            after_step(self, index);
+        }
+    }
+
     /// Dispatch an already-constructed pointer event through the UI runtime's
     /// input path, as platform input arrives.
     pub fn dispatch_pointer_event(&self, event: &PointerEvent) {
         self.host.dispatch_pointer(event);
+    }
+
+    /// Dispatch a key event through the UI runtime's input path, as platform
+    /// input arrives: the runtime sees it before focus does.
+    pub fn dispatch_key(&self, event: flui_platform_api::keyboard::KeyEvent) {
+        self.host.dispatch_key(event);
     }
 
     /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move

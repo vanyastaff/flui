@@ -251,7 +251,8 @@ loop, not to a window or UI runtime.
 Built: the vocabulary, `OfferTable`, the request/completer pair,
 `DataTransferSource` and `NullDataTransferSource`; `Platform::data_transfer()`
 on every backend; `PlatformInput::DragDrop`; the winit file-drop source; UI runtime
-dispatch that logs and drops DnD events. The transport's state machines are
+dispatch that delivers DnD events to the receivers under the pointer and caches
+their answers as drop feedback ([ADR-0211](ADR-0211-unified-drag-and-drop.md)). The transport's state machines are
 tested in `crates/flui-app/tests/data_transfer_transport.rs`. A plain-text
 `ClipboardHandle` (`flui-interaction`) over the synchronous `Clipboard`
 substrate reaches widgets through `LifecycleContext::clipboard_handle`; its

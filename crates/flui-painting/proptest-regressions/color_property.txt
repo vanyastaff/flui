@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5450ece45bcc91fef87c6d01811ea236b26333e70d055ac522f0a1b295e3dfce # shrinks to a = Color { r: 0, g: 0, b: 0, a: 255 }, b = Color { r: 0, g: 0, b: 43, a: 255 }, t = 0.8628931072793389
+cc 10bc904b2a124f181a71b3473959879fface31f286d94b97e0ffadc8541f4f31 # shrinks to a = Color { r: 0.14509805, g: 0.07450981, b: 0.7019608, a: 0.003921569 }, b = Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }, t = 0.9986312747251395

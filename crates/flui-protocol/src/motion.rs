@@ -66,3 +66,24 @@ impl MotionState {
         Self { rate, time_ms }
     }
 }
+
+/// `motion.set`: change, step or read one window's animation clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct MotionParams {
+    /// The window.
+    pub window: crate::tree::WindowId,
+    /// The change; a request with neither field reads the state.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub request: MotionRequest,
+}
+
+impl MotionParams {
+    /// `request` for `window`.
+    #[must_use]
+    pub const fn new(window: crate::tree::WindowId, request: MotionRequest) -> Self {
+        Self { window, request }
+    }
+}

@@ -43,16 +43,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Window creation moves inside `on_ready` (ADR-0039 §1): `Ready` is
     // guaranteed there, matching every other backend's contract.
     platform.run(Box::new(|owner| {
-        let options = WindowOptions {
-            title: "Windows 11 Features Demo".to_string(),
-            size: Size::new(1000.0, 700.0),
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: Some(Size::new(600.0, 400.0)),
-            max_size: None,
-            ..Default::default()
-        };
+        let options = WindowOptions::default()
+            .with_title("Windows 11 Features Demo".to_string())
+            .with_size(Size::new(1000.0, 700.0))
+            .with_resizable(true)
+            .with_visible(true)
+            .with_decorated(true)
+            .with_min_size(Some(Size::new(600.0, 400.0)))
+            .with_max_size(None);
 
         let _window = owner
             .open_window(options)

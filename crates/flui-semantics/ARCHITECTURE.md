@@ -12,6 +12,39 @@ shape.
 
 ## Mapping decisions
 
+### Rejected drafts retain executable ownership rather than inert metadata
+
+`SemanticsConfiguration::retire` lends each action handler to the caller's
+existing `RecoveryScope`. Configuration attributes and storage buffers are
+ordinary destruction; opaque handler ownership follows ADR-0127. Rendering
+uses this operation after a draft validation failure, whose typed error stays
+authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+in flui-objects checks single and competing capture risks, forced merge, overwritten
+receiver actions, blocked/custom actions, unchanged publication and subsequent
+retry through the real frame pipeline. `registered_action_handlers` lends all raw
+handler ownership to assembly, independent of dispatch authorization. Rendering
+pins those handles before any fold can overwrite or filter them, through the
+complete pass verdict and across a graft fallback. Healthy temporary pins retire
+after publication and phase completion; arbitrary description before return and
+old published-tree destruction retain their existing boundaries (ADR-0223).
+The public
+`configuration_capture_retirement_preserves_first_failure_and_healthy_destruction`
+also exercises normal and custom action captures on the healthy path, preserves
+the first destructor failure and retires a subsequent healthy configuration.
+`harness_accepted_semantics_drafts_retire_filtered_callbacks` verifies that a
+successful assembly releases filtered callbacks normally and keeps published
+callbacks only until their owner retires.
+
+### Authored regions have independent accessibility identities
+
+[ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md) distinguishes
+render-boundary origins from allocated region origins. `SemanticsNode` encodes
+that choice as one private enum. A presentation-owned opaque source reserves
+synthetic IDs below nonzero render generations; it never rewinds or reissues
+released values. `synthetic_identity_exhaustion_never_wraps_or_partially_reserves`
+pins the terminal boundary using a private seam. Region actions use the same
+rooted-node and delivered-offer validation as render boundaries.
+
 ### Scroll ranges retain their actual axis
 
 [ADR-0157](../../docs/adr/ADR-0157-native-scroll-range-actions.md) carries the
@@ -459,9 +492,11 @@ one are not published.
 selection rule are authored, so the ARIA roles that support them are listed in
 `applicability.rs`; a row takes an index of its own, not a cell's column and spans. Position and
 size are not checked by role: the framework derives them, whatever role the node declares. The
-assembly checks them against each other instead (see flui-rendering's architecture): a position
-that does not fit the set it sits in, and a position under a set of unknown size inside a set of
-known size, are not published, since the consumer would read "item 8 of 3" or "item 12 of 5".
+assembly checks them against each other once the tree is built (see flui-rendering's
+architecture): a position past its own known set's size is not published, and the totals of the
+known sets above an unknown set, or above a member numbered for another set, are withheld
+(ADR-0227), since the consumer would read "item 8 of 3" or "item 12 of 5". A lazy host's
+`SemanticsCollection` and a `size_of_set` a caller declares are both sets to that check.
 Anything past what the adapters convert to an `i32` (a position, a level, a count, a row, a
 column, a span) is not published either.
 
@@ -646,6 +681,23 @@ copied payload, so there is no second shape to keep in step with it; the platfor
 cross-thread handoff is the AccessKit `TreeUpdate`. `SemanticsAttributes` is the crate's:
 consumers read and write a node through `SemanticsConfiguration`'s accessors. A selection-only annotation still reaches the
 platform (`a_selection_only_annotation_reaches_the_platform`).
+
+### The identifier names only the node its own configuration forms
+
+**Rule.** [ADR-0240](../../docs/adr/ADR-0240-semantics-identifier.md)'s identifier is published as
+AccessKit `author_id` and as the wire `Node.identifier`, and never as text. Setting it neither marks
+the configuration annotated nor makes it a boundary, and `absorb` never takes it: a configuration
+with only an identifier contributes nothing, and one absorbed into an ancestor or a
+`MergeSemantics` loses it while the receiver keeps its own. A widget names its node where the node
+is formed: a container `Semantics`, `MergeSemantics::identifier`, or a control whose own
+configuration is the outermost of its parts.
+
+**Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
+reader says, by adding a test id; one carried upward would name a node with another node's id, and
+a merged parent would collect its children's.
+
+**Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
+`tests/identifier.rs`; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
 ## Numeric and directional input
 

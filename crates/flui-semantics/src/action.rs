@@ -300,6 +300,9 @@ pub enum ActionDecodeError {
     /// The raw target id is not one FLUI publishes.
     #[error("the request targets {0}, which is not a FLUI node id")]
     UnknownTarget(u64),
+    /// The request addresses a tree other than the one a window publishes.
+    #[error("the request targets accessibility tree {0:?}, which this window does not publish")]
+    UnknownTree(accesskit::TreeId),
     /// FLUI routes this platform action nowhere.
     #[error("the platform action {0:?} has no FLUI route")]
     Unrouted(UnroutedAction),

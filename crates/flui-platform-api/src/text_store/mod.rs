@@ -55,8 +55,8 @@ pub use lock::{
 pub use owner_calls::{OwnerCalls, RetainOnFailure};
 pub use projection::project_ime_event;
 pub use session::{
-    Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
-    TextStoreStatus,
+    Composition, PointMode, RangeRect, Selection, TextChange, TextInputPurpose, TextStoreEdit,
+    TextStoreRead, TextStoreStatus,
 };
 pub use store::{TextStore, TextStoreObserver};
 pub use utf16::{OffsetError, Utf16Offset, Utf16Range};

@@ -255,10 +255,10 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
                     "sibling frame"
                 });
             if !self.seeded.replace(true) {
-                assert_eq!(self.first.deliver(self), Ok(Delivery::Queued));
+                assert_eq!(self.first.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
                 assert_eq!(self.close.close(self), Ok(Delivery::Queued));
                 assert_eq!(
-                    self.first.deliver(self),
+                    self.first.deliver(crate::VSYNC, self),
                     Err(DispatchError::PresentationClosing)
                 );
                 assert_eq!(
@@ -296,8 +296,7 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -308,12 +307,15 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
             assert_eq!(address, self.first_address);
             assert_eq!(surviving, Some(self.sibling_address));
             assert_eq!(
-                self.first.deliver(self),
+                self.first.deliver(crate::VSYNC, self),
                 Err(DispatchError::UnknownPresentation)
             );
             assert_eq!(self.owner.runtime_count(), 1);
             self.trace.borrow_mut().push("native retirement");
-            assert_eq!(self.sibling.deliver(self), Ok(Delivery::Queued));
+            assert_eq!(
+                self.sibling.deliver(crate::VSYNC, self),
+                Ok(Delivery::Queued)
+            );
         }
         fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {
             if let Some(prepared) = self.pending.take() {
@@ -357,7 +359,10 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
         )),
         trace: RefCell::new(Vec::new()),
     };
-    effects.first.deliver(&effects).expect("first turn");
+    effects
+        .first
+        .deliver(crate::VSYNC, &effects)
+        .expect("first turn");
     assert_eq!(
         *effects.trace.borrow(),
         [
@@ -435,8 +440,7 @@ fn native_close_failure_preserves_first_error_and_does_not_restore_the_runtime()
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(

@@ -389,9 +389,7 @@ impl LocalHistoryScope {
     pub(crate) fn new(handle: LocalHistoryHandle, child: impl IntoView) -> Self {
         Self {
             handle: crate::navigator::lifecycle::Terminal::new(handle),
-            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
-                child.into_view(),
-            ))),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView::new(child.into_view())),
         }
     }
 }

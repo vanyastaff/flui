@@ -131,6 +131,94 @@ handle! {
     WindowId, "w", "^w[1-9][0-9]*$"
 }
 
+/// A resolved element across windows, `w3/e12` on the wire (ADR-0238 §4).
+///
+/// An [`ElementId`] is scoped to its window, so a session that spans windows names both.
+/// The app mints both parts; a client only hands back what it read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ElementRef {
+    /// The window the element is in.
+    pub window: WindowId,
+    /// The element, generation-checked by the app.
+    pub element: ElementId,
+}
+
+impl ElementRef {
+    /// `element` in `window`.
+    #[must_use]
+    pub const fn new(window: WindowId, element: ElementId) -> Self {
+        Self { window, element }
+    }
+}
+
+impl fmt::Display for ElementRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.window, self.element)
+    }
+}
+
+impl FromStr for ElementRef {
+    type Err = ParseHandleError;
+
+    /// Only `w<n>/e<n>`, each part in its handle's one spelling.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let (window, element) = text.split_once('/').ok_or_else(|| ParseHandleError {
+            text: text.to_owned(),
+            prefix: 'w',
+        })?;
+        Ok(Self {
+            window: window.parse()?,
+            element: element.parse()?,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for ElementRef {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for ElementRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for ElementRef {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ElementRef".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^w[1-9][0-9]*/e[1-9][0-9]*$"
+        })
+    }
+}
+
+/// A published revision of a window's semantics tree: it grows by one at every publish that
+/// changed the tree, so two readings compare by revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TreeRevision(pub u64);
+
+impl fmt::Display for TreeRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// An axis-aligned rectangle in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -186,6 +274,13 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub automation_id: Option<String>,
+    /// The widget author's stable identifier (ADR-0240): never announced, matched exactly by a
+    /// locator's `identifier`.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub identifier: Option<String>,
     /// Toolkit class name.
     #[cfg_attr(
         feature = "serde",
@@ -303,6 +398,7 @@ impl Node {
             description: None,
             value: None,
             automation_id: None,
+            identifier: None,
             class_name: None,
             rect: None,
             surface_rect: None,
@@ -336,6 +432,13 @@ pub struct Tree {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub protocol: Option<ProtocolVersion>,
+    /// The revision of the window's published tree this read saw; `None` from a backend that
+    /// keeps no revisions, or a read across windows.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub revision: Option<TreeRevision>,
     /// One tree per window read.
     pub roots: Vec<Node>,
     /// Elements reported.
@@ -363,10 +466,49 @@ impl Tree {
     pub fn new(roots: Vec<Node>, truncated: bool) -> Self {
         Self {
             protocol: Some(PROTOCOL_VERSION),
+            revision: None,
             count: count(&roots),
             roots,
             truncated,
         }
+    }
+
+    /// The tree, saying which revision it read.
+    #[must_use]
+    pub fn with_revision(mut self, revision: TreeRevision) -> Self {
+        self.revision = Some(revision);
+        self
+    }
+}
+
+/// `semantics.read`: a window's semantics tree, or a subtree of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ReadParams {
+    /// The window to read.
+    pub window: WindowId,
+    /// What part of it, and how much.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub query: ReadQuery,
+}
+
+impl ReadParams {
+    /// The whole of `window`.
+    #[must_use]
+    pub fn new(window: WindowId) -> Self {
+        Self {
+            window,
+            query: ReadQuery::new(),
+        }
+    }
+
+    /// `window`, scoped by `query`.
+    #[must_use]
+    pub fn with_query(mut self, query: ReadQuery) -> Self {
+        self.query = query;
+        self
     }
 }
 
@@ -460,6 +602,9 @@ pub fn outline(roots: &[Node]) -> String {
         }
         if let Some(id) = &node.automation_id {
             let _ = write!(out, " [id={id:?}]");
+        }
+        if let Some(identifier) = &node.identifier {
+            let _ = write!(out, " [identifier={identifier:?}]");
         }
         if let Some(value) = &node.value {
             let _ = write!(out, " [value={value:?}]");
@@ -591,7 +736,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.4",
+                "protocol": "0.5",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

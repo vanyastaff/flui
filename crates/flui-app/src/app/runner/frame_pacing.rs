@@ -170,11 +170,7 @@ pub(super) fn frame_is_dirty(
 /// spin at full CPU speed re-processing the same leftover work on every
 /// rapid re-wake instead of being bounded like any other no-present,
 /// gate-open frame.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 pub(super) fn keeps_frame_gate_open(
     needs_redraw: bool,
     frame_scheduled: bool,
@@ -184,25 +180,62 @@ pub(super) fn keeps_frame_gate_open(
 }
 
 /// The pace a BACKGROUNDED pump (frames disabled) is bounded to on the mobile
-/// backends, whose frame sources have no wake-deadline hook to arm instead —
-/// see `bootstrap_android`'s and `bootstrap_ios`'s `PumpBackground` arms. Desktop
-/// no longer sleeps on the loop thread at all (ADR-0058, [`FallbackWake`]).
-#[cfg(any(target_os = "android", target_os = "ios"))]
+/// backends. Android arms it as a deadline ([`BackgroundPace`]); iOS, whose
+/// frame source has no wake-deadline hook yet, still sleeps it in
+/// `bootstrap_ios`'s `PumpBackground` arm. Desktop does not sleep on the loop
+/// thread at all (ADR-0058, [`FallbackWake`]).
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// The display period assumed when the platform cannot report one (no
-/// monitor known, a backend without the query): one 60 Hz frame. Only the
-/// fallback wake reads it, and only after a pump that presented nothing —
-/// on a stack whose present blocks, or whose compositor paces redraws, it
-/// is never the pacer. A window that CAN report its period overrides this
-/// at bootstrap and after every move/resize.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub(super) const DEFAULT_DISPLAY_PERIOD: std::time::Duration =
-    std::time::Duration::from_micros(16_667);
+/// The bound on backgrounded pumps (frames disabled) as a deadline instead of
+/// a sleep on the loop thread, for a backend whose wake-deadline hook brings
+/// the loop back: a pump that leaves work asking for another wake defers the
+/// next pump by [`BACKGROUNDED_PUMP_PACE`], and the loop keeps delivering
+/// input and lifecycle events meanwhile.
+///
+/// One-shot, like [`FallbackWake`]: the wake the deadline brings consumes it,
+/// so a deadline source that is never served cannot keep reporting a past
+/// instant.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Default)]
+pub(super) struct BackgroundPace {
+    deadline: parking_lot::Mutex<Option<web_time::Instant>>,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl BackgroundPace {
+    /// Whether a wake at `now` may pump: not while an armed deadline lies
+    /// ahead. A deadline that has passed is consumed by the wake reading it.
+    pub(super) fn admit(&self, now: web_time::Instant) -> bool {
+        let mut deadline = self.deadline.lock();
+        match *deadline {
+            Some(at) if now < at => false,
+            Some(_) => {
+                *deadline = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// A pump at `now` left work that asks for another wake: the next pump
+    /// waits until one pace later.
+    pub(super) fn defer(&self, now: web_time::Instant) {
+        *self.deadline.lock() = Some(now + BACKGROUNDED_PUMP_PACE);
+    }
+
+    /// Frames are enabled again: no pump is deferred any more, and a deadline
+    /// left armed would be reported as due on every wake with nothing to
+    /// consume it.
+    pub(super) fn clear(&self) {
+        *self.deadline.lock() = None;
+    }
+
+    /// The armed deadline, for the wake-deadline hook.
+    pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        *self.deadline.lock()
+    }
+}
 
 /// How much of the display period the fallback wake waits after the last
 /// present. Slightly under a full period on purpose: on a stack whose
@@ -276,9 +309,12 @@ pub(super) struct FallbackWake {
 ))]
 #[derive(Debug)]
 struct FallbackState {
-    period: std::time::Duration,
     last_present_at: Option<web_time::Instant>,
     deadline: Option<web_time::Instant>,
+    /// When the loop was first told the armed deadline is due (`next_wake`
+    /// answered `Some(now)` for it), so the wake can be given up on only once
+    /// the platform has had a period to answer it.
+    delivered_at: Option<web_time::Instant>,
 }
 
 #[cfg(all(
@@ -287,27 +323,21 @@ struct FallbackState {
     not(target_arch = "wasm32")
 ))]
 impl FallbackWake {
-    /// A fallback wake for a display with the given refresh period
-    /// ([`DEFAULT_DISPLAY_PERIOD`] when the platform reports none).
-    pub(super) fn new(period: std::time::Duration) -> Self {
+    /// A fallback wake with nothing armed.
+    ///
+    /// It keeps no display period of its own: every arm and every deadline
+    /// query is handed the presentation's current refresh interval, so a window
+    /// that changes display mode, moves to another display, or lands on one that
+    /// reports nothing paces by the new value from the next arm, not only
+    /// after a resize.
+    pub(super) fn new() -> Self {
         Self {
             state: parking_lot::Mutex::new(FallbackState {
-                period,
                 last_present_at: None,
                 deadline: None,
+                delivered_at: None,
             }),
         }
-    }
-
-    /// Adopt a new display period (the window moved to another monitor, or
-    /// the platform learned it late). Takes effect at the next arm.
-    pub(super) fn set_period(&self, period: std::time::Duration) {
-        self.state.lock().period = period;
-    }
-
-    /// The period in force.
-    pub(super) fn period(&self) -> std::time::Duration {
-        self.state.lock().period
     }
 
     /// What this wake sees. Reading a DUE deadline consumes it — this wake
@@ -322,6 +352,7 @@ impl FallbackWake {
             },
             Some(_) => {
                 state.deadline = None;
+                state.delivered_at = None;
                 FallbackGate {
                     pending: false,
                     due: true,
@@ -337,6 +368,7 @@ impl FallbackWake {
         let mut state = self.state.lock();
         state.last_present_at = Some(now);
         state.deadline = None;
+        state.delivered_at = None;
     }
 
     /// A pump ran and presented nothing while a ticker keeps the gate open:
@@ -344,21 +376,28 @@ impl FallbackWake {
     /// after the last present — or after `now`, when nothing has presented
     /// yet or the last present is already further back than that (an
     /// occluded window keeps a bounded, non-blocking cadence). Returns the
-    /// armed instant.
-    pub(super) fn arm_after_no_present(&self, now: web_time::Instant) -> web_time::Instant {
+    /// armed instant. `period` is the presentation's current refresh interval.
+    pub(super) fn arm_after_no_present(
+        &self,
+        now: web_time::Instant,
+        period: std::time::Duration,
+    ) -> web_time::Instant {
         let mut state = self.state.lock();
-        let interval = state.period.mul_f64(FALLBACK_PERIOD_FRACTION);
+        let interval = period.mul_f64(FALLBACK_PERIOD_FRACTION);
         let anchored = state
             .last_present_at
             .map(|at| at + interval)
             .filter(|deadline| *deadline > now)
             .unwrap_or(now + interval);
         state.deadline = Some(anchored);
+        state.delivered_at = None;
         anchored
     }
 
     /// The instant the platform's wake-deadline hook should wake the loop
-    /// at while a deferral is armed.
+    /// at while a deferral is armed. `period` is the presentation's current
+    /// refresh interval, which bounds how late a deadline may be and still be
+    /// answered.
     ///
     /// **This query never consumes the deadline** — [`Self::gate`], called
     /// from the frame callback, is the sole consumer, and splitting those
@@ -374,40 +413,56 @@ impl FallbackWake {
     /// animation froze mid-flight, `next_wake` observing the deadline 5 µs
     /// late, and stayed frozen for the rest of the run.
     ///
-    /// A deadline already behind `now` is therefore still reported (as
-    /// `now`, so `WaitUntil` fires immediately) — that IS the wake being
-    /// asked for, and `gate` consumes it exactly once when the frame
-    /// callback it pokes finally runs, so at most one extra iteration is
-    /// spent, never a spin. The one case where that poke can never be
-    /// answered is a surface whose redraws the compositor withholds (a
-    /// hidden Wayland window): a deadline more than one full period late
-    /// is abandoned, which bounds that case at roughly one wasted wake and
-    /// leaves the presentation idle, as a hidden presentation should be.
-    /// The ticker's demand is retained on the clock either way, so the
-    /// next delivered redraw produces.
-    pub(super) fn next_wake(&self, now: web_time::Instant) -> Option<web_time::Instant> {
+    /// A deadline already behind `now` is therefore still reported, the first
+    /// time as `now` (so `WaitUntil` fires immediately) — that IS the wake
+    /// being asked for, and `gate` consumes it exactly once when the frame
+    /// callback it pokes finally runs. Until it does, each further query
+    /// reports the instant a full period after that first report, a future
+    /// one, so a poke that is slow to dispatch costs one wake and not a spin.
+    /// The one case where the poke can never be answered is a surface whose
+    /// redraws the compositor withholds (a hidden Wayland window): once that
+    /// period passes the deadline is abandoned, which bounds the case at one
+    /// wake and leaves the presentation idle, as a hidden presentation should
+    /// be. The period runs from the first report, not from the deadline: a
+    /// loop that was busy elsewhere (another window blocked in `present`)
+    /// reads a deadline late the first time it looks, and the platform was
+    /// never handed that wake to answer. The ticker's demand is retained on
+    /// the clock either way, so the next delivered redraw produces.
+    pub(super) fn next_wake(
+        &self,
+        now: web_time::Instant,
+        period: std::time::Duration,
+    ) -> Option<web_time::Instant> {
         let mut state = self.state.lock();
         let deadline = state.deadline?;
         if deadline > now {
             return Some(deadline);
         }
-        let late = now.saturating_duration_since(deadline);
-        if late > state.period {
-            // The wake this deadline asked for is not coming (a hidden
-            // surface withholds redraws). Abandon it rather than re-arming
-            // `WaitUntil` in the past every iteration — ADR-0044 §7's
-            // measured busy-spin. Clearing it also lifts the suppression of
-            // the ui_runtime's own redraw echo, so an ordinary wake produces.
-            state.deadline = None;
-            tracing::trace!(
-                target: "flui.pace",
-                event = "fallback_abandoned",
-                late_us = late.as_micros() as u64,
-                "the deferred wake was never delivered; abandoning the deadline"
-            );
-            return None;
+        let Some(delivered_at) = state.delivered_at else {
+            state.delivered_at = Some(now);
+            return Some(now);
+        };
+        // Reported already: the platform has a period to answer it, and the
+        // loop waits for that period, not for `now` over and over.
+        let expiry = delivered_at + period;
+        if expiry > now {
+            return Some(expiry);
         }
-        Some(now)
+        // The wake this deadline asked for is not coming (a hidden surface
+        // withholds redraws). Abandon it rather than re-arming `WaitUntil`
+        // in the past every iteration — ADR-0044 §7's measured busy-spin.
+        // Clearing it also lifts the suppression of the ui_runtime's own
+        // redraw echo, so an ordinary wake produces.
+        let unanswered = now.saturating_duration_since(delivered_at);
+        state.deadline = None;
+        state.delivered_at = None;
+        tracing::trace!(
+            target: "flui.pace",
+            event = "fallback_abandoned",
+            unanswered_us = unanswered.as_micros() as u64,
+            "the deferred wake was never delivered; abandoning the deadline"
+        );
+        None
     }
 }
 
@@ -459,13 +514,13 @@ mod desktop_pacing_tests {
     /// every median still reads healthy.
     fn the_fallback_deadline_is_anchored_to_the_last_present() {
         let period = Duration::from_micros(6_065); // a 164.89 Hz panel
-        let fallback = FallbackWake::new(period);
+        let fallback = FallbackWake::new();
         let present_at = Instant::now();
         fallback.record_present(present_at);
 
         // The pump that presents nothing runs 1 ms after the present.
         let pump_at = present_at + Duration::from_millis(1);
-        let armed = fallback.arm_after_no_present(pump_at);
+        let armed = fallback.arm_after_no_present(pump_at, period);
 
         let from_present = armed.saturating_duration_since(present_at);
         assert!(
@@ -476,6 +531,61 @@ mod desktop_pacing_tests {
         assert!(
             armed > pump_at,
             "and still in the future, or the wake it asks for is a busy-spin"
+        );
+    }
+
+    /// A deadline that came due is abandoned only once the loop has been told
+    /// so for a full period without the wake arriving, where the period is the
+    /// one the presentation has when the loop asks: a display that got faster
+    /// since the deadline was armed makes the same wait a lost wake.
+    fn an_unanswered_deadline_is_abandoned_by_the_period_in_force_when_asked() {
+        let fallback = FallbackWake::new();
+        let armed_at = Instant::now();
+        let deadline = fallback.arm_after_no_present(armed_at, Duration::from_millis(16));
+
+        assert_eq!(
+            fallback.next_wake(deadline, Duration::from_millis(16)),
+            Some(deadline),
+            "reported due"
+        );
+        let ten_ms_later = deadline + Duration::from_millis(10);
+        assert_eq!(
+            fallback.next_wake(ten_ms_later, Duration::from_millis(16)),
+            Some(deadline + Duration::from_millis(16)),
+            "10 ms unanswered on a 16 ms display is a wake still worth waiting for, until a \
+             future instant and not a spin on `now`"
+        );
+        assert_eq!(
+            fallback.next_wake(ten_ms_later, Duration::from_millis(8)),
+            None,
+            "10 ms unanswered on an 8 ms display is a wake that is not coming"
+        );
+    }
+
+    /// A loop that was busy elsewhere (another window blocked in `present`)
+    /// reads the deadline more than a period after it fell due. The platform
+    /// was never handed that wake, so the first report is still a wake to
+    /// answer: abandoning it parks a window whose animation then freezes.
+    fn a_deadline_first_read_late_is_still_reported_due() {
+        let fallback = FallbackWake::new();
+        let period = Duration::from_millis(7);
+        let deadline = fallback.arm_after_no_present(Instant::now(), period);
+        let two_periods_late = deadline + period * 2;
+
+        assert_eq!(
+            fallback.next_wake(two_periods_late, period),
+            Some(two_periods_late),
+            "the first report of a due deadline is answered however late the loop looked"
+        );
+        assert_eq!(
+            fallback.next_wake(two_periods_late + period / 2, period),
+            Some(two_periods_late + period),
+            "a further query waits out the period; it does not report `now` again"
+        );
+        assert_eq!(
+            fallback.next_wake(two_periods_late + period * 2, period),
+            None,
+            "and abandoned only when that report went unanswered for a period"
         );
     }
 
@@ -530,10 +640,64 @@ mod desktop_pacing_tests {
                     the_fallback_deadline_is_anchored_to_the_last_present as fn(),
                 ),
                 (
+                    "an_unanswered_deadline_is_abandoned_by_the_period_in_force_when_asked",
+                    an_unanswered_deadline_is_abandoned_by_the_period_in_force_when_asked as fn(),
+                ),
+                (
+                    "a_deadline_first_read_late_is_still_reported_due",
+                    a_deadline_first_read_late_is_still_reported_due as fn(),
+                ),
+                (
                     "a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work",
                     a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work as fn(),
                 ),
             ],
         );
+    }
+}
+
+#[cfg(test)]
+mod background_pace_tests {
+    use web_time::Instant;
+
+    use super::{BACKGROUNDED_PUMP_PACE, BackgroundPace};
+
+    /// A backgrounded pump that leaves work defers the next one by a pace
+    /// instead of sleeping, and the wake the deadline brings consumes it.
+    #[test]
+    fn a_background_pump_defers_the_next_by_one_pace() {
+        let pace = BackgroundPace::default();
+        let start = Instant::now();
+        assert!(pace.admit(start), "nothing armed: the first pump runs");
+        assert_eq!(pace.next_wake(), None);
+
+        pace.defer(start);
+        let deadline = start + BACKGROUNDED_PUMP_PACE;
+        assert_eq!(
+            pace.next_wake(),
+            Some(deadline),
+            "the hook reports the pace"
+        );
+        assert!(
+            !pace.admit(start + BACKGROUNDED_PUMP_PACE / 2),
+            "a wake before the pace does not pump"
+        );
+        assert_eq!(
+            pace.next_wake(),
+            Some(deadline),
+            "and leaves the deadline armed"
+        );
+
+        assert!(pace.admit(deadline), "the wake the deadline brings pumps");
+        assert_eq!(
+            pace.next_wake(),
+            None,
+            "and consumes the deadline, so a past instant is never reported again"
+        );
+
+        pace.defer(deadline);
+        pace.clear();
+        assert_eq!(pace.next_wake(), None, "frames enabled again drop the pace");
+        assert!(pace.admit(deadline));
     }
 }

@@ -1077,9 +1077,12 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
     armed.set(false);
     assert!(!fail_once.get(), "the actual outgoing capture must retire");
     if let Err(failure) = result {
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("outgoing switcher capture failed")
+        // The last owner of the shared view lets go inside a build, so the
+        // frame names the phase in front of the capture's own message.
+        assert!(
+            flui_foundation::panic::payload_text(failure.as_ref())
+                .is_some_and(|text| text.ends_with("outgoing switcher capture failed")),
+            "the outgoing capture's failure propagates"
         );
     }
     assert!(
@@ -2326,6 +2329,56 @@ pub(crate) fn cross_fade_announces_only_the_shown_child() {
     );
 }
 
+/// Only the shown cross-fade child can take focus: the one fading out or
+/// waiting is excluded, so keys and text cannot reach an invisible child.
+pub(crate) fn cross_fade_focuses_only_the_shown_child() {
+    use flui_interaction::focus::FocusNode;
+    use flui_widgets::interaction::Focus;
+
+    let registry = Vsync::new();
+    let (first, second) = (FocusNode::new(), FocusNode::new());
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    Focus::new(SizedBox::new(100.0, 20.0)).focus_node(std::rc::Rc::clone(&first)),
+                    Focus::new(SizedBox::new(100.0, 80.0)).focus_node(std::rc::Rc::clone(&second)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump();
+    let _ = second.request_focus();
+    assert!(
+        !second.has_primary_focus(),
+        "the hidden second child takes no focus"
+    );
+    let _ = first.request_focus();
+    assert!(first.has_primary_focus(), "the shown first child does");
+
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    assert!(
+        !first.has_primary_focus(),
+        "a child that stops being shown gives up focus"
+    );
+    let _ = first.request_focus();
+    assert!(!first.has_primary_focus(), "and cannot take it back");
+    let _ = second.request_focus();
+    assert!(second.has_primary_focus(), "the newly shown child can");
+}
+
 /// A retarget the motion refuses leaves the fade where it is, so layout and
 /// pointer routing stay with the child actually shown.
 pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {
@@ -2380,7 +2433,10 @@ pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {
         (height - 20.0).abs() < 1e-6,
         "the box keeps the first child's size, got {height}"
     );
-    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    let hits = laid.hit_test_pointer(
+        Offset::new(100.0, 100.0),
+        flui_interaction::events::PointerKind::Mouse,
+    );
     assert!(
         hits.path().iter().any(|entry| entry.target == shown),
         "pointers still reach the child shown"
@@ -2576,7 +2632,10 @@ pub(crate) fn cross_fade_fades_resizes_and_routes_pointers_to_the_shown_child() 
         .iter()
         .find(|&&id| laid.opacity(id) < 1e-6)
         .expect("one child is fully hidden");
-    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    let hits = laid.hit_test_pointer(
+        Offset::new(100.0, 100.0),
+        flui_interaction::events::PointerKind::Mouse,
+    );
     let targets: Vec<_> = hits.path().iter().map(|entry| entry.target).collect();
     assert!(
         targets.contains(&shown) && !targets.contains(&hidden),

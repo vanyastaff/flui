@@ -33,9 +33,6 @@
 //! - [`execution`]: the loop-scoped background execution services (ADR-0047)
 //!   — the compute and IO lanes, their bounded admission and shutdown, and
 //!   the host-injection seam — which only the host constructs;
-//! - [`performance_stats`]: the rolling frame-time window whose numbers a
-//!   presentation's performance overlay records, shaped through the UI runtime's
-//!   text context;
 //! - [`pump`]: what a UI runtime's frame transaction reads and reports — the
 //!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
@@ -46,18 +43,22 @@
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
-//! - `testing` (with the `test-support` feature): a window double and a
+//! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
 pub mod dev_agent;
 pub mod epoch;
 pub mod execution;
 pub mod frame_failure;
+pub mod frame_rate_demand;
 pub mod held_input;
+mod host_input;
+mod input_record;
+mod input_tap;
 pub mod lifecycle_state;
 mod media_query_root;
+mod overlay_style;
 pub mod owner;
-pub mod performance_stats;
 pub mod presentation;
 mod presentation_forest;
 pub mod pump;
@@ -67,10 +68,19 @@ pub mod renderer_binding;
 mod runtime_services;
 pub mod semantics_host;
 pub mod sink;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod ui_runtime;
 
 #[cfg(test)]
 mod table_test;
 pub use flui_animation::MotionOverride;
+pub use host_input::HostInput;
+pub use input_record::{
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface, RecordingStart, RecordingWindow,
+};
+pub use input_tap::{
+    INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
+    TapFailure, TapFailureSite,
+};

@@ -14,8 +14,8 @@ use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::PointerId;
-use flui_interaction::routing::{
-    FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
+use flui_interaction::focus::{
+    FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
 use flui_interaction::{ClientToken, ClipboardHandle, TextInputClient, TextInputHandle};
@@ -26,7 +26,7 @@ use flui_painting::{
 };
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_platform_api::text_store::OwnerCalls;
+use flui_platform_api::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
@@ -35,8 +35,9 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
-    Action, ActionChain, ActionChainProvider, ActionOutcome, CopySelectionTextIntent,
-    PasteTextIntent, SelectAllTextIntent, as_node_context, erased_action, layered_chain,
+    Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
+    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent, as_node_context,
+    erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -402,6 +403,10 @@ pub struct EditableText {
     /// stronger than redacting at each of those points, because it cannot be
     /// forgotten at a new one.
     pub(super) obscure_text: bool,
+    /// What the field is for, which input methods shape their layout and
+    /// suggestions by (default [`TextInputPurpose::Text`]). It never filters
+    /// what the field accepts.
+    pub(super) input_purpose: TextInputPurpose,
     /// The character painted in place of each source character.
     pub(super) obscuring_character: char,
     /// Called with the current text when Enter is pressed while this field
@@ -424,6 +429,7 @@ pub(super) struct FieldSemantics {
     placeholder: Option<String>,
     invalid: bool,
     required: bool,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 /// Callback for [`EditableText::on_changed`], with the dispatch's
@@ -445,6 +451,7 @@ impl EditableText {
             enabled: true,
             text_style: None,
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
             on_changed: None,
@@ -492,6 +499,22 @@ impl EditableText {
         self
     }
 
+    /// Names the field's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.field_semantics.identifier = Some(identifier.into());
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`: how a
+    /// decorated field forwards its own.
+    #[must_use]
+    pub(crate) fn identifier_if(mut self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        self.field_semantics.identifier = identifier.cloned();
+        self
+    }
+
     /// Override the caret bar height in logical pixels. By default it follows
     /// the laid-out text line; an override is independent of text scaling.
     #[must_use]
@@ -529,6 +552,16 @@ impl EditableText {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// What the field is for: an email, URL, phone or number field asks the
+    /// input method for the layout that suits it (default
+    /// [`TextInputPurpose::Text`]). An obscured field is a password field
+    /// whatever its purpose.
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.input_purpose = purpose;
         self
     }
 
@@ -579,7 +612,7 @@ impl EditableText {
     /// Fires on a raw Enter keypress rather than an IME action-button
     /// commit, since this substrate has no platform IME-action-button
     /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
-    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
+    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::focus::KeyEventResult))
     /// only when a callback is set — with none, Enter is left unconsumed
     /// (`Ignored`) so an ancestor can still act on it, unchanged from this
     /// field's behavior before this method existed.
@@ -643,6 +676,7 @@ impl std::fmt::Debug for EditableText {
             .field("enabled", &self.enabled)
             .field("text_style", &self.text_style)
             .field("obscure_text", &self.obscure_text)
+            .field("input_purpose", &self.input_purpose)
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
@@ -783,6 +817,9 @@ pub struct EditableTextState {
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
     obscure: Rc<Cell<bool>>,
+    /// The field's purpose, read by the text store's status and kept current
+    /// by `did_update_view`.
+    input_purpose: Rc<Cell<TextInputPurpose>>,
     /// The mask character, read by the text store's geometry and kept
     /// current by `did_update_view`.
     obscuring_character: Rc<Cell<char>>,
@@ -845,6 +882,7 @@ impl StatefulView for EditableText {
             clipboard: None,
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
+            input_purpose: Rc::new(Cell::new(self.input_purpose)),
             obscuring_character: Rc::new(Cell::new(self.obscuring_character)),
             text_store: None,
             enclosing_action_chain: None,
@@ -1207,6 +1245,9 @@ impl EditableTextState {
                     controller: Rc::clone(&self.controller),
                     focus_node: Rc::clone(&self.observed_focus_node),
                 }),
+                erased_action::<ActivateIntent>(KeptByTheField),
+                erased_action::<ActivationPressIntent>(KeptByTheField),
+                erased_action::<DismissIntent>(KeptByTheField),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -1215,6 +1256,33 @@ impl EditableTextState {
             Some(self.focus_node.register_context(as_node_context(&chain)));
         self.action_chain = Some(chain);
         self.enclosing_action_chain = enclosing;
+    }
+}
+
+/// The keys a field types or ignores that the default bindings would turn
+/// into a command for an enclosing control: the release of a typed space
+/// (`ActivateIntent`), Space's key-down and an Escape. A focused field
+/// consumes them without effect, so typing a space in a field inside a
+/// pressable card does not press the card, and Escape in a field closes
+/// nothing.
+#[derive(Clone, Copy)]
+struct KeptByTheField;
+
+impl Action<ActivateIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<ActivationPressIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<DismissIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+        ActionOutcome::Performed
     }
 }
 
@@ -1250,7 +1318,8 @@ impl FieldSemanticsActions {
             return;
         }
         if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
-            let _ = node.request_focus();
+            // Assistive focus is shown, as `Focus` shows it on any control.
+            let _ = node.request_focus_with(FocusCause::Assistive);
         }
     }
 
@@ -1544,6 +1613,7 @@ impl ViewState<EditableText> for EditableTextState {
             pipeline: self.pipeline_owner.clone(),
             inner_anchor: self.inner_anchor.clone(),
             obscure: Rc::clone(&self.obscure),
+            input_purpose: Rc::clone(&self.input_purpose),
             obscuring_character: Rc::clone(&self.obscuring_character),
             edits: self.edit_observer(),
         }));
@@ -1745,7 +1815,8 @@ impl ViewState<EditableText> for EditableTextState {
         let mut calls = OwnerCalls::new();
         let was_obscured = self.obscure.replace(new_view.obscure_text);
         self.obscuring_character.set(new_view.obscuring_character);
-        if was_obscured != new_view.obscure_text
+        let was_purpose = self.input_purpose.replace(new_view.input_purpose);
+        if (was_obscured != new_view.obscure_text || was_purpose != new_view.input_purpose)
             && let Some(store) = &self.text_store
         {
             calls.run(|| store.status_changed());
@@ -2180,6 +2251,12 @@ impl CursorAreaLoop {
                 None => {}
             }
         }
+        // A read the store answered `NoLayout` inside an edit session owes the
+        // input method a notification once layout exists, even when the rect
+        // is the one already sent.
+        if let Some(store) = &store {
+            calls.run(|| store.settle_owed_layout());
+        }
         calls.run(|| self.schedule());
         calls.resume();
     }
@@ -2276,9 +2353,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// too (native Ctrl+Arrow is the OS's own Spaces-switch shortcut there,
 /// so Control would never even reach this handler). Web and embedded
 /// targets need `TargetPlatform` resolved at RUNTIME instead — the same
-/// gap `GestureSettings::native`'s own doc already flags for the
-/// analogous gesture-settings case
-/// (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
+/// gap `GestureSettings::preset` closes for gestures by taking the
+/// platform as a value (`flui-interaction/src/gesture/settings.rs`). Tracked, not fixed here — see
 /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
 ///
 /// # DEFERRED
@@ -2663,6 +2739,7 @@ fn build_field_view(
         .focused(focused)
         .invalid(appearance.semantics.invalid)
         .required(appearance.semantics.required)
+        .identifier_if(appearance.semantics.identifier.as_ref())
         .value(text.clone());
     if let Some(label) = &appearance.semantics.label {
         semantics = semantics.label(label.as_str());

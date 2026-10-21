@@ -34,12 +34,6 @@ pub enum AppControlError {
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppWindowError {
-    /// A requested setting has no host implementation yet.
-    #[error("unsupported application setting: {setting}")]
-    UnsupportedConfiguration {
-        /// Configuration field that cannot be honored.
-        setting: &'static str,
-    },
     /// Native creation failed; retains the original platform error.
     #[error("native window creation failed: {source}")]
     Native {
@@ -101,15 +95,6 @@ pub enum AppWindowError {
         /// Why this policy was refused, in one sentence.
         reason: &'static str,
     },
-}
-
-#[cfg(feature = "persist")]
-impl From<super::config::UnsupportedSetting> for AppWindowError {
-    fn from(error: super::config::UnsupportedSetting) -> Self {
-        Self::UnsupportedConfiguration {
-            setting: error.setting,
-        }
-    }
 }
 
 pub(crate) type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;

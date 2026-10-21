@@ -54,7 +54,7 @@ use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::{Listenable, ListenerId, Single};
+use flui_foundation::{Single, panic::PanicRecovery};
 use flui_painting::typography::TextDirection;
 use flui_rendering::{
     RenderUpdateImpact,
@@ -65,6 +65,7 @@ use flui_rendering::{
 };
 
 use crate::TranslationFraction;
+use crate::subscription::RenderSubscription;
 
 /// The motion a [`RenderAnimatedTransform`] follows.
 ///
@@ -95,6 +96,12 @@ pub enum TransformMotion {
         /// The rotation in turns.
         turns: ProxyAnimation<f64>,
     },
+    /// Translation by an offset in logical pixels, whatever the node's size:
+    /// content that follows a finger.
+    Translate {
+        /// The offset, in logical pixels.
+        offset: ProxyAnimation<Offset<f64>>,
+    },
 }
 
 /// The motion's kind without its animation: what the matrix computation
@@ -104,6 +111,7 @@ enum Kind {
     Slide(TextDirection),
     Scale,
     Rotation,
+    Translate,
 }
 
 /// Which side of the layer boundary a matrix sits on.
@@ -209,6 +217,7 @@ fn matrix(kind: Kind, (first, second): (f64, f64), size: Size) -> Matrix4 {
         // turn count would overflow the multiplication into a non-finite
         // (degenerate) matrix.
         Kind::Rotation => about_centre(Matrix4::rotation_z(first.rem_euclid(1.0) * TAU)),
+        Kind::Translate => Matrix4::translation(first, second, 0.0),
     }
 }
 
@@ -251,12 +260,17 @@ fn scalar_sample(value: &f64) -> (f64, f64) {
     (*value, 0.0)
 }
 
+fn offset_sample(value: &Offset<f64>) -> (f64, f64) {
+    (value.dx, value.dy)
+}
+
 /// The node's animation, held behind an `Rc` the node alone owns so the tick
 /// listener can capture a `Weak` to it.
 #[derive(Debug)]
 enum Source {
     Fraction(Rc<ProxyAnimation<TranslationFraction>>),
     Scalar(Rc<ProxyAnimation<f64>>),
+    Pixels(Rc<ProxyAnimation<Offset<f64>>>),
 }
 
 impl Source {
@@ -264,6 +278,7 @@ impl Source {
         match self {
             Self::Fraction(proxy) => fraction_sample(&proxy.value()),
             Self::Scalar(proxy) => scalar_sample(&proxy.value()),
+            Self::Pixels(proxy) => offset_sample(&proxy.value()),
         }
     }
 
@@ -272,42 +287,42 @@ impl Source {
         cell: &Rc<SampleCell>,
         kind: Kind,
         handle: &LocalRenderInvalidationHandle,
-    ) -> ListenerId {
+        recovery: &mut PanicRecovery,
+    ) -> Option<RenderSubscription> {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
             read: fn(&T) -> (f64, f64),
             cell: &Rc<SampleCell>,
             kind: Kind,
             handle: &LocalRenderInvalidationHandle,
-        ) -> ListenerId
+            recovery: &mut PanicRecovery,
+        ) -> Option<RenderSubscription>
         where
             T: Clone + std::fmt::Debug + 'static,
         {
             let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(proxy);
             let cell = Rc::clone(cell);
             let handle = handle.clone();
-            proxy.add_listener(std::rc::Rc::new(move || {
-                if let Some(proxy) = weak.upgrade() {
-                    // The ticket precedes the read: see `SampleCell`.
-                    let generation = cell.ticket();
-                    let value = read(&proxy.value());
-                    // Release the proxy before marking: the marks never call
-                    // back into it, but nothing here needs it any longer.
-                    drop(proxy);
-                    commit(&cell, kind, generation, value, &handle);
-                }
-            }))
+            RenderSubscription::subscribe_callback(
+                || Some(proxy.clone()),
+                Rc::new(move || {
+                    if let Some(proxy) = weak.upgrade() {
+                        // The ticket precedes the read: see `SampleCell`.
+                        let generation = cell.ticket();
+                        let value = read(&proxy.value());
+                        // Release the proxy before marking: the marks never call
+                        // back into it, but nothing here needs it any longer.
+                        drop(proxy);
+                        commit(&cell, kind, generation, value, &handle);
+                    }
+                }),
+                recovery,
+            )
         }
         match self {
-            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle),
-            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle),
-        }
-    }
-
-    fn unsubscribe(&self, id: ListenerId) {
-        match self {
-            Self::Fraction(proxy) => proxy.remove_listener(id),
-            Self::Scalar(proxy) => proxy.remove_listener(id),
+            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, recovery),
+            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, recovery),
+            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle, recovery),
         }
     }
 }
@@ -389,14 +404,9 @@ pub struct RenderAnimatedTransform {
     source: Source,
     kind: Kind,
     cell: Rc<SampleCell>,
-    /// The sample `hit_test_transform` chose for the current hit-test visit,
-    /// consumed by the `hit_test` that follows it, so a tick between the two
-    /// hooks cannot pair one matrix on the hit entry with another for the
-    /// child's position.
-    hit_sample: Cell<Option<(f64, f64)>>,
     transform_hit_tests: bool,
     has_child: bool,
-    listener_id: Option<ListenerId>,
+    listener_id: Option<RenderSubscription>,
 }
 
 impl RenderAnimatedTransform {
@@ -419,13 +429,15 @@ impl RenderAnimatedTransform {
             TransformMotion::Rotation { turns } => {
                 (Source::Scalar(Rc::new(turns)), Kind::Rotation, (0.0, 0.0))
             }
+            TransformMotion::Translate { offset } => {
+                (Source::Pixels(Rc::new(offset)), Kind::Translate, (0.0, 0.0))
+            }
         };
         let seed = finite(source.read()).unwrap_or(identity);
         Self {
             source,
             kind,
             cell: Rc::new(SampleCell::new(seed)),
-            hit_sample: Cell::new(None),
             transform_hit_tests: true,
             has_child: false,
             listener_id: None,
@@ -465,19 +477,6 @@ impl RenderAnimatedTransform {
         let m = matrix(kind, sample, size);
         (classify_matrix(&m), m)
     }
-
-    /// Records the sample this hit-test visit uses; see `hit_sample`.
-    fn arm_hit_sample(&self) -> (f64, f64) {
-        let sample = self.cell.sample();
-        self.hit_sample.set(Some(sample));
-        sample
-    }
-
-    /// The sample `hit_test_transform` recorded for this visit, or a fresh
-    /// read when `hit_test` runs alone.
-    fn take_hit_sample(&self) -> (f64, f64) {
-        self.hit_sample.take().unwrap_or_else(|| self.cell.sample())
-    }
 }
 
 impl std::fmt::Debug for RenderAnimatedTransform {
@@ -501,6 +500,7 @@ impl flui_foundation::Diagnosticable for RenderAnimatedTransform {
             Kind::Slide(_) => format!("slide({first}, {second})"),
             Kind::Scale => format!("scale({first})"),
             Kind::Rotation => format!("rotation({first} turns)"),
+            Kind::Translate => format!("translate({first}, {second})"),
         };
         properties.add("motion", motion);
         properties.add_flag(
@@ -539,27 +539,12 @@ impl RenderBox for RenderAnimatedTransform {
         if !self.has_child {
             return false;
         }
-        // The flag comes first: an untransformed hit does not depend on the
-        // matrix, degenerate or not.
-        if !self.transform_hit_tests {
-            return ctx.hit_test_child(0, *ctx.position());
-        }
-        let size = ctx.own_size();
-        let (class, matrix) = Self::class_and_matrix(self.kind, self.take_hit_sample(), size);
-        match class {
-            Class::Degenerate => false,
-            Class::Identity => ctx.hit_test_child(0, *ctx.position()),
-            Class::Layered => {
-                let Some(inverse) = matrix.try_inverse() else {
-                    return false;
-                };
-                let position = ctx.position();
-                let Some((x, y)) = inverse.unproject_to_plane(position.dx, position.dy) else {
-                    return false;
-                };
-                ctx.hit_test_child(0, Offset::new(x, y))
-            }
-        }
+        //
+        // The one sample this visit uses was read by `hit_test_transform`; the
+        // walk mapped the position through that matrix's inverse, or refused
+        // a degenerate one before this call. An untransformed hit, or an
+        // identity sample, leaves the position as it was.
+        self.has_child && ctx.hit_test_child(0, *ctx.position())
     }
 
     fn skip_paint(&self) -> bool {
@@ -602,18 +587,28 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
-        // Must agree with `hit_test`: an untransformed hit gets no matrix on
-        // its entry, or the delivered position would be mapped through a
-        // transform the hit did not use.
+        // The visit's only read of the sample: the walk maps the position and
+        // the entries through this one matrix, so a tick cannot pair one
+        // sample on the entry with another for the child's position. An
+        // untransformed hit gets no matrix, or the delivered position would
+        // be mapped through a transform the hit did not use. A degenerate
+        // matrix is reported so the walk refuses it: nothing is visible.
         if !self.transform_hit_tests {
             return None;
         }
-        let (class, matrix) = Self::class_and_matrix(self.kind, self.arm_hit_sample(), size);
-        (class == Class::Layered).then_some(matrix)
+        match self.current(size) {
+            (Class::Identity, _) => None,
+            (Class::Layered | Class::Degenerate, matrix) => Some(matrix),
+        }
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
-        self.listener_id = Some(self.source.subscribe(&self.cell, self.kind, &handle));
+        self.detach();
+        let mut recovery = PanicRecovery::new();
+        self.listener_id = self
+            .source
+            .subscribe(&self.cell, self.kind, &handle, &mut recovery);
+        recovery.finish();
         // Catch up with a change made while nothing listened (a reattach).
         // Its ticket is taken before the read like a listener's, so a
         // listener delivery that read later wins over this reading.
@@ -628,8 +623,10 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn detach(&mut self) {
-        if let Some(id) = self.listener_id.take() {
-            self.source.unsubscribe(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }
@@ -638,6 +635,7 @@ impl RenderBox for RenderAnimatedTransform {
 mod tests {
     use super::*;
     use flui_animation::AnimationController;
+    use flui_foundation::{Listenable, ListenerId};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use std::sync::Arc;
@@ -790,56 +788,6 @@ mod tests {
         let (class, m) = node.current(size);
         assert_ne!(class, Class::Degenerate, "{m:?}");
         assert!(is_finite(&m));
-    }
-
-    // A tick between `hit_test_transform` and `hit_test` must not change the
-    // matrix `hit_test` positions the child with: both use the visit's one
-    // sample.
-    #[test]
-    fn one_sample_per_hit_test_visit() {
-        let controller = AnimationController::builder(Duration::from_millis(1))
-            .unbounded()
-            .build();
-        controller.set_value(0.25);
-        let node = RenderAnimatedTransform::new(TransformMotion::Rotation {
-            turns: ProxyAnimation::new(
-                std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
-            ),
-        });
-        let (_owner, handle) = owner_with_handle(|| {});
-        let mut node = node;
-        node.attach(handle);
-        let size = Size::new(40.0, 40.0);
-        let entry = node
-            .hit_test_transform(size)
-            .expect("a quarter turn is layered");
-        controller.set_value(0.125);
-        assert_eq!(
-            node.cell.sample(),
-            (0.125, 0.0),
-            "the tick reached the cache"
-        );
-        node.has_child = true;
-        let observed = std::cell::Cell::new(None);
-        let mut hit_child = |index, position, _transform| {
-            assert_eq!(index, 0);
-            observed.set(position);
-            true
-        };
-        let inner =
-            flui_rendering::protocol::BoxHitTestCtx::<Single, BoxParentData>::with_child_callback(
-                Offset::new(30.0, 20.0),
-                &mut hit_child,
-            );
-        let mut ctx = BoxHitTestContext::new(inner, size);
-        assert!(node.hit_test(&mut ctx));
-        let position = observed.get().expect("child was hit");
-        assert!((position.dx - 20.0).abs() < 1e-10);
-        assert!(
-            (position.dy - 10.0).abs() < 1e-10,
-            "the child must use the quarter-turn entry, not the later eighth turn: {position:?}; {entry:?}"
-        );
-        node.detach();
     }
 
     #[derive(Debug)]

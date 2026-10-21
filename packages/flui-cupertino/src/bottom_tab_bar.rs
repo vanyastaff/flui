@@ -34,8 +34,8 @@
 //! ## Deferred, named
 //!
 //! - **Blur** (`BackdropFilter` on a translucent background) — same gap
-//!   `CupertinoNavigationBar` documents: no `BackdropFilter` primitive in
-//!   `flui-widgets` yet. A caller-supplied translucent `background_color`
+//!   `CupertinoNavigationBar` documents: `flui-widgets`' `BackdropFilter` is
+//!   not on the `flui-sdk` surface yet. A caller-supplied translucent `background_color`
 //!   does reach the opaque/translucent branch (`opaque(ctx)` is wired), it
 //!   just paints with no blur behind it.
 //! - **The localized `Semantics` hint** (tab index and count) — no
@@ -324,7 +324,7 @@ impl StatelessView for CupertinoTabBar {
             .active_color
             .unwrap_or_else(|| theme.primary_color())
             .resolve(ctx);
-        let bottom_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.bottom);
+        let bottom_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().bottom);
 
         let tab_label_style = theme.text_theme().tab_label_text_style();
 

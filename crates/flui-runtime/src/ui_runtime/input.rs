@@ -4,10 +4,12 @@ use super::UiRuntime;
 use super::presentation_lifecycle::HostLifecycle;
 use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
-use flui_foundation::PresentationId;
-use flui_interaction::PointerEvent;
-use flui_platform_api::{DragDropEvent, PlatformInput};
-use flui_rendering::binding::RendererBinding as _;
+use flui_foundation::{InputSequenceId, PresentationId};
+use flui_interaction::{InputSurface, PointerEvent};
+use flui_platform_api::keyboard::KeyState;
+use flui_platform_api::pointer::{ButtonChange, PointerButton};
+use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
+use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -59,6 +61,26 @@ impl FocusCoordinator {
     pub(super) fn note_focus_gained(&self, id: PresentationId) {
         self.active.set(id);
     }
+}
+
+/// What applying one platform input did: whether a handler consumed it (a
+/// key a shortcut or focused node handled), the input sequence its
+/// dispatch placed it in, and whether it was held for its presentation's
+/// committed tree instead, its row then recorded where it is dispatched.
+#[derive(Debug, Clone, Copy, Default)]
+struct Applied {
+    handled: bool,
+    sequence: Option<InputSequenceId>,
+    held: bool,
+}
+
+/// Where one platform input is dispatched, and so where its row says it
+/// went: the presentation whose tree receives it and the surface of that
+/// presentation's window it is applied to.
+#[derive(Debug, Clone, Copy)]
+struct InputTarget {
+    presentation: PresentationId,
+    surface: InputSurface,
 }
 
 /// Keep the earliest input-phase panic when cleanup or wake work also
@@ -117,7 +139,11 @@ pub(super) fn input_dropped_by_lifecycle(
         | PresentationLifecycle::Closed => true,
         PresentationLifecycle::Suspended => match input {
             PlatformInput::Pointer(_) | PlatformInput::DragDrop(_) => true,
-            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) => false,
+            // Keyboard/IME keep flowing; capabilities describe the session,
+            // not an interaction, so a suspended window keeps them current.
+            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) | PlatformInput::Capabilities(_) => {
+                false
+            }
         },
         PresentationLifecycle::SurfaceAttached => false,
     }
@@ -133,6 +159,7 @@ pub(super) fn input_kind(input: &PlatformInput) -> &'static str {
         PlatformInput::Keyboard(_) => "keyboard",
         PlatformInput::Ime(_) => "ime",
         PlatformInput::DragDrop(_) => "drag_drop",
+        PlatformInput::Capabilities(_) => "capabilities",
     }
 }
 
@@ -145,6 +172,39 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
         DragDropEvent::Dropped { .. } => "dropped",
         DragDropEvent::Exited { .. } => "exited",
     }
+}
+
+/// Whether `event` is the press of Escape that cancels a drag: its first
+/// press, while no input method composes.
+fn is_escape_press(event: &flui_platform_api::keyboard::KeyEvent) -> bool {
+    use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
+    event.state() == KeyState::Down
+        && event.repeat() == KeyRepeat::First
+        && event.composition == ImeComposition::Inactive
+        && event.key == Key::Named(NamedKey::Escape)
+}
+
+/// Whether `event` pressed a pointer button: a contact beginning, or another
+/// button going down during one.
+fn pointer_pressed(event: &PointerEvent) -> bool {
+    matches!(
+        event,
+        PointerEvent::Down(_) | PointerEvent::ButtonChange(ButtonChange::Pressed(_))
+    )
+}
+
+/// The back button (X1) going down or up in `event`, and when.
+fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
+    let (state, button, time) = match event {
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
+            (KeyState::Down, press.button(), press.sample.time)
+        }
+        PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
+            (KeyState::Up, release.button(), release.sample.time)
+        }
+        _ => return None,
+    };
+    (button == PointerButton::BACK).then_some((state, time))
 }
 
 impl UiRuntime {
@@ -214,17 +274,117 @@ impl UiRuntime {
     /// key handler (a shortcut) or a focused node handled. Every other kind,
     /// and any event dropped above, returns `false`, so the host may keep
     /// its own default for it (Alt+F4, the system menu).
+    ///
+    /// While a tap records, the input is recorded after its dispatch
+    /// committed, with the sequence the dispatch placed it in and followed by
+    /// the arena verdicts it produced (ADR-0215 §1); a dispatch failure is
+    /// recorded too and then resumed. Its row names the window and surface it
+    /// was dispatched to, not the ones it was stamped for: a key on the active
+    /// presentation's window. Pointer input held for the tree's commit is
+    /// recorded where it is dispatched or discarded instead.
     pub fn handle_input_addressed(
         &self,
         presentation_id: PresentationId,
         input: PlatformInput,
     ) -> bool {
-        let target_id = match &input {
-            PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
-            PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => {
-                presentation_id
+        self.handle_input_on(presentation_id, InputSurface::Window, input)
+    }
+
+    /// [`handle_input_addressed`](Self::handle_input_addressed) for input a
+    /// surface of `presentation_id`'s window reported: the window itself, or
+    /// a surface embedded in it that the presentation's gesture binding
+    /// minted. Pointer input on an embedded surface keeps that surface's own
+    /// contacts, hover, coalescing and latches (ADR-0207 §5) and is held,
+    /// like the window's, until the tree it hit-tests is committed. Keyboard,
+    /// IME, drag-and-drop and capability input belong to the window whatever
+    /// surface reported them, and are recorded on it.
+    pub fn handle_input_on(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: PlatformInput,
+    ) -> bool {
+        let recording = self.begin_recorded_input();
+        // Resolved once, before dispatch: the row names where the input went
+        // even when a handler it reaches moves keyboard focus.
+        let target = self.input_target(presentation_id, surface, &input);
+        if !recording {
+            return self
+                .apply_platform_input(presentation_id, target, input, false)
+                .handled;
+        }
+        let keyboard = matches!(input, PlatformInput::Keyboard(_));
+        let recorded = input.clone();
+        let applied = catch_unwind(AssertUnwindSafe(|| {
+            self.apply_platform_input(presentation_id, target, input, true)
+        }));
+        let (outcome, sequence) = match &applied {
+            // Its row waits for the dispatch; the rows of input the hold
+            // discarded go out now.
+            Ok(applied) if applied.held => {
+                self.deliver_input_records();
+                return applied.handled;
             }
+            Ok(applied) if keyboard && !applied.handled => {
+                (crate::owner::InputOutcome::Unhandled, applied.sequence)
+            }
+            Ok(applied) => (crate::owner::InputOutcome::Handled, applied.sequence),
+            Err(_) => (crate::owner::InputOutcome::Handled, None),
         };
+        self.record_dispatched(
+            target.presentation,
+            target.surface,
+            crate::HostInput::Platform(recorded),
+            outcome,
+            sequence,
+        );
+        applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
+    }
+
+    /// Where `input`, stamped for `presentation_id` and reported by `surface`
+    /// of its window, is dispatched. Keyboard goes to the active
+    /// presentation whatever presentation it was stamped for
+    /// ([`FocusCoordinator`]); every other kind to the stamped one. Pointer
+    /// input stays on the surface that reported it; keyboard, IME,
+    /// drag-and-drop and capability input belong to the window.
+    fn input_target(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: &PlatformInput,
+    ) -> InputTarget {
+        match input {
+            PlatformInput::Pointer(_) => InputTarget {
+                presentation: presentation_id,
+                surface,
+            },
+            PlatformInput::Keyboard(_) => InputTarget {
+                presentation: self.focus_coordinator.active(),
+                surface: InputSurface::Window,
+            },
+            PlatformInput::Ime(_) | PlatformInput::DragDrop(_) | PlatformInput::Capabilities(_) => {
+                InputTarget {
+                    presentation: presentation_id,
+                    surface: InputSurface::Window,
+                }
+            }
+        }
+    }
+
+    /// Apply `input`, stamped for `presentation_id`, at `target`; while
+    /// `recording`, pointer input held for the tree's commit takes its input
+    /// row along.
+    fn apply_platform_input(
+        &self,
+        presentation_id: PresentationId,
+        target: InputTarget,
+        input: PlatformInput,
+        recording: bool,
+    ) -> Applied {
+        let InputTarget {
+            presentation: target_id,
+            surface,
+        } = target;
         let Some(presentation) = self.presentations.get(target_id) else {
             tracing::debug!(
                 { flui_foundation::diagnostics::PRESENTATION_ID } = target_id.as_u64(),
@@ -232,7 +392,7 @@ impl UiRuntime {
                 input_kind = input_kind(&input),
                 "dropping input addressed to a presentation this ui_runtime no longer hosts"
             );
-            return false;
+            return Applied::default();
         };
         if presentation.closing_requested.get()
             || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
@@ -244,7 +404,7 @@ impl UiRuntime {
                 input_kind = input_kind(&input),
                 "dropping input due to presentation lifecycle"
             );
-            return false;
+            return Applied::default();
         }
         // Telemetry: stamp this event's arrival on the RESOLVED target's own
         // clock (never a wall-clock read) before dispatch, so a consumer can
@@ -252,12 +412,11 @@ impl UiRuntime {
         // input — see `FrameClock::stamp_input_epoch`'s own doc. Stamped
         // INSIDE each arm below, only for a kind this method actually
         // routes (every arm that stamps also calls `request_redraw_for`,
-        // its own contribution to demand) — never for `DragDrop`, whose own
-        // arm traces the event as dropped without routing it anywhere or
-        // requesting a frame. Stamping an event this method is about to
-        // drop would leave a phantom epoch sitting in the ring until
-        // eviction, attributed to whichever unrelated frame happens to
-        // produce next.
+        // its own contribution to demand) — never for a capability snapshot,
+        // which is session state and requests no frame. Stamping an event
+        // this method does not route would leave a phantom epoch sitting in
+        // the ring until eviction, attributed to whichever unrelated frame
+        // happens to produce next.
         match input {
             PlatformInput::Ime(ime_event) => {
                 let clock = presentation.clock();
@@ -266,7 +425,7 @@ impl UiRuntime {
                     presentation.text_input().dispatch(&ime_event);
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                false
+                Applied::default()
             }
             PlatformInput::Pointer(pointer_event) => {
                 let should_hold_pointer = presentation.frame_commit_state()
@@ -276,38 +435,97 @@ impl UiRuntime {
                     let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
                         pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
+                    let row = recording
+                        .then(|| self.held_input_row(presentation, surface, &pointer_event));
                     presentation
                         .held_pointer_input()
                         .borrow_mut()
-                        .append_with_active_contact(pointer_event, has_active_contact_sequence);
-                    return false;
+                        .append_recorded(surface, pointer_event, has_active_contact_sequence, row);
+                    return Applied {
+                        held: true,
+                        ..Applied::default()
+                    };
                 }
-                let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
+                let mut sequence = None;
+                let dispatch =
+                    Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event)
+                        .map(|dispatched| sequence = dispatched);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                false
+                Applied {
+                    sequence,
+                    ..Applied::default()
+                }
             }
             PlatformInput::Keyboard(keyboard_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
                 let mut handled = false;
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
-                    handled = presentation
-                        .focus_manager()
-                        .dispatch_key_event(&keyboard_event)
-                        .is_handled();
+                    // Escape cancels the drags of this window before focus
+                    // sees it, as an OS drag loop does, unless an input
+                    // method is composing: then it is the method's (ADR-0211).
+                    handled = is_escape_press(&keyboard_event)
+                        && self.drag.cancel_on_escape(presentation.id());
+                    if !handled {
+                        handled = presentation
+                            .focus_manager()
+                            .dispatch_key_event(&keyboard_event)
+                            .is_handled();
+                    }
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                handled
+                Applied {
+                    handled,
+                    ..Applied::default()
+                }
             }
             PlatformInput::DragDrop(drag_drop_event) => {
-                // Not stamped (see this method's own doc): this event is
-                // never routed and never requests a frame, so there is no
-                // future produce to attribute it to.
-                tracing::debug!(
+                // An OS drag over this window: the receivers under it answer, and the
+                // answers reach the OS as drop feedback (ADR-0211 §5). Like the
+                // other routed kinds it requests a frame, since a receiver may restyle.
+                tracing::trace!(
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
-                    "drag-and-drop input received; ui_runtime routing not implemented yet, dropping"
+                    "drag-and-drop input delivered"
                 );
-                false
+                let clock = presentation.clock();
+                clock.stamp_input_epoch(clock.now());
+                let mut hit_panic = None;
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
+                    self.drag
+                        .deliver(presentation.id(), drag_drop_event, &mut |position, kind| {
+                            let mut result = flui_interaction::pointer::HitTestResult::new();
+                            // A busy tree answers nothing rather than "over
+                            // nothing", which would make every receiver leave.
+                            match presentation.renderer().hit_test_in_view(
+                                &mut result,
+                                position,
+                                kind,
+                                0,
+                            ) {
+                                ViewHitTest::Answered { panic } => {
+                                    preserve_first_input_panic(
+                                        &mut hit_panic,
+                                        panic,
+                                        "drag-and-drop hit test",
+                                    );
+                                    Some(result.path().to_vec())
+                                }
+                                ViewHitTest::TreeBusy => None,
+                            }
+                        });
+                });
+                // The hit test ran before the receivers it found were told.
+                let mut first = hit_panic;
+                preserve_first_input_panic(&mut first, dispatch.err(), "drag-and-drop delivery");
+                let dispatch = first.map_or(Ok(()), Err);
+                self.finish_addressed_input_dispatch(presentation, dispatch);
+                Applied::default()
+            }
+            PlatformInput::Capabilities(capabilities) => {
+                // Not stamped and no frame requested: a capability snapshot or
+                // change is session state, not an interaction (ADR-0213).
+                tracing::debug!(?capabilities, "input capabilities received");
+                Applied::default()
             }
         }
     }
@@ -332,26 +550,59 @@ impl UiRuntime {
         first.map_or(Ok(()), Err)
     }
 
+    /// Dispatch `pointer_event` on `surface` of `presentation`'s window;
+    /// the input sequence it belonged to, or the first panic.
     pub(super) fn dispatch_pointer_event_entered(
         presentation: &PresentationState,
+        surface: InputSurface,
         pointer_event: &PointerEvent,
-    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+    ) -> Result<Option<InputSequenceId>, Box<dyn std::any::Any + Send>> {
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
+        // The pointer's kind reaches hit testing, so an expanded hit area
+        // sizes its minimum target for this kind of contact (ADR-0212 §4).
+        let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
+            .unwrap_or(flui_interaction::events::PointerKind::Unknown);
+        // A press decides the input modality before anything it reaches can
+        // move focus: focus a click moves is not shown.
+        let modality_panic = pointer_pressed(pointer_event)
+            .then(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    presentation.focus_manager().note_pointer_input();
+                }))
+                .err()
+            })
+            .flatten();
+        let mut sequence = None;
+        // A render object that panicked in the hit test is a miss there; its
+        // panic is reported once the event reached the rest of the path.
+        let mut hit_panic = None;
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
-            presentation
-                .gestures()
-                .handle_pointer_event(pointer_event, |position| {
-                    let mut result = flui_interaction::routing::HitTestResult::new();
-                    let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
-                    presentation
-                        .renderer()
-                        .hit_test_in_view(&mut result, offset, 0);
-                    if !result.is_empty() {
-                        tracing::debug!(hits = result.len(), "Hit test found targets");
-                    }
-                    result
-                });
+            let outcome =
+                presentation
+                    .gestures()
+                    .dispatch_pointer_on(surface, pointer_event, |position| {
+                        let mut result = flui_interaction::pointer::HitTestResult::new();
+                        let offset =
+                            flui_foundation::geometry::Offset::new(position.dx, position.dy);
+                        match presentation
+                            .renderer()
+                            .hit_test_in_view(&mut result, offset, kind, 0)
+                        {
+                            ViewHitTest::Answered { panic } => hit_panic = panic,
+                            ViewHitTest::TreeBusy => {
+                                tracing::debug!("pointer hit test found the render tree busy");
+                            }
+                        }
+                        if !result.is_empty() {
+                            tracing::debug!(hits = result.len(), "Hit test found targets");
+                        }
+                        result
+                    });
+            sequence = outcome.sequence();
+            if let Some(sequence) = sequence {
+                tracing::trace!(sequence = sequence.get(), "pointer input dispatched");
+            }
         }))
         .err();
         let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
@@ -359,16 +610,29 @@ impl UiRuntime {
         }))
         .err();
 
-        let mut first_panic = None;
+        // The back button (X1) is also the Back key, after its pointer event
+        // reached the widgets under it.
+        let back_panic = back_button_change(pointer_event).and_then(|(state, time)| {
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = presentation
+                    .focus_manager()
+                    .dispatch_pointer_back(state, time);
+            }))
+            .err()
+        });
+
+        let mut first_panic = modality_panic;
+        preserve_first_input_panic(&mut first_panic, hit_panic, "pointer hit test");
         preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
         preserve_first_input_panic(
             &mut first_panic,
             deferred_panic,
             "deferred arena resolution",
         );
+        preserve_first_input_panic(&mut first_panic, back_panic, "pointer back key");
         match first_panic {
             Some(payload) => Err(payload),
-            None => Ok(()),
+            None => Ok(sequence),
         }
     }
 
@@ -393,6 +657,141 @@ impl UiRuntime {
         presentation.held_pointer_input().borrow_mut().drop_hovers();
         presentation.gestures().handle_pointer_left_window();
         self.request_redraw_for(presentation);
+    }
+
+    /// Unwrap [`HostInput::Accessibility`](crate::HostInput::Accessibility):
+    /// decode `request` and invoke it through `presentation_id`'s semantics
+    /// owner. Returns whether a handler ran.
+    ///
+    /// An assistive action is an input sequence of its own: its identity comes
+    /// from the presentation's gesture binding, never a second mint (ADR-0207
+    /// §4). A request FLUI cannot route (an unknown node, an action with no
+    /// counterpart, a stale snapshot, a closed presentation) is a traced
+    /// drop, since screen readers may act on a snapshot that is gone.
+    pub fn dispatch_accessibility(
+        &self,
+        presentation_id: PresentationId,
+        request: &accesskit::ActionRequest,
+    ) -> bool {
+        if !self.begin_recorded_input() {
+            return self.apply_accessibility(presentation_id, request).handled;
+        }
+        let applied = catch_unwind(AssertUnwindSafe(|| {
+            self.apply_accessibility(presentation_id, request)
+        }));
+        // A request no handler ran for is recorded as unhandled, as a key is,
+        // so a replay tells a dropped action from one that ran.
+        let (outcome, sequence) = match &applied {
+            Ok(applied) if !applied.handled => {
+                (crate::owner::InputOutcome::Unhandled, applied.sequence)
+            }
+            Ok(applied) => (crate::owner::InputOutcome::Handled, applied.sequence),
+            Err(_) => (crate::owner::InputOutcome::Handled, None),
+        };
+        self.record_dispatched(
+            presentation_id,
+            InputSurface::Window,
+            crate::HostInput::Accessibility(request.clone()),
+            outcome,
+            sequence,
+        );
+        applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
+    }
+
+    fn apply_accessibility(
+        &self,
+        presentation_id: PresentationId,
+        request: &accesskit::ActionRequest,
+    ) -> Applied {
+        let Some(presentation) = self.presentations.get(presentation_id) else {
+            tracing::trace!(
+                stamped_presentation_id = presentation_id.as_u64(),
+                "dropping an accessibility action for a presentation this ui_runtime no longer hosts"
+            );
+            return Applied::default();
+        };
+        let decoded = match flui_semantics::semantics_action_request_for(request) {
+            Ok(decoded) => decoded,
+            Err(
+                error @ (flui_semantics::ActionDecodeError::UnknownTarget(_)
+                | flui_semantics::ActionDecodeError::UnknownTree(_)),
+            ) => {
+                tracing::warn!(%error, "dropping accessibility action out of contract");
+                return Applied::default();
+            }
+            Err(error) => {
+                tracing::trace!(%error, "dropping undecodable accessibility action");
+                return Applied::default();
+            }
+        };
+        let sequence = match presentation
+            .gestures()
+            .begin_contactless(flui_interaction::ContactlessSource::Assistive)
+        {
+            Ok(sequence) => {
+                tracing::trace!(
+                    sequence = sequence.id.get(),
+                    "assistive input sequence started"
+                );
+                Some(sequence.id)
+            }
+            Err(error) => {
+                tracing::debug!(%error, "assistive action runs without a sequence id");
+                None
+            }
+        };
+        // A scroll the action drives names its deltas by this sequence.
+        let dispatched = match sequence {
+            Some(id) => presentation
+                .gestures()
+                .dispatch_contactless(id, || presentation.dispatch_semantics_action(decoded)),
+            None => presentation.dispatch_semantics_action(decoded),
+        };
+        let handled = match dispatched {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::trace!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = presentation_id.as_u64(),
+                    ?error,
+                    "dropping semantics action against a stale snapshot"
+                );
+                false
+            }
+        };
+        Applied {
+            handled,
+            sequence,
+            held: false,
+        }
+    }
+
+    /// Note the vsync of the frame about to be delivered to `presentation_id`
+    /// (`HostInput::Frame`): that frame samples resampled motion there, on
+    /// the event timeline, instead of at the frame clock's own reading.
+    ///
+    /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
+    /// recorded; the verdicts the frame makes follow it when the pump ends.
+    ///
+    /// The command inbox is drained first. The frame applies what it holds
+    /// (assistive requests among it) before it renders, so their rows precede
+    /// the frame's row and a replay applies them before rendering it too. A
+    /// drain failure is resumed after the frame's row is recorded.
+    pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+        let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
+        let recording = self.begin_recorded_input();
+        if let Some(presentation) = self.presentations.get(presentation_id) {
+            presentation.frame_vsync.set(Some(vsync));
+        }
+        if recording {
+            self.record_applied(
+                presentation_id,
+                crate::HostInput::Frame { vsync },
+                crate::owner::InputOutcome::Handled,
+            );
+        }
+        if let Some(payload) = drained {
+            resume_unwind(payload);
+        }
     }
 
     /// Record that `presentation_id`'s native window just gained OS focus —

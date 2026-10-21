@@ -43,6 +43,12 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`painting::SemanticsRegion` and `painting::SemanticsRegionKey` name the values
+returned by `widgets::CustomPainter::semantics_regions` (ADR-0223). A package
+can implement that trait using only the SDK, with configuration from the
+whole `widgets` surface. The measured list and facade identity test pin both
+values.
+
 `animation::AnimationBehavior` is used by essential timer and loading-indicator
 controllers. `animation::MotionPolicy` is read by Cupertino route composition
 through `widgets::MediaQuery::motion_of` (ADR-0195). These consumer imports are
@@ -142,7 +148,9 @@ package may carry the facade or an internal crate as a dev-dependency, which `pr
 does not tell from a normal one. The one shape this order cannot serve, an owner crate as a
 normal dependency beside `flui-sdk` as a dev-dependency only, has no instance
 (`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `Diagnosticable` derive
-itself has no SDK path; its expansion still resolves through the SDK.
+itself has no SDK path; its expansion still resolves through the SDK. Its replacement,
+`#[derive(Inspect)]` (ADR-0242), sits beside its trait as `flui_sdk::foundation::inspect::Inspect`;
+`inspect_through_sdk` in `tests/compiler_guards.rs` derives and reads it through that path.
 
 Whenever a build enables `flui/material` or `flui/cupertino` (the test scope and `--all-features`
 do), `flui-sdk`'s dev-dependency on the facade reaches that catalog, and a unit test inside this
@@ -173,3 +181,62 @@ package-author surface; no new framework dependency is required by a package.
 ADR-0125 exposes `animation::VsyncRegistrationError` through the existing whole
 animation-module export. The surface list pins this typed admission refusal;
 package lifecycle owners borrow registration tokens when removing work.
+
+### The custom-recognizer extension surface
+
+The input-completeness spec places the recognizer extension surface here
+(its design §0.2, requirements E1–E2): `interaction` re-exports the
+recognizer and arena-member traits, `ArenaMembership`, `PrimaryContact` and
+its contact types, the arena entry and disposition, `GestureComposition`,
+`GestureBranches`, `SequencedBranch`, `CompositionError`, `MotionRole`,
+`PanClaim`, `PointerKindSet` (which `GestureRecognizer::allowed_devices`
+returns, so it sits here and not only behind `unstable-input`),
+`GestureSettingsProvider`, `cancel_all`, the pointer event and dispatch types
+and `EventTime`; `RawGestureDetector`, `GestureRecognizerFactory` and
+`RecognizerContext` come through the whole `widgets` export. The facade's
+`interaction` module holds every one of them, observer items included, so
+the facade-path invariant holds. `tests/surface/custom_recognizer.rs`, a
+module of the surface test, is the proof: a recognizer written against
+`flui_sdk` alone, mounted by `RawGestureDetector`, that keeps its contact
+through a parent rebuild (`a_rebuild_mid_gesture_keeps_the_drag`).
+
+### Gesture alternatives
+
+A package's behavioural widget takes a `GestureAlternatives` (ADR-0216):
+`GestureAlternatives`, `Alternative`, `ControlSpec`, `ControlPlacement`,
+`MenuSpec`, `MenuPresenter`, `MenuRequest`, `MenuItem`, `MenuCause`,
+`CompanionSpec`, `CompanionLink`, `CompanionRegistration`, `CompanionGap`,
+`GestureCommand`, `CommandHandle`, `GestureAlternativesError` and
+`ShowContextMenuIntent` come through the whole `widgets` export, with
+`SingleActivator` for a command's keys and `WidgetsLocalizations` for the
+labels the alternatives make themselves. A widget whose gestures perform
+several commands reaches each through `GestureCommand::handle` and checks a
+command's intent with `GestureCommand::performs`, as `SwipeActions` and
+`RefreshIndicator` do; a widget that drags along an axis leaves the window's
+system-gesture strip to the operating system with
+`ContactAdmission::outside_system_edges`, through `GestureDetector`,
+`RawGestureDetector` or `AnchoredDrag::admission`, as the swiped rows do.
+A widget whose commands another widget already draws as controls declares
+`Alternative::Companion` over a `CompanionLink` that the owner of the shared state
+makes; the companion registers on it with `CompanionLink::register` and names the node
+that performs each command by a `SemanticsAnchor`, as `flui-material`'s `TabBar` does for
+`TabBarView` (`gesture_alternatives::tab_bar_view_with_its_tab_bar`).
+`tests/surface/behavioural_widget.rs` is the proof: a fling-to-file widget
+written against `flui_sdk` alone, whose left fling performs its first command
+through `GestureAlternatives::handle` and whose right fling performs its
+second through `GestureCommand::handle`, passes
+`flui_testing::assert_gesture_alternatives`
+(`a_package_gesture_widget_reaches_its_intent_on_every_path`), performs the
+second command from its gesture and leaves an edge-strip touch alone
+(`a_package_gesture_widget_performs_its_second_command_from_its_gesture`).
+
+`InteractiveViewer`'s transform seams stay crate-private:
+`TransformSlot::start_mode` (a one-contact pan that becomes a scale) and
+`TransformSlot::native_admission` (refusing a native pinch the viewer would
+not act on). A package zoomable
+viewer can mount a `TransformSlot` and receives native trackpad pinch through
+it, but cannot yet start the scale from one contact or refuse a native pinch
+before it is claimed; exposing them needs `ScaleStartMode` and the pan-zoom
+event types on this surface.
+`tests/ui/gesture_command_needs_an_intent.rs` pins the diagnostic a closure
+passed where the gesture's intent belongs gets.

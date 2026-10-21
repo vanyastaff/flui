@@ -38,6 +38,8 @@ extend-ignore-identifiers-re = [
 flui = "flui"
 # Shepperd's method (S. W. Shepperd 1978): quaternion from a rotation matrix.
 shepperd = "shepperd"
+# Win32 `FORMATETC::ptd`, the target-device pointer of an OLE data format.
+ptd = "ptd"
 arity = "arity"
 arities = "arities"
 ser = "ser"

@@ -396,12 +396,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Whether this object has no baseline of its own and answers a live
     /// baseline query with its only child's.
     ///
-    /// A pure proxy places its child at its own origin, so the child's
-    /// baseline is also its own. [`Self::actual_baseline_raw`] cannot express
+    /// The layout driver adds the child's committed vertical layout offset
+    /// to its baseline. [`Self::actual_baseline_raw`] cannot express
     /// that — it takes no context and so has no route to the child — and
     /// returning `None` would silently drop a wrapped `Text` out of a parent's
     /// baseline alignment. The layout driver reads this flag and walks to the
-    /// only child instead.
+    /// only child instead, composing offsets through nested forwarding boxes.
+    /// Paint transforms do not rotate or scale a layout baseline.
     ///
     /// Default: `false`. Box objects override via
     /// [`RenderBox::forwards_baseline_to_only_child`](crate::traits::RenderBox::forwards_baseline_to_only_child),
@@ -582,8 +583,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 
     /// Returns the transform matrix for hit testing.
     ///
-    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
-    /// onto the `HitTestResult` stack before recursing into children.
+    /// If `Some(matrix)` — the forward, paint-direction matrix — the hit
+    /// walk inverts it once: the inverse goes onto the `HitTestResult`
+    /// stack for every entry this node and its subtree add, and maps the
+    /// position, so this node's `hit_test` already receives its position
+    /// in the transformed space and never inverts the matrix itself. A
+    /// matrix without an admitted inverse, or one whose plane the position's
+    /// ray misses, refuses the subtree before `hit_test` runs (ADR-0113).
     /// Default: `None` (no transform — uses identity).
     fn hit_test_transform(
         &self,
@@ -591,6 +597,29 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ) -> Option<flui_foundation::geometry::Matrix4> {
         let _ = size;
         None
+    }
+
+    /// The expanded hit area this node claims beyond its own bounds, in its
+    /// local coordinates, or `None` for a node hit-tested by its bounds only.
+    ///
+    /// The pipeline resolves expanded areas after the visual walk, so they
+    /// never outrank a visual hit (see `PipelineOwner::hit_test`). Only
+    /// `RenderHitSlop` overrides it; the area must contain the box itself.
+    /// `kind` is the pointer asking, whose minimum target the area may follow.
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        let _ = (size, kind);
+        None
+    }
+
+    /// Whether a hit on this node keeps the position from every expanded hit
+    /// area, whatever lies above it — a pointer barrier such as an absorbing
+    /// `RenderAbsorbPointer`. Default `false`.
+    fn blocks_hit_slop(&self) -> bool {
+        false
     }
 
     /// The data-only pointer target this render object contributes to its hit
@@ -652,7 +681,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Defaults to deferring; `RenderMouseRegion` overrides this so
-    /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
+    /// [`MouseTracker`](flui_interaction::pointer::MouseTracker) can resolve the active
     /// platform cursor from the leaf-first hit-test path.
     fn mouse_cursor(&self) -> CursorRequest {
         CursorRequest::Defer
@@ -686,6 +715,23 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// Writes the input regions this node claims, in its own local coordinates at its
+    /// laid-out `size`, into `regions`.
+    ///
+    /// Called on every composited frame by
+    /// [`PipelineOwner::input_regions`](crate::pipeline::PipelineOwner::input_regions),
+    /// which maps each region into the window through the paint transforms and clips
+    /// above this node (see [`crate::input_regions`]). Pure in `(self, size)`, like
+    /// [`Self::paint_effects`]: a configuration change that alters the regions marks paint,
+    /// so a frame is composited and the new set is collected. Default: no regions.
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
@@ -695,6 +741,16 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Called when building the semantics tree. Override to provide
     /// labels, actions, or other semantic information. Default: no-op.
     fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
+
+    /// Describes independently keyed accessible regions in committed local
+    /// geometry, before and after this object's actual children. Normal ancestor
+    /// clipping, action blocking and merge/exclude policies apply to each region.
+    fn semantics_regions(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
 
     /// Whether the semantics assembly walk should skip this render
     /// object's entire child subtree.
@@ -721,8 +777,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// not present — `RenderTheater`'s entries below the topmost opaque one —
     /// needs this one: those are real children it deliberately does not show.
     ///
+    /// `size` is the committed box size or sliver's absolute paint size.
+    /// Size-dependent presentation can be replayed without duplicating geometry.
     /// Default: `true`.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(
+        &self,
+        _child_slot: usize,
+        _size: flui_foundation::geometry::Size,
+    ) -> bool {
         true
     }
 

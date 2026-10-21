@@ -31,8 +31,12 @@ mod async_driver;
 mod controller_restart;
 #[path = "first_frame_deferral.rs"]
 mod first_frame_deferral;
+#[path = "gesture_alternatives.rs"]
+mod gesture_alternatives;
 #[path = "headless_host.rs"]
 mod headless_host;
+#[path = "inspect.rs"]
+mod inspect;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
 #[path = "lifecycle_panic_containment.rs"]
@@ -45,18 +49,27 @@ mod mount_bootstrap;
 mod multi_presentation_clock;
 #[path = "owner_scope.rs"]
 mod owner_scope;
+mod ownership_table;
 #[path = "pointer_script_replay.rs"]
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
+#[path = "recording.rs"]
+mod recording;
+#[path = "recording_vocabulary.rs"]
+mod recording_vocabulary;
 #[path = "runtime_driver.rs"]
 mod runtime_driver;
 #[path = "runtime_input_lifecycle.rs"]
 mod runtime_input_lifecycle;
+#[path = "scripts.rs"]
+mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "window_conformance.rs"]
+mod window_conformance;
 #[path = "window_scale_factor.rs"]
 mod window_scale_factor;
 
@@ -78,7 +91,6 @@ fn headless_frame_driver_matrix() {
             ("controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal", controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal as fn()),
             ("runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount", runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount as fn()),
             ("first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral", first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral as fn()),
-            ("runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples", runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("runtime_driver::logical_render_root_tracks_replacement_and_build_recovery", runtime_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),
             ("a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support", a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support as fn()),

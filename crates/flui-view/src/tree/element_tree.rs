@@ -1380,40 +1380,19 @@ impl ElementTree {
                 render_parent_id,
                 &mut desired_children,
             );
-            let children_match = owner
-                .render_tree()
-                .get(render_parent_id)
-                .is_some_and(|node| node.children() == desired_children.as_slice());
-            if children_match {
+            let update = owner
+                .render_tree_mut()
+                .set_children(render_parent_id, &desired_children);
+            if !update.changed {
                 return;
             }
-            let current = owner
-                .render_tree()
-                .get(render_parent_id)
-                .map_or_else(Vec::new, |node| node.children().to_vec());
-            {
-                let render_tree = owner.render_tree_mut();
-                for &child in &desired_children {
-                    if let Some(node) = render_tree.get_mut(child) {
-                        node.set_parent(Some(render_parent_id));
-                    }
-                }
-                let Some(parent) = render_tree.get_mut(render_parent_id) else {
-                    return;
-                };
-                for child in current {
-                    parent.remove_child(child);
-                }
-                for (index, child) in desired_children.iter().copied().enumerate() {
-                    parent.insert_child(index, child);
-                }
+            let impact = flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+                | flui_rendering::RenderUpdateImpact::SEMANTICS;
+            owner.apply_render_update_impact(render_parent_id, impact);
+            for donor in update.donors {
+                owner.apply_render_update_impact(donor, impact);
             }
-            owner.apply_render_update_impact(
-                render_parent_id,
-                flui_rendering::RenderUpdateImpact::LAYOUT
-                    | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                    | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            );
         });
         visited
     }
@@ -1424,10 +1403,13 @@ impl ElementTree {
         // then becomes the render ancestor for its own subtree.
         let mut target: HashMap<flui_foundation::RenderId, Vec<flui_foundation::RenderId>> =
             HashMap::new();
-        let mut desired_parent: HashMap<
+        // Every render node with its desired render parent, in depth-first
+        // pre-order: a parent's own edge is settled before its children
+        // move under it, so no step of the sync closes a cycle.
+        let mut desired_parent: Vec<(
             flui_foundation::RenderId,
             Option<flui_foundation::RenderId>,
-        > = HashMap::new();
+        )> = Vec::new();
         let mut pipeline_owner: Option<PipelineCell> = None;
         let mut visited = 0;
 
@@ -1444,7 +1426,7 @@ impl ElementTree {
                 continue;
             };
             let child_ancestor = if let Some(render_id) = node.element().render_id() {
-                desired_parent.insert(render_id, render_ancestor);
+                desired_parent.push((render_id, render_ancestor));
                 if let Some(parent_render) = render_ancestor {
                     target.entry(parent_render).or_default().push(render_id);
                 }
@@ -1471,71 +1453,46 @@ impl ElementTree {
         // Tree borrows are dropped; the checkout guards only the render tree.
         pipeline_owner.with_mut(|owner| {
             let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
-            let mut membership_changed_parents: HashSet<flui_foundation::RenderId> =
-                HashSet::new();
+            let mut membership_changed_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
             {
                 let render_tree = owner.render_tree_mut();
-                let render_ids: Vec<_> = render_tree.iter().map(|(id, _)| id).collect();
+                for &(render_id, desired) in &desired_parent {
+                    if !render_tree.contains(render_id) {
+                        continue;
+                    }
+                    // A render root in the element graph leaves the render
+                    // parent it still holds.
+                    if desired.is_none()
+                        && let Some(current) = render_tree.parent(render_id)
+                    {
+                        render_tree.drop_child(current, render_id);
+                        dirty_render_parents.insert(current);
+                        membership_changed_parents.insert(current);
+                    }
 
-                // Sync render parent pointers first. Sibling sorting alone is not
-                // enough when a GlobalKey move transfers an already-attached
-                // render subtree from one render parent to another.
-                for render_id in &render_ids {
-                    let Some(&desired) = desired_parent.get(render_id) else {
-                        continue;
-                    };
-                    let Some(node) = render_tree.get_mut(*render_id) else {
-                        continue;
-                    };
-                    let current = node.parent();
-                    if current != desired {
-                        if let Some(parent) = current {
-                            dirty_render_parents.insert(parent);
-                            membership_changed_parents.insert(parent);
-                        }
-                        if let Some(parent) = desired {
-                            dirty_render_parents.insert(parent);
-                            membership_changed_parents.insert(parent);
-                        }
-                        node.set_parent(desired);
+                    // Every element-managed render node's child list follows
+                    // element slot order exactly. A node absent from `target`
+                    // is a render leaf in the element graph, so its desired
+                    // list holds only its sparse sliver children; anything
+                    // else it still lists becomes a root. A child arriving
+                    // from another render parent leaves that donor's list.
+                    let mut desired_children = target.remove(&render_id).unwrap_or_default();
+                    append_sparse_sliver_children(render_tree, render_id, &mut desired_children);
+                    let update = render_tree.set_children(render_id, &desired_children);
+                    if update.changed {
+                        dirty_render_parents.insert(render_id);
+                    }
+                    if update.membership_changed {
+                        membership_changed_parents.insert(render_id);
+                    }
+                    for donor in update.donors {
+                        dirty_render_parents.insert(donor);
+                        membership_changed_parents.insert(donor);
                     }
                 }
 
-                // Sync every element-managed render node's child list exactly to
-                // element slot order. Parents absent from `target` are render
-                // leaves in the element graph, so their desired child list is
-                // empty; clearing them removes donor-side stale children after a
-                // cross-parent move.
-                for parent_render in &render_ids {
-                    if !desired_parent.contains_key(parent_render) {
-                        continue;
-                    }
-                    let mut desired_children = target.remove(parent_render).unwrap_or_default();
-                    append_sparse_sliver_children(render_tree, *parent_render, &mut desired_children);
-                    let Some(parent_node) = render_tree.get_mut(*parent_render) else {
-                        continue;
-                    };
-                    if parent_node.children() == desired_children.as_slice() {
-                        continue;
-                    }
-                    let current = parent_node.children().to_vec();
-                    for child in current {
-                        parent_node.remove_child(child);
-                    }
-                    for (target_index, child) in desired_children.into_iter().enumerate() {
-                        parent_node.insert_child(target_index, child);
-                    }
-                    dirty_render_parents.insert(*parent_render);
-                }
-
-                // Invariant check (debug-only, O(desired_parent size)): the two
-                // loops above write the parent-pointer and the children-list
-                // separately, so prove they agree rather than trust it silently.
-                // This is exactly the asymmetry the root-hop parent-link defect
-                // produced — a child present in its parent's children list with
-                // its own `parent` link disagreeing (or missing).
                 #[cfg(debug_assertions)]
-                for (&render_id, &desired) in &desired_parent {
+                for &(render_id, desired) in &desired_parent {
                     let Some(node) = render_tree.get(render_id) else {
                         continue;
                     };
@@ -1543,19 +1500,8 @@ impl ElementTree {
                         node.parent(),
                         desired,
                         "reorder pass: render node {render_id:?}'s parent link disagrees with the \
-                         desired parent the DFS computed for it — the two directions of a render-tree \
-                         edge must always be written consistently"
+                         desired parent the DFS computed for it"
                     );
-                    if let Some(parent_id) = desired {
-                        let parent_has_child = render_tree.get(parent_id).is_some_and(
-                            |parent_node| parent_node.children().contains(&render_id),
-                        );
-                        debug_assert!(
-                            parent_has_child,
-                            "reorder pass: render node {render_id:?} claims parent {parent_id:?}, \
-                             but that parent's children list does not contain it"
-                        );
-                    }
                 }
             }
 

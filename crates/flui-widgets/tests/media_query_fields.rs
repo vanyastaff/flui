@@ -106,7 +106,7 @@ impl View for StaticChild {
 
 impl ProxyView for StaticChild {
     fn child(&self) -> &dyn View {
-        &*self.inner.0
+        &self.inner
     }
 }
 
@@ -373,4 +373,98 @@ pub(crate) fn a_build_that_panics_before_reading_keeps_its_dependency() {
         10.0,
         "the reader rendered the new width after recovering"
     );
+}
+
+fn keyboard_over_home_indicator(keyboard_bottom: f64) -> MediaQueryData {
+    use flui_foundation::geometry::EdgeInsets;
+
+    MediaQueryData {
+        view_padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
+        view_insets: EdgeInsets::new(0.0, 0.0, keyboard_bottom, 0.0),
+        ..MediaQueryData::default()
+    }
+}
+
+/// A literal built from `view_padding` and `view_insets` reports the derived
+/// padding, and it never goes negative.
+pub(crate) fn padding_is_derived_from_view_padding_and_view_insets() {
+    use flui_foundation::geometry::EdgeInsets;
+
+    let data = MediaQueryData {
+        view_padding: EdgeInsets::new(47.0, 0.0, 34.0, 0.0),
+        view_insets: EdgeInsets::new(0.0, 0.0, 20.0, 0.0),
+        ..MediaQueryData::default()
+    };
+    assert_eq!(data.padding(), EdgeInsets::new(47.0, 0.0, 14.0, 0.0));
+
+    let covered = MediaQueryData {
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
+        ..data
+    };
+    assert_eq!(covered.padding().bottom, 0.0, "clamped, not negative");
+}
+
+/// Consuming or overriding padding keeps `padding()` equal to what the
+/// consumer meant.
+pub(crate) fn consuming_and_overriding_padding_updates_its_sources() {
+    let mut data = keyboard_over_home_indicator(20.0);
+    data.remove_bottom_padding();
+    assert_eq!(data.padding().bottom, 0.0);
+    assert_eq!(data.view_padding.bottom, 20.0, "the covered part stays");
+
+    data.set_padding_bottom(50.0);
+    assert_eq!(data.padding().bottom, 50.0);
+}
+
+/// A keyboard that covers the home-indicator area must leave nothing for a
+/// `SafeArea` to reserve: `padding` is the part of `view_padding` the
+/// `view_insets` do not already cover.
+pub(crate) fn safe_area_reserves_the_home_indicator_only_while_the_keyboard_is_down() {
+    use flui_widgets::SafeArea;
+
+    let safe_area = || SafeArea::new().child(SizedBox::new(10.0, 10.0));
+    let mut laid = lay_out(
+        MediaQuery::new(keyboard_over_home_indicator(0.0), safe_area()),
+        loose(4000.0),
+    );
+    assert_eq!(
+        laid.size(laid.current_root()).height,
+        44.0,
+        "without a keyboard the home indicator is reserved"
+    );
+
+    laid.pump_widget(MediaQuery::new(
+        keyboard_over_home_indicator(300.0),
+        safe_area(),
+    ));
+    assert_eq!(
+        laid.size(laid.current_root()).height,
+        10.0,
+        "a 300px keyboard covers the 34px home indicator, so SafeArea adds nothing above it"
+    );
+
+    laid.pump_widget(MediaQuery::new(
+        keyboard_over_home_indicator(20.0),
+        safe_area(),
+    ));
+    assert_eq!(
+        laid.size(laid.current_root()).height,
+        24.0,
+        "a keyboard shorter than the indicator leaves only the uncovered 14px"
+    );
+}
+
+/// Consuming the bottom view inset keeps all three fields consistent.
+pub(crate) fn removing_the_bottom_view_inset_shrinks_view_padding_by_what_it_covered() {
+    let mut data = keyboard_over_home_indicator(20.0);
+    assert_eq!(data.padding().bottom, 14.0);
+    data.remove_bottom_view_inset();
+    assert_eq!(data.view_insets.bottom, 0.0);
+    assert_eq!(data.view_padding.bottom, 14.0);
+    assert_eq!(data.padding().bottom, 14.0);
+
+    let mut covered = keyboard_over_home_indicator(300.0);
+    covered.remove_bottom_view_inset();
+    assert_eq!(covered.view_padding.bottom, 0.0);
+    assert_eq!(covered.padding().bottom, 0.0);
 }

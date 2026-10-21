@@ -16,16 +16,15 @@ use crate::common::{LaidOut, lay_out, tight};
 use flui_animation::{ArcCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
-use flui_view::{IntoView, ViewExt};
+use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, RefreshController, RefreshIndicator,
-    ScrollController, Scrollable, Scrollbar, SemanticsRole, SharedScrollPhysics, SizedBox,
-    VsyncScope,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable, Scrollbar,
+    SemanticsRole, SharedScrollPhysics, SizedBox, VsyncScope,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
 pub(crate) struct FlingProfile {
-    pub(crate) provider: flui_interaction::settings::GestureSettingsProvider,
+    pub(crate) provider: flui_interaction::gesture::GestureSettingsProvider,
     pub(crate) child: flui_view::BoxedView,
 }
 
@@ -36,6 +35,145 @@ impl flui_view::StatelessView for FlingProfile {
             self.child.clone(),
         )
         .settings(self.provider.clone())
+    }
+}
+
+/// A mouse resting over a list a finger scrolls enters nothing while the
+/// scroll owns the finger, though the rows move under it every frame; once
+/// the finger lifts, the next frame's refresh catches up (ADR-0208 rule 6).
+pub(crate) fn hover_holds_while_a_touch_scroll_is_latched() {
+    use flui_testing::replay::TouchScript;
+    use flui_widgets::{Column, MouseRegion};
+    use std::cell::RefCell;
+
+    let entered = Rc::new(RefCell::new(Vec::new()));
+    let rows: Vec<_> = (0..10)
+        .map(|row| {
+            let entered = Rc::clone(&entered);
+            MouseRegion::new()
+                .on_enter(move |_, _, _| entered.borrow_mut().push(row))
+                .child(SizedBox::new(300.0, 100.0))
+                .boxed()
+        })
+        .collect();
+    let mut laid = lay_out(
+        Scrollable::new().child(Column::new(rows)),
+        tight(300.0, 300.0),
+    );
+    laid.dispatch_pointer_hover(150.0, 50.0);
+    laid.pump();
+    assert_eq!(*entered.borrow(), [0], "the mouse rests over the first row");
+
+    let sample = Duration::from_millis(16);
+    let scroll = TouchScript::new("scroll under a resting mouse")
+        .down(5, flui_foundation::geometry::Offset::new(150.0, 280.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 230.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 160.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 100.0))
+        .wait(sample * 3)
+        .up(5)
+        .build()
+        .expect("one whole contact");
+    let mut latched = Vec::new();
+    laid.replay_with(&scroll, |_, _| latched.clone_from(&entered.borrow()));
+    assert_eq!(latched, [0], "no row entered while the scroll was latched");
+    laid.pump();
+    assert_ne!(
+        *entered.borrow(),
+        [0],
+        "the refresh after the latch enters the row now under the mouse"
+    );
+}
+
+pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics() {
+    use flui_widgets::{
+        Semantics, SliverConstrainedCrossAxis, SliverCrossAxisGroup, SliverCrossAxisItem,
+        SliverToBoxAdapter, Viewport,
+    };
+    let child = |label: &str, height| {
+        SliverToBoxAdapter::new().child(
+            Semantics::new()
+                .container(true)
+                .label(label)
+                .child(SizedBox::new(200.0, height)),
+        )
+    };
+    let content = |weight, limit| {
+        Viewport::new((SliverCrossAxisGroup::new((
+            SliverCrossAxisItem::content(
+                SliverConstrainedCrossAxis::new(limit, child("fixed", 30.0)).expect("valid limit"),
+            ),
+            child("one share", 60.0),
+            SliverCrossAxisItem::flex(
+                std::num::NonZeroU32::new(weight).expect("positive weight"),
+                child("weighted", 90.0),
+            ),
+        )),))
+    };
+    let mut laid = lay_out(content(2, 40.0), tight(160.0, 100.0));
+    laid.enable_semantics();
+    laid.tick();
+    let group = laid.find_by_render_type("RenderSliverCrossAxisGroup");
+    let fixed = laid.child(group, 0);
+    let equal = laid.child(group, 1);
+    let weighted = laid.child(group, 2);
+    for (weight, limit, expected) in [
+        (2, 40.0, (40.0, 40.0, 80.0)),
+        (3, 20.0, (20.0, 35.0, 105.0)),
+        (1, 200.0, (160.0, 0.0, 0.0)),
+        (2, 40.0, (40.0, 40.0, 80.0)),
+    ] {
+        laid.pump_widget(content(weight, limit));
+        assert_eq!(
+            laid.find_by_render_type("RenderSliverCrossAxisGroup"),
+            group
+        );
+        assert_eq!(laid.child(group, 0), fixed);
+        assert_eq!(laid.child(group, 1), equal);
+        assert_eq!(laid.child(group, 2), weighted);
+        assert_eq!(laid.offset(equal).dx, expected.0);
+        assert_eq!(laid.offset(weighted).dx, expected.0 + expected.1);
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        for (label, width) in [
+            ("fixed", expected.0),
+            ("one share", expected.1),
+            ("weighted", expected.2),
+        ] {
+            let node = tree.find_by_label(label).expect("accessible child");
+            assert_eq!(
+                node.bounds().expect("published geometry").width(),
+                width,
+                "{label}"
+            );
+        }
+        assert_eq!(laid.sliver_geometry(group).scroll_extent, 90.0);
+    }
+}
+
+pub(crate) fn constrained_sliver_updates_layout_without_replacing_the_child() {
+    use flui_widgets::{SliverConstrainedCrossAxis, SliverToBoxAdapter, Viewport};
+    let content = |extent| {
+        Viewport::new((SliverConstrainedCrossAxis::new(
+            extent,
+            SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
+        )
+        .expect("valid extent"),))
+    };
+    let mut laid = lay_out(content(40.0), tight(100.0, 100.0));
+    let limit = laid.find_by_render_type("RenderSliverConstrainedCrossAxis");
+    let child = laid.child(laid.child(limit, 0), 0);
+    for extent in [40.0, 15.5, 0.0, 200.0] {
+        laid.pump_widget(content(extent));
+        assert_eq!(
+            laid.find_by_render_type("RenderSliverConstrainedCrossAxis"),
+            limit
+        );
+        assert_eq!(laid.child(laid.child(limit, 0), 0), child);
+        assert_eq!(laid.size(child).width, extent.min(100.0));
+        assert_eq!(laid.sliver_geometry(limit).scroll_extent, 30.0);
     }
 }
 
@@ -115,30 +253,20 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
 }
 
 pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
-    terminal_motion_uses_the_admitted_fling_profile(false);
-}
-
-pub(crate) fn terminal_refresh_motion_uses_the_admitted_fling_profile() {
-    terminal_motion_uses_the_admitted_fling_profile(true);
-}
-
-fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
     let profile = |min, max| {
         flui_interaction::GestureSettings::default()
             .try_with_fling_velocity(min, max)
             .expect("valid fling range")
     };
-    let source = flui_interaction::settings::GestureSettingsSource::new(profile(50.0, 300.0));
+    let source = flui_interaction::gesture::GestureSettingsSource::new(profile(50.0, 300.0));
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
-    let child = if refresh {
-        refresh_content(&controller, &RefreshController::new()).boxed()
-    } else {
-        Scrollable::new()
-            .controller(controller.clone())
-            .child(SizedBox::new(300.0, 5000.0))
-            .boxed()
-    };
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
+    let child = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0))
+        .boxed();
     let vsync = Vsync::new();
     let mut laid = crate::common::lay_out_animated(
         VsyncScope::new(
@@ -172,19 +300,19 @@ fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
         if attempt == 1 {
             assert_eq!(
                 coast, 0.0,
-                "{refresh}: next contact below its admitted minimum does not coast"
+                "next contact below its admitted minimum does not coast"
             );
             source.replace(profile(50.0, 600.0));
         } else if attempt == 3 {
             assert!(
                 coast > 200.0 && coast < 250.0,
-                "{refresh}: admitted max15000 determines the coasting distance, coast {coast}"
+                "admitted max15000 determines the coasting distance, coast {coast}"
             );
         } else {
             let bound = if attempt == 0 { 10.0 } else { 20.0 };
             assert!(
                 coast > 0.0 && coast < bound,
-                "{refresh}: attempt {attempt} uses its captured maximum, coast {coast}"
+                "attempt {attempt} uses its captured maximum, coast {coast}"
             );
             if attempt == 2 {
                 source.replace(profile(50.0, 15000.0));
@@ -220,7 +348,9 @@ fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
 pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
     let controller = ScrollController::new();
     // 300px viewport, 800px content → 500px scroll extent.
-    controller.update_dimensions(300.0, 0.0, 500.0);
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
 
     let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::default());
     let widget = Scrollable::new()
@@ -257,7 +387,9 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     use flui_testing::PointerPhase;
 
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let widget = Scrollable::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
@@ -290,7 +422,9 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
                 PointerButtons::NONE,
                 sample,
             )),
-            PointerPhase::Cancel => unreachable!("this row scripts touch release"),
+            PointerPhase::Cancel | PointerPhase::Hover => {
+                unreachable!("this row scripts touch contact and release")
+            }
         }
     };
     for (id, millis, y, phase) in [
@@ -336,13 +470,14 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
 
     controller.jump_to(200.0);
     scoped.dispatch_pointer_event(&event(2, 200, 200.0, PointerPhase::Down));
-    scoped.dispatch_pointer_event(&event(2, 210, 190.0, PointerPhase::Move));
+    // Past the slop: the drag starts from Down and applies all 30px.
+    scoped.dispatch_pointer_event(&event(2, 210, 170.0, PointerPhase::Move));
     assert_eq!(
         controller.pixels(),
-        210.0,
+        230.0,
         "reused touch identity starts a fresh drag after completion"
     );
-    scoped.dispatch_pointer_event(&event(2, 220, 190.0, PointerPhase::Up));
+    scoped.dispatch_pointer_event(&event(2, 220, 170.0, PointerPhase::Up));
 }
 
 // ============================================================================
@@ -376,7 +511,9 @@ fn exercise_fling_registry(migrate: bool) {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
 
     let vsync = Vsync::new();
     let widget = Scrollable::new()
@@ -386,12 +523,12 @@ fn exercise_fling_registry(migrate: bool) {
     let mut scoped = fling_scoped(widget.clone(), vsync.clone(), tight(300.0, 300.0));
 
     // Upward drag well past the 18 px slop to establish a recognizable fling
-    // velocity. The first move crosses slop (on_pan_start). The second fires
-    // on_pan_update, advancing the offset. The pointer_up triggers on_pan_end
+    // velocity. The first move crosses slop (drag on_start). The second fires
+    // drag on_update, advancing the offset. The pointer_up triggers drag on_end
     // which calls animate_with on the fling controller.
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: on_pan_update
+    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: drag on_update
     scoped.dispatch_pointer_up(150.0, 150.0);
 
     let pixels_at_release = controller.pixels();
@@ -453,7 +590,9 @@ fn exercise_fling_registry(migrate: bool) {
 pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
-    controller.update_dimensions(300.0, 0.0, max_extent);
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
 
     let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
     let vsync = Vsync::new();
@@ -472,11 +611,11 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     // `apply_boundary_conditions` and lets pixels exceed max_extent (damped
     // by the overscroll spring coefficient 0.52):
     //   proposed = 480 − (−60) = 540 → clamped = 500 + 40×0.52 = 520.8
-    // on_pan_end sees pixels = 520.8 > max_extent and returns a
+    // drag on_end sees pixels = 520.8 > max_extent and returns a
     // spring simulation that springs the position back to max_extent.
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: on_pan_update
+    scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: drag on_update
     scoped.dispatch_pointer_up(150.0, 120.0);
 
     // Pump 100 frames (1.6 s) — sufficient for the critically-damped spring
@@ -547,7 +686,9 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
 /// Jumping cancels before another frame can publish the displaced run's value.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
 
     let vsync = Vsync::new();
     let widget = Scrollable::new()
@@ -648,7 +789,9 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             [(false, false), (true, false), (false, true), (true, true)]
         {
             let controller = ScrollController::new();
-            controller.update_dimensions(300.0, 0.0, 4700.0);
+            controller
+                .update_dimensions(300.0, 0.0, 4700.0)
+                .expect("ordered extents");
             let drops = Arc::new(AtomicUsize::new(0));
             controller.animate_to(
                 100.0,
@@ -830,7 +973,9 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
         for outer_jumps in [false, true] {
             for newer_jumps in [false, true] {
                 let controller = ScrollController::new();
-                controller.update_dimensions(300.0, 0.0, 4700.0);
+                controller
+                    .update_dimensions(300.0, 0.0, 4700.0)
+                    .expect("ordered extents");
                 let drops = Arc::new(AtomicUsize::new(0));
                 let content = || {
                     Scrollable::new()
@@ -907,7 +1052,9 @@ pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded
 
 fn assert_scrollbar_track(height: f64) {
     let controller = ScrollController::new();
-    controller.update_dimensions(height, 0.0, 900.0);
+    controller
+        .update_dimensions(height, 0.0, 900.0)
+        .expect("ordered extents");
     let mut laid = lay_out(
         Scrollbar::new()
             .controller(controller.clone())
@@ -1019,10 +1166,6 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
 }
 
 // ============================================================================
-// RefreshIndicator — pull-to-refresh
-// ============================================================================
-
-// ============================================================================
 // Hit-test transform-stack composition through the sliver hit-test walk
 // ============================================================================
 //
@@ -1052,274 +1195,11 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
 /// from the grab with the user's direction recorded, live through the
 /// ballistic run past the release, and idle again — direction reset — once
 /// the run settles. The signal a floating header's snap trigger keys on.
-pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
-    let mut failures = Vec::new();
-    for cancelled in [false, true] {
-        let scroll = ScrollController::new();
-        let refresh = RefreshController::new();
-        let vsync = Vsync::new();
-        let position = scroll.position();
-        let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let observed = Arc::clone(&observations);
-        let observed_position = position.clone();
-        let listener = position.add_activity_listener(std::rc::Rc::new(move || {
-            observed.lock().expect("activity observer").push((
-                observed_position.is_scrolling(),
-                observed_position.user_scroll_direction(),
-            ));
-        }));
-        let mut laid = crate::common::lay_out_animated(
-            VsyncScope::new(vsync.clone(), refresh_content(&scroll, &refresh)),
-            tight(300.0, 300.0),
-            vsync,
-        );
-        laid.dispatch_pointer_down(150.0, 250.0);
-        for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
-            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
-        }
-        let released = scroll.pixels();
-        assert!(released > 0.0, "refresh wrapper actually scrolls");
-        if !observations
-            .lock()
-            .expect("activity observer")
-            .contains(&(true, ScrollDirection::Reverse))
-        {
-            failures.push(format!(
-                "cancelled={cancelled}: no active-direction delivery during drag"
-            ));
-        }
-        if cancelled {
-            laid.dispatch_pointer_cancel();
-        } else {
-            laid.dispatch_pointer_up(150.0, 150.0);
-        }
-        laid.pump_for(Duration::from_millis(16));
-        laid.pump_for(Duration::from_millis(16));
-        if cancelled {
-            assert_eq!(
-                scroll.pixels(),
-                released,
-                "cancelled in-range drag does not coast"
-            );
-        } else {
-            assert!(
-                scroll.pixels() > released,
-                "completed refresh drag actually coasts"
-            );
-            if !position.is_scrolling() {
-                failures.push("ballistic pixels move while activity is idle".into());
-            }
-        }
-        laid.pump_for(Duration::from_secs(10));
-        assert!(!position.is_scrolling(), "terminal motion settles");
-        assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
-        observations.lock().expect("activity observer").clear();
-        let before = scroll.pixels();
-        laid.dispatch_pointer_down(150.0, 250.0);
-        laid.dispatch_pointer_move_after(150.0, 210.0, Duration::from_millis(10));
-        laid.dispatch_pointer_move_after(150.0, 190.0, Duration::from_millis(10));
-        assert!(
-            scroll.pixels() > before,
-            "next healthy contact drives content"
-        );
-        if !observations
-            .lock()
-            .expect("activity observer")
-            .contains(&(true, ScrollDirection::Reverse))
-        {
-            failures.push(format!(
-                "cancelled={cancelled}: next contact has no activity delivery"
-            ));
-        }
-        laid.dispatch_pointer_cancel();
-        position.remove_activity_listener(listener);
-    }
-    assert!(
-        failures.is_empty(),
-        "refresh activity delivery failed: {failures:?}"
-    );
-}
-
-pub(crate) fn refresh_without_vsync_ends_activity_after_release_and_cancel() {
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerPhase, ScriptedPointer};
-
-    let pointer = |binding: &HeadlessBinding, phase, y, millis| {
-        binding.clock().advance(Duration::from_millis(10));
-        let event = ScriptedPointer::new(
-            Duration::from_millis(millis),
-            flui_interaction::PointerId::try_from(1).expect("nonzero fixture contact"),
-            phase,
-            flui_foundation::geometry::Offset::new(150.0, y),
-        )
-        .to_event();
-        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
-    };
-    let mut failures = Vec::new();
-    for cancelled in [false, true] {
-        let scroll = ScrollController::new();
-        let refresh = RefreshController::new();
-        let mut binding = HeadlessBinding::new();
-        let root = flui_widgets::GestureArenaScope::new(
-            binding.arena().clone(),
-            flui_widgets::FocusRoot::new(
-                refresh_content(&scroll, &refresh).physics(Arc::new(BouncingScrollPhysics::new())),
-            ),
-        );
-        let _mounted = binding.mount_root(
-            &root,
-            MountOwners::fresh(),
-            MountOptions::tight(300.0, 300.0),
-        );
-        scroll.set_pixels(scroll.max_scroll_extent() - 10.0);
-        pointer(&binding, PointerPhase::Down, 250.0, 0);
-        for (millis, y) in [
-            (10, 230.0),
-            (20, 210.0),
-            (30, 190.0),
-            (40, 170.0),
-            (50, 150.0),
-        ] {
-            pointer(&binding, PointerPhase::Move, y, millis);
-        }
-        assert!(scroll.position().is_scrolling());
-        assert!(scroll.pixels() > scroll.max_scroll_extent());
-        if cancelled {
-            pointer(&binding, PointerPhase::Cancel, 150.0, 50);
-        } else {
-            pointer(&binding, PointerPhase::Up, 150.0, 50);
-        }
-        let released = scroll.pixels();
-        binding.pump_frame(Duration::from_millis(16));
-        binding.pump_frame(Duration::from_secs(10));
-        assert_eq!(
-            scroll.pixels(),
-            released,
-            "no clock drives ballistic motion"
-        );
-        if scroll.position().is_scrolling() {
-            failures.push(format!(
-                "cancelled={cancelled}: terminal activity remains live"
-            ));
-        }
-        pointer(&binding, PointerPhase::Down, 100.0, 100);
-        pointer(&binding, PointerPhase::Move, 150.0, 110);
-        pointer(&binding, PointerPhase::Move, 180.0, 120);
-        assert!(scroll.pixels() < released, "fresh contact remains usable");
-        pointer(&binding, PointerPhase::Cancel, 180.0, 120);
-    }
-    assert!(failures.is_empty(), "{}", failures.join("; "));
-}
-
-pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let mut failures = Vec::new();
-    for (phase_fault, activity_fault) in [(true, false), (false, true), (true, true)] {
-        let scroll = ScrollController::new();
-        let refresh = RefreshController::new();
-        let fail = Arc::new(AtomicBool::new(phase_fault));
-        let failed = Arc::new(AtomicBool::new(false));
-        let watched = refresh.clone();
-        let fail_callback = fail;
-        let failed_callback = failed.clone();
-        let listenable = refresh.listenable();
-        let listener = listenable.add_listener(std::rc::Rc::new(move || {
-            if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
-                failed_callback.store(true, Ordering::SeqCst);
-                panic!("refresh phase subscriber failed");
-            }
-        }));
-        let activity_fail = Arc::new(AtomicBool::new(activity_fault));
-        let activity_failed = Arc::new(AtomicBool::new(false));
-        let activity_flag = activity_fail.clone();
-        let activity_observed = activity_failed.clone();
-        let phase = refresh.clone();
-        let position = scroll.position();
-        let watched_position = position.clone();
-        let activity_listener = position.add_activity_listener(std::rc::Rc::new(move || {
-            if phase.is_refreshing()
-                && !watched_position.is_scrolling()
-                && activity_flag.swap(false, Ordering::SeqCst)
-            {
-                activity_observed.store(true, Ordering::SeqCst);
-                panic!("refresh activity subscriber failed");
-            }
-        }));
-        let calls = Rc::new(Cell::new(0));
-        let calls_callback = calls.clone();
-        let content = refresh_content(&scroll, &refresh).on_refresh(move |_| {
-            calls_callback.set(calls_callback.get() + 1);
-        });
-        let vsync = Vsync::new();
-        let mut laid = crate::common::lay_out_animated(
-            VsyncScope::new(vsync.clone(), content),
-            tight(300.0, 300.0),
-            vsync,
-        );
-        let pull = |laid: &LaidOut| {
-            laid.dispatch_pointer_down(150.0, 100.0);
-            for y in [130.0, 160.0, 190.0, 220.0, 250.0] {
-                laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
-            }
-        };
-        pull(&laid);
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            laid.dispatch_pointer_up(150.0, 250.0);
-        }));
-        if let Err(payload) = failure {
-            assert_eq!(
-                flui_foundation::panic::payload_text(payload.as_ref()),
-                Some(if phase_fault {
-                    "refresh phase subscriber failed"
-                } else {
-                    "refresh activity subscriber failed"
-                })
-            );
-        }
-        assert_eq!(failed.load(Ordering::SeqCst), phase_fault);
-        let attempted_cleanup = activity_failed.load(Ordering::SeqCst);
-        activity_fail.store(false, Ordering::SeqCst);
-        assert!(
-            refresh.is_refreshing(),
-            "accepted refresh phase survives its observer"
-        );
-        assert_eq!(
-            calls.get(),
-            1,
-            "accepted refresh callback remains deliverable"
-        );
-        let stranded = scroll.position().is_scrolling();
-        let before_recovery = calls.get();
-        refresh.finish();
-        laid.pump_for(Duration::from_millis(16));
-        pull(&laid);
-        laid.dispatch_pointer_up(150.0, 250.0);
-        assert_eq!(
-            calls.get(),
-            before_recovery + 1,
-            "next healthy refresh callback remains deliverable"
-        );
-        refresh.finish();
-        assert!(!scroll.position().is_scrolling());
-        listenable.remove_listener(listener);
-        position.remove_activity_listener(activity_listener);
-        if attempted_cleanup != activity_fault {
-            failures.push(format!(
-                "phase={phase_fault}, activity={activity_fault}: mandatory cleanup not attempted"
-            ));
-        }
-        if stranded {
-            failures.push(format!(
-                "phase={phase_fault}, activity={activity_fault}: terminal activity stranded"
-            ));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("; "));
-}
-
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let position = controller.position();
 
     let vsync = Vsync::new();
@@ -1332,12 +1212,12 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
 
     scoped.dispatch_pointer_down(150.0, 250.0);
-    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: on_pan_start
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: drag on_start
     assert!(
         position.is_scrolling(),
         "the grab begins the scroll activity"
     );
-    scoped.dispatch_pointer_move(150.0, 150.0); // on_pan_update
+    scoped.dispatch_pointer_move(150.0, 150.0); // drag on_update
     assert_eq!(
         position.user_scroll_direction(),
         ScrollDirection::Reverse,
@@ -1369,197 +1249,6 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
 // Scrollable — arbitrated pointer-signal (wheel) routing
 // ============================================================================
 
-fn refresh_content(scroll: &ScrollController, refresh: &RefreshController) -> RefreshIndicator {
-    RefreshIndicator::new()
-        .controller(refresh.clone())
-        .scroll_controller(scroll.clone())
-        .child(SizedBox::new(300.0, 5000.0))
-}
-
-pub(crate) fn incremental_pulls_refresh_once_and_finish_allows_the_next_gesture() {
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
-    let refresh = RefreshController::new();
-    let calls = Rc::new(Cell::new(0));
-    let recorded = Rc::clone(&calls);
-    let mut laid = lay_out(
-        refresh_content(&scroll, &refresh).on_refresh(move |_| recorded.set(recorded.get() + 1)),
-        tight(300.0, 300.0),
-    );
-    for expected_calls in [1, 2] {
-        laid.dispatch_pointer_down(150.0, 40.0);
-        for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
-            laid.dispatch_pointer_move(150.0, y);
-            laid.pump();
-        }
-        assert_eq!(refresh.pull_distance_px(), 100.0);
-        assert_eq!(scroll.pixels(), 0.0);
-        laid.dispatch_pointer_up(150.0, 140.0);
-        assert_eq!(calls.get(), expected_calls);
-        assert!(refresh.is_refreshing());
-        assert_eq!(refresh.pull_distance_px(), 0.0);
-        laid.dispatch_pointer_down(150.0, 40.0);
-        laid.dispatch_pointer_move(150.0, 140.0);
-        laid.dispatch_pointer_up(150.0, 140.0);
-        assert_eq!(
-            calls.get(),
-            expected_calls,
-            "refreshing suppresses another operation"
-        );
-        assert_eq!(scroll.pixels(), 0.0);
-        refresh.finish();
-        laid.pump();
-        assert!(!refresh.is_refreshing());
-    }
-}
-
-pub(crate) fn reversing_a_pull_consumes_it_before_scrolling_content() {
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
-    let refresh = RefreshController::new();
-    let laid = lay_out(refresh_content(&scroll, &refresh), tight(300.0, 300.0));
-    laid.dispatch_pointer_down(150.0, 100.0);
-    laid.dispatch_pointer_move(150.0, 140.0);
-    laid.dispatch_pointer_move(150.0, 160.0);
-    assert_eq!(refresh.pull_distance_px(), 60.0);
-    laid.dispatch_pointer_move(150.0, 130.0);
-    assert_eq!(refresh.pull_distance_px(), 30.0);
-    assert_eq!(scroll.pixels(), 0.0);
-    laid.dispatch_pointer_move(150.0, 90.0);
-    assert_eq!(refresh.pull_distance_px(), 0.0);
-    assert_eq!(
-        scroll.pixels(),
-        10.0,
-        "movement crosses the remaining pull boundary"
-    );
-    laid.dispatch_pointer_up(150.0, 90.0);
-    assert!(!refresh.is_refreshing());
-}
-
-fn start_refresh_content_fling(laid: &LaidOut) {
-    laid.dispatch_pointer_down(150.0, 250.0);
-    laid.dispatch_pointer_move(150.0, 180.0);
-    laid.dispatch_pointer_move(150.0, 150.0);
-    laid.dispatch_pointer_up(150.0, 150.0);
-}
-
-pub(crate) fn a_fast_gesture_while_refreshing_does_not_start_a_fling() {
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
-    let refresh = RefreshController::new();
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(vsync.clone(), refresh_content(&scroll, &refresh)),
-        tight(300.0, 300.0),
-        vsync,
-    );
-    // One sufficient pull isolates this row from incremental accumulation.
-    laid.dispatch_pointer_down(150.0, 40.0);
-    laid.dispatch_pointer_move(150.0, 140.0);
-    laid.dispatch_pointer_up(150.0, 140.0);
-    laid.pump();
-    assert!(refresh.is_refreshing());
-
-    start_refresh_content_fling(&laid);
-    assert_eq!(
-        scroll.pixels(),
-        0.0,
-        "refreshing ignores direct drag updates"
-    );
-    // The first frame anchors a newly started simulation. Later frames would
-    // reveal the erroneous run even though its initial value was still zero.
-    for _ in 0..4 {
-        laid.pump_for(Duration::from_millis(16));
-        assert_eq!(
-            scroll.pixels(),
-            0.0,
-            "refreshing must not coast after release"
-        );
-    }
-    assert!(refresh.is_refreshing());
-    refresh.finish();
-    laid.pump();
-    start_refresh_content_fling(&laid);
-    let released = scroll.pixels();
-    assert!(released > 0.0, "the next gesture scrolls after finish");
-    laid.pump_for(Duration::from_millis(16));
-    laid.pump_for(Duration::from_millis(16));
-    assert!(
-        scroll.pixels() > released,
-        "post-finish fling makes progress"
-    );
-}
-
-pub(crate) fn a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
-    let a = ScrollController::new();
-    let b = ScrollController::new();
-    for scroll in [&a, &b] {
-        scroll.update_dimensions(300.0, 0.0, 4700.0);
-    }
-    let refresh = RefreshController::new();
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(vsync.clone(), refresh_content(&a, &refresh)),
-        tight(300.0, 300.0),
-        vsync.clone(),
-    );
-    start_refresh_content_fling(&laid);
-    laid.pump_for(Duration::from_millis(16));
-    laid.pump_for(Duration::from_millis(16));
-    assert!(
-        a.pixels() > 100.0,
-        "old controller has a live ballistic run"
-    );
-    let retired = a.pixels();
-    laid.pump_widget(VsyncScope::new(vsync, refresh_content(&b, &refresh)));
-    for _ in 0..3 {
-        laid.pump_for(Duration::from_millis(16));
-    }
-    assert_eq!(
-        a.pixels(),
-        retired,
-        "retired position receives no more ticks"
-    );
-    assert_eq!(
-        b.pixels(),
-        0.0,
-        "old run cannot jump the replacement position"
-    );
-    start_refresh_content_fling(&laid);
-    let released = b.pixels();
-    assert!(released > 0.0);
-    laid.pump_for(Duration::from_millis(16));
-    laid.pump_for(Duration::from_millis(16));
-    assert!(b.pixels() > released, "replacement receives its new fling");
-    assert_eq!(a.pixels(), retired);
-}
-
-pub(crate) fn rebuilding_refresh_content_with_the_same_position_preserves_its_fling() {
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
-    let refresh = RefreshController::new();
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(vsync.clone(), refresh_content(&scroll, &refresh)),
-        tight(300.0, 300.0),
-        vsync.clone(),
-    );
-    start_refresh_content_fling(&laid);
-    laid.pump_for(Duration::from_millis(16));
-    laid.pump_for(Duration::from_millis(16));
-    let before = scroll.pixels();
-    assert!(
-        before > 100.0,
-        "control fling advances before reconfiguration"
-    );
-    laid.pump_widget(VsyncScope::new(vsync, refresh_content(&scroll, &refresh)));
-    laid.pump_for(Duration::from_millis(16));
-    assert!(
-        scroll.pixels() > before,
-        "same-position configuration keeps the run"
-    );
-}
-
 /// Two vertically nested scrollables under one wheel tick: the outer's
 /// 300×300 viewport holds a 300×200 inner scrollable at the top of its
 /// content, and the tick lands over the inner.
@@ -1569,8 +1258,12 @@ pub(crate) fn rebuilding_refresh_content_with_the_same_position_preserves_its_fl
 /// filler], inner content = 300×1000, so the inner can travel 0..=800 and
 /// the outer 0..=4700.
 fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync: Vsync) -> LaidOut {
-    outer.update_dimensions(300.0, 0.0, 4700.0);
-    inner.update_dimensions(200.0, 0.0, 800.0);
+    outer
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
+    inner
+        .update_dimensions(200.0, 0.0, 800.0)
+        .expect("ordered extents");
 
     let inner_scrollable = Scrollable::new()
         .controller(inner.clone())
@@ -1694,26 +1387,38 @@ pub(crate) fn scroll_latch_survives_focal_motion_and_releases_on_cancel() {
     );
 }
 
+/// A wheel burst ends after the preset's contactless idle time on the owner
+/// clock; a phased source that began and never ended (Wayland) after the
+/// longer phased time (ADR-0209 §5).
 pub(crate) fn phase_less_scroll_latch_expires_on_owner_clock_inactivity() {
-    let outer = ScrollController::new();
-    let inner = ScrollController::new();
-    let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
-    scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, None, 1));
-    scoped.pump_for(Duration::from_millis(499));
-    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
-    assert_eq!(
-        inner.pixels(),
-        83.0,
-        "a wheel burst remains latched just before the inactivity boundary"
-    );
-    assert_eq!(outer.pixels(), 0.0);
-    scoped.pump_for(Duration::from_millis(500));
-    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
-    assert_eq!(
-        outer.pixels(),
-        30.0,
-        "500ms of owner-clock inactivity releases the burst without sleeping"
-    );
+    use flui_interaction::events::pointer::ScrollPhase;
+    let settings = flui_interaction::GestureSettings::default();
+    let millisecond = Duration::from_millis(1);
+    for (phase, idle) in [
+        (None, settings.contactless_latch_idle()),
+        (Some(ScrollPhase::Changed), settings.phased_latch_idle()),
+    ] {
+        let outer = ScrollController::new();
+        let inner = ScrollController::new();
+        let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
+        let first = phase.map(|_| ScrollPhase::Began);
+        scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, first, 1));
+        scoped.pump_for(idle.saturating_sub(millisecond));
+        scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, phase, 1));
+        assert_eq!(
+            inner.pixels(),
+            83.0,
+            "{phase:?}: a burst remains latched just before the inactivity boundary"
+        );
+        assert_eq!(outer.pixels(), 0.0);
+        scoped.pump_for(idle);
+        scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, phase, 1));
+        assert_eq!(
+            outer.pixels(),
+            30.0,
+            "{phase:?}: {idle:?} of owner-clock inactivity releases the burst without sleeping"
+        );
+    }
 }
 
 pub(crate) fn scroll_latches_are_source_local_and_device_removal_releases() {
@@ -1752,7 +1457,9 @@ pub(crate) fn shift_wheel_scrolls_the_horizontal_axis() {
     use flui_interaction::events::Modifiers;
 
     let laid_out = |axis: Axis, scroll: &ScrollController| {
-        scroll.update_dimensions(300.0, 0.0, 700.0);
+        scroll
+            .update_dimensions(300.0, 0.0, 700.0)
+            .expect("ordered extents");
         lay_out(
             Scrollable::new()
                 .scroll_direction(axis)
@@ -1799,14 +1506,50 @@ fn assert_bounce(current: f64, proposed: f64, expected: f64) {
     );
 }
 
+// Expected values integrate the resistance `0.52 · (1 − overscroll / 300)²`
+// over the pull: `0.52·p·s² / (1 + 0.52·p·s / 300)`, `s = 1 − overscroll / 300`.
+
 pub(crate) fn bouncing_lower_edge_preserves_outward_direction() {
-    assert_bounce(0.0, -100.0, -52.0);
-    assert_bounce(-52.0, -62.0, -57.2);
+    assert_bounce(0.0, -100.0, -44.318_181_818_181_82);
+    assert_bounce(-52.0, -62.0, -55.503_365_114_974_76);
 }
 
 pub(crate) fn bouncing_upper_edge_preserves_outward_direction() {
-    assert_bounce(100.0, 200.0, 152.0);
-    assert_bounce(152.0, 162.0, 157.2);
+    assert_bounce(100.0, 200.0, 144.318_181_818_181_8);
+    assert_bounce(152.0, 162.0, 155.503_365_114_974_8);
+}
+
+/// The rubber band stiffens as the overscroll grows: a 1200 px pull from
+/// the edge of a 600 px viewport moves the content about 306 px out, not
+/// 624, no pull however long carries it a viewport's length out, and a pull
+/// split over many events lands where one event carrying it all does.
+pub(crate) fn bouncing_resistance_stiffens_toward_the_viewport_length() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    let physics = BouncingScrollPhysics::new();
+    let pull = |from: f64, by: f64| {
+        physics.apply_boundary_conditions(&ScrollMetrics::new(from, 0.0, 1000.0, 600.0), from - by)
+    };
+    let whole = pull(0.0, 1200.0);
+    assert!(
+        (whole + 305.882_352_941_176_5).abs() < 1e-9,
+        "one 1200 px pull: {whole}"
+    );
+    let split = (0..12).fold(0.0, |at, _| pull(at, 100.0));
+    assert!(
+        (split - whole).abs() < 1e-9,
+        "twelve 100 px pulls {split} land where one 1200 px pull {whole} does"
+    );
+    let far = pull(0.0, 1e12);
+    assert!(
+        far > -600.0 && far < -599.0,
+        "an endless pull nears the viewport's length: {far}"
+    );
+    let past =
+        physics.apply_boundary_conditions(&ScrollMetrics::new(1000.0, 0.0, 1000.0, 600.0), 2200.0);
+    assert!(
+        (past - 1_305.882_352_941_177).abs() < 1e-9,
+        "the upper edge resists alike: {past}"
+    );
 }
 
 pub(crate) fn bouncing_stationary_input_preserves_overscroll() {
@@ -1817,8 +1560,8 @@ pub(crate) fn bouncing_stationary_input_preserves_overscroll() {
 pub(crate) fn bouncing_inward_motion_and_crossing_respect_the_new_edge() {
     assert_bounce(-52.0, -42.0, -42.0);
     assert_bounce(152.0, 142.0, 142.0);
-    assert_bounce(-52.0, 120.0, 110.4);
-    assert_bounce(152.0, -20.0, -10.4);
+    assert_bounce(-52.0, 120.0, 110.051_546_391_752_6);
+    assert_bounce(152.0, -20.0, -10.051_546_391_752_58);
 }
 
 fn animated_scroll_content(scroll: &ScrollController, vsync: &Vsync) -> impl flui_view::View {
@@ -1844,8 +1587,6 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
     for (family, fail_stop) in [
         ("scrollable", false),
         ("scrollable", true),
-        ("refresh", false),
-        ("refresh", true),
         ("viewer", false),
     ] {
         let scroll = ScrollController::new();
@@ -1855,8 +1596,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
                 .controller(scroll.clone())
                 .child(SizedBox::new(300.0, 5000.0))
                 .boxed(),
-            "refresh" => refresh_content(&scroll, &RefreshController::new()).boxed(),
-            _ => InteractiveViewer::new()
+            _ => InteractiveViewer::new(crate::common::viewer_alternatives())
                 .controller(transform.clone())
                 .boundary_margin(EdgeInsets::all(1000.0))
                 .scale_enabled(false)
@@ -1968,7 +1708,7 @@ pub(crate) fn a_repeated_frame_does_not_cancel_viewer_inertia() {
     let vsync = Vsync::new();
     let content = VsyncScope::new(
         vsync.clone(),
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
             .scale_enabled(false)
@@ -2013,14 +1753,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
     use std::sync::Mutex;
 
     let mut failures = Vec::new();
-    for (family, cancelled, bouncing) in [
-        ("scrollable", false, false),
-        ("scrollable", true, false),
-        ("refresh", false, false),
-        ("refresh", true, false),
-        ("refresh", false, true),
-        ("refresh", true, true),
-    ] {
+    for (family, cancelled) in [("scrollable", false), ("scrollable", true)] {
         let old = ScrollController::new();
         let new = ScrollController::new();
         let vsync = Vsync::new();
@@ -2033,24 +1766,13 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
                 .expect("activity observer lock")
                 .push((watched.is_scrolling(), watched.user_scroll_direction()));
         }));
-        let refresh = RefreshController::new();
         let content = |controller: &ScrollController| {
-            let child = if family == "refresh" {
-                let content = refresh_content(controller, &refresh);
-                if bouncing {
-                    content
-                        .physics(Arc::new(BouncingScrollPhysics::new()))
-                        .boxed()
-                } else {
-                    content.boxed()
-                }
-            } else {
+            VsyncScope::new(
+                vsync.clone(),
                 Scrollable::new()
                     .controller(controller.clone())
-                    .child(SizedBox::new(300.0, 5000.0))
-                    .boxed()
-            };
-            VsyncScope::new(vsync.clone(), child)
+                    .child(SizedBox::new(300.0, 5000.0)),
+            )
         };
         let mut laid =
             crate::common::lay_out_animated(content(&old), tight(300.0, 300.0), vsync.clone());
@@ -2058,9 +1780,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
         laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
         assert!(old.pixels() > 0.0);
-        if family == "scrollable" {
-            assert!(old.position().is_scrolling());
-        }
+        assert!(old.position().is_scrolling());
         let same = old.pixels();
         laid.pump_widget(content(&old));
         laid.dispatch_pointer_move_after(150.0, 160.0, Duration::from_millis(10));
@@ -2068,11 +1788,6 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
             old.pixels() > same,
             "same position preserves the admitted contact"
         );
-
-        if bouncing {
-            old.set_pixels(old.max_scroll_extent() + 40.0);
-            assert!(old.position().is_scrolling());
-        }
 
         laid.pump_widget(content(&new));
         let retired = old.pixels();
@@ -2106,18 +1821,13 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
             "fresh contact drives replacement content"
         );
         assert!(
-            family == "refresh"
-                || observed
-                    .lock()
-                    .expect("activity observer lock")
-                    .contains(&(true, ScrollDirection::Reverse)),
+            observed
+                .lock()
+                .expect("activity observer lock")
+                .contains(&(true, ScrollDirection::Reverse)),
             "fresh movement reaches the real activity consumer"
         );
         laid.dispatch_pointer_cancel();
-        if bouncing {
-            advance_scroll_run(&mut laid);
-            laid.pump_for(Duration::from_secs(10));
-        }
         assert!(!incoming.is_scrolling());
         incoming.remove_activity_listener(subscription);
     }
@@ -2499,6 +2209,65 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
     );
 }
 
+/// A click while a notched wheel's easing runs reaches the content as a tap
+/// and the easing goes on to its destination; a press while a released
+/// fling coasts catches it instead: the fling stops and the content sees no
+/// tap (ADR-0208 rule 4).
+pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_widgets::GestureDetector;
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let taps = Rc::new(Cell::new(0_u32));
+    let tapped = Rc::clone(&taps);
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new().controller(scroll.clone()).child(
+                GestureDetector::new()
+                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .on_tap(move |_| tapped.set(tapped.get() + 1))
+                    .child(SizedBox::new(300.0, 5000.0)),
+            ),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(50));
+    let easing = scroll.pixels();
+    assert!(easing > 0.0 && easing < 100.0, "the easing runs: {easing}");
+    laid.dispatch_pointer_down(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(taps.get(), 1, "the click reaches the content");
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        scroll.pixels(),
+        100.0,
+        "the easing goes on to its destination"
+    );
+
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    let coasting = scroll.pixels();
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > coasting, "the fling coasts");
+    laid.dispatch_pointer_down(150.0, 150.0);
+    let caught = scroll.pixels();
+    laid.dispatch_pointer_up(150.0, 150.0);
+    for _ in 0..10 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(taps.get(), 1, "the press that catches the fling is no tap");
+    assert_eq!(scroll.pixels(), caught, "the press stops the fling");
+}
+
 pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
     use flui_platform_api::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
@@ -2655,10 +2424,19 @@ pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independen
         grabbed > 0.0 && grabbed < 100.0,
         "the grabbed motion is live"
     );
+    // A wheel's easing is no motion a press catches: the press does not
+    // hold it, and the drag that takes the contact past its slop stops the
+    // easing where it shows and moves the content from there.
     laid.dispatch_pointer_down(150.0, 200.0);
     laid.dispatch_pointer_move(150.0, 180.0);
+    let started = scroll.pixels();
+    assert!(
+        started >= grabbed,
+        "the drag starts from the displayed position: {started} from {grabbed}"
+    );
+    laid.dispatch_pointer_move(150.0, 170.0);
     let dragged = scroll.pixels();
-    assert!(dragged > grabbed, "drag starts from the displayed position");
+    assert!(dragged > started, "and moves the content");
     laid.dispatch_pointer_cancel();
     laid.pump_for(Duration::from_millis(200));
     assert_eq!(
@@ -2746,6 +2524,45 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
         scroll.pixels() > before,
         "same position keeps its active trajectory"
     );
+
+    // Without a controller of its own the position is the state's: a parent
+    // rebuilt mid-drag (a layout builder, a focus change above it) keeps the
+    // offset and the drag.
+    let top = flui_interaction::focus::FocusNode::with_debug_label("content top");
+    let own_position = |vsync: &Vsync| {
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new().child(flui_widgets::Column::new(vec![
+                flui_widgets::Focus::new(SizedBox::new(300.0, 10.0))
+                    .focus_node(Rc::clone(&top))
+                    .boxed(),
+                SizedBox::new(300.0, 5000.0).boxed(),
+            ])),
+        )
+    };
+    let vsync = Vsync::new();
+    let mut laid =
+        crate::common::lay_out_animated(own_position(&vsync), tight(300.0, 300.0), vsync.clone());
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 200.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    let dragged = -top.rect().top();
+    assert!(dragged > 0.0, "the drag scrolled the content, by {dragged}");
+    laid.pump_widget(own_position(&vsync));
+    assert_eq!(
+        -top.rect().top(),
+        dragged,
+        "a rebuild above it keeps the scrollable's own position"
+    );
+    laid.dispatch_pointer_move(150.0, 100.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        -top.rect().top() >= dragged + 49.0,
+        "and the drag goes on, at {}",
+        -top.rect().top()
+    );
+    laid.dispatch_pointer_up(150.0, 100.0);
 }
 
 pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
@@ -2870,38 +2687,6 @@ pub(crate) fn cancelling_bouncing_overscroll_settles_without_release_velocity() 
     assert!(scroll.pixels() > 0.0, "next gesture advances content");
 }
 
-pub(crate) fn cancelling_a_threshold_refresh_pull_does_not_refresh() {
-    let scroll = ScrollController::new();
-    let refresh = RefreshController::new();
-    let calls = Rc::new(Cell::new(0));
-    let recorded = Rc::clone(&calls);
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(
-            vsync.clone(),
-            refresh_content(&scroll, &refresh)
-                .on_refresh(move |_| recorded.set(recorded.get() + 1)),
-        ),
-        tight(300.0, 300.0),
-        vsync,
-    );
-    laid.dispatch_pointer_down(150.0, 40.0);
-    laid.dispatch_pointer_move(150.0, 140.0);
-    assert!(refresh.pull_distance_px() >= 100.0);
-    laid.dispatch_pointer_cancel();
-    for _ in 0..8 {
-        laid.pump_for(Duration::from_millis(16));
-    }
-    assert_eq!(calls.get(), 0);
-    assert!(!refresh.is_refreshing());
-    assert_eq!(refresh.pull_distance_px(), 0.0);
-    assert_eq!(scroll.pixels(), 0.0);
-    laid.dispatch_pointer_down(150.0, 40.0);
-    laid.dispatch_pointer_move(150.0, 140.0);
-    laid.dispatch_pointer_up(150.0, 140.0);
-    assert_eq!(calls.get(), 1, "normal release still starts refresh");
-}
-
 // ============================================================================
 // Ballistic rest — device pixel ratio, extents, overscroll
 // ============================================================================
@@ -2942,7 +2727,9 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let recording = Arc::new(RecordingPhysics::default());
     let physics: SharedScrollPhysics = recording.clone();
     let widget = Scrollable::new()
@@ -2985,13 +2772,10 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
 /// Unordered or non-finite extents start no ballistic run, under every
 /// physics, instead of panicking.
 pub(crate) fn inverted_extents_do_not_fling() {
-    use flui_widgets::{PageScrollPhysics, ScrollMetrics, ScrollPhysics};
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
-    let physics: [&dyn ScrollPhysics; 3] = [
-        &ClampingScrollPhysics::new(),
-        &BouncingScrollPhysics::new(),
-        &PageScrollPhysics::new(1.0),
-    ];
+    let physics: [&dyn ScrollPhysics; 2] =
+        [&ClampingScrollPhysics::new(), &BouncingScrollPhysics::new()];
     for metrics in [
         ScrollMetrics::new(50.0, 100.0, 0.0, 300.0),
         ScrollMetrics::new(f64::NAN, 0.0, 100.0, 300.0),
@@ -3008,12 +2792,97 @@ pub(crate) fn inverted_extents_do_not_fling() {
     }
 }
 
+/// Extents that are unordered, NaN, infinite or over a negative viewport are
+/// refused at the controller and leave the position as it was; physics handed
+/// such metrics bound nothing instead of panicking.
+pub(crate) fn unordered_extents_are_refused_and_bound_nothing() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+
+    let controller = ScrollController::new();
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
+    for (viewport, min, max) in [
+        (300.0, 300.0, 100.0),
+        (300.0, f64::NAN, 100.0),
+        (300.0, 0.0, f64::INFINITY),
+        (f64::NAN, 0.0, 100.0),
+        (-1.0, 0.0, 100.0),
+    ] {
+        let refused = controller.update_dimensions(viewport, min, max);
+        assert!(refused.is_err(), "({viewport}, {min}, {max}) is refused");
+        assert_eq!(
+            (
+                controller.viewport_dimension_pixels(),
+                controller.min_scroll_extent(),
+                controller.max_scroll_extent()
+            ),
+            (300.0, 0.0, 500.0),
+            "a refusal keeps the extents"
+        );
+    }
+    controller.jump_to(700.0);
+    assert_eq!(
+        controller.pixels(),
+        500.0,
+        "a jump still clamps to the kept range"
+    );
+
+    let physics: [&dyn ScrollPhysics; 2] =
+        [&ClampingScrollPhysics::new(), &BouncingScrollPhysics::new()];
+    for metrics in [
+        ScrollMetrics::new(50.0, 100.0, 0.0, 300.0),
+        ScrollMetrics::new(50.0, f64::NAN, 100.0, 300.0),
+    ] {
+        for physics in physics {
+            assert_eq!(
+                physics.apply_boundary_conditions(&metrics, 70.0),
+                70.0,
+                "{physics:?} under {metrics:?} bounds nothing"
+            );
+        }
+        assert_eq!(
+            metrics.page(1.0),
+            50.0 / 300.0,
+            "{metrics:?}: the page of the pixels"
+        );
+    }
+}
+
+/// A clamping release from past an edge, where content that shrank under
+/// the offset leaves it, returns to the edge at any velocity, below the
+/// fling threshold and moving outward alike, without passing it.
+pub(crate) fn clamping_release_past_an_edge_returns_to_it() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    for velocity in [0.0, 30.0, 3000.0] {
+        let simulation = ClampingScrollPhysics::new()
+            .create_ballistic_simulation(&ScrollMetrics::new(600.0, 0.0, 500.0, 300.0), velocity)
+            .expect("a return to the edge");
+        let mut time = 0.0;
+        while !simulation.is_done(time) {
+            assert!(
+                simulation.x(time) >= 500.0 - 0.5,
+                "at {velocity} px/s the return stays out of the range: {} at {time}",
+                simulation.x(time)
+            );
+            time += 1.0 / 60.0;
+            assert!(time < 10.0, "at {velocity} px/s the return comes to rest");
+        }
+        assert!(
+            (simulation.x(time) - 500.0).abs() <= 0.5,
+            "rests on the edge"
+        );
+    }
+}
+
 /// A fling inside the range that friction carries past the edge overscrolls,
 /// then springs back and rests exactly on the edge.
 pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
-    controller.update_dimensions(300.0, 0.0, max_extent);
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
     let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
     let widget = Scrollable::new()
         .controller(controller.clone())
@@ -3043,374 +2912,464 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
 }
 
-// ============================================================================
-// RefreshIndicator — scrolling and pulling without rebuilding
-// ============================================================================
-
-/// A `RefreshIndicator` on the headless binding, whose per-frame report runs
-/// the build phase every frame, driven by pointer events between frames.
-struct RefreshHarness {
-    binding: flui_testing::HeadlessBinding,
-    mounted: flui_testing::Mounted,
-    scroll: ScrollController,
-    refresh: RefreshController,
-    content_builds: Rc<Cell<usize>>,
+/// A clamping fling that friction would carry past the edge stops on it.
+pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
+    let max_extent = 500.0_f64;
+    let controller = ScrollController::new();
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
+    let mut laid = fling_scoped(
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0)),
+        Vsync::new(),
+        tight(300.0, 300.0),
+    );
+    controller.set_pixels(300.0);
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    assert!(controller.pixels() < max_extent, "released inside");
+    let mut furthest = controller.pixels();
+    for _ in 0..240 {
+        laid.pump_for(Duration::from_millis(16));
+        furthest = furthest.max(controller.pixels());
+    }
+    assert_eq!(furthest, max_extent, "never passes the edge");
+    assert_eq!(controller.pixels(), max_extent, "rests on the edge");
 }
 
-#[derive(Clone, flui_view::prelude::StatelessView)]
-struct RefreshContent {
-    builds: Rc<Cell<usize>>,
-}
-
-impl flui_view::StatelessView for RefreshContent {
-    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
-        self.builds.set(self.builds.get() + 1);
-        SizedBox::new(300.0, 5000.0)
-    }
-}
-
-const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
-
-impl RefreshHarness {
-    fn mount() -> Self {
-        let scroll = ScrollController::new();
-        scroll.update_dimensions(300.0, 0.0, 4700.0);
-        let refresh = RefreshController::new();
-        let content_builds = Rc::new(Cell::new(0));
-        let mut binding = flui_testing::HeadlessBinding::new();
-        let root = flui_widgets::GestureArenaScope::new(
-            binding.arena().clone(),
-            flui_widgets::FocusRoot::new(VsyncScope::new(
-                binding.vsync().clone(),
-                refresh_content(&scroll, &refresh).child(RefreshContent {
-                    builds: Rc::clone(&content_builds),
-                }),
-            )),
-        );
-        let mounted = binding.mount_root(
-            &root,
-            flui_testing::MountOwners::fresh(),
-            flui_testing::MountOptions::tight(300.0, 300.0),
-        );
-        binding.pump_frame(REFRESH_FRAME);
-        Self {
-            binding,
-            mounted,
-            scroll,
-            refresh,
-            content_builds,
-        }
-    }
-
-    fn pointer(&self, phase: flui_testing::PointerPhase, y: f64) {
-        let event = flui_testing::ScriptedPointer::new(
-            Duration::ZERO,
-            flui_interaction::PointerId::try_from(1).expect("nonzero fixture contact"),
-            phase,
-            flui_foundation::geometry::Offset::new(150.0, y),
-        )
-        .to_event();
-        let binding = &self.binding;
-        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
-    }
-
-    fn replace_refresh(&mut self, refresh: RefreshController) {
-        let root = flui_widgets::GestureArenaScope::new(
-            self.binding.arena().clone(),
-            flui_widgets::FocusRoot::new(VsyncScope::new(
-                self.binding.vsync().clone(),
-                refresh_content(&self.scroll, &refresh).child(RefreshContent {
-                    builds: Rc::clone(&self.content_builds),
-                }),
-            )),
-        );
-        self.binding.swap_root_view(
-            self.mounted.root_element,
-            &flui_view::RootRenderView::new(root, 300.0, 300.0),
-        );
-        self.refresh = refresh;
-        self.frame();
-    }
-
-    /// Pumps one frame and returns how many elements it rebuilt.
-    fn frame(&mut self) -> usize {
-        self.binding.pump_frame(REFRESH_FRAME);
-        self.binding.last_frame_report().build.elements_built
-    }
-
-    fn paints_indicator(&self) -> bool {
-        self.binding
-            .layer_tree()
-            .expect("committed refresh scene")
-            .iter()
-            .any(|(_, node)| {
-                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                    picture.picture().iter().any(|command| {
-                        matches!(&command.op,
-                    flui_painting::display_list::DrawOp::Arc { paint, .. }
-                    if paint.color == flui_painting::styling::Color::rgba(33, 150, 243, 204))
+/// A fling down a lazy list whose first rows are taller than the rest: the
+/// list estimates its end from the tall rows, the end moves in as the short
+/// ones are measured while the list coasts, and the fling, under either
+/// physics, rests on the end the measured rows give, never in the blank
+/// space past it. Clamping never passes the end; bouncing may overscroll it
+/// and comes back.
+pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
+    let physics: [(SharedScrollPhysics, bool); 2] = [
+        (Arc::new(ClampingScrollPhysics::new()), false),
+        (Arc::new(BouncingScrollPhysics::new()), true),
+    ];
+    for (physics, bounces) in physics {
+        let controller = ScrollController::new();
+        let list = Scrollable::new()
+            .controller(controller.clone())
+            .physics(physics.clone())
+            .viewport_builder(Rc::new(|position| {
+                // 20 rows of 120 and 40 of 40: 4000 px over a 300 px viewport.
+                flui_widgets::ListView::builder(60, 50.0, |index| {
+                    (index < 60).then(|| {
+                        SizedBox::new(300.0, if index < 20 { 120.0 } else { 40.0 }).boxed()
                     })
-                } else {
-                    false
-                }
-            })
-    }
-
-    /// Where the content's top edge is painted, in root coordinates.
-    fn content_top(&self) -> f64 {
-        self.binding
-            .pipeline_owner()
-            .expect("tree-bound")
-            .with(|owner| {
-                let root = owner.root_id().expect("rooted");
-                let content = owner
-                    .render_tree()
-                    .iter()
-                    .map(|(id, _)| id)
-                    .find(|&id| {
-                        owner.box_size(id)
-                            == Some(flui_foundation::geometry::Size::new(300.0, 5000.0))
-                    })
-                    .expect("the 300x5000 content is mounted");
-                owner
-                    .transform_to(content, root)
-                    .expect("content laid out")
-                    .transform_point(0.0, 0.0)
-                    .1
-            })
-    }
-}
-
-/// Dragging the content scrolls the viewport on every frame without
-/// rebuilding any element.
-pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
-    use flui_testing::PointerPhase::{Down, Move, Up};
-    let mut harness = RefreshHarness::mount();
-    harness.pointer(Down, 250.0);
-    assert_eq!(harness.frame(), 0, "touch down rebuilds nothing");
-    for y in [230.0, 200.0, 170.0, 140.0] {
-        harness.pointer(Move, y);
-        assert_eq!(harness.frame(), 0, "a drag frame to y={y} must not rebuild");
+                })
+                .position(position)
+                .boxed()
+            }));
+        let mut laid = fling_scoped(list, Vsync::new(), tight(300.0, 300.0));
+        laid.pump_for(Duration::from_millis(16));
+        let estimated = controller.max_scroll_extent();
         assert!(
-            (harness.content_top() + harness.scroll.pixels()).abs() < 1e-9,
-            "the viewport follows the position on the same frame: top {} at pixels {}",
-            harness.content_top(),
-            harness.scroll.pixels()
+            estimated > 3700.0,
+            "{physics:?}: the tall rows overestimate the end: {estimated}"
+        );
+        laid.dispatch_pointer_down(150.0, 290.0);
+        laid.dispatch_pointer_move(150.0, 200.0);
+        laid.dispatch_pointer_move(150.0, 100.0);
+        laid.dispatch_pointer_move(150.0, 10.0);
+        laid.dispatch_pointer_up(150.0, 10.0);
+        for frame in 0..300 {
+            laid.pump_for(Duration::from_millis(16));
+            if !bounces {
+                assert!(
+                    controller.pixels() <= controller.max_scroll_extent(),
+                    "{physics:?}: frame {frame} at {} is past the end {}",
+                    controller.pixels(),
+                    controller.max_scroll_extent()
+                );
+            }
+        }
+        assert_eq!(
+            controller.max_scroll_extent(),
+            3700.0,
+            "{physics:?}: the measured end"
+        );
+        assert_eq!(
+            controller.pixels(),
+            3700.0,
+            "{physics:?}: the fling rests on it"
+        );
+        assert!(
+            !controller.position().is_scrolling(),
+            "{physics:?}: and ends"
         );
     }
-    assert!(harness.scroll.pixels() > 0.0, "the drag scrolled");
-    harness.pointer(Up, 140.0);
+}
+
+/// A list of `height` (a viewport of 300) under `snap`, its height read
+/// again whenever `resized` notifies.
+fn resizable_snapping_list(
+    controller: &ScrollController,
+    snap: Option<flui_widgets::SharedSnapPolicy>,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+) -> impl flui_view::View {
+    resizable_list(controller, height, resized, vsync, |list| match snap {
+        Some(snap) => list.snap_policy(snap),
+        None => list,
+    })
+}
+
+/// A list of `height` (a viewport of 300) configured by `configure`, its
+/// height read again whenever `resized` notifies.
+fn resizable_list(
+    controller: &ScrollController,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+    configure: impl FnOnce(Scrollable) -> Scrollable,
+) -> impl flui_view::View {
+    let height = Rc::clone(height);
+    let listenable = Rc::clone(resized) as Rc<dyn flui_foundation::Listenable>;
+    let content =
+        flui_widgets::AnimatedBuilder::new(listenable, move || SizedBox::new(300.0, height.get()));
+    let list = Scrollable::new()
+        .controller(controller.clone())
+        .child(content);
+    VsyncScope::new(vsync.clone(), configure(list))
+}
+
+/// A fling under `physics` down a 5000 px range that a rebuild switches to
+/// `rebuilt` physics three frames in, as the end moves in to 1000: each
+/// frame's offset and range.
+fn fling_rebuilt_as_the_end_moves_in(
+    physics: SharedScrollPhysics,
+    rebuilt: SharedScrollPhysics,
+) -> Vec<(f64, f64)> {
+    use crate::nested_scroll::{Device, at, fling};
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(5300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let first = Arc::clone(&physics);
+    let mut laid = crate::common::lay_out_animated(
+        resizable_list(&controller, &height, &resized, &vsync, |list| {
+            list.physics(first)
+        }),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+    let mut frames = Vec::new();
+    for _ in 0..3 {
+        laid.pump_for(Duration::from_millis(16));
+        frames.push((controller.pixels(), controller.max_scroll_extent()));
+    }
+    laid.pump_widget(resizable_list(
+        &controller,
+        &height,
+        &resized,
+        &vsync,
+        |list| list.physics(rebuilt),
+    ));
+    height.set(1300.0);
+    resized.notify_listeners();
+    for _ in 0..240 {
+        laid.pump_for(Duration::from_millis(16));
+        frames.push((controller.pixels(), controller.max_scroll_extent()));
+    }
+    frames
+}
+
+/// A fling a rebuild gave other physics keeps its own when the end moves in
+/// under it: a bouncing fling rebuilt with clamping physics still
+/// overscrolls the new end and comes back, as a set physics leaves a run in
+/// progress its simulation.
+pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
+    let frames = fling_rebuilt_as_the_end_moves_in(
+        Arc::new(BouncingScrollPhysics::new()),
+        Arc::new(ClampingScrollPhysics::new()),
+    );
+    let past = frames
+        .iter()
+        .map(|(pixels, max)| pixels - max)
+        .fold(f64::MIN, f64::max);
+    assert!(
+        past > 1.0,
+        "the bouncing fling overscrolls the new end by {past}"
+    );
+    assert_eq!(frames.last(), Some(&(1000.0, 1000.0)), "and rests on it");
+}
+
+/// Clamping physics that writes the offset to `JUMP_TO` once, from its
+/// `boundary_velocity`, after it is armed: user code taking over the start
+/// of a run.
+#[derive(Debug, Default)]
+struct JumpingPhysics;
+
+thread_local! {
+    static JUMP: std::cell::RefCell<Option<(ScrollController, f64)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl flui_widgets::ScrollPhysics for JumpingPhysics {
+    fn apply_boundary_conditions(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        proposed: f64,
+    ) -> f64 {
+        ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        velocity: f64,
+    ) -> Option<Box<dyn flui_animation::Simulation>> {
+        ClampingScrollPhysics::new().create_ballistic_simulation(metrics, velocity)
+    }
+
+    fn boundary_velocity(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        velocity: f64,
+    ) -> Option<f64> {
+        if let Some((controller, to)) = JUMP.with_borrow_mut(Option::take) {
+            controller.set_pixels(to);
+        }
+        ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+    }
+}
+
+/// A physics that moves the offset while a run is rebuilt for new extents
+/// takes the run over: the obsolete run stops where the physics put the
+/// offset instead of applying its stale motion from there.
+pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
+    use crate::nested_scroll::{Device, at, fling};
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(5300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let mut laid = crate::common::lay_out_animated(
+        resizable_list(&controller, &height, &resized, &vsync, |list| {
+            list.physics(Arc::new(JumpingPhysics))
+        }),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+    for _ in 0..3 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let coasting = controller.pixels();
+    laid.pump_for(Duration::from_millis(16));
+    assert!(controller.pixels() > coasting, "the fling coasts");
+    JUMP.with_borrow_mut(|jump| *jump = Some((controller.clone(), 300.0)));
+    height.set(4300.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        JUMP.with_borrow(Option::is_none),
+        "the rebuild asked the physics"
+    );
+    assert_eq!(
+        controller.pixels(),
+        300.0,
+        "the run stopped where the physics put it"
+    );
+    assert!(
+        !controller.position().is_scrolling(),
+        "and its activity ended"
+    );
+}
+
+/// Anchors at 0, 500 and 1000 px.
+fn three_anchors() -> flui_widgets::SharedSnapPolicy {
+    Arc::new(flui_widgets::AnchorSnap::new([0.0, 500.0, 1000.0]).expect("three anchors"))
+}
+
+/// A drag from 800 that comes to rest at 740 and lifts: the snap settles
+/// toward the anchor at 500. Returns the laid-out list one frame into it.
+fn settling_toward_500(
+    controller: &ScrollController,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+) -> LaidOut {
+    use crate::nested_scroll::{Device, at, slow};
+    let mut laid = crate::common::lay_out_animated(
+        resizable_snapping_list(controller, Some(three_anchors()), height, resized, vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    controller.jump_to(800.0);
+    laid.pump_for(Duration::from_millis(16));
+    laid.replay(&slow(Device::Touch, at(150.0, 100.0), at(150.0, 160.0)));
     for _ in 0..4 {
-        let before = harness.scroll.pixels();
-        assert_eq!(harness.frame(), 0, "a fling frame must not rebuild");
-        assert!(
-            harness.scroll.pixels() >= before,
-            "the fling coasts forward"
-        );
-        assert!((harness.content_top() + harness.scroll.pixels()).abs() < 1e-9);
+        laid.pump_for(Duration::from_millis(16));
     }
+    let settling = controller.pixels();
+    assert!(
+        settling > 600.0 && settling < 740.0,
+        "the snap settles toward 500, at {settling}"
+    );
+    laid
 }
 
-/// A retained overlay follows its replacement refresh source and withdraws
-/// delivery from the previous source, without rebuilding scroll content.
-pub(crate) fn refresh_controller_replacement_rebinds_the_retained_indicator() {
-    use flui_testing::PointerPhase::{Down, Move, Up};
+/// A snap whose target the new extents still hold, while layout clamps the
+/// offset under it: the end moves in from 1000 to 600 while the settle is
+/// above 600, and the settle still rests on its anchor at 500.
+pub(crate) fn a_snap_rests_on_its_target_when_the_end_clamps_the_offset() {
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(1300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let mut laid = settling_toward_500(&controller, &height, &resized, &vsync);
+    height.set(900.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(controller.max_scroll_extent(), 600.0, "the end moved in");
+    assert!(
+        (controller.pixels() - 500.0).abs() <= 0.5,
+        "the settle rests on its anchor, at {}",
+        controller.pixels()
+    );
+}
 
-    for initially_refreshing in [false, true] {
-        let mut harness = RefreshHarness::mount();
-        if initially_refreshing {
-            harness.pointer(Down, 40.0);
-            harness.pointer(Move, 140.0);
-            harness.pointer(Up, 140.0);
-            harness.frame();
-            assert!(harness.paints_indicator());
+/// A run rebuilt for new extents keeps the mode its release started in: a
+/// snap whose policy a rebuild removed still settles on its anchor, and a
+/// fling under a policy a rebuild installed still coasts where the physics
+/// takes it.
+pub(crate) fn a_rebuilt_run_keeps_the_mode_its_release_started_in() {
+    use crate::nested_scroll::{Device, at, fling};
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(1300.0));
+    let mut laid = settling_toward_500(&controller, &height, &resized, &vsync);
+    laid.pump_widget(resizable_snapping_list(
+        &controller,
+        None,
+        &height,
+        &resized,
+        &vsync,
+    ));
+    height.set(1200.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        (controller.pixels() - 500.0).abs() <= 0.5,
+        "a snap whose policy was removed still rests on its anchor, at {}",
+        controller.pixels()
+    );
+
+    let coast = |install: bool| {
+        let (controller, vsync) = (ScrollController::new(), Vsync::new());
+        let height = Rc::new(Cell::new(5300.0));
+        let mut laid = crate::common::lay_out_animated(
+            resizable_snapping_list(&controller, None, &height, &resized, &vsync),
+            tight(300.0, 300.0),
+            vsync.clone(),
+        );
+        laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+        for _ in 0..3 {
+            laid.pump_for(Duration::from_millis(16));
         }
-        let retired = harness.refresh.clone();
-        harness.replace_refresh(RefreshController::new());
-        assert!(!harness.paints_indicator(), "the replacement starts idle");
-        assert_eq!(harness.frame(), 0, "configuration replacement settles");
-        let content_builds = harness.content_builds.get();
-
-        retired.finish();
-        assert_eq!(
-            harness.frame(),
-            0,
-            "the old source cannot rebuild the overlay"
-        );
-        assert!(!harness.paints_indicator());
-
-        harness.pointer(Down, 40.0);
-        harness.pointer(Move, 140.0);
-        assert_eq!(harness.frame(), 0, "new pull distance does not rebuild");
-        harness.pointer(Up, 140.0);
-        assert!(
-            harness.refresh.is_refreshing(),
-            "the gesture uses the new source"
-        );
-        harness.frame();
-        assert!(
-            harness.paints_indicator(),
-            "new phase delivery paints its arc"
-        );
-        assert_eq!(harness.frame(), 0);
-        assert_eq!(harness.content_builds.get(), content_builds);
-
-        retired.finish();
-        assert_eq!(
-            harness.frame(),
-            0,
-            "old completion cannot hide the new indicator"
-        );
-        assert!(harness.paints_indicator());
-        harness.refresh.finish();
-        harness.frame();
-        assert!(
-            !harness.paints_indicator(),
-            "new completion removes the arc"
-        );
-        assert_eq!(harness.frame(), 0);
-        assert_eq!(harness.content_builds.get(), content_builds);
-    }
-}
-
-/// A pull changes only the pull distance: no rebuild, while an external
-/// listener still hears every change. Entering and leaving the refreshing
-/// phase rebuilds, once each.
-pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
-    use flui_testing::PointerPhase::{Down, Move, Up};
-    let mut harness = RefreshHarness::mount();
-    let content_builds = harness.content_builds.get();
+        if install {
+            let snap = Some(three_anchors());
+            laid.pump_widget(resizable_snapping_list(
+                &controller,
+                snap,
+                &height,
+                &resized,
+                &vsync,
+            ));
+        }
+        height.set(4300.0);
+        resized.notify_listeners();
+        for _ in 0..240 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        controller.pixels()
+    };
+    let coasted = coast(false);
     assert!(
-        !harness.paints_indicator(),
-        "idle content has no loading arc"
-    );
-    let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counter = Arc::clone(&heard);
-    let _subscription = harness
-        .refresh
-        .listenable()
-        .add_listener(std::rc::Rc::new(move || {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }));
-
-    harness.pointer(Down, 40.0);
-    harness.frame();
-    let mut moves = 0;
-    for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
-        harness.pointer(Move, y);
-        moves += 1;
-        assert_eq!(harness.frame(), 0, "a pull frame to y={y} must not rebuild");
-    }
-    assert!(harness.refresh.pull_distance_px() > 80.0);
-    assert!(
-        heard.load(std::sync::atomic::Ordering::SeqCst) >= moves,
-        "external listeners hear every pull change"
-    );
-
-    harness.pointer(Up, 140.0);
-    assert!(harness.refresh.is_refreshing());
-    assert!(
-        harness.frame() > 0,
-        "entering the refreshing phase rebuilds"
-    );
-    assert_eq!(harness.frame(), 0, "and then settles");
-    assert!(
-        harness.paints_indicator(),
-        "the refreshing frame paints its loading arc"
+        coasted > 500.0,
+        "the fling coasts past the anchors' reach: {coasted}"
     );
     assert_eq!(
-        harness.content_builds.get(),
-        content_builds,
-        "starting refresh rebuilds only the indicator"
-    );
-
-    harness.refresh.finish();
-    assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
-    assert_eq!(harness.frame(), 0, "and then settles");
-    assert!(
-        !harness.paints_indicator(),
-        "completion removes the loading arc"
-    );
-    assert_eq!(
-        harness.content_builds.get(),
-        content_builds,
-        "finishing refresh rebuilds only the indicator"
+        coast(true),
+        coasted,
+        "a policy installed while the fling coasts leaves it to the physics"
     );
 }
-pub(crate) fn a_refresh_completed_by_a_listener_allows_the_next_pull() {
-    use flui_testing::PointerPhase::{Down, Move, Up};
 
-    for bind_first in [false, true] {
-        let refresh = RefreshController::new();
-        let finish_first = Rc::new(Cell::new(true));
-        let notifications = Rc::new(Cell::new(0));
-        let listenable = refresh.listenable();
-        let callback: flui_foundation::ListenerCallback = Rc::new({
-            let watched = refresh.clone();
-            let finish_first = Rc::clone(&finish_first);
-            let notifications = Rc::clone(&notifications);
-            move || {
-                notifications.set(notifications.get() + 1);
-                if watched.is_refreshing() && finish_first.replace(false) {
-                    watched.finish();
-                }
-            }
-        });
-        let mut harness = RefreshHarness::mount();
-        let listener = if bind_first {
-            harness.replace_refresh(refresh.clone());
-            listenable.add_listener(callback)
-        } else {
-            let listener = listenable.add_listener(callback);
-            harness.replace_refresh(refresh.clone());
-            listener
-        };
-        let content_builds = harness.content_builds.get();
+/// A scrollable rebuilt with a fresh physics value every frame, as a build
+/// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
+/// on, bounces past the edge and comes back to rest exactly on it, and a
+/// press after it rests reaches the content as a tap.
+pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
+    use flui_widgets::GestureDetector;
+    let controller = ScrollController::new();
+    let max_extent = 500.0_f64;
+    let vsync = Vsync::new();
+    let taps = Rc::new(Cell::new(0_u32));
+    let tree = || {
+        let taps = Rc::clone(&taps);
+        let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new()
+                .controller(controller.clone())
+                .physics(physics)
+                .child(
+                    GestureDetector::new()
+                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .on_tap(move |_| taps.set(taps.get() + 1))
+                        .child(SizedBox::new(300.0, 800.0)),
+                ),
+        )
+    };
+    let mut laid = crate::common::lay_out_animated(tree(), tight(300.0, 300.0), vsync.clone());
+    controller.set_pixels(300.0);
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    assert!(
+        controller.pixels() < max_extent,
+        "released inside the range"
+    );
 
-        for attempt in 0..2 {
-            harness.scroll.set_pixels(0.0);
-            harness.pointer(Down, 40.0);
-            for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
-                harness.pointer(Move, y);
-            }
-            harness.pointer(Up, 140.0);
+    let mut furthest = controller.pixels();
+    for frame in 0..240 {
+        let before = controller.pixels();
+        laid.pump_widget(tree());
+        laid.pump_for(Duration::from_millis(16));
+        if frame < 3 {
             assert!(
-                !finish_first.get(),
-                "the observer completed the first refresh"
+                controller.pixels() > before,
+                "frame {frame}: the rebuilt scrollable keeps flinging, at {}",
+                controller.pixels()
             );
-            assert_eq!(
-                refresh.is_refreshing(),
-                attempt == 1,
-                "only the subsequent pull remains refreshing; bind_first={bind_first}"
-            );
-            harness.frame();
-            assert_eq!(
-                harness.paints_indicator(),
-                attempt == 1,
-                "the committed indicator follows the latest phase; bind_first={bind_first}"
-            );
-            assert_eq!(harness.content_builds.get(), content_builds);
         }
-
-        let heard = notifications.get();
-        refresh.finish();
-        assert_eq!(notifications.get(), heard + 1);
-        harness.frame();
-        assert!(
-            !harness.paints_indicator(),
-            "normal completion removes the arc"
-        );
-        let heard = notifications.get();
-        refresh.finish();
-        assert_eq!(
-            notifications.get(),
-            heard + 1,
-            "an idle finish still notifies the external channel"
-        );
-        assert_eq!(harness.frame(), 0, "an unchanged phase does not rebuild");
-        assert_eq!(harness.content_builds.get(), content_builds);
-        listenable.remove_listener(listener);
+        furthest = furthest.max(controller.pixels());
     }
+    assert!(
+        furthest > max_extent + 1.0,
+        "the fling bounces past the edge; furthest {furthest:.3}"
+    );
+    assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
+
+    laid.dispatch_pointer_down(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(taps.get(), 1, "a press on the resting list is a tap");
 }
 
 fn nested_fling_content(
@@ -4839,4 +4798,44 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             "fresh transfer makes progress after containment"
         );
     }
+}
+
+/// A command queued before the scrollable mounted starts its run when the
+/// scrollable applies its view, and the activity listeners that run notifies
+/// may write signals: that is outside `build`, where the runtime refuses a
+/// write.
+pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
+    let mut laid = lay_out(SizedBox::square(1.0), tight(300.0, 300.0));
+    let vsync = Vsync::new();
+    laid.adopt_vsync(vsync.clone()).expect("clock admission");
+    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let signal = reactive.signal(0u32);
+    let controller = ScrollController::new();
+    // Room to scroll, so the command moves something.
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
+    let outcome = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&outcome);
+    let writer = reactive;
+    let _listener = controller
+        .position()
+        .add_activity_listener(Rc::new(move || {
+            seen.set(Some(signal.set(&writer, 1)));
+        }));
+    controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+    assert_eq!(outcome.get(), None, "nothing serves the command yet");
+
+    laid.pump_widget(VsyncScope::new(
+        vsync,
+        Scrollable::new()
+            .controller(controller)
+            .child(SizedBox::new(300.0, 800.0)),
+    ));
+
+    assert_eq!(
+        outcome.get(),
+        Some(Ok(())),
+        "the run started and its listener wrote a signal"
+    );
 }

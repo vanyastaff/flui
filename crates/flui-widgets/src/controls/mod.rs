@@ -4,6 +4,6 @@ mod activity_indicator;
 mod disclosure;
 mod slider;
 
-pub use activity_indicator::{ActivityIndicator, ActivityIndicatorState};
+pub use activity_indicator::{ActivityArc, ActivityIndicator, ActivityIndicatorState};
 pub use disclosure::{Disclosure, DisclosureState, ExpansionState};
 pub use slider::{Slider, SliderState};

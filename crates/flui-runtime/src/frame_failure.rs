@@ -244,6 +244,9 @@ pub enum SamplingStage {
     GestureDeadline,
     /// Observing deadline sources before publishing the host scheduling snapshot.
     DeadlineDiscovery,
+    /// Expiring frame-queued haptics and delivering their outcomes to the
+    /// observer (ADR-0210 §4).
+    HapticDelivery,
 }
 
 /// The postcondition proved at the failing callout, independently of its text.

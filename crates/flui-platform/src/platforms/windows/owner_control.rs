@@ -12,7 +12,7 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::platform::{FrameCount, WindowIdentity, WindowMap};
+use super::platform::{FrameCount, ModalDelivery, WindowIdentity, WindowMap};
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -20,6 +20,7 @@ use crate::{
         hwnd_affinity::{UserDataRefusal, UserDataVerdict, classify_user_data_access},
         owner_signal::{OwnerSignal, OwnerTurnSlot},
         panic_boundary::contain_owner_callback,
+        system_notice::SystemNotices,
     },
     traits::{
         OpenWindowError, Platform, WindowOptions,
@@ -67,12 +68,22 @@ pub(super) struct OwnerControlContext {
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<super::preferences::PreferenceSource>,
+    /// The system events the preferences receiver forwards.
+    host: Rc<super::host_events::HostEvents>,
+    /// Where system notices go; see [`SystemNotices`].
+    notices: Arc<SystemNotices>,
+    displays: Arc<super::display::WindowsDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
     /// Set while an [`EXIT_POLICY`] message is queued; see
     /// [`ExitPolicyRequest`].
     exit_policy_pending: Arc<AtomicBool>,
+    /// OLE drag and drop, whose sessions run from this window.
+    drag: Arc<super::drag::OleTransfer>,
+    /// The last wake deadline the modal drag loop delivered, with the frame
+    /// count it was delivered at (see `WindowsPlatform::deliver_modal_frames`).
+    modal_delivery: Rc<ModalDelivery>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -87,6 +98,13 @@ pub(super) struct OwnerShares {
     /// Frame callbacks dispatched by every window this platform opens.
     pub(super) frames: Rc<FrameCount>,
     pub(super) preferences: Rc<super::preferences::PreferenceSource>,
+    /// The system events the receiver forwards to the owner.
+    pub(super) host: Rc<super::host_events::HostEvents>,
+    /// Where the platform hands system notices to the host.
+    pub(super) notices: Arc<SystemNotices>,
+    /// The platform's monitors; a window invalidates them on a DPI change and
+    /// names its display through them.
+    pub(super) displays: Arc<super::display::WindowsDisplays>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(super) exit_policy: ExitPolicyRequest,
@@ -149,6 +167,9 @@ impl OwnerControl {
     pub(super) fn new(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
+        drag: Arc<super::drag::OleTransfer>,
+        displays: Arc<super::display::WindowsDisplays>,
+        notices: Arc<SystemNotices>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
@@ -190,15 +211,29 @@ impl OwnerControl {
                 })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
+        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
+        let host = Rc::new(super::host_events::HostEvents::new(
+            Rc::clone(&handlers),
+            Arc::clone(&notices),
+        ));
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
-            handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
+            handlers,
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
-            preferences: Rc::new(super::preferences::PreferenceSource::new(&signal)?),
+            preferences: Rc::new(super::preferences::PreferenceSource::with_host(
+                &signal,
+                &displays,
+                Some(Rc::clone(&host)),
+            )?),
+            host,
+            notices,
+            displays,
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
+            drag: Arc::clone(&drag),
+            modal_delivery: Rc::default(),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -230,6 +265,7 @@ impl OwnerControl {
             let mut address_slot = address.lock();
             *address_slot = Some(hwnd.0 as isize);
         }
+        drag.attach_owner(Arc::clone(&address));
         Ok(Self {
             signal,
             wake,
@@ -347,6 +383,9 @@ impl OwnerGate {
                     turn: Rc::clone(&context.turn),
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
+                    host: Rc::clone(&context.host),
+                    notices: Arc::clone(&context.notices),
+                    displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),
                 })
             }
@@ -485,14 +524,20 @@ unsafe extern "system" fn procedure(
     contain_owner_callback(|| {
         // SAFETY: only this class stores `OwnerControlContext` userdata, and
         // Win32 runs this procedure on the owner thread, the only thread
-        // that frees it (`WM_NCDESTROY`, below). A wake turn clones the
-        // signal out before running callbacks, so a callback that tears the
-        // window down cannot free what the turn still uses.
+        // that frees it (`WM_NCDESTROY`, below). A wake turn, a drag
+        // session and the modal frame tick clone what they use out of the
+        // context before running callbacks, so a callback that tears the
+        // window down cannot free what they still use.
         unsafe {
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
             if message == WM_NCDESTROY && !pointer.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(pointer));
+                let context = Box::from_raw(pointer);
+                let drag = Arc::clone(&context.drag);
+                drop(context);
+                // The session this window was to start never runs: it is
+                // told so here, with nothing of the window left to reach.
+                drag.cancel_pending();
             } else if message == WAKE && !pointer.is_null() {
                 let signal = Arc::clone(&(*pointer).signal);
                 let turn = Rc::clone(&(*pointer).turn);
@@ -510,6 +555,26 @@ unsafe extern "system" fn procedure(
                 if exit_policy_allows_exit(&signal, &handlers, &windows) {
                     quit_owner_loop(&signal, &turn);
                 }
+                return;
+            } else if message == super::drag::START_DRAG && !pointer.is_null() {
+                // Cloned out first: the modal loop runs user code that may
+                // tear this window down.
+                let drag = Arc::clone(&(*pointer).drag);
+                drag.run_pending(hwnd);
+                return;
+            } else if message == super::drag::MODAL_FRAME && !pointer.is_null() {
+                let context = &*pointer;
+                if !context.drag.is_running() || !context.signal.accepting() {
+                    return;
+                }
+                let handlers = Rc::clone(&context.handlers);
+                let frames = Rc::clone(&context.frames);
+                let delivered = Rc::clone(&context.modal_delivery);
+                let windows = context.windows.clone();
+                let wait = super::platform::WindowsPlatform::deliver_modal_frames(
+                    &handlers, &windows, &frames, &delivered,
+                );
+                result = LRESULT(wait as isize);
                 return;
             }
             result = DefWindowProcW(hwnd, message, wparam, lparam);

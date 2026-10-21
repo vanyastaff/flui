@@ -8,7 +8,7 @@ use crate::{
     error::{EngineError, EngineResult, GeometryError},
     recording_budget::RecordingBudget,
 };
-use flui_foundation::geometry::{Point, Radius, Rect};
+use flui_foundation::geometry::{Point, RRect, Radius, Rect};
 use flui_painting::paint::{PathCommand, PathFillType};
 use lyon::path::{PathEvent, iterator::Flattened};
 
@@ -275,17 +275,16 @@ impl ClipChain {
                     ValidatedClip::RSuperellipse(rect) => {
                         node.meta[0] = 2;
                         node.bounds = pack_rect(rect.outer_rect())?;
+                        // Hit testing reads the same normalized shape.
+                        let shape = rect.normalized();
                         pack_radii(
                             &mut node,
-                            normalize_radii(
-                                rect.outer_rect(),
-                                [
-                                    rect.tl_radius(),
-                                    rect.tr_radius(),
-                                    rect.br_radius(),
-                                    rect.bl_radius(),
-                                ],
-                            ),
+                            [
+                                shape.tl_radius(),
+                                shape.tr_radius(),
+                                shape.br_radius(),
+                                shape.bl_radius(),
+                            ],
                         )?;
                     }
                     ValidatedClip::Path(path) => {
@@ -330,22 +329,16 @@ fn pack_rect(rect: Rect<f64>) -> Result<[f32; 4], GeometryError> {
     Ok(result)
 }
 
-fn normalize_radii(rect: Rect<f64>, radii: [Radius<f64>; 4]) -> [Radius<f64>; 4] {
-    // Normalize the sum before adding: finite radii may overflow their sum.
-    // One common factor preserves every rx/ry ratio.
-    let fitting_factor = |a: f64, b: f64, extent: f64| {
-        let maximum = a.max(b);
-        if maximum == 0.0 {
-            1.0
-        } else {
-            ((extent / maximum) / (a / maximum + b / maximum)).min(1.0)
-        }
-    };
-    let factor = fitting_factor(radii[0].x, radii[1].x, rect.width())
-        .min(fitting_factor(radii[3].x, radii[2].x, rect.width()))
-        .min(fitting_factor(radii[0].y, radii[3].y, rect.height()))
-        .min(fitting_factor(radii[1].y, radii[2].y, rect.height()));
-    radii.map(|r| Radius::new(r.x * factor, r.y * factor))
+/// Radii fitted to `rect` by [`RRect::normalized`], the shape
+/// `RRect::contains` hit-tests.
+fn normalize_radii(rect: Rect<f64>, [tl, tr, br, bl]: [Radius<f64>; 4]) -> [Radius<f64>; 4] {
+    let shape = RRect::new(rect, tl, tr, br, bl).normalized();
+    [
+        shape.top_left,
+        shape.top_right,
+        shape.bottom_right,
+        shape.bottom_left,
+    ]
 }
 
 fn pack_radii(node: &mut MaskNode, radii: [Radius<f64>; 4]) -> Result<(), GeometryError> {

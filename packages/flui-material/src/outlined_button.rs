@@ -17,6 +17,8 @@
 //! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
 //! one introduced here.
 
+use std::sync::Arc;
+
 use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::view::prelude::*;
@@ -43,6 +45,7 @@ use crate::theme::Theme;
 pub struct OutlinedButton {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
+    identifier: Option<Arc<str>>,
     child: BoxedView,
 }
 
@@ -62,7 +65,8 @@ impl OutlinedButton {
         Self {
             on_pressed: None,
             style: None,
-            child: BoxedView(Box::new(child.into_view())),
+            identifier: None,
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -84,6 +88,14 @@ impl OutlinedButton {
         self.style = Some(style);
         self
     }
+
+    /// Names the button's node for tests and automation (ADR-0240): exported as
+    /// UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
 }
 
 impl StatelessView for OutlinedButton {
@@ -103,7 +115,7 @@ impl StatelessView for OutlinedButton {
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }
-        core
+        core.identifier(self.identifier.clone())
     }
 }
 

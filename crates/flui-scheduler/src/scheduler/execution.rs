@@ -356,7 +356,13 @@ impl OwnerFrame {
         let mut output = None;
         recovery.attempt(&mut prepare);
         let span = if recovery.first.is_none() {
-            recovery.attempt(|| tracing::debug_span!("frame", id = tracing::field::Empty))
+            recovery.attempt(|| {
+                tracing::debug_span!(
+                    "frame",
+                    id = tracing::field::Empty,
+                    period_us = tracing::field::Empty
+                )
+            })
         } else {
             None
         };
@@ -367,6 +373,7 @@ impl OwnerFrame {
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = Some(deadline.0);
                     let id = scheduler.handle_begin_frame(timestamp, self);
                     span.record("id", tracing::field::debug(id));
+                    span.record("period_us", scheduler.budget_period_micros());
                     scheduler.handle_draw_frame();
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = None;
                     output = Some(pipeline());

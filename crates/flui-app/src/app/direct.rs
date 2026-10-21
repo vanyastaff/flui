@@ -93,18 +93,6 @@ pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
 ) -> anyhow::Result<()> {
-    #[cfg(all(
-        feature = "persist",
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    config.validate().map_err(super::AppWindowError::from)?;
-    #[cfg(all(
-        feature = "persist",
-        any(target_os = "android", target_os = "ios", target_arch = "wasm32")
-    ))]
-    config.validate()?;
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
     // `Logger::init`, which panicked the moment a host — or a second
@@ -241,13 +229,19 @@ pub fn run_direct(
 
         // 5. Register resize callback
         let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width * scale_factor) as u32;
-            let h = (size.height * scale_factor) as u32;
-            if w > 0 && h > 0 {
-                renderer_resize.lock().resize(w, h);
-                tracing::debug!("Window resized to {}x{} (scale: {})", w, h, scale_factor);
-            }
+        window.on_resize(Box::new(move |metrics| {
+            let physical = metrics.physical();
+            let (w, h) = (
+                physical.width.unsigned_abs(),
+                physical.height.unsigned_abs(),
+            );
+            renderer_resize.lock().resize(w, h);
+            tracing::debug!(
+                "Window resized to {}x{} (scale: {})",
+                w,
+                h,
+                metrics.scale().get()
+            );
         }));
 
         // 6. Register input callback. This is a no-op stub: it neither inspects

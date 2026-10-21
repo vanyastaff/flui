@@ -421,7 +421,11 @@ pub fn a_long_press_winning_the_arena_cancels_the_wave() {
     ));
     laid.dispatch_pointer_down(50.0, 20.0);
     laid.tick();
+    // The long press holds the contact, so the well shows it as pressed at
+    // the press timeout, and the wave paints a frame later.
     laid.pump_for(ms(300));
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
     assert_eq!(waves(&laid).len(), 1, "the press grows a wave");
     laid.pump_for(ms(300));
     laid.tick();
@@ -432,9 +436,10 @@ pub fn a_long_press_winning_the_arena_cancels_the_wave() {
     laid.dispatch_pointer_up(50.0, 20.0);
 }
 
-/// Of two contacts, only the one that stops being a tap fades: the other
-/// keeps pressing.
-pub fn rejecting_one_contact_leaves_the_other_pressing() {
+/// The well shows the one contact its tap recognizer tracks: a second
+/// contact that lands while it is pending grows no wave, and the tracked one
+/// fades once it moves past the slop.
+pub fn a_second_contact_grows_no_wave_beside_a_pending_tap() {
     use flui_interaction::events::{
         PointerId, PointerKind, make_down_event_for_id, make_move_event_for_id,
     };
@@ -451,25 +456,21 @@ pub fn rejecting_one_contact_leaves_the_other_pressing() {
         &make_down_event_for_id(second, at(80.0), PointerKind::Touch).expect("finite fixture"),
     );
     laid.tick();
+    // The press shows at the win, and its wave paints two frames on.
     laid.pump_for(ms(100));
-    assert_eq!(waves(&laid).len(), 2, "each contact grows a wave");
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
+    let pressing = waves(&laid);
+    assert_eq!(pressing.len(), 1, "one wave: {pressing:?}");
+    assert!((pressing[0].0.x - 20.0).abs() < 1e-6, "it is the first's");
     laid.dispatch_pointer_event(
         &make_move_event_for_id(first, at(70.0), PointerKind::Touch).expect("finite fixture"),
     );
     laid.tick();
     laid.pump_for(ms(75));
-    let painted = waves(&laid);
-    assert_eq!(painted.len(), 2, "both waves are visible: {painted:?}");
-    let held = painted
-        .iter()
-        .find(|(center, ..)| (center.x - 80.0).abs() < 1e-6)
-        .expect("the second contact's wave");
-    let dragged = painted
-        .iter()
-        .find(|(center, ..)| (center.x - 20.0).abs() < 1e-6)
-        .expect("the dragged first contact's wave");
-    assert_close(held.2, 0.10, "the held contact keeps its full wave");
-    assert_close(dragged.2, 0.05, "the dragged contact's wave fades");
+    let fading = waves(&laid);
+    assert_eq!(fading.len(), 1, "the dragged contact's wave is fading");
+    assert_close(fading[0].2, 0.05, "the dragged contact's wave fades");
 }
 
 /// Pressing and releasing another button while the primary is held (a

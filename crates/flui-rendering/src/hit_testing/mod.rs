@@ -1,7 +1,7 @@
 //! Hit testing infrastructure for pointer interaction.
 //!
 //! This module is a thin protocol-extension surface over
-//! `flui_interaction::routing`.
+//! `flui_interaction::pointer`.
 //! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
 //! types live in `flui-interaction`; this module re-exports them for caller
 //! convenience.
@@ -9,13 +9,13 @@
 //! # Key Types
 //!
 //! - [`HitTestResult`]: re-exported from
-//!   [`flui_interaction::routing::HitTestResult`] -- canonical
+//!   [`flui_interaction::pointer::HitTestResult`] -- canonical
 //!   result with data-only entries and a transform stack.
 //! - [`HitTestEntry`]: re-exported from
-//!   [`flui_interaction::routing::HitTestEntry`] -- carries
+//!   [`flui_interaction::pointer::HitTestEntry`] -- carries
 //!   render identity, optional pointer and scroll targets, and a cursor request.
 //! - [`HitTestBehavior`]: re-exported from
-//!   [`flui_interaction::routing::HitTestBehavior`] -- standard
+//!   [`flui_interaction::pointer::HitTestBehavior`] -- standard
 //!   `DeferToChild` / `Opaque` / `Translucent` enum.
 //!
 //! # Protocol-Specific Types
@@ -47,7 +47,7 @@ mod result;
 // consumers' `use crate::hit_testing::HitTestResult` imports compile
 // unchanged.
 pub use entry::HitTestEntry;
-pub use flui_interaction::routing::{CursorRequest, HitTestBehavior};
+pub use flui_interaction::pointer::{CursorRequest, HitTestBehavior};
 // Pointer-event dispatch surface: a `RenderObject` advertises a data-only
 // `PointerTarget` (see `RenderObject::pointer_target`) that the pipeline
 // attaches to its hit entry; dispatch resolves the target through the
@@ -57,8 +57,9 @@ pub use flui_interaction::routing::{CursorRequest, HitTestBehavior};
 // `EventPropagation` is carried only by the two arbitrated claim walks, scroll
 // signals and trackpad pan-zoom.
 pub use flui_interaction::events::{CursorIcon, PointerEvent, PointerEventExt};
-pub use flui_interaction::routing::{
-    DeviceId, EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
+pub use flui_interaction::ids::DeviceId;
+pub use flui_interaction::pointer::{
+    EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation,
     PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget,
     resolve_path_clip_target, resolve_shader_mask_target,

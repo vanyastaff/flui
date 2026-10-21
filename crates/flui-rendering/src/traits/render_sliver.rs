@@ -341,6 +341,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         None
     }
 
+    /// The input regions this sliver claims, in its local paint coordinates at its
+    /// absolute paint `size`.
+    ///
+    /// Default: none. See [`RenderObject::describe_input_regions`].
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
     // ========================================================================
     // Compositing / Layer Boundaries
     // ========================================================================
@@ -388,10 +400,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     // Semantics / Hot Reload
     // ========================================================================
 
+    /// Independently keyed accessible parts of this sliver's custom content.
+    /// See [`RenderObject::semantics_regions`].
+    fn semantics_regions(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
+
     /// Describes semantic properties for accessibility.
     ///
-    /// Default: no-op. See
-    /// [`RenderObject::describe_semantics_configuration`].
+    /// Default: no-op. See [`RenderObject::describe_semantics_configuration`].
     fn describe_semantics_configuration(
         &self,
         _config: &mut crate::semantics::SemanticsConfiguration,
@@ -417,7 +437,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// for why the placed-generation stamp cannot answer this — it excludes a
     /// child a parent *stopped* laying out, so one skipped from its very first
     /// pass was never stamped and reads as placed.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         true
     }
 
@@ -545,7 +565,7 @@ where
     fn hit_test_raw(
         &self,
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
-        _child_count: usize,
+        child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
@@ -560,7 +580,8 @@ where
             crate::protocol::SliverHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
                 position, hit_child,
             );
-        let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
+        let mut ctx =
+            crate::context::SliverHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
         HitTestOutcome::new(
             ctx.self_hit_entry_registered() || blocks_below,
@@ -590,6 +611,14 @@ where
         <T as RenderSliver>::hit_test_transform(self, size)
     }
 
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        <T as RenderSliver>::describe_input_regions(self, size, regions);
+    }
+
     fn describe_semantics_configuration(
         &self,
         config: &mut crate::semantics::SemanticsConfiguration,
@@ -597,8 +626,15 @@ where
         <T as RenderSliver>::describe_semantics_configuration(self, config);
     }
 
-    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
-        <T as RenderSliver>::visits_child_for_semantics(self, child_slot)
+    fn semantics_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        <T as RenderSliver>::semantics_regions(self, size)
+    }
+
+    fn visits_child_for_semantics(&self, child_slot: usize, size: Size) -> bool {
+        <T as RenderSliver>::visits_child_for_semantics(self, child_slot, size)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

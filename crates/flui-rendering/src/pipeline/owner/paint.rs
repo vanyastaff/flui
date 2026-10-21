@@ -5,9 +5,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ContentToken,
-    FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
-    PictureLayer, ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree,
+    LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -103,6 +103,7 @@ impl PipelineOwner<PaintPhase> {
         .entered();
 
         self.scheduler.enter_phase(PhaseKind::Paint);
+        self.local_dirty.begin_paint();
 
         // Deepest-first ordering retained: the
         // full-tree descent below repaints everything, but per-boundary
@@ -332,11 +333,20 @@ impl PipelineOwner<PaintPhase> {
                     self.last_follower_offsets = follower_offsets;
                     self.last_hidden_follower_ids = hidden_follower_ids;
 
-                    self.last_layer_tree = Some(layer_tree);
+                    // A u64 of frames outlasts any process; reusing the last number instead
+                    // would let a kept layer id read the next scene's layer.
+                    self.scenes_painted = self
+                        .scenes_painted
+                        .checked_add(1)
+                        .expect("BUG: u64 scene numbers exhausted");
+                    let scene = std::num::NonZeroU64::new(self.scenes_painted)
+                        .expect("BUG: incremented from at least 0 just above");
+                    self.last_layer_tree = Some(layer_tree.with_scene(scene));
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
                     // the owner stays consistent on the error path.
+                    let _ = self.local_dirty.end_paint();
                     let _ = self.scheduler.exit_phase(PhaseKind::Paint);
                     return Err(e);
                 }
@@ -408,7 +418,13 @@ impl PipelineOwner<PaintPhase> {
         // The always-drain contract of exit_phase is the correct behavior:
         // mid-paint marks scheduled before the error survive into the next
         // frame's retry rather than being dropped.
+        let layout_during_paint = self.local_dirty.end_paint();
         let _ = self.scheduler.exit_phase(PhaseKind::Paint);
+        debug_assert!(
+            layout_during_paint.is_none(),
+            "BUG: render object {layout_during_paint:?} requested layout during paint; \
+             paint must not change geometry"
+        );
 
         Ok(())
     }
@@ -630,7 +646,8 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let child_ids: Vec<RenderId> = render_node.children().to_vec();
+        // Borrowed, not copied: `&self` keeps the tree immutable for the walk.
+        let child_ids = render_node.children();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
         // that pass and is skipped at the splice below.
@@ -1632,6 +1649,9 @@ fn conjugate(
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
+        FragmentScope::Opacity(opacity) => {
+            Layer::Opacity(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
+        }
         FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
@@ -1646,11 +1666,14 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             filter,
             blend_mode,
             bounds,
-        } => Layer::BackdropFilter(BackdropFilterLayer::new(
-            filter,
-            blend_mode,
-            bounds.translate_offset(origin),
-        )),
+            group,
+        } => Layer::BackdropFilter(
+            BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
+                .with_group(group),
+        ),
+        FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
+            AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),
+        ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
         // this node's own accumulated position, exactly what `origin`
         // already is at this call site (`:270`). Unlike the clip/mask
@@ -1705,6 +1728,13 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
         PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::RSuperellipse {
+            rsuperellipse,
+            behavior,
+        } => Layer::ClipSuperellipse(ClipSuperellipseLayer::new(
+            rsuperellipse.translate_offset(origin),
             behavior,
         )),
         PaintClip::Path { path, behavior } => {

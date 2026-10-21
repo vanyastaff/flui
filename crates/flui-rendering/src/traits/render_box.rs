@@ -138,9 +138,10 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Hit tests this render object.
     ///
-    /// The default implementation checks if the hit position is within the
-    /// render object's size bounds. Implementors can override to add children
-    /// testing or special hit behavior.
+    /// The default depends on the arity: a leaf is hit inside its own size;
+    /// an object that can have children hands the position to them, topmost
+    /// (last) first, and is hit only through a child. Implementors override
+    /// to add their own target area, transforms or special hit behavior.
     ///
     /// The context provides:
     /// - Position via `ctx.position()` or `ctx.x()`, `ctx.y()`
@@ -151,9 +152,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// # Default behavior
     ///
-    /// Returns true iff the hit position is within this object's bounds
-    /// (size.contains check). Override this method to add child testing,
-    /// transform recording, or special hit behaviors.
+    /// Outside its own size nothing is hit. Inside it, a leaf (an arity
+    /// that admits no child) claims the hit; any other object returns
+    /// whether a child, tested at its layout offset in reverse order, was
+    /// hit — so a parent that forgets to override this neither swallows its
+    /// children's hits nor claims empty space of its own.
     ///
     /// # Example
     ///
@@ -173,7 +176,15 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// }
     /// ```
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
-        ctx.is_within_own_size()
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+        if !<Self::Arity as Arity>::validate_count(1) {
+            return true;
+        }
+        (0..ctx.child_count())
+            .rev()
+            .any(|index| ctx.hit_test_child_at_layout_offset(index))
     }
 
     // ========================================================================
@@ -295,8 +306,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Whether this box answers a live baseline query with its only child's.
     ///
-    /// Set by `forward_single_child_box_queries!` for pure proxies, which
-    /// place their child at their own origin and therefore share its baseline.
+    /// The driver adds the child's committed vertical layout offset. A sizing
+    /// or positioning wrapper can opt in without caching child baselines.
+    /// `forward_single_child_box_queries!` sets this for pure proxies.
     /// This method exists because [`Self::compute_distance_to_actual_baseline`]
     /// takes no context and so cannot reach the child; the layout driver walks
     /// to the child on this object's behalf. See
@@ -454,6 +466,36 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The expanded hit area this box claims beyond its own bounds.
+    ///
+    /// Default: `None`. See [`RenderObject::hit_slop_area`].
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        let _ = (size, kind);
+        None
+    }
+
+    /// The input regions this box claims, in local coordinates.
+    ///
+    /// Default: none. See [`RenderObject::describe_input_regions`].
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
+    /// Whether a hit on this box keeps the position from expanded hit areas.
+    ///
+    /// Default: `false`. See [`RenderObject::blocks_hit_slop`].
+    fn blocks_hit_slop(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
@@ -521,6 +563,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ) {
     }
 
+    /// Independently keyed accessible parts of this box's custom content.
+    /// See [`RenderObject::semantics_regions`].
+    fn semantics_regions(&self, _size: Size) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
+
     /// Whether the semantics assembly walk should skip this box's entire
     /// child subtree.
     ///
@@ -547,8 +595,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// unstamped child reads as placed by design (the stamp may only remove a
     /// child that demonstrably fell out, or a parent laying out through a path
     /// of its own would hide its whole subtree). So exclusion by stamp is
-    /// history-dependent, and this is not.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    /// history-dependent, and this is not. `size` supplies committed geometry
+    /// for size-dependent presentation, as in [`Self::describe_approximate_paint_clip`].
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         true
     }
 
@@ -706,7 +755,7 @@ where
     fn hit_test_raw(
         &self,
         position: crate::protocol::ProtocolPosition<BoxProtocol>,
-        _child_count: usize,
+        child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
@@ -735,7 +784,8 @@ where
         let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
             position, hit_child,
         );
-        let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
+        let mut ctx =
+            crate::context::BoxHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
         HitTestOutcome::new(
             ctx.self_hit_entry_registered() || blocks_below,
@@ -828,6 +878,26 @@ where
         <T as RenderBox>::hit_test_transform(self, size)
     }
 
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        <T as RenderBox>::hit_slop_area(self, size, kind)
+    }
+
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        <T as RenderBox>::describe_input_regions(self, size, regions);
+    }
+
+    fn blocks_hit_slop(&self) -> bool {
+        <T as RenderBox>::blocks_hit_slop(self)
+    }
+
     fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
         <T as RenderBox>::metadata(self)
     }
@@ -862,8 +932,12 @@ where
         <T as RenderBox>::describe_semantics_configuration(self, config);
     }
 
-    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
-        <T as RenderBox>::visits_child_for_semantics(self, child_slot)
+    fn visits_child_for_semantics(&self, child_slot: usize, size: Size) -> bool {
+        <T as RenderBox>::visits_child_for_semantics(self, child_slot, size)
+    }
+
+    fn semantics_regions(&self, size: Size) -> crate::semantics::SemanticsRegions {
+        <T as RenderBox>::semantics_regions(self, size)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

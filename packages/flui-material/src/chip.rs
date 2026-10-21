@@ -384,6 +384,7 @@ pub struct Chip {
     on_pressed: Option<ChipTapCallback>,
     on_deleted: Option<ChipTapCallback>,
     enabled: bool,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl std::fmt::Debug for Chip {
@@ -402,18 +403,19 @@ impl Chip {
     /// delete handler.
     pub fn new(label: impl IntoView) -> Self {
         Self {
-            label: BoxedView(Box::new(label.into_view())),
+            label: BoxedView::new(label.into_view()),
             avatar: None,
             on_pressed: None,
             on_deleted: None,
             enabled: true,
+            identifier: None,
         }
     }
 
     /// Sets the leading avatar (typically a small icon or image).
     #[must_use]
     pub fn avatar(mut self, avatar: impl IntoView) -> Self {
-        self.avatar = Some(BoxedView(Box::new(avatar.into_view())));
+        self.avatar = Some(BoxedView::new(avatar.into_view()));
         self
     }
 
@@ -444,6 +446,15 @@ impl Chip {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Names the chip's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the chip's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -564,7 +575,7 @@ impl StatelessView for Chip {
                 as std::rc::Rc<dyn CustomPainter>)
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        Semantics::new()
+        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
             .role(if self.on_pressed.is_some() {
                 SemanticsRole::Button
             } else {
@@ -598,6 +609,7 @@ pub struct FilterChip {
     selected: bool,
     on_selected: Option<FilterChipSelectCallback>,
     on_deleted: Option<ChipTapCallback>,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl std::fmt::Debug for FilterChip {
@@ -616,11 +628,12 @@ impl FilterChip {
     /// [`Self::on_selected`] set yet), with no avatar or delete handler.
     pub fn new(label: impl IntoView) -> Self {
         Self {
-            label: BoxedView(Box::new(label.into_view())),
+            label: BoxedView::new(label.into_view()),
             avatar: None,
             selected: false,
             on_selected: None,
             on_deleted: None,
+            identifier: None,
         }
     }
 
@@ -628,7 +641,7 @@ impl FilterChip {
     /// checkmark while selected — see the module docs' "Selection" section.
     #[must_use]
     pub fn avatar(mut self, avatar: impl IntoView) -> Self {
-        self.avatar = Some(BoxedView(Box::new(avatar.into_view())));
+        self.avatar = Some(BoxedView::new(avatar.into_view()));
         self
     }
 
@@ -636,6 +649,15 @@ impl FilterChip {
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Names the filter chip's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the filter chip's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -847,7 +869,7 @@ impl StatelessView for FilterChip {
 
         // A filter chip is a toggle button: ARIA carries its selection as the
         // button's pressed state, which `aria-selected` on a button is not.
-        Semantics::new()
+        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
             .role(SemanticsRole::Button)
             .toggled(Toggled::from_bool(selected))
             .enabled(enabled)

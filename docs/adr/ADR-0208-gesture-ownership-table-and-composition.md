@@ -1,8 +1,7 @@
 # ADR-0208: One ownership table decides who owns a contact; arena composition nests
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §4, §18). Until it
-  merges, `main` follows ADR-0167.
+- **Status:** Accepted (2026-10-13)
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §4, §18)
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0167](ADR-0167-arena-owned-recognizer-composition.md)
 - **Related:** [ADR-0112](ADR-0112-gesture-terminal-reasons.md),
@@ -31,7 +30,7 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
 |---|---|---|---|
 | Axial (drag, `Scrollable`) | decided on accumulated displacement at slop; the loser rejects | innermost owns; the ancestor is only a channel participant | holds until slop on its axis, or release |
 | Free (pan) | yields to the axial member at ≥ cos 45° on its axis, unless the subtree's `PanClaim` is `None` | same | owns after slop |
-| Scale / `InteractiveViewer` | channel leaf: does not yield; ancestors take the remainder through the channel | same | owns |
+| Scale / `InteractiveViewer` | channel leaf: does not yield; ancestors take the remainder through the channel. A scale that needs two contacts is a leaf only once it holds two: on a lone contact the table passes it by, so a pan beside it takes a one-finger drag (`drag_and_transform_slots_split_one_contact_from_two`) | same | owns |
 | `AnchoredDrag` leaf (`SwipeActions` row) | axial member; consumes first, remainder to the ancestor | same | owns |
 | `AnchoredDrag` ancestor (photo dismiss) | channel participant only | same | — |
 | `Sequenced` (menu → drag, DnD, reorder, selection handles) | the hold is the arena member; after hand-off the successor owns the contact, its motion axial or free per its own configuration | same | owns |
@@ -49,12 +48,20 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    an exact tie goes to the innermost member on the route.
 3. **Same axis.** An ancestor channel participant does not compete in the arena with a
    descendant channel leaf on that axis; the innermost claimant owns and the ancestor receives
-   deltas. A free pan is not a channel leaf and follows rule 2. This replaces ADR-0167's sentence
+   deltas. A free pan is not a channel leaf and follows rule 2. A channel leaf yields to no
+   ancestor, but the members inside it are inner claimants: the leaf meets them as a free member
+   does (rule 2), so a list in an `InteractiveViewer` owns a drag on its axis and the viewer the
+   rest, and a pan inside it owns every drag (rows `axial / channel-leaf ancestor`,
+   `free / channel-leaf ancestor`). This replaces ADR-0167's sentence
    "Horizontal drag acquires no invented orthogonal-rejection behavior": an axial member rejects
    when the table gives the contact to an orthogonal winner, and a pan meeting an axial drag is
    decided by rule 2, not by first claim.
 4. **Hold on Down.** Touching a moving scrollable admits a hold member that beats tap and
    long-press on that contact, not drag or scroll: an arena rule; children stay hit-testable.
+   A hold is an admission kind (`ArenaMembership::holding_contact`, `HoldGestureRecognizer`):
+   on its admission the contact's members admitted without a motion role lose, and such members
+   joining after it are refused; members with a motion role compete as before and take the
+   contact from the hold.
 5. **Cancel on hand-off.** When the arena gives a continuing contact to its winner, losers and the
    pointer callbacks of the `Listener`s on the route, other than the one feeding the winning
    member (`GestureDetector` and `Draggable` feed recognizers through a `Listener`), receive
@@ -63,8 +70,20 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    `#[non_exhaustive]` `flui_platform_api::pointer::CancelReason`, emitted only by the framework;
    an observing `Listener` is cancelled too. Verdicts precede it (ADR-0159 order); an accepted end
    still carries `GestureEndReason` (ADR-0112).
+   Only a *claimed* hand-off cancels: a member that asked for the contact (an acceptance, a
+   motion claim, an explicit resolution) and won it while the contact continues. A lone
+   member's default win claims nothing, so no `Listener` is cancelled: otherwise every raw
+   `Listener` beside a lone recognizer would lose its contact at Down — `EditableText` runs its
+   selection drag in a raw `Listener` beside a lone double-tap recognizer, and that drag would
+   stop on the first frame. A `Sequenced` hold whose win carries successors claims nothing
+   either; the contact is claimed for the successor's target at the hand-off. Row
+   `unclaimed_wins_cancel_no_listener` (`gesture_lifecycle_matrix`) pins both cases, and
+   `claimed_contact_cancels_every_other_listener_once` the claimed one.
 6. **No re-decision.** `PointerEvent::Revise` refines samples for the current owner, never
-   reopening an axis, slop or winner. Hover freezes while a scroll sequence is latched.
+   reopening an axis, slop or winner. Hover freezes while a scroll sequence is latched: a
+   contact is latched from the verdict that gives it to a member with a motion role, by claim
+   or as the lone member, to its terminal event; a claimed trackpad pan-zoom session is latched
+   too.
 7. **No `Simultaneous`.** One contact has one owner. Continued observation goes through
    `GestureObserver`, shared continuous motion through the channel.
 
@@ -86,7 +105,9 @@ pub enum CompositionError { DelayCeilingExceeded { sum: Duration, ceiling: Durat
 - `Sequenced` is one arena member with explicit hand-off from hold to successor; only
   `sequenced()`'s `SequencedBranch` carries that authority. `CompositionKind` is what each node
   reports to `GestureObserver` and `GestureInspector`. The menu stays visible until release;
-  motion past slop closes it and starts the drag.
+  motion past slop closes it and starts the drag. A context menu's long press is the hold the
+  long-press drags beneath its row succeed, so one contact has one hold: a nested
+  `Sequenced` hold of its own would compete with the menu's instead of handing off.
 - A composition whose summed deadlines on any root-to-leaf path exceed the preset's
   `max_resolution_delay` returns `DelayCeilingExceeded`, which the detector reports as a build
   diagnostic. Every deadline is on the `EventTime` scale.
@@ -106,9 +127,10 @@ pub enum CompositionError { DelayCeilingExceeded { sum: Duration, ceiling: Durat
 
 ### 4. Configuration, not arena special cases
 
-Rotation is Scale configuration (ADR-0166). `SwipeGestureRecognizer` (`SwipeStart::{Anywhere,
-FromEdge(PhysicalEdge)}`) is axial. `AxisLock` rails touch and touchpad only and projects release
-velocity onto the locked axis; `TransformLock` locks rotation or scale while panning.
+Rotation is Scale configuration (ADR-0166). `SwipeGestureRecognizer` (`SwipeStart::{Anywhere(Axis),
+FromEdge(PhysicalEdge)}`; `Anywhere` names its axis so a start without one is unrepresentable) is
+axial. `AxisLock` rails touch and touchpad only and projects release velocity onto the locked
+axis; `TransformLock` locks rotation or scale in a gesture that begins as a pan.
 
 ## Consequences and verification
 
@@ -116,8 +138,9 @@ velocity onto the locked axis; `TransformLock` locks rotation or scale while pan
   composition, `Sequenced` hand-off, the delay-ceiling refusal, cancel on hand-off, hold on Down,
   `Revise` leaving decisions and hover frozen under a latch. `assert_ownership_table` runs one
   row per cell plus the 44°, 45° and 46° rows with first-sample noise, for touch and mouse
-  through `PointerScript`; widget rows (pager, `InteractiveViewer`, `SwipeActions`, vertical drag
-  over a settling pager) land in `flui-widgets` tests with each widget. `assert_backend_conforms`
+  through `PointerScript`, and widget rows on mounted widgets (pager, `InteractiveViewer`, a
+  press and a vertical drag over a settling pager); the `SwipeActions` row lands with that
+  widget. `assert_backend_conforms`
   has a row that no backend emits `CancelReason::Claimed`.
 - All rows run headless in CI; native touch, pen and touchpad paths run only on a native host
   (`cargo xtask device <os>-input`, recorded traces).

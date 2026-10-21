@@ -2,6 +2,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use flui_foundation::PresentationId;
+use flui_foundation::panic::FirstPanic;
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
 use flui_view::__runtime::BindingRuntime as _;
@@ -19,6 +20,20 @@ fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::Close
     } else {
         flui_interaction::__runtime::CloseMode::Ordinary
     }
+}
+
+/// Forget `presentation`'s held keys. A key-cancel handler's panic is held in
+/// `first`, so the caller still finishes every window-focus write and the
+/// lifecycle pass (pointer cancellation included) before it propagates.
+fn forget_pressed_keys(
+    presentation: &crate::presentation::PresentationState,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+) {
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        presentation.focus_manager().forget_pressed_keys();
+    }))
+    .err();
+    preserve_first_lifecycle_panic(first, failure, "held key cancellation");
 }
 
 /// An observed Detached state is reversible; terminal lifetime is explicit.
@@ -42,7 +57,8 @@ impl UiRuntime {
     /// Adopt presentation `id`'s whole window state at once (execution,
     /// focus, visibility), as a window reports it when it is shown, and
     /// deliver what it changes. Cancels the pointer sequences of a
-    /// presentation that loses focus or stops running.
+    /// presentation that loses focus or stops running; one that is not
+    /// focused forgets its held keys.
     pub fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
@@ -60,22 +76,29 @@ impl UiRuntime {
             return;
         }
         presentation.window_execution.set(execution);
+        if execution == flui_platform_api::WindowExecutionState::Detached {
+            presentation.overlay_style.forget_delivery();
+        }
         presentation.window_visible.set(visible);
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();
+        let mut first = None;
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    forget_pressed_keys(other, &mut first);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            forget_pressed_keys(presentation, &mut first);
         }
         if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
             cancel.push(id);
         }
         self.set_presentation_hidden(id, !visible);
-        self.reconcile_lifecycle(cancel);
+        self.reconcile_lifecycle_after_failure(cancel, first);
     }
 
     /// Record presentation `id`'s window execution state; a window that
@@ -95,6 +118,7 @@ impl UiRuntime {
             return;
         }
         let changed = presentation.window_execution.replace(state) != state;
+        presentation.sync_haptics_visibility();
         self.reconcile_lifecycle(
             if changed && state != flui_platform_api::WindowExecutionState::Running {
                 vec![id]
@@ -105,7 +129,8 @@ impl UiRuntime {
     }
 
     /// Record presentation `id`'s window focus. Focus is exclusive within
-    /// the UI runtime: gaining it takes it from every sibling.
+    /// the UI runtime: gaining it takes it from every sibling. A window that
+    /// loses it forgets its held keys: their releases go to another window.
     pub fn update_window_focus(&self, id: PresentationId, focused: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -117,18 +142,22 @@ impl UiRuntime {
             return;
         }
         let mut cancel = Vec::new();
+        let mut first = None;
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    forget_pressed_keys(other, &mut first);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            forget_pressed_keys(presentation, &mut first);
         }
         if presentation.window_focused.replace(focused) && !focused {
             cancel.push(id);
         }
-        self.reconcile_lifecycle(cancel);
+        self.reconcile_lifecycle_after_failure(cancel, first);
     }
 
     /// Record presentation `id`'s window visibility, gating its frame clock.
@@ -149,6 +178,97 @@ impl UiRuntime {
         } else {
             Vec::new()
         });
+    }
+
+    /// Attach the host's control of presentation `id`'s window: from now on its
+    /// elements reach it through `LifecycleContext::window`. Call before the
+    /// root widget is attached, so `init_state` finds it. `false` when no
+    /// such presentation exists.
+    pub fn install_window(
+        &self,
+        id: PresentationId,
+        window: flui_view::__runtime::WindowSource,
+    ) -> bool {
+        let Some(presentation) = self.presentations.get(id) else {
+            return false;
+        };
+        let handle = window.handle();
+        presentation.window_placement.set(
+            handle
+                .state()
+                .ok()
+                .map(|state| crate::presentation::ContentPlacement::of(&state)),
+        );
+        presentation.widgets().set_window_handle(handle);
+        *presentation.window_control.borrow_mut() = Some(std::rc::Rc::new(window));
+        true
+    }
+
+    /// The window of presentation `id` reported that its state may have
+    /// changed: deliver the new state to the subscribers of its handle.
+    ///
+    /// A state that puts the content somewhere else is the window moving:
+    /// its gesture geometry and input regions follow
+    /// ([`Self::window_moved`]) and `moved` runs, both before any subscriber
+    /// does. `moved` runs first, so the move is noted even when following it
+    /// panics; the subscribers still receive the state, and the first panic
+    /// resumes afterwards.
+    pub(crate) fn publish_window_state(&self, id: PresentationId, moved: impl FnOnce()) {
+        let Some(window) = self
+            .presentations
+            .get(id)
+            .and_then(|presentation| presentation.window_control.borrow().clone())
+        else {
+            return;
+        };
+        let Some(state) = window.queue_current() else {
+            return;
+        };
+        let placement = Some(crate::presentation::ContentPlacement::of(&state));
+        let placed_elsewhere = self.presentations.get(id).is_some_and(|presentation| {
+            presentation.window_placement.replace(placement) != placement
+        });
+        let mut first = FirstPanic::new();
+        if placed_elsewhere {
+            moved();
+            first.contain(|| self.window_moved(id));
+        }
+        first.contain(|| window.drain());
+        first.resume();
+    }
+
+    /// Deliver a system notice to every presentation's subscribers
+    /// (`LifecycleHandle::subscribe_notices`), in the order notices arrive.
+    ///
+    /// A notice is committed to every presentation before any subscriber runs,
+    /// so a subscriber sees the same ordering across presentations. A
+    /// presentation that is closing is skipped. Every presentation is drained
+    /// even when a subscriber panics; the first panic resumes afterwards.
+    pub fn deliver_host_notice(&self, notice: &flui_platform_api::HostNotice) {
+        // This runtime's own caches give memory back first, so a subscriber
+        // finds the easy memory already free. The host's shared receivers are
+        // reclaimed once per notice by the host, not once per runtime.
+        let mut first = FirstPanic::new();
+        if let flui_platform_api::HostNotice::MemoryPressure(level) = notice {
+            // `None` while a measurement has the context lent: it is
+            // mid-layout, and the next notice reclaims it.
+            first.contain(|| {
+                let _ = self.text.try_with(|text| text.reclaim(*level));
+            });
+        }
+        let sources: Vec<_> = self
+            .presentations
+            .iter()
+            .map(|presentation| presentation.widgets().lifecycle_source())
+            .collect();
+        for source in &sources {
+            // A closing presentation refuses the commit and receives nothing.
+            let _ = source.commit_notice(notice.clone());
+        }
+        for source in sources {
+            first.contain(|| source.drain());
+        }
+        first.resume();
     }
 
     /// Re-derive and deliver every presentation's lifecycle from the state
@@ -197,7 +317,7 @@ impl UiRuntime {
     /// so a test can observe what a closing presentation still accepts.
     /// Production closes through [`Self::close_presentation_entered`], which
     /// stops and removes it in one step.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn stop_presentation_for_test(&self, id: PresentationId) {
         self.stop_presentation_after_failure(id, None);
     }
@@ -525,7 +645,10 @@ impl UiRuntime {
 mod tests {
     use super::*;
 
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     fn lifecycle_subscription_direct_drop_preserves_outer_unwind_and_invalidates_handle() {
         let retained = Rc::new(RefCell::new(None));
@@ -621,6 +744,162 @@ mod tests {
         assert!(
             ui_runtime.scheduler().frames_enabled(),
             "visible sibling remains eligible"
+        );
+    }
+
+    fn notice_handles(
+        ui_runtime: &UiRuntime,
+        ids: &[PresentationId],
+    ) -> Vec<flui_view::LifecycleHandle> {
+        ids.iter()
+            .map(|id| {
+                ui_runtime
+                    .presentations
+                    .get(*id)
+                    .expect("presentation")
+                    .widgets()
+                    .lifecycle_source()
+                    .handle()
+            })
+            .collect()
+    }
+
+    fn host_notices_reach_every_presentation_in_arrival_order() {
+        use flui_platform_api::{HostNotice, MemoryPressureLevel};
+        let (ui_runtime, a, b) = two_presentations();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let _tokens: Vec<_> = notice_handles(&ui_runtime, &[a, b])
+            .into_iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                let seen = Rc::clone(&log);
+                handle
+                    .subscribe_notices(move |notice| {
+                        let label = match notice {
+                            HostNotice::Sleep => "sleep",
+                            HostNotice::Wake => "wake",
+                            HostNotice::MemoryPressure(MemoryPressureLevel::Critical) => "critical",
+                            _ => "other",
+                        };
+                        seen.borrow_mut().push((index, label));
+                    })
+                    .expect("open presentation")
+            })
+            .collect();
+        ui_runtime.deliver_host_notice(&HostNotice::Sleep);
+        ui_runtime.deliver_host_notice(&HostNotice::Wake);
+        ui_runtime.deliver_host_notice(&HostNotice::MemoryPressure(MemoryPressureLevel::Critical));
+        assert_eq!(
+            *log.borrow(),
+            [
+                (0, "sleep"),
+                (1, "sleep"),
+                (0, "wake"),
+                (1, "wake"),
+                (0, "critical"),
+                (1, "critical")
+            ],
+            "every presentation hears every notice, notice by notice"
+        );
+    }
+
+    fn a_notice_is_not_replayed_to_a_late_subscriber() {
+        use flui_platform_api::HostNotice;
+        let (ui_runtime, a, _b) = two_presentations();
+        ui_runtime.deliver_host_notice(&HostNotice::Wake);
+        let count = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&count);
+        let _token = notice_handles(&ui_runtime, &[a])[0]
+            .subscribe_notices(move |_| seen.set(seen.get() + 1))
+            .expect("open presentation");
+        assert_eq!(count.get(), 0, "registering calls nothing");
+        ui_runtime.deliver_host_notice(&HostNotice::Sleep);
+        assert_eq!(count.get(), 1, "only what happens after registration");
+    }
+
+    fn session_end_blocks_of_several_presentations_aggregate() {
+        use flui_platform_api::{HostNotice, SessionEndBlock, SessionEndRequest};
+        let (ui_runtime, a, b) = two_presentations();
+        let held: Rc<RefCell<Vec<SessionEndBlock>>> = Rc::default();
+        let _tokens: Vec<_> = notice_handles(&ui_runtime, &[a, b])
+            .into_iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                let held = Rc::clone(&held);
+                handle
+                    .subscribe_notices(move |notice| {
+                        if let HostNotice::SessionEnding(request) = notice {
+                            held.borrow_mut().push(
+                                request
+                                    .block(format!("save {index}"))
+                                    .expect("the book is open until the host answers"),
+                            );
+                        }
+                    })
+                    .expect("open presentation")
+            })
+            .collect();
+        let released = Rc::new(Cell::new(0));
+        let on_release = Rc::clone(&released);
+        let request =
+            SessionEndRequest::new().on_release(move || on_release.set(on_release.get() + 1));
+        ui_runtime.deliver_host_notice(&HostNotice::SessionEnding(request.clone()));
+        assert!(request.is_blocked());
+        assert_eq!(request.reasons(), ["save 0", "save 1"]);
+        // The host answers the platform once every presentation has heard it.
+        assert_eq!(request.answer(), flui_platform_api::SessionEndAnswer::Block);
+
+        let first = held.borrow_mut().remove(0);
+        drop(first);
+        assert!(request.is_blocked(), "one presentation still holds");
+        assert_eq!(released.get(), 0);
+        held.borrow_mut().clear();
+        assert!(!request.is_blocked());
+        assert_eq!(released.get(), 1, "the last block released the session end");
+    }
+
+    fn a_panicking_notice_subscriber_does_not_starve_the_others() {
+        use flui_platform_api::HostNotice;
+        let (ui_runtime, a, b) = two_presentations();
+        let reached = Rc::new(Cell::new(false));
+        let handles = notice_handles(&ui_runtime, &[a, b]);
+        let _panics = handles[0]
+            .subscribe_notices(|_| panic!("a subscriber fails"))
+            .expect("open presentation");
+        let seen = Rc::clone(&reached);
+        let _hears = handles[1]
+            .subscribe_notices(move |_| seen.set(true))
+            .expect("open presentation");
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            ui_runtime.deliver_host_notice(&HostNotice::Wake);
+        }))
+        .expect_err("the first panic resumes after delivery");
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&"a subscriber fails"));
+        assert!(reached.get(), "the other presentation still heard it");
+    }
+
+    #[test]
+    fn host_notice_delivery() {
+        crate::table_test::run_table(
+            "host_notice_delivery",
+            &[
+                (
+                    "host_notices_reach_every_presentation_in_arrival_order",
+                    host_notices_reach_every_presentation_in_arrival_order as fn(),
+                ),
+                (
+                    "a_notice_is_not_replayed_to_a_late_subscriber",
+                    a_notice_is_not_replayed_to_a_late_subscriber as fn(),
+                ),
+                (
+                    "session_end_blocks_of_several_presentations_aggregate",
+                    session_end_blocks_of_several_presentations_aggregate as fn(),
+                ),
+                (
+                    "a_panicking_notice_subscriber_does_not_starve_the_others",
+                    a_panicking_notice_subscriber_does_not_starve_the_others as fn(),
+                ),
+            ],
         );
     }
 

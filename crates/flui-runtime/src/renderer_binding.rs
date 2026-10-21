@@ -23,6 +23,7 @@
 //! layer without widgets.
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
     sync::{
         Arc,
@@ -32,7 +33,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_rendering::{
-    binding::RendererBinding,
+    binding::{RendererBinding, ViewHitTest},
     hit_testing::HitTestResult,
     pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
     view::{RenderView, ViewConfiguration},
@@ -165,7 +166,7 @@ pub struct RenderingBinding {
     root_pipeline_owner: PipelineCell,
 
     /// Render views managed by this binding (viewId → RenderView).
-    render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
+    render_views: RefCell<HashMap<u64, RenderView>>,
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
@@ -205,7 +206,7 @@ pub struct RenderingBinding {
 impl std::fmt::Debug for RenderingBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderingBinding")
-            .field("render_views_count", &self.render_views.read().len())
+            .field("render_views_count", &self.render_views.borrow().len())
             .field(
                 "semantics_enabled",
                 &self.semantics_enabled.load(Ordering::Relaxed),
@@ -270,7 +271,7 @@ impl RenderingBinding {
         Self::init_instances();
         Self {
             root_pipeline_owner: pipeline_owner,
-            render_views: RwLock::new(HashMap::new()),
+            render_views: RefCell::new(HashMap::new()),
             semantics_enabled: AtomicBool::new(false),
             semantics_listeners: SemanticsListenerStorage {
                 entries: RwLock::new(Vec::new()),
@@ -581,7 +582,13 @@ impl RendererBinding for RenderingBinding {
 
     // ---- formerly ViewHitTestable ----
 
-    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, _view_id: u64) {
+    fn hit_test_in_view(
+        &self,
+        result: &mut HitTestResult,
+        position: Offset,
+        kind: flui_interaction::events::PointerKind,
+        _view_id: u64,
+    ) -> ViewHitTest {
         // Hits route through the REAL render tree (the pipeline
         // owner's), not the per-view registry — the registry views
         // are bare metric holders with no children, so testing them
@@ -595,9 +602,21 @@ impl RendererBinding for RenderingBinding {
         // logical pixels too, so the position passes through unscaled
         // — dividing by the DPR here would shrink every hit a second
         // time on scaled displays.
-        let _ = self
-            .root_pipeline_owner
-            .try_with_layout(|owner| owner.hit_test(position, result));
+        //
+        // A render object's panic surfaces only after the walk completed the
+        // path without it (`PipelineOwner::hit_test`); it is caught here so
+        // the caller can deliver to that path first.
+        let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.root_pipeline_owner
+                .try_with_layout(|owner| owner.hit_test(position, kind, result))
+        }));
+        match walk {
+            Ok(Some(_hit)) => ViewHitTest::Answered { panic: None },
+            Ok(None) => ViewHitTest::TreeBusy,
+            Err(payload) => ViewHitTest::Answered {
+                panic: Some(payload),
+            },
+        }
     }
 
     // ---- RendererBinding proper ----
@@ -606,27 +625,35 @@ impl RendererBinding for RenderingBinding {
         &self.root_pipeline_owner
     }
 
-    // The trait used to expose `render_views()` returning
-    // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` directly, which
-    // leaked the implementer's lock topology through the trait surface.
-    // The trait now exposes four narrow primitives instead; the
-    // `self.render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>`
-    // field stays as private storage (HashMap is still the
-    // canonical container -- it just isn't exposed as a lock graph anymore).
-    fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
-        self.render_views.read().get(&view_id).cloned()
+    fn with_render_view(&self, view_id: u64, visit: &mut dyn FnMut(&mut RenderView)) -> bool {
+        let Some(view) = self.render_views.borrow_mut().remove(&view_id) else {
+            return false;
+        };
+        // The view goes back when `visit` returns or unwinds, so no borrow of
+        // the map is held while it runs.
+        let mut lent = LentRenderView {
+            views: &self.render_views,
+            view_id,
+            view: Some(view),
+        };
+        visit(
+            lent.view
+                .as_mut()
+                .expect("BUG: the lent view stays lent until dropped"),
+        );
+        true
     }
 
     fn render_view_ids(&self) -> Vec<u64> {
-        self.render_views.read().keys().copied().collect()
+        self.render_views.borrow().keys().copied().collect()
     }
 
-    fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
-        let _prev = self.render_views.write().insert(view_id, view);
+    fn insert_render_view(&self, view_id: u64, view: RenderView) {
+        self.render_views.borrow_mut().insert(view_id, view);
     }
 
-    fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
-        self.render_views.write().remove(&view_id)
+    fn remove_render_view_by_id(&self, view_id: u64) -> Option<RenderView> {
+        self.render_views.borrow_mut().remove(&view_id)
     }
 
     fn send_frames_to_engine(&self) -> bool {
@@ -640,6 +667,23 @@ impl RendererBinding for RenderingBinding {
         } else {
             // Default configuration for testing
             ViewConfiguration::default()
+        }
+    }
+}
+
+/// A render view lent out of [`RenderingBinding`]'s map for one
+/// [`RendererBinding::with_render_view`] call.
+struct LentRenderView<'a> {
+    views: &'a RefCell<HashMap<u64, RenderView>>,
+    view_id: u64,
+    view: Option<RenderView>,
+}
+
+impl Drop for LentRenderView<'_> {
+    fn drop(&mut self) {
+        if let Some(view) = self.view.take() {
+            // A view inserted under this id while it was lent is the newer one.
+            self.views.borrow_mut().entry(self.view_id).or_insert(view);
         }
     }
 }

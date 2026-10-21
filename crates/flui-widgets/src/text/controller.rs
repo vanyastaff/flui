@@ -117,6 +117,10 @@ pub(super) struct ControllerInner {
     /// write-back does not. A platform session records it when its lock
     /// opens and drops its result if it moved (ADR-0142 item 3).
     pub(super) generation: EditGeneration,
+    /// How many times the controller has been handed out for mutation, by an
+    /// application edit or silently by a session or a key handler: a reader
+    /// that saw this value and sees it again has nothing to diff.
+    pub(super) revision: u64,
 }
 
 /// The in-progress IME composition: its byte range into
@@ -343,6 +347,7 @@ impl TextEditingController {
                 selection: Selection::collapsed(0),
                 composing: None,
                 generation: EditGeneration::FIRST,
+                revision: 0,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -359,6 +364,7 @@ impl TextEditingController {
                 selection,
                 composing: None,
                 generation: EditGeneration::FIRST,
+                revision: 0,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -988,7 +994,14 @@ impl TextEditingController {
     /// when it is done. A platform session writes all of its edits back this
     /// way, so the session is one change to the field, not one per edit.
     pub(super) fn with_inner_silent<R>(&self, f: impl FnOnce(&mut ControllerInner) -> R) -> R {
-        f(&mut self.inner.lock().unwrap_or_else(PoisonError::into_inner))
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.revision = guard.revision.wrapping_add(1);
+        f(&mut guard)
+    }
+
+    /// [`ControllerInner::revision`], read under the lock.
+    pub(super) fn revision(&self) -> u64 {
+        self.with_inner(|inner| inner.revision)
     }
 
     /// Notify listeners of a change made through [`Self::with_inner_silent`].
@@ -1006,6 +1019,7 @@ impl TextEditingController {
             let changed = edit(&mut guard);
             if changed {
                 guard.generation.advance();
+                guard.revision = guard.revision.wrapping_add(1);
             }
             changed
         };

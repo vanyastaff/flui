@@ -52,8 +52,8 @@ pub(crate) struct BuildTools {
     java_home: Option<PathBuf>,
 }
 
-// View.getRootWindowInsets is the native safe-area capture boundary.
-const MIN_SDK: u32 = 23;
+// The floor (ADR-0244); `View.getRootWindowInsets`, the safe-area read, is one of what sets it.
+const MIN_SDK: u32 = super::platform_floor::ANDROID_MIN_SDK;
 const DEBUG_ALIAS: &str = "androiddebugkey";
 const DEBUG_PASSWORD: &str = "android";
 
@@ -265,9 +265,13 @@ fn add_native_libs(apk: &Path, libs: &[(String, PathBuf)]) -> BuildResult<()> {
 
 /// Entry names of an archive, for tests and `flui build android -v`.
 pub(crate) fn archive_entries(apk: &Path) -> BuildResult<Vec<String>> {
-    let archive = ZipArchive::new(BufReader::new(File::open(apk)?))
-        .map_err(|error| BuildError::Other(format!("{}: {error}", apk.display())))?;
-    Ok(archive.file_names().map(str::to_string).collect())
+    let zip_error =
+        |error: zip::result::ZipError| BuildError::Other(format!("{}: {error}", apk.display()));
+    let archive = ZipArchive::new(BufReader::new(File::open(apk)?)).map_err(zip_error)?;
+    archive
+        .file_names()
+        .map(|name| name.map(String::from).map_err(zip_error))
+        .collect()
 }
 
 /// The subdirectory with the highest version-like name.

@@ -97,7 +97,8 @@ impl ViewState<Counter> for CounterState {
                     Text::new(self.count.get().to_string()),
                     SizedBox::height(16.0),
                     ElevatedButton::new(Text::new("Increment"))
-                        .on_pressed(move |_cx| count.update(|n| n + 1)),
+                        .on_pressed(move |_cx| count.update(|n| n + 1))
+                        .identifier("increment"),
                     SizedBox::height(16.0),
                     Focus::new(
                         Semantics::new()

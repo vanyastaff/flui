@@ -1,5 +1,6 @@
 //! Owner deadline recovery uses the same binding and open members as consumers.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::AssertUnwindSafe,
@@ -15,9 +16,9 @@ use flui_foundation::{
 };
 use flui_interaction::{
     GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
-    arena::GestureArenaMember,
+    gesture::GestureArenaMember,
 };
-use web_time::Instant;
+use flui_platform_api::EventTime;
 
 thread_local! {
     static WAKE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
@@ -59,6 +60,26 @@ impl flui_platform_api::PlatformWindow for WakeWindow {
     ) -> Result<(), flui_platform_api::CursorError> {
         Ok(())
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -118,10 +139,10 @@ impl VerdictMember {
 }
 
 impl GestureArenaMember for VerdictMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.notified();
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.notified();
     }
 }
@@ -136,18 +157,18 @@ impl Drop for VerdictMember {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RejectionDeadlineObservation {
     Unobserved,
-    Armed(Instant),
+    Armed(EventTime),
     Disarmed,
 }
 
 struct DeadlineMember {
-    due: Cell<Option<Instant>>,
+    due: Cell<Option<EventTime>>,
     fail_query: Cell<bool>,
     fail_poll: Cell<bool>,
     queries: Cell<usize>,
     effects: Cell<usize>,
-    query_publication: RefCell<Option<(GestureDeadlineUpdate, Option<Instant>)>>,
-    poll_publication: RefCell<Option<(GestureDeadlineUpdate, Option<Instant>)>>,
+    query_publication: RefCell<Option<(GestureDeadlineUpdate, Option<EventTime>)>>,
+    poll_publication: RefCell<Option<(GestureDeadlineUpdate, Option<EventTime>)>>,
     release_owner: RefCell<Option<MemberOwner>>,
     drops: Rc<Cell<usize>>,
     rejection_binding: RefCell<Option<Rc<GestureBinding>>>,
@@ -155,7 +176,7 @@ struct DeadlineMember {
 }
 
 impl DeadlineMember {
-    fn new(due: Instant) -> Rc<Self> {
+    fn new(due: EventTime) -> Rc<Self> {
         Rc::new(Self {
             due: Cell::new(Some(due)),
             fail_query: Cell::new(false),
@@ -173,8 +194,8 @@ impl DeadlineMember {
 }
 
 impl GestureArenaMember for DeadlineMember {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {
         let binding = self.rejection_binding.borrow().clone();
         if let Some(binding) = binding
             && self.rejection_deadline.get() == RejectionDeadlineObservation::Unobserved
@@ -186,7 +207,7 @@ impl GestureArenaMember for DeadlineMember {
             self.rejection_deadline.set(observation);
         }
     }
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.queries.set(self.queries.get() + 1);
         let publication = self.query_publication.borrow_mut().take();
         if let Some((update, due)) = publication {
@@ -201,7 +222,7 @@ impl GestureArenaMember for DeadlineMember {
         assert!(!self.fail_query.get(), "deadline query failure");
         self.due.get()
     }
-    fn poll_deadline(&self, _: Instant) {
+    fn poll_deadline(&self, _: EventTime) {
         self.effects.set(self.effects.get() + 1);
         let publication = self.poll_publication.borrow_mut().take();
         if let Some((update, due)) = publication {
@@ -227,7 +248,12 @@ fn pointer(value: u64) -> PointerId {
     PointerId::try_from(value).expect("fixture pointer is nonzero")
 }
 
-fn sample(binding: &GestureBinding, now: Instant) -> bool {
+/// `clock`'s reading on the event timeline a binding built over it uses.
+fn at(clock: &ManualClock) -> EventTime {
+    EventTime::from_nanos(u64::try_from(clock.elapsed().as_nanos()).expect("test time fits"))
+}
+
+fn sample(binding: &GestureBinding, now: web_time::Instant) -> bool {
     let mut recovery = PanicRecovery::new();
     flui_interaction::__runtime::tick_deadlines_with_recovery(binding, now, &mut recovery.scope());
     recovery.has_failure()
@@ -236,10 +262,10 @@ fn sample(binding: &GestureBinding, now: Instant) -> bool {
 fn query_failure_has_one_bounded_probe_and_inert_reads() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_query.set(true);
     let _entry = binding.arena().add(pointer(1), &member);
-    let healthy = DeadlineMember::new(clock.now() + Duration::from_millis(50));
+    let healthy = DeadlineMember::new(at(&clock) + Duration::from_millis(50));
     let _healthy_entry = binding.arena().add(pointer(2), &healthy);
     assert!(sample(&binding, clock.now()));
     assert_eq!(member.queries.get(), 1);
@@ -252,7 +278,7 @@ fn query_failure_has_one_bounded_probe_and_inert_reads() {
     );
     assert_eq!(
         deadline.expect("inert read"),
-        clock.now().checked_add(Duration::from_millis(50))
+        at(&clock).checked_add(Duration::from_millis(50))
     );
     clock.advance(Duration::from_millis(99));
     assert!(
@@ -291,9 +317,9 @@ fn query_failure_has_one_bounded_probe_and_inert_reads() {
 fn unknown_poll_is_not_replayed_and_healthy_tail_progresses() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let failed = DeadlineMember::new(clock.now());
+    let failed = DeadlineMember::new(at(&clock));
     failed.fail_poll.set(true);
-    let healthy = DeadlineMember::new(clock.now());
+    let healthy = DeadlineMember::new(at(&clock));
     let _failed_entry = binding.arena().add(pointer(1), &failed);
     let _healthy_entry = binding.arena().add(pointer(2), &healthy);
     assert!(sample(&binding, clock.now()));
@@ -315,7 +341,7 @@ fn unknown_poll_is_not_replayed_and_healthy_tail_progresses() {
 fn a_reused_pointer_admits_a_new_deadline_identity() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_poll.set(true);
     let _old = binding.arena().add(pointer(1), &member);
     assert!(sample(&binding, clock.now()));
@@ -331,7 +357,7 @@ fn a_reused_pointer_admits_a_new_deadline_identity() {
 fn explicit_same_time_rearm_is_independent_and_stale_authority_refuses() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_poll.set(true);
     let erased: Rc<dyn GestureArenaMember> = member.clone();
     let registration = binding
@@ -339,12 +365,12 @@ fn explicit_same_time_rearm_is_independent_and_stale_authority_refuses() {
         .register_deadline_member(pointer(1), &erased)
         .expect("one member-wide source");
     let update = registration.update_handle();
-    update.publish(Some(clock.now())).expect("first revision");
+    update.publish(Some(at(&clock))).expect("first revision");
     assert!(sample(&binding, clock.now()));
     assert!(!sample(&binding, clock.now()));
     assert_eq!(member.effects.get(), 1);
     update
-        .publish(Some(clock.now()))
+        .publish(Some(at(&clock)))
         .expect("same numerical deadline is a new revision");
     assert!(sample(&binding, clock.now()));
     assert_eq!(member.effects.get(), 2);
@@ -359,15 +385,15 @@ fn explicit_same_time_rearm_is_independent_and_stale_authority_refuses() {
         .expect("replacement source");
     replacement
         .update_handle()
-        .publish(Some(clock.now() + Duration::from_secs(1)))
+        .publish(Some(at(&clock) + Duration::from_secs(1)))
         .expect("replacement deadline");
     assert_eq!(
-        update.publish(Some(clock.now())),
+        update.publish(Some(at(&clock))),
         Err(GestureDeadlineError::Retired)
     );
     assert_eq!(
         flui_interaction::__runtime::next_deadline_snapshot(&binding),
-        Some(clock.now() + Duration::from_secs(1))
+        Some(at(&clock) + Duration::from_secs(1))
     );
     flui_interaction::__runtime::close_gestures(
         &binding,
@@ -382,7 +408,7 @@ fn explicit_same_time_rearm_is_independent_and_stale_authority_refuses() {
 fn a_member_wide_poll_cannot_escape_through_another_captured_slot() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_poll.set(true);
     let _one = binding.arena().add(pointer(1), &member);
     let _two = binding.arena().add(pointer(2), &member);
@@ -408,7 +434,7 @@ fn a_member_wide_poll_cannot_escape_through_another_captured_slot() {
     );
     registration
         .update_handle()
-        .publish(Some(clock.now()))
+        .publish(Some(at(&clock)))
         .expect("explicit new revision");
     assert!(sample(&binding, clock.now()));
     assert!(!sample(&binding, clock.now()));
@@ -419,14 +445,14 @@ fn reentrant_query_and_poll_publications_survive_the_old_failure() {
     for during_query in [true, false] {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-        let member = DeadlineMember::new(clock.now());
+        let member = DeadlineMember::new(at(&clock));
         let erased: Rc<dyn GestureArenaMember> = member.clone();
         let registration = binding
             .arena()
             .register_deadline_member(pointer(1), &erased)
             .expect("source");
         let update = registration.update_handle();
-        let replacement_due = clock.now() + Duration::from_secs(2);
+        let replacement_due = at(&clock) + Duration::from_secs(2);
         if during_query {
             member.fail_query.set(true);
             *member.query_publication.borrow_mut() = Some((update.clone(), Some(replacement_due)));
@@ -434,9 +460,7 @@ fn reentrant_query_and_poll_publications_survive_the_old_failure() {
         } else {
             member.fail_poll.set(true);
             *member.poll_publication.borrow_mut() = Some((update.clone(), Some(replacement_due)));
-            update
-                .publish(Some(clock.now()))
-                .expect("due poll revision");
+            update.publish(Some(at(&clock))).expect("due poll revision");
         }
         assert!(sample(&binding, clock.now()));
         assert_eq!(
@@ -452,7 +476,7 @@ fn a_successful_reprobe_and_explicit_refresh_restore_discovery() {
     for recover_on_reprobe in [true, false] {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-        let due = clock.now() + Duration::from_secs(2);
+        let due = at(&clock) + Duration::from_secs(2);
         let member = DeadlineMember::new(due);
         member.fail_query.set(true);
         let erased: Rc<dyn GestureArenaMember> = member.clone();
@@ -486,7 +510,7 @@ fn a_successful_reprobe_and_explicit_refresh_restore_discovery() {
 fn a_shared_traversal_clone_does_not_keep_the_member_alive_after_failure() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_poll.set(true);
     let weak = Rc::downgrade(&member);
     let _entry = binding.arena().add(pointer(1), &member);
@@ -504,7 +528,7 @@ fn a_shared_traversal_clone_does_not_keep_the_member_alive_after_failure() {
 
 fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{
         DoubleTapGestureRecognizer, GestureRecognizer as _, LongPressGestureRecognizer,
         MultiTapGestureRecognizer,
@@ -543,18 +567,21 @@ fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
                 recognizer
             }
             _ => {
-                let recognizer = MultiTapGestureRecognizer::builder(binding.arena().clone(), 2)
-                    .on_multi_tap_cancel(move |_| {
-                        captured.set(captured.get() + 1);
-                        panic!("committed multi-tap cancellation");
-                    })
-                    .build();
+                let recognizer = MultiTapGestureRecognizer::builder(
+                    binding.arena().clone(),
+                    flui_interaction::MultiTapCount::TWO,
+                )
+                .on_multi_tap_cancel(move |_| {
+                    captured.set(captured.get() + 1);
+                    panic!("committed multi-tap cancellation");
+                })
+                .build();
                 recognizer.add_pointer(PointerDispatch::at_root(&down));
                 recognizer
             }
         };
         clock.advance(Duration::from_secs(1));
-        let healthy = DeadlineMember::new(clock.now());
+        let healthy = DeadlineMember::new(at(&clock));
         let _entry = binding.arena().add(pointer(2), &healthy);
         let mut recovery = PanicRecovery::new();
         flui_interaction::__runtime::tick_deadlines_with_recovery(
@@ -587,7 +614,7 @@ fn retired_and_held_sources_cannot_resurrect_an_unknown_poll() {
     for explicit in [true, false] {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-        let member = DeadlineMember::new(clock.now());
+        let member = DeadlineMember::new(at(&clock));
         member.fail_poll.set(true);
         let entry = binding.arena().add(pointer(1), &member);
         let erased: Rc<dyn GestureArenaMember> = member.clone();
@@ -622,7 +649,7 @@ fn retired_and_held_sources_cannot_resurrect_an_unknown_poll() {
 fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation() {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     member.fail_query.set(true);
     let erased: Rc<dyn GestureArenaMember> = member.clone();
     let registration = binding
@@ -634,7 +661,7 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
     assert!(sample(&binding, clock.now()));
     let drops = Rc::clone(&member.drops);
     *member.query_publication.borrow_mut() =
-        Some((update.clone(), Some(clock.now() + Duration::from_secs(2))));
+        Some((update.clone(), Some(at(&clock) + Duration::from_secs(2))));
     let owner = Rc::new(RefCell::new(Some(Rc::clone(&member))));
     *member.release_owner.borrow_mut() = Some(Rc::clone(&owner));
     drop(member);
@@ -659,7 +686,7 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
 
 fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -715,14 +742,14 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
                 panic!("wake delivery first failure");
             }));
         });
-        let member = DeadlineMember::new(clock.now());
+        let member = DeadlineMember::new(at(&clock));
         let erased: Rc<dyn GestureArenaMember> = member;
         let registration = binding
             .arena()
             .register_deadline_member(pointer(1), &erased)
             .expect("source");
         let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            registration.update_handle().publish(Some(clock.now()))
+            registration.update_handle().publish(Some(at(&clock)))
         }));
         let payload = caught.expect_err("wake delivery fails after deadline commit");
         assert_eq!(
@@ -737,7 +764,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
         assert!(owner.lock().expect("fixture owner").is_none());
         assert_eq!(
             flui_interaction::__runtime::next_deadline_snapshot(&binding),
-            Some(clock.now()),
+            Some(at(&clock)),
             "failed wake cannot erase accepted timing"
         );
         return;
@@ -760,7 +787,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
 
 fn an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -794,8 +821,8 @@ fn an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner() {
 fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
     let clock = ManualClock::new();
     let binding = Rc::new(GestureBinding::with_clock(Arc::new(clock.clone())));
-    let member = DeadlineMember::new(clock.now());
-    let healthy_due = clock.now() + Duration::from_secs(5);
+    let member = DeadlineMember::new(at(&clock));
+    let healthy_due = at(&clock) + Duration::from_secs(5);
     let healthy = DeadlineMember::new(healthy_due);
     let entry = binding.arena().add(pointer(1), &member);
     let _healthy_entry = binding.arena().add(pointer(1), &healthy);
@@ -808,7 +835,7 @@ fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
     );
     assert_eq!(
         flui_interaction::__runtime::next_deadline_snapshot(&binding),
-        Some(clock.now())
+        Some(at(&clock))
     );
     entry.resolve(flui_interaction::GestureDisposition::Rejected);
     assert_eq!(
@@ -821,7 +848,7 @@ fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
 fn abandoned_generations_are_withdrawn_before_rejection(all_pointers: bool) {
     let clock = ManualClock::new();
     let binding = Rc::new(GestureBinding::with_clock(Arc::new(clock.clone())));
-    let member = DeadlineMember::new(clock.now());
+    let member = DeadlineMember::new(at(&clock));
     let held = binding.arena().add(pointer(1), &member);
     held.hold();
     binding.arena().sweep(pointer(1));
@@ -836,7 +863,7 @@ fn abandoned_generations_are_withdrawn_before_rejection(all_pointers: bool) {
     );
     assert_eq!(
         flui_interaction::__runtime::next_deadline_snapshot(&binding),
-        Some(clock.now())
+        Some(at(&clock))
     );
     if all_pointers {
         binding.cancel_all_pointer_sequences();
@@ -867,7 +894,7 @@ enum VerdictFault {
 
 fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault: VerdictFault) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{
         DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
     };
@@ -884,9 +911,12 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
         "double tap" => DoubleTapGestureRecognizer::builder(binding.arena().clone())
             .on_double_tap_cancel(move |_| captured.set(captured.get() + 1))
             .build(),
-        _ => MultiTapGestureRecognizer::builder(binding.arena().clone(), 2)
-            .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
-            .build(),
+        _ => MultiTapGestureRecognizer::builder(
+            binding.arena().clone(),
+            flui_interaction::MultiTapCount::TWO,
+        )
+        .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
+        .build(),
     };
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     let owner = Rc::new(RefCell::new(None));
@@ -1059,7 +1089,7 @@ fn nested_public_verdict_operation(
     fault: NestedVerdictFault,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -1299,18 +1329,18 @@ fn nested_public_held_release_retirement_precedes_later_callback_failure() {
 fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     struct NestedPollMember {
         arena: flui_interaction::GestureArena,
-        due: Instant,
+        due: EventTime,
         polls: Rc<Cell<usize>>,
         panic_after_retirement: bool,
     }
 
     impl GestureArenaMember for NestedPollMember {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
-        fn deadline(&self) -> Option<Instant> {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
+        fn deadline(&self) -> Option<EventTime> {
             Some(self.due)
         }
-        fn poll_deadline(&self, _: Instant) {
+        fn poll_deadline(&self, _: EventTime) {
             self.polls.set(self.polls.get() + 1);
             self.arena.abandon(pointer(2));
             assert!(
@@ -1325,7 +1355,7 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     let polls = Rc::new(Cell::new(0));
     let member = Rc::new(NestedPollMember {
         arena: binding.arena().clone(),
-        due: clock.now(),
+        due: at(&clock),
         polls: Rc::clone(&polls),
         panic_after_retirement,
     });

@@ -52,6 +52,8 @@ fn lifecycle_matrix() {
         ("local marks survive a failed wake and coalesce", crate::attach_detach_lifecycle::local_marks_survive_a_failed_wake_and_coalesce),
         ("local marks wait for a hook and end with the attachment", crate::attach_detach_lifecycle::local_marks_wait_for_a_hook_and_end_with_the_attachment),
         ("attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id", crate::attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id),
+        ("attach_detach_lifecycle::a_layout_mark_during_paint_is_diagnosed", crate::attach_detach_lifecycle::a_layout_mark_during_paint_is_diagnosed),
+        ("attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth", crate::attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
         ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),
         ("pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round", crate::pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round),
@@ -71,6 +73,9 @@ fn lifecycle_matrix() {
 fn semantics_assembly_matrix() {
     let cases: &[(&str, fn())] = &[
         ("semantics_assembly::a_semantics_clip_drops_a_child_that_falls_entirely_outside_it", crate::semantics_assembly::a_semantics_clip_drops_a_child_that_falls_entirely_outside_it),
+        ("semantics_assembly::an_identifier_names_only_the_node_its_configuration_forms", crate::semantics_assembly::an_identifier_names_only_the_node_its_configuration_forms),
+        ("semantics_assembly::nonfinite_reading_order_is_refused_before_publication", crate::semantics_assembly::nonfinite_reading_order_is_refused_before_publication),
+        ("semantics_assembly::a_panicking_semantics_callback_leaves_the_phase", crate::semantics_assembly::a_panicking_semantics_callback_leaves_the_phase),
         ("semantics_assembly::excludes_semantics_subtree_drops_descendant_content", crate::semantics_assembly::excludes_semantics_subtree_drops_descendant_content),
         ("semantics_assembly::explicit_child_nodes_forms_direct_contributors", crate::semantics_assembly::explicit_child_nodes_forms_direct_contributors),
         ("semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node", crate::semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node),
@@ -111,9 +116,13 @@ fn paint_matrix() {
 #[test]
 fn layout_protocol_matrix() {
     let cases: &[(&str, fn())] = &[
+        ("layout_dirty_root::adopted_nodes_lay_out_parents_before_children", crate::layout_dirty_root::adopted_nodes_lay_out_parents_before_children),
+        ("layout_dirty_root::sibling_layout_marks_share_one_ancestor_walk", crate::layout_dirty_root::sibling_layout_marks_share_one_ancestor_walk),
+        ("layout_dirty_root::a_moved_node_marks_its_new_ancestors", crate::layout_dirty_root::a_moved_node_marks_its_new_ancestors),
         ("intrinsics_cache::intrinsic_walk_memoizes_every_level", crate::intrinsics_cache::intrinsic_walk_memoizes_every_level),
         ("render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions", crate::render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions),
         ("render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix", crate::render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix),
+        ("render_viewport::a_sliver_reports_its_painted_area_as_an_input_region", crate::render_viewport::a_sliver_reports_its_painted_area_as_an_input_region),
         ("sliver_direction_matrix::sliver_direction_matrix_eight_by_three", crate::sliver_direction_matrix::sliver_direction_matrix_eight_by_three),
         ("sliver_fill_remaining::sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent", crate::sliver_fill_remaining::sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent),
         ("sliver_fixed_extent_list::sliver_fixed_extent_list_sizes_children_to_item_extent", crate::sliver_fixed_extent_list::sliver_fixed_extent_list_sizes_children_to_item_extent),
@@ -216,6 +225,26 @@ fn hit_test_matrix() {
         (
             "hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates",
             crate::hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates,
+        ),
+        (
+            "hit_test_pipeline::a_contained_hit_panic_retains_the_discarded_entries",
+            crate::hit_test_pipeline::a_contained_hit_panic_retains_the_discarded_entries,
+        ),
+        (
+            "hit_test_pipeline::a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit",
+            crate::hit_test_pipeline::a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit,
+        ),
+        (
+            "hit_test_pipeline::a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic",
+            crate::hit_test_pipeline::a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic,
+        ),
+        (
+            "hit_test_pipeline::default_parent_hit_test_reaches_its_children",
+            crate::hit_test_pipeline::default_parent_hit_test_reaches_its_children,
+        ),
+        (
+            "hit_test_pipeline::a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path",
+            crate::hit_test_pipeline::a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path,
         ),
     ];
     crate::run_table(cases);

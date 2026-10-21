@@ -27,6 +27,75 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
+pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
+    use flui_rendering::semantics::SemanticsSortKey;
+    for order in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut config = SemanticsConfiguration::new();
+        config.set_label("invalid ordering");
+        config.set_sort_key(SemanticsSortKey::new(order));
+        let result = RenderTester::mount(box_node(SemanticsLeaf {
+            side: 20.0,
+            configuration: Some(config),
+            ..Default::default()
+        }))
+        .with_constraints(constraints())
+        .with_semantics_enabled()
+        .try_run_frame();
+        let error = result.expect_err("nonfinite reading order must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("non-finite semantics sort order"),
+            "{error}"
+        );
+    }
+}
+
+/// A panic in authored semantics code leaves the semantics phase, so a host
+/// driving the phases that catches it keeps an owner that routes later marks
+/// normally.
+pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
+    #[derive(Debug)]
+    struct Panicking;
+    impl flui_foundation::Diagnosticable for Panicking {}
+    impl RenderBox for Panicking {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(Size::new(20.0, 20.0)))
+        }
+        fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {
+            std::panic::panic_any("semantics callback failed");
+        }
+    }
+    let mut owner =
+        flui_rendering::PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    owner.set_semantics_update_callback(Arc::new(|_: &flui_semantics::TreeUpdate| {}));
+    owner.set_root_render_object(Box::new(Panicking));
+    owner.set_root_constraints(Some(constraints()));
+    owner.set_semantics_enabled(true);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("layout");
+    let mut owner = owner.into_compositing();
+    owner.run_compositing().expect("compositing");
+    let mut owner = owner.into_paint();
+    owner.run_paint().expect("paint");
+    let mut owner = owner.into_semantics();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.run_semantics()))
+        .expect_err("the callback's panic propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"semantics callback failed")
+    );
+    assert!(
+        !owner.debug_doing_semantics(),
+        "the semantics phase is left on unwind"
+    );
+}
+
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
 /// Stands in for a `Semantics`/button-like leaf widget — the real
@@ -500,6 +569,95 @@ pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
         label.contains("Tile") && label.contains("Open"),
         "{label:?}"
     );
+}
+
+/// A configuration naming its node, with `label` when one is given.
+fn identified(identifier: &str, label: Option<&str>) -> SemanticsConfiguration {
+    let mut config = SemanticsConfiguration::new();
+    config.set_identifier(identifier);
+    if let Some(label) = label {
+        config.set_label(label);
+    }
+    config
+}
+/// An identifier names only the node its own configuration forms
+/// (ADR-0240): a boundary keeps it, a contributor absorbed into its
+/// ancestor and a boundary under a merge lose it, and an identifier alone
+/// forms no node.
+pub(crate) fn an_identifier_names_only_the_node_its_configuration_forms() {
+    // The walk root's own children always form nodes, so the cases sit under
+    // a plain boundary, where contributors are absorbed.
+    let run = RenderTester::mount(
+        box_node(SemanticsContainer::default()).label("root").child(
+            box_node(SemanticsContainer::default().with_boundary())
+                .label("group")
+                .child(
+                    box_node(SemanticsLeaf {
+                        configuration: Some(identified("save-id", Some("Save"))),
+                        ..SemanticsLeaf::new(20.0).with_boundary()
+                    })
+                    .label("save"),
+                )
+                .child(box_node(SemanticsLeaf {
+                    configuration: Some(identified("note-id", Some("Note"))),
+                    ..SemanticsLeaf::new(20.0)
+                }))
+                .child(box_node(SemanticsLeaf {
+                    configuration: Some(identified("bare-id", None)),
+                    ..SemanticsLeaf::new(20.0)
+                }))
+                .child(
+                    box_node(
+                        SemanticsContainer::merge_semantics()
+                            .with_configuration(identified("card-id", None)),
+                    )
+                    .label("card")
+                    .child(box_node(SemanticsLeaf {
+                        configuration: Some(identified("open-id", Some("Open"))),
+                        ..SemanticsLeaf::new(20.0).with_boundary().with_button()
+                    })),
+                ),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_frame();
+
+    let root = accessibility_id(run.id("root"));
+    let group = accessibility_id(run.id("group"));
+    let save = accessibility_id(run.id("save"));
+    let card = accessibility_id(run.id("card"));
+    assert_snapshot_preorder(&snapshot(&run), &[root, group, save, card]);
+
+    let owner = run
+        .owner()
+        .semantics_owner()
+        .expect("semantics must remain enabled");
+    let node_of = |id: AccessibilityNodeId| {
+        owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.accessibility_id() == Some(id))
+            .map(|(_, node)| node)
+            .expect("every expected accessibility identity resolves")
+    };
+    assert_eq!(node_of(save).config().identifier(), Some("save-id"));
+    assert_eq!(
+        node_of(group).config().identifier(),
+        None,
+        "an absorbed contributor's identifier does not cross into its ancestor"
+    );
+    assert_eq!(
+        node_of(group).label(),
+        Some("Note"),
+        "the absorbed label arrives without its identifier"
+    );
+    assert_eq!(
+        node_of(card).config().identifier(),
+        Some("card-id"),
+        "a merged parent keeps its own identifier, not its merged child's"
+    );
+    assert_eq!(node_of(card).label(), Some("Open"));
 }
 
 // ============================================================================

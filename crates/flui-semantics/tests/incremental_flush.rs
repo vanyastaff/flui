@@ -735,6 +735,61 @@ fn reveal_healthy_capture_retirement_and_failed_retirement_keep_authority() {
     );
 }
 
+#[test]
+fn configuration_capture_retirement_preserves_first_failure_and_healthy_destruction() {
+    use flui_foundation::panic::PanicRecovery;
+    use flui_semantics::{SemanticsAction, SemanticsActionHandler, SemanticsConfiguration};
+    for (regular_fails, custom_fails) in
+        [(false, false), (true, false), (true, true), (false, true)]
+    {
+        let retired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler = |panic_on_drop, failure| -> SemanticsActionHandler {
+            let capture = RevealCapture {
+                retired: retired.clone(),
+                panic_on_drop,
+                failure,
+            };
+            Arc::new(move |_| {
+                let _capture = &capture;
+            })
+        };
+        let mut configuration = SemanticsConfiguration::new();
+        configuration.add_action(
+            SemanticsAction::Click,
+            handler(regular_fails, "regular capture"),
+        );
+        let _ = configuration.add_custom_action("custom", handler(custom_fails, "custom capture"));
+        let mut recovery = PanicRecovery::new();
+        configuration.retire(&mut recovery.scope());
+        let result = catch_unwind(AssertUnwindSafe(|| recovery.finish()));
+        if regular_fails || custom_fails {
+            let first = result.expect_err("capture retirement propagates its first failure");
+            let expected = if regular_fails {
+                "regular capture"
+            } else {
+                "custom capture"
+            };
+            assert_eq!(first.downcast_ref::<&str>().copied(), Some(expected));
+        } else {
+            result.expect("healthy captures retire normally");
+        }
+        let expected = if regular_fails { 1 } else { 2 };
+        assert_eq!(
+            retired.load(Ordering::SeqCst),
+            expected,
+            "the opaque tail is retained after failure"
+        );
+
+        let mut fresh = SemanticsConfiguration::new();
+        fresh.add_action(SemanticsAction::Click, handler(false, "healthy regular"));
+        let _ = fresh.add_custom_action("healthy custom", handler(false, "healthy custom"));
+        let mut recovery = PanicRecovery::new();
+        fresh.retire(&mut recovery.scope());
+        recovery.finish();
+        assert_eq!(retired.load(Ordering::SeqCst), expected + 2);
+    }
+}
+
 fn unused_reveal_snapshot_retirement_worker(competing: bool) {
     let mut fixture = RevealFixture::with_retirement_failures([true, competing]);
     let held = fixture.resolve();
@@ -2009,4 +2064,86 @@ fn a_failed_publication_admits_only_what_both_nodes_offer() {
         failures.is_empty(),
         "failed-publication admission rows failed: {failures:?}"
     );
+}
+
+/// A disabled control refuses a platform request the way it refuses an agent
+/// one; focus and blur still reach it, and enabling it again restores the
+/// click.
+#[test]
+fn a_disabled_node_takes_no_user_action_from_the_platform() {
+    use flui_semantics::{
+        ActionCall, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
+    };
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    let target = button.accessibility_id().expect("render-backed identity");
+    let clicks = Arc::new(Mutex::new(0_u32));
+    let focuses = Arc::new(Mutex::new(0_u32));
+    let (click_counter, focus_counter) = (Arc::clone(&clicks), Arc::clone(&focuses));
+    button.config_mut().set_enabled(Some(false));
+    button.config_mut().add_action(
+        SemanticsAction::Click,
+        Arc::new(move |_| *click_counter.lock() += 1),
+    );
+    button.config_mut().add_action(
+        SemanticsAction::Focus,
+        Arc::new(move |_| *focus_counter.lock() += 1),
+    );
+    let button = owner.insert(button);
+    owner.add_child(root, button);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    assert_eq!(
+        owner
+            .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+            .err(),
+        Some(SemanticsActionError::Disabled { node_id: target })
+    );
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Focus))
+        .expect("a disabled node still takes focus")
+        .invoke();
+    assert_eq!((*clicks.lock(), *focuses.lock()), (0, 1));
+
+    owner
+        .get_mut(button)
+        .expect("the button is live")
+        .config_mut()
+        .set_enabled(Some(true));
+    owner.flush();
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+        .expect("an enabled node is actionable")
+        .invoke();
+    assert_eq!(*clicks.lock(), 1);
+}
+
+/// A child the root lists but whose own parent link was never set is still
+/// published by the full walk, so an action on it resolves.
+#[test]
+fn a_child_listed_without_a_parent_link_still_resolves() {
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    let target = button.accessibility_id().expect("render-backed identity");
+    button
+        .config_mut()
+        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    let button = owner.insert(button);
+    owner
+        .get_mut(root)
+        .expect("the root is live")
+        .add_child(button);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+        .expect("a listed child is published and actionable")
+        .invoke();
 }

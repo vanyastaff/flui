@@ -236,6 +236,30 @@ deep-but-valid chain; `a_deep_chain_survives_a_small_stack` in
 | `tessellator.rs` | none — the adapter over `lyon` |
 | `glyph_atlas.rs` | `Texture`, `TextureView`, `Sampler`, `BindGroup` for the two pages; `etagere` packs them |
 
+**Surface acquisition escalates.** `Outdated`, `Lost` and `Validation`
+reconfigure and retry once; a surface still `Lost` after that is recreated on
+the same device (`Renderer::recreate_surface`), because `Lost` means the
+surface itself is gone. The recreating frame is skipped as `NotShown`, which
+the caller retries: it was planned against the old surface, and the new one
+may differ in format or `COPY_SRC` support. A recreation that fails leaves the
+renderer without a surface its owner never released, so the next acquire
+recreates again before anything else instead of skipping frames as if released.
+A frame acquired `Suboptimal` configures the surface right after it presents,
+not before the next acquire, because it may be the last frame with damage and
+a clean frame never acquires. The configure owes a full repaint the caller
+never hears about, so the renderer presents the same scene again at once.
+That is once per episode: a surface still
+suboptimal after it presents as it is until a `Success`. The owner's
+`release_surface`, a successful recreation and device recovery clear both
+obligations. A
+recreation that fails for good (`SurfaceCreation`, a handle kind the owner
+never supports) returns that error rather than the retryable `SurfaceLost`.
+`render_frame_inner` plans again after the acquisition, because a configure
+during it invalidates the retained target a partial plan would read.
+`acquisition_escalates_from_reconfigure_to_recreate` pins the table and
+`an_owed_surface_recreation_runs_through_the_backend_render_path` the real
+renderer's side.
+
 The Cargo features `vulkan`, `metal`, `dx12`, `webgpu`, `gles` are **additive
 pass-throughs to wgpu's own backend features, not selectors**. Nobody
 normally names them: the per-target dependency entries in `Cargo.toml` unify
@@ -782,8 +806,9 @@ paragraph; the pacing surface returns with a real consumer.
 `draw_gradient_rect` / `draw_radial_gradient_rect` / `draw_sweep_gradient_rect`
 / `draw_shadow_rect` are deleted with the display-list variants they served
 ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
-A gradient arrives as `Paint::shader` on `Rect`/`RRect`/`Circle` and reaches
-`DrawBatcher::dispatch_shader_rect`, which is the only lowering: it carries
+A gradient arrives as `Paint::shader` on `Rect`/`RRect`/`Circle` (or on a
+path, below) and reaches `DrawBatcher::dispatch_shader`, which is the only
+lowering: it carries
 the paint's blend mode (decision 5), its `anti_alias`, the painter's
 transform, and the rounded rect's real `[tl, tr, br, bl]`. The deleted path
 had none of those — it collapsed the corners to one radius and handed the
@@ -791,6 +816,30 @@ batcher untransformed bounds — so this is a fix as much as a deletion;
 `gradient_rrect_keeps_per_corner_radii` is red against a uniform radius.
 `GradientStop` and `ShadowParams` are crate-private batch payloads now, with
 no root re-export.
+
+A shader on `draw_path` takes the same lowering over a mesh. The path's
+tessellated outline (fill, stroke or dashed stroke, from the shared path
+cache) enters the segment's gradient mesh arena in the instance's unit-square
+coordinates, and its run (`GradientRun::mesh`) draws that one instance over
+those triangles instead of the unit quad. The vertex stage, transform, analytic
+clip, stop table, blend-mode pipelines, portable coverage and advanced
+isolation are the rounded box's, unchanged; bit 31 of the stop-count word
+switches off the box's own SDF edge, because the triangles are the coverage.
+The outline is aliased like the solid tessellated route outside SSAA, and
+`Shader::Image` still declines to the solid route. Before this the path route
+had no shader branch and painted `Paint::color`. The `path_*` rows of
+`gradients_read_back_as_specified` read linear, radial and sweep ramps on a
+filled triangle and a stroked arc, under mirroring and rotation, scissor,
+rounded and path clips, `Multiply` and `Plus`, and between quad gradients.
+
+Every closed-form shape the rounded box cannot express takes the same mesh:
+stroked rects, rounded rects and circles, filled and stroked ovals and arcs
+(whose instanced `SrcOver` fills carry no shader), `draw_drrect` rings and
+`draw_line`. Each tessellates its fill or stroke in local space and hands it to
+`DrawBatcher::draw_shaded_tessellation` before any solid route is chosen. A
+filled rect, rounded rect or circle stays on the anti-aliased rounded box. The
+`shape_*` rows of `gradients_read_back_as_specified` read each of these on the
+GPU.
 
 ### 16. Text is a glyph batch of the segment; the engine owns the atlas
 
@@ -1336,6 +1385,9 @@ RenderTester and captures its actual layer tree; `render_image_natural_crop`
 also pins an oversized natural-scale crop. Both visible crop color and
 pixels outside the allocated box distinguish the producer defect. Engine dev
 edges on objects and rendering's testing feature exist for this consumer path.
+`render_image_subnormal_scale_cover` repeats the crop with the smallest positive
+scale: a bounded image must preserve its crop rather than disappear after
+overflowing an intermediate logical extent.
 `standalone_source_crop`, `atlas_affine_and_paint`, `advanced_affine` and
 `degenerate_image_quad_keeps_sibling` cover source region/texture layout, sprite and
 advanced placement, and deliberate zero-area image-quad omission with a healthy

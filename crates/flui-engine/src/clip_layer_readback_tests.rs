@@ -206,6 +206,14 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
                 continue;
             }
             compared += 1;
+            assert_eq!(
+                squircle.contains(flui_foundation::geometry::Point::new(
+                    f64::from(x as f32 + 0.5),
+                    f64::from(y as f32 + 0.5),
+                )),
+                here,
+                "hit testing must follow the drawn curve at ({x}, {y})"
+            );
             let pixel = sample(&frame, x, y);
             if here {
                 assert!(
@@ -230,6 +238,204 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
          excluded almost everything and the loop above asserted nothing",
         (SIDE - 2) * (SIDE - 2)
     );
+}
+
+/// Hit testing reads the drawn shape: with asymmetric radii larger than the
+/// sides, `RSuperellipse::contains` normalizes them exactly as the clip
+/// chain's mask and the per-draw SDF do.
+fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
+    use flui_foundation::geometry::{RSuperellipse, Radius};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE as f32);
+    let shape = RSuperellipse::from_rect_and_corners(
+        Rect::from_xywh(0.0, 0.0, side, side),
+        Radius::new(side, side * 0.5),
+        Radius::circular(side * 0.25),
+        Radius::new(side * 0.75, side),
+        Radius::ZERO,
+    );
+    assert_clip_reads_back_as(
+        &renderer,
+        "superellipse",
+        |builder, behavior| {
+            builder.push_clip_superellipse(shape, behavior);
+        },
+        |point| shape.contains(point),
+        (1_000, 50),
+    );
+}
+
+/// Hit testing reads the drawn rounded rect: `RRect::contains` answers for the
+/// shape the clip paints when the radii overflow the sides (a pill whose
+/// radius exceeds its height, a corner wider than half the box) and when the
+/// corners are elliptical (an oval drawn as a rounded rect).
+fn rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii() {
+    use flui_foundation::geometry::{RRect, Radius};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE as f32);
+    let cases = [
+        (
+            "pill",
+            RRect::from_rect_circular(Rect::from_xywh(0.0, 16.0, side, 32.0), 200.0),
+            (600, 100),
+        ),
+        (
+            "wide corner",
+            RRect::from_rect_and_corners(
+                Rect::from_xywh(0.0, 0.0, side, side),
+                Radius::circular(side * 0.875),
+                Radius::circular(side * 0.125),
+                Radius::ZERO,
+                Radius::ZERO,
+            ),
+            (1_000, 100),
+        ),
+        (
+            "oval",
+            RRect::from_rect_elliptical(Rect::from_xywh(0.0, 16.0, side, 32.0), side * 0.5, 16.0),
+            (600, 100),
+        ),
+    ];
+    for (name, rrect, minimums) in cases {
+        assert_clip_reads_back_as(
+            &renderer,
+            name,
+            |builder, behavior| {
+                builder.push_clip_rrect(rrect, behavior);
+            },
+            |point| rrect.contains(point),
+            minimums,
+        );
+    }
+}
+
+/// A rounded rect drawn directly — the decoration path, no clip layer — paints
+/// the radii `RRect::contains` hit-tests: a pill whose radius exceeds its
+/// height fills its whole straight run, as the normalized shape says.
+fn a_drawn_rrect_matches_hit_testing_with_oversized_radii() {
+    use flui_foundation::geometry::{Point, RRect};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE as f32);
+    let pill = RRect::from_rect_circular(Rect::from_xywh(0.0, 16.0, side, 32.0), 200.0);
+    let tree = {
+        let mut builder = SceneBuilder::new();
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(255, 0, 0));
+        canvas.draw_rrect(
+            pill,
+            &Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+        builder.build()
+    };
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+    let inside_at = |x: i64, y: i64| pill.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+    let (mut kept, mut cut) = (0_usize, 0_usize);
+    for y in 1..i64::from(SIDE) - 1 {
+        for x in 1..i64::from(SIDE) - 1 {
+            let here = inside_at(x, y);
+            let unanimous = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                .all(|(dx, dy)| inside_at(x + dx, y + dy) == here);
+            if !unanimous {
+                continue;
+            }
+            let pixel = sample(&frame, x as u32, y as u32);
+            if here {
+                kept += 1;
+                assert!(
+                    pixel[1] > 128 && pixel[0] < 64,
+                    "drawn pill: ({x}, {y}) inside, got {pixel:?}"
+                );
+            } else {
+                cut += 1;
+                assert!(
+                    pixel[0] > 200 && pixel[1] < 64,
+                    "drawn pill: ({x}, {y}) outside, got {pixel:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        kept > 600 && cut > 100,
+        "drawn pill: kept {kept}, cut {cut}"
+    );
+}
+
+/// Every pixel clear of the boundary reads back as `inside` says: the fill is
+/// kept inside the clip `push_clip` installs and the red backdrop survives
+/// outside it — for an unbounded fill and an instanced rect, in both in-place
+/// modes. A point whose 3x3 neighbourhood disagrees is skipped, since sample
+/// coverage is fractional there.
+fn assert_clip_reads_back_as(
+    renderer: &HeadlessRenderer,
+    shape_name: &str,
+    push_clip: impl Fn(&mut SceneBuilder, Clip),
+    inside: impl Fn(flui_foundation::geometry::Point<f64>) -> bool,
+    (min_kept, min_cut): (usize, usize),
+) {
+    use flui_foundation::geometry::Point;
+    let side = f64::from(SIDE as f32);
+    for behavior in [Clip::AntiAlias, Clip::HardEdge] {
+        for fill_name in ["paint", "rect"] {
+            let tree = inside_a_clip(
+                behavior,
+                |builder, behavior| push_clip(builder, behavior),
+                |canvas| {
+                    if fill_name == "paint" {
+                        fill_everything(canvas);
+                    } else {
+                        canvas.draw_rect(
+                            Rect::from_xywh(0.0, 0.0, side, side),
+                            &Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false),
+                        );
+                    }
+                },
+            );
+            let frame = renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("the headless capture path must rasterize the scene");
+            let inside_at = |x: i64, y: i64| inside(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let (mut kept, mut cut) = (0_usize, 0_usize);
+            for y in 1..i64::from(SIDE) - 1 {
+                for x in 1..i64::from(SIDE) - 1 {
+                    let here = inside_at(x, y);
+                    let unanimous = (-1..=1)
+                        .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                        .all(|(dx, dy)| inside_at(x + dx, y + dy) == here);
+                    if !unanimous {
+                        continue;
+                    }
+                    let pixel = sample(&frame, x as u32, y as u32);
+                    if here {
+                        kept += 1;
+                        assert!(
+                            pixel[1] > 128 && pixel[0] < 64,
+                            "{shape_name} {behavior:?} {fill_name}: ({x}, {y}) inside, got {pixel:?}"
+                        );
+                    } else {
+                        cut += 1;
+                        assert!(
+                            pixel[0] > 200 && pixel[1] < 64,
+                            "{shape_name} {behavior:?} {fill_name}: ({x}, {y}) outside, got {pixel:?}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                kept > min_kept && cut > min_cut,
+                "{shape_name} {behavior:?} {fill_name}: kept {kept}, cut {cut}"
+            );
+        }
+    }
 }
 
 /// An unbounded green fill — the shape `RenderPhysicalModel` emits.
@@ -508,6 +714,9 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     display_list_and_save_layer_scopes_own_their_clips();
     a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
     the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
+    superellipse_hit_testing_matches_the_mask_with_oversized_radii();
+    rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii();
+    a_drawn_rrect_matches_hit_testing_with_oversized_radii();
     a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape();
     an_empty_clip_path_clips_everything();
     a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();

@@ -563,6 +563,16 @@ An immutable `SpringCurve` instead describes normalized easing; when admitted as
 `MotionSpec::Curve`, it uses the generic Hermite velocity correction and assigned
 deadline. Direct keyframe sampling retains the curve's authored time scale.
 
+### Changing one half of a motion spec keeps the other
+
+`MotionSpec::with_duration` keeps the easing and `with_curve` keeps the
+duration, so `.curve(..).duration(..)` and `.duration(..).curve(..)` on an
+implicit widget's `MotionBuilder` agree. A spring has neither half: asked for a
+duration it takes the default easing (`EASE_IN_OUT`), asked for a curve it
+takes `MotionSpec::DEFAULT_DURATION` (200 ms), the same values
+`MotionSpec::default()` uses. `motion_spec_changes_keep_the_other_half` pins
+the four cases.
+
 ### Immutable authored easing retains the existing Curve domain
 
 `PiecewiseLinear` canonicalizes a borrowed stop slice once, then shares the
@@ -960,8 +970,8 @@ One direct, load-bearing consequence: **the first `stop()` on a fresh
 unbounded controller emits `Forward → ForwardSettled`.**
 `settled_status_directed`'s bound checks are both false on an infinite
 range, so it falls to `match direction { Forward => ForwardSettled }`. Every
-`jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both own an unbounded
-controller built with `AnimationController::builder(..).unbounded()`) triggers this event through the
+`jump_to` on a fresh `Scrollable` (it owns an unbounded controller built
+with `AnimationController::builder(..).unbounded()`) triggers this event through the
 fling controller's `stop_hook`.
 
 **Refusals carry typed input, range or arithmetic causes (ADR-0198).**
@@ -1049,8 +1059,7 @@ Reading the field directly at the boundary removes the multiplication from
 that path entirely, so no path through `tick_at` can ever compute or store
 a NaN value: the issue's own stated criterion.
 
-**Consumer construction.** `Scrollable` and `RefreshIndicator` own their ballistic
-controllers through `AnimationController::builder(..).unbounded().build_on(..)`.
+**Consumer construction.** `Scrollable` owns its ballistic controller through `AnimationController::builder(..).unbounded().build_on(..)`.
 Unbounded configuration is explicit; no literal infinite endpoint pair or
 fallible range construction is needed.
 

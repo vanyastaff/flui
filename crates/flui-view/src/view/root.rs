@@ -150,6 +150,14 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         TypeId::of::<RootRenderView<V>>()
     }
 
+    fn view_type_name(&self) -> &'static str {
+        core::any::type_name::<RootRenderView<V>>()
+    }
+
+    fn debug_kind(&self) -> &'static str {
+        "RootRenderElement"
+    }
+
     fn lifecycle(&self) -> Lifecycle {
         self.lifecycle
     }

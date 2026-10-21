@@ -35,7 +35,7 @@
 //! Before the very first layout pass nothing has published, so the builder
 //! **cannot** be called: there is no honest `BoxConstraints` to hand it. This
 //! element then builds **no child** — `RenderLayoutBuilder` sizes itself to
-//! `constraints.biggest()` for that one pass, publishes, and the fixpoint's
+//! `constraints.smallest()` for that one pass, publishes, and the fixpoint's
 //! next iteration builds the real child in the same frame. It never passes
 //! `BoxConstraints::UNCONSTRAINED` or a default to the builder; that placeholder
 //! is exactly what the pre-rewrite `LayoutBuilder` (commit `bb58a8fa`) did, and
@@ -50,7 +50,7 @@
 //! The intrinsics, dry-layout, and double-invocation divergences are recorded
 //! in ADR-0017.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use flui_objects::{LayoutConstraintsCell, RenderLayoutBuilder};
 use flui_rendering::{constraints::BoxConstraints, protocol::BoxProtocol};
@@ -103,7 +103,8 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 /// widget is rebuilt with a new builder, or when a dependency it read changes.
 ///
 /// The widget's final size is `constraints.constrain(child.size)` — it follows
-/// its child. With no child it fills `constraints.biggest()`.
+/// its child. Before its builder has run, with no child yet, it takes
+/// `constraints.smallest()`.
 ///
 /// # Unsupported
 ///
@@ -149,12 +150,12 @@ impl RenderView for LayoutBuilder {
     ///
     /// The cell is created here, not on the view, because a view is rebuilt
     /// (and so reconstructed) on every parent rebuild — a cell owned by the
-    /// view would be a fresh `Arc` each time, silently orphaning the one the
+    /// view would be a fresh `Rc` each time, silently orphaning the one the
     /// render object and the registry hold. `create_render_object` runs exactly
     /// once per mount; `LayoutBuilderBehavior::on_mount` reads the cell back out
     /// of the render object, which is therefore the single source of truth.
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderLayoutBuilder::new(Arc::new(LayoutConstraintsCell::new()))
+        RenderLayoutBuilder::new(Rc::new(LayoutConstraintsCell::new()))
     }
 
     /// Deliberately empty: the builder closure lives on the view, never on the
@@ -215,7 +216,7 @@ pub(crate) struct LayoutBuilderBehavior {
     inner: RenderBehavior<LayoutBuilder>,
     /// The cell shared with the render object. `None` until `on_mount` reads it
     /// back out of the freshly created render object.
-    cell: Option<Arc<LayoutConstraintsCell>>,
+    cell: Option<Rc<LayoutConstraintsCell>>,
 }
 
 impl std::fmt::Debug for LayoutBuilderBehavior {
@@ -263,7 +264,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 
         // No layout pass has run yet, so no constraints exist. Build no child
         // rather than inventing one: `RenderLayoutBuilder` sizes to
-        // `constraints.biggest()` for this single pass, publishes, and the
+        // `constraints.smallest()` for this single pass, publishes, and the
         // fixpoint rebuilds us with real constraints before the frame paints.
         let Some(constraints) = self.cell.as_ref().and_then(|cell| cell.constraints()) else {
             tracing::debug!(
@@ -278,9 +279,9 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         let ctx = ctx_choice.as_ctx();
         let view = core.view().clone();
         let child_view = build_or_recover(core, owner, "LayoutBuilderElement", move || {
-            // `BoxedView` is a newtype over `Box<dyn View>`; unwrap it for the
-            // reconciler, which speaks `Box<dyn View>`.
-            (view.builder)(ctx, constraints).0
+            // The reconciler speaks `Box<dyn View>`; the box keeps the
+            // `BoxedView` inside it, and with it the view's identity.
+            Box::new((view.builder)(ctx, constraints)) as Box<dyn View>
         });
         single_child_views(core, child_view, "LayoutBuilderBehavior")
     }
@@ -295,7 +296,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         self.inner.on_mount(core, owner);
 
         // Step 2: read the cell back out of the render object it just made. The
-        // render object is the single owner of that `Arc`; cloning it here is
+        // render object is the single owner of that `Rc`; cloning it here is
         // what makes the element and the render half share one channel.
         let Some(render_id) = self.inner.render_id else {
             tracing::warn!(
@@ -311,7 +312,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
                     .render_tree_mut()
                     .get_mut(render_id)
                     .and_then(|node| node.downcast_render_object_mut::<RenderLayoutBuilder>())
-                    .map(|render_object| Arc::clone(render_object.cell()))
+                    .map(|render_object| Rc::clone(render_object.cell()))
             })
         });
 
@@ -334,7 +335,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
             return;
         };
 
-        self.cell = Some(Arc::clone(&cell));
+        self.cell = Some(Rc::clone(&cell));
         owner.register_layout_builder(render_id, self_id, cell);
     }
 
@@ -367,6 +368,8 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     use flui_foundation::RenderId;

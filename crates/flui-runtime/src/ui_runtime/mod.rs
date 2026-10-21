@@ -22,6 +22,8 @@
 //! still gets a fresh generational [`UiRuntimeId`], so results stamped for a
 //! dead runtime are droppable by identity, not by convention.
 
+mod display;
+pub use display::DEFAULT_REFRESH_PERIOD;
 pub(crate) mod preferences;
 pub(crate) mod text_preparation;
 pub use text_preparation::{TextSizingSettlement, TextSizingWork};
@@ -36,7 +38,7 @@ use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -112,6 +114,7 @@ mod frame_clock;
 mod input;
 mod presentations;
 mod pump;
+mod recording;
 mod sampling;
 
 pub use crate::runtime_services::RuntimeHostServices;
@@ -119,6 +122,7 @@ pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
+pub(crate) use presentations::start_os_drags;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -155,6 +159,10 @@ pub struct UiRuntime {
     owner_frame: OwnerFrame,
     /// Owner-local interaction callback storage, activated with the UI runtime scope.
     interaction_lane: InteractionLane,
+    /// The drag-and-drop sessions of this UI runtime and the OS drags delivered
+    /// to its presentations (ADR-0211). One per runtime, not per presentation:
+    /// a drag's value is redeemed by any presentation of its own runtime.
+    drag: flui_interaction::drag::DragOwner,
     /// This UI runtime's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
@@ -213,6 +221,10 @@ pub struct UiRuntime {
     /// render-retry path all need this, exactly as the retired
     /// `AppBinding::wake_frame` did).
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// The tap registry and the records awaiting delivery (ADR-0215 §1).
+    input_taps: crate::InputTaps,
+    /// The arena observers a recording keeps, and what they reported.
+    decision_recorder: recording::DecisionRecorder,
     /// The platform clipboard this UI runtime's presentations hand their widgets:
     /// the initial one at construction, every later one through
     /// [`Self::assemble_presentation`].
@@ -234,7 +246,7 @@ pub struct UiRuntime {
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
     /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
     /// nudged to the smallest positive subnormal instead).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     now_secs_override: AtomicU64,
     rx: Receiver<UiCommand>,
     /// Prototype for [`Self::command_sender`]: crossbeam receivers cannot

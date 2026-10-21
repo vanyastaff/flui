@@ -1,6 +1,6 @@
 //! Test doubles for driving a UI runtime with no platform backend and no GPU.
 //!
-//! Compiled for this crate's own tests and, through the `test-support`
+//! Compiled for this crate's own tests and, through the `testing`
 //! feature, for `flui-app`'s, which enables it on its dev edge only.
 //!
 //! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime
@@ -56,6 +56,8 @@ pub struct TestWindow {
     /// [`TestWindow::pre_present_notifies_handle`].
     pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
+    /// Reported from [`PlatformWindow::system_chrome`].
+    system_chrome: Option<Arc<dyn flui_platform_api::PlatformSystemChrome>>,
     /// The bridge a host-side wrapper reports for this window. A
     /// `PlatformWindow` names no accessibility type (ADR-0082 §1), so the
     /// double only carries it for a test that builds a presentation from it
@@ -98,6 +100,7 @@ impl TestWindow {
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
             pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
+            system_chrome: None,
             accessibility: None,
             cursor: parking_lot::Mutex::new(CursorIcon::Default),
         }
@@ -150,6 +153,16 @@ impl TestWindow {
     #[must_use]
     pub fn with_text_input(mut self, text_input: Option<Arc<dyn PlatformTextInput>>) -> Self {
         self.text_input = text_input;
+        self
+    }
+
+    /// Report `system_chrome` from [`PlatformWindow::system_chrome`].
+    #[must_use]
+    pub fn with_system_chrome(
+        mut self,
+        system_chrome: Arc<dyn flui_platform_api::PlatformSystemChrome>,
+    ) -> Self {
+        self.system_chrome = Some(system_chrome);
         self
     }
 
@@ -243,8 +256,32 @@ impl PlatformWindow for TestWindow {
         self.text_input.clone()
     }
 
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        self.system_chrome.clone()
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
+        Ok(())
+    }
+
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
         Ok(())
     }
 

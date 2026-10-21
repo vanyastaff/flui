@@ -8,23 +8,27 @@
 //! ## Type-Safe Budget Management
 //!
 //! ```rust
+//! use std::num::NonZeroU32;
+//!
 //! use flui_scheduler::{
 //!     budget::{BudgetPolicy, FrameBudget},
-//!     duration::{FrameDuration, Milliseconds},
+//!     duration::Milliseconds,
 //! };
 //!
-//! let mut budget = FrameBudget::new(60);
+//! let start = flui_scheduler::Instant::now();
+//! let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
+//! budget.reset(start);
 //!
 //! // Type-safe time recording
 //! budget.record_build_duration(Milliseconds::new(5.0));
 //!
 //! // Check budget status
-//! if budget.is_deadline_near() {
+//! if budget.is_deadline_near(start) {
 //!     budget.set_policy(BudgetPolicy::SkipIdle);
 //! }
 //! ```
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, num::NonZeroU32, sync::Arc};
 
 use parking_lot::Mutex;
 #[cfg(feature = "serde")]
@@ -154,15 +158,19 @@ impl PhaseTiming {
 
 /// Frame budget manager with type-safe durations
 ///
-/// Tracks time spent in each phase and enforces budget limits.
+/// Tracks time spent in each phase and enforces budget limits. Instants are
+/// supplied by the caller, read from whichever clock stamps its frames, so a
+/// virtual clock drives the budget deterministically.
 ///
 /// # Examples
 ///
 /// ```
+/// use std::num::NonZeroU32;
+///
 /// use flui_scheduler::{budget::FrameBudget, duration::Milliseconds};
 ///
-/// let mut budget = FrameBudget::new(60);
-/// budget.reset();
+/// let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
+/// budget.reset(flui_scheduler::Instant::now());
 ///
 /// // Record phase timings
 /// budget.record_build_duration(Milliseconds::new(5.0));
@@ -189,34 +197,30 @@ pub struct FrameBudget {
     /// Total frame time of last frame
     last_frame_time: Milliseconds,
 
-    /// Average frame time (rolling window)
+    /// Average frame time over [`Self::frame_times`]
     avg_frame_time: Milliseconds,
 
-    /// Running sum of frame times in the rolling window (avoids re-summing each
-    /// frame)
-    running_sum: f64,
-
-    /// Frame time history (last 60 frames)
+    /// Frame time history (last [`FRAME_TIME_WINDOW`] frames), every entry
+    /// finite and non-negative
     frame_times: VecDeque<Milliseconds>,
 
     /// Frame counter
     frame_count: u64,
 }
 
+/// Frames the rolling statistics cover.
+const FRAME_TIME_WINDOW: usize = 60;
+
+/// The frame duration of a non-zero rate.
+fn fps_duration(fps: NonZeroU32) -> FrameDuration {
+    FrameDuration::try_from_fps(fps.get())
+        .expect("BUG: a non-zero frame rate is a valid frame duration")
+}
+
 impl FrameBudget {
     /// Create a new frame budget for target FPS
-    pub fn new(target_fps: u32) -> Self {
-        Self {
-            frame_duration: FrameDuration::try_from_fps(target_fps).expect("fps > 0"),
-            frame_start: None,
-            policy: BudgetPolicy::SkipIdle,
-            phase_timing: PhaseTiming::default(),
-            last_frame_time: Milliseconds::ZERO,
-            avg_frame_time: Milliseconds::ZERO,
-            running_sum: 0.0,
-            frame_times: VecDeque::with_capacity(60),
-            frame_count: 0,
-        }
+    pub fn new(target_fps: NonZeroU32) -> Self {
+        Self::with_duration(fps_duration(target_fps))
     }
 
     /// Create with a specific frame duration
@@ -228,53 +232,42 @@ impl FrameBudget {
             phase_timing: PhaseTiming::default(),
             last_frame_time: Milliseconds::ZERO,
             avg_frame_time: Milliseconds::ZERO,
-            running_sum: 0.0,
-            frame_times: VecDeque::with_capacity(60),
+            frame_times: VecDeque::with_capacity(FRAME_TIME_WINDOW + 1),
             frame_count: 0,
         }
     }
 
-    /// Reset for new frame
-    pub fn reset(&mut self) {
-        self.frame_start = Some(Instant::now());
+    /// Start a new frame at `now`
+    pub fn reset(&mut self, now: Instant) {
+        self.frame_start = Some(now);
         self.phase_timing.reset();
     }
 
-    /// Get elapsed time since frame start
-    pub fn elapsed(&self) -> Milliseconds {
+    /// Time from the frame's start to `now`; zero before [`Self::reset`]
+    pub fn elapsed(&self, now: Instant) -> Milliseconds {
         self.frame_start.map_or(Milliseconds::ZERO, |start| {
-            Milliseconds::new(start.elapsed().as_secs_f64() * 1000.0)
+            Milliseconds::new(now.saturating_duration_since(start).as_secs_f64() * 1000.0)
         })
     }
 
-    /// Get elapsed time since frame start (raw f64 for backwards compat)
-    pub fn elapsed_ms(&self) -> f64 {
-        self.elapsed().value()
+    /// Check if over budget at `now`
+    pub fn is_over_budget(&self, now: Instant) -> bool {
+        self.frame_duration.is_over_budget(self.elapsed(now))
     }
 
-    /// Check if over budget
-    pub fn is_over_budget(&self) -> bool {
-        self.frame_duration.is_over_budget(self.elapsed())
+    /// Get remaining budget at `now`
+    pub fn remaining(&self, now: Instant) -> Milliseconds {
+        self.frame_duration.remaining(self.elapsed(now))
     }
 
-    /// Get remaining budget
-    pub fn remaining(&self) -> Milliseconds {
-        self.frame_duration.remaining(self.elapsed())
+    /// Get budget utilization at `now` (0.0 to 1.0+)
+    pub fn utilization(&self, now: Instant) -> f64 {
+        self.frame_duration.utilization(self.elapsed(now))
     }
 
-    /// Get remaining budget (raw f64 for backwards compat)
-    pub fn remaining_ms(&self) -> f64 {
-        self.remaining().value()
-    }
-
-    /// Get budget utilization (0.0 to 1.0+)
-    pub fn utilization(&self) -> f64 {
-        self.frame_duration.utilization(self.elapsed())
-    }
-
-    /// Get budget utilization as percentage
-    pub fn utilization_percent(&self) -> BudgetPercentage {
-        BudgetPercentage::from_ratio(self.utilization())
+    /// Get budget utilization at `now` as percentage
+    pub fn utilization_percent(&self, now: Instant) -> BudgetPercentage {
+        BudgetPercentage::from_ratio(self.utilization(now))
     }
 
     /// Set budget policy
@@ -292,19 +285,9 @@ impl FrameBudget {
         self.phase_timing.set(phase, duration);
     }
 
-    /// Record build phase time
-    pub fn record_build_time(&mut self, duration_ms: f64) {
-        self.phase_timing.build = Milliseconds::new(duration_ms);
-    }
-
     /// Record build phase duration (type-safe)
     pub fn record_build_duration(&mut self, duration: Milliseconds) {
         self.phase_timing.build = duration;
-    }
-
-    /// Record layout phase time
-    pub fn record_layout_time(&mut self, duration_ms: f64) {
-        self.phase_timing.layout = Milliseconds::new(duration_ms);
     }
 
     /// Record layout phase duration (type-safe)
@@ -312,19 +295,9 @@ impl FrameBudget {
         self.phase_timing.layout = duration;
     }
 
-    /// Record paint phase time
-    pub fn record_paint_time(&mut self, duration_ms: f64) {
-        self.phase_timing.paint = Milliseconds::new(duration_ms);
-    }
-
     /// Record paint phase duration (type-safe)
     pub fn record_paint_duration(&mut self, duration: Milliseconds) {
         self.phase_timing.paint = duration;
-    }
-
-    /// Record composite phase time
-    pub fn record_composite_time(&mut self, duration_ms: f64) {
-        self.phase_timing.composite = Milliseconds::new(duration_ms);
     }
 
     /// Record composite phase duration (type-safe)
@@ -332,26 +305,25 @@ impl FrameBudget {
         self.phase_timing.composite = duration;
     }
 
-    /// Record total frame time
-    pub fn record_frame_time(&mut self, total_ms: f64) {
-        self.record_frame_duration(Milliseconds::new(total_ms));
-    }
-
-    /// Record total frame duration (type-safe)
-    pub fn record_frame_duration(&mut self, total: Milliseconds) {
+    /// Record total frame duration.
+    ///
+    /// Returns `false`, recording nothing, for a non-finite or negative
+    /// duration: one such sample would otherwise poison the rolling average.
+    pub fn record_frame_duration(&mut self, total: Milliseconds) -> bool {
+        if !total.value().is_finite() || total.value() < 0.0 {
+            return false;
+        }
         self.last_frame_time = total;
         self.frame_count += 1;
-
-        // Update running sum: add new, subtract evicted
-        self.running_sum += total.value();
         self.frame_times.push_back(total);
-        if self.frame_times.len() > 60
-            && let Some(evicted) = self.frame_times.pop_front()
-        {
-            self.running_sum -= evicted.value();
+        if self.frame_times.len() > FRAME_TIME_WINDOW {
+            self.frame_times.pop_front();
         }
-
-        self.avg_frame_time = Milliseconds::new(self.running_sum / self.frame_times.len() as f64);
+        // Summed from the window rather than kept as a running sum, which
+        // accumulates rounding error with every eviction.
+        let sum: f64 = self.frame_times.iter().map(|time| time.value()).sum();
+        self.avg_frame_time = Milliseconds::new(sum / self.frame_times.len() as f64);
+        true
     }
 
     /// Get phase stats
@@ -446,9 +418,15 @@ impl FrameBudget {
         self.frame_count
     }
 
+    /// Set the frame duration the budget judges frames against, keeping a
+    /// fractional rate exact (see [`FrameDuration::try_from_period`]).
+    pub fn set_frame_duration(&mut self, frame_duration: FrameDuration) {
+        self.frame_duration = frame_duration;
+    }
+
     /// Set the target FPS
-    pub fn set_target_fps(&mut self, target_fps: u32) {
-        self.frame_duration = FrameDuration::try_from_fps(target_fps).expect("fps > 0");
+    pub fn set_target_fps(&mut self, target_fps: NonZeroU32) {
+        self.frame_duration = fps_duration(target_fps);
     }
 
     /// Get target FPS
@@ -456,20 +434,19 @@ impl FrameBudget {
         self.frame_duration.fps() as u32
     }
 
-    /// Check if deadline is approaching (>80% of budget used)
-    pub fn is_deadline_near(&self) -> bool {
-        self.frame_duration.is_deadline_near(self.elapsed())
+    /// Check if deadline is approaching at `now` (>80% of budget used)
+    pub fn is_deadline_near(&self, now: Instant) -> bool {
+        self.frame_duration.is_deadline_near(self.elapsed(now))
     }
 
-    /// Finish current frame and record total time
+    /// Finish the current frame at `now` and record its total time
     ///
     /// This is a convenience that calls
     /// [`record_frame_duration`](Self::record_frame_duration)
-    /// with the elapsed time since [`reset`](Self::reset) was called.
-    pub fn finish_frame(&mut self) {
-        if let Some(start) = self.frame_start {
-            let total = Milliseconds::new(start.elapsed().as_secs_f64() * 1000.0);
-            self.record_frame_duration(total);
+    /// with the time from [`reset`](Self::reset) to `now`.
+    pub fn finish_frame(&mut self, now: Instant) {
+        if self.frame_start.is_some() {
+            self.record_frame_duration(self.elapsed(now));
         }
         self.frame_start = None;
     }
@@ -557,7 +534,7 @@ impl AllPhaseStats {
 /// };
 ///
 /// let budget = FrameBudgetBuilder::new()
-///     .target_fps(120)
+///     .target_fps(std::num::NonZeroU32::new(120).expect("120 is non-zero"))
 ///     .policy(BudgetPolicy::SkipIdleAndBuild)
 ///     .build();
 ///
@@ -565,7 +542,7 @@ impl AllPhaseStats {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct FrameBudgetBuilder {
-    target_fps: Option<u32>,
+    target_fps: Option<NonZeroU32>,
     frame_duration: Option<FrameDuration>,
     policy: Option<BudgetPolicy>,
 }
@@ -577,7 +554,7 @@ impl FrameBudgetBuilder {
     }
 
     /// Set target FPS
-    pub fn target_fps(mut self, fps: u32) -> Self {
+    pub fn target_fps(mut self, fps: NonZeroU32) -> Self {
         self.target_fps = Some(fps);
         self
     }
@@ -603,10 +580,7 @@ impl FrameBudgetBuilder {
     pub fn build(self) -> FrameBudget {
         let frame_duration = self
             .frame_duration
-            .or_else(|| {
-                self.target_fps
-                    .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
-            })
+            .or_else(|| self.target_fps.map(fps_duration))
             .unwrap_or_else(|| {
                 FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid")
             });
@@ -625,6 +599,6 @@ impl FrameBudgetBuilder {
 pub type SharedBudget = Arc<Mutex<FrameBudget>>;
 
 /// Create a new shared budget
-pub fn shared_budget(target_fps: u32) -> SharedBudget {
+pub fn shared_budget(target_fps: NonZeroU32) -> SharedBudget {
     Arc::new(Mutex::new(FrameBudget::new(target_fps)))
 }

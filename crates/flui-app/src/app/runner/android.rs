@@ -3,7 +3,7 @@ use flui_view::{StatelessView, View};
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
-    BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
+    BackgroundPace, FallbackGate, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
 };
 use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
@@ -58,11 +58,6 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
 
     tracing::info!(
         title = %config.title,
@@ -90,7 +85,12 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
-    crate::app::dev_agent::log_undriven(&config, "android");
+    // Attached for the loop: the attachment detaches the hook when it drops,
+    // after `run` returns. The window is handed over once it is installed.
+    let agent = config
+        .dev_agent
+        .as_ref()
+        .and_then(crate::app::dev_agent::DevAgent::attach);
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
@@ -145,20 +145,27 @@ where
         let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
         let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
 
+        // 0b-3. The bound on backgrounded pumps: a deadline the wake hook
+        // reports, not a sleep on the loop thread.
+        let background_pace = Arc::new(BackgroundPace::default());
+
         // The existing owner wake carries runtime deadlines as well as device
-        // and surface recovery. Geometry refresh is owner work even while a
-        // hidden presentation cannot produce frames.
+        // and surface recovery and the background pace. Geometry refresh is
+        // owner work even while a hidden presentation cannot produce frames.
         owner_platform_installed(|owner| {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
+            let background_pace = Arc::clone(&background_pace);
             owner.shared().set_wake_deadline_hook(Box::new(move || {
-                super::host::merge_wake_deadlines(
+                [
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-                    super::host::merge_wake_deadlines(
-                        device_recovery_backoff.next_attempt_at(),
-                        surface_recreation_retry.next_attempt_at(),
-                    ),
-                )
+                    device_recovery_backoff.next_attempt_at(),
+                    surface_recreation_retry.next_attempt_at(),
+                    background_pace.next_wake(),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
             }));
         });
 
@@ -214,6 +221,7 @@ where
         // desktop bootstrap.
         ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+        config.install_input_tap(&ui_runtime);
 
         let logical = window.logical_size();
         let owner = APP_RUNTIME
@@ -240,8 +248,16 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
+        // Vended while the ui_runtime is still ours, handed over once the
+        // install commits: a failed install drops it with the ui_runtime.
+        let agent_window = config
+            .dev_agent
+            .as_ref()
+            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+        let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.text_sizing(native_sizing);
+        installation.dev_agent(config.dev_agent.clone().zip(agent_window));
         let owner_dispatch = installation.dispatcher();
 
         // 3b. Start config-declared application services (issue #558) —
@@ -270,12 +286,17 @@ where
         // plus the owner-affine stamp/size state, and every frame submit
         // below crosses the raster boundary as an owned, stamped
         // `SceneSnapshot`.
-        let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-            renderer,
-            owner_dispatch.address,
-            phys_size.width as u32,
-            phys_size.height as u32,
-        )));
+        let lane = Arc::new(Mutex::new(
+            crate::app::raster_lane::RasterLane::new(
+                renderer,
+                owner_dispatch.address,
+                phys_size.width as u32,
+                phys_size.height as u32,
+            )
+            .with_textures(textures),
+        ));
+
+        super::host::track_raster_lane(lane.lock().reclaim_handle());
 
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
@@ -286,10 +307,15 @@ where
                 hot_reload,
                 device_recovery_backoff,
                 surface_recreation_retry,
+                background_pace,
             },
         ))?;
         let binding = frame.binding;
         window.on_request_frame(Box::new(move || {
+            // The frame is the turn a window command's wake asks for: it starts
+            // with the queued commands, before the callback guard would leave
+            // them waiting.
+            super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
             super::owner_dispatch::with_owner_callback(|_| {
                 let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
             });
@@ -297,10 +323,10 @@ where
 
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
-        window.on_resize(Box::new(move |size, scale_factor| {
+        window.on_resize(Box::new(move |metrics| {
             let _ = dispatch_platform_ui_runtime(
                 owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
             );
         }));
 
@@ -325,25 +351,29 @@ where
             installation.terminal_callbacks(&owner.shared());
         });
 
-        // Window active status. On Android this one callback conflates real
-        // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
-        // actual pause/resume signal (`MainEvent::Resume`/`Pause` currently fire
-        // the identical `dispatch_active_status_change` — see
-        // `flui-platform`'s `platforms/android/mod.rs`); a dedicated
-        // `MainEvent` -> lifecycle callback that tells them apart is a named
-        // follow-up (ADR-0035), not this PR. Until that split lands, this keeps
-        // the existing transport but fixes the mapping: `false` ladders all the
-        // way to `Paused` and `true` back to `Resumed` — Android's
-        // backgrounding signal needs the deeper ladder the desktop/web
-        // `(visible, focused)` derivation (which only ever reaches
-        // `Inactive`/`Hidden`) does not produce.
-        window.on_active_status_change(Box::new(move |resumed| {
-            let target = if resumed {
-                AppLifecycleState::Resumed
-            } else {
-                AppLifecycleState::Paused
-            };
-            let _ = owner_dispatch.runtime().lifecycle(target);
+        // The Activity's three lifecycle facts reach the runtime as they are,
+        // and `derive_lifecycle_state` builds the application state from them:
+        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
+        // and holding input focus. Focus alone must not stand for the other two
+        // (a dialog or the notification shade takes focus from a running
+        // Activity), so no callback here sets the lifecycle itself.
+        window.on_active_status_change(Box::new(move |focused| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
+            );
+        }));
+        window.on_visibility_status_change(Box::new(move |visible| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
+            );
+        }));
+        window.on_execution_state_change(Box::new(move |state| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
+            );
         }));
 
         // 8b. Surface availability (issue #1146): the release that has to
@@ -458,14 +488,25 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
+        installation.observe_appearance();
+        installation.observe_display();
+        installation.observe_window_state();
+        // Registered above, so a fact that changed during bootstrap is not lost
+        // between this sample and the first callback.
+        installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
+            execution: window.execution_state(),
+            focused: window.is_focused(),
+            visible: window.is_visible(),
         });
+        if let Ok(metrics) = window.metrics() {
+            installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
+        }
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed). Routed through dispatch --
-        // see `run_desktop`'s matching comment for why.
+        // Seed the host's own lifecycle as Resumed. It does not decide what a
+        // presentation is: the window's visible, running and focused facts,
+        // sampled above, do. Routed through dispatch -- see `run_desktop`'s
+        // matching comment for why.
         debug_assert_eq!(
             std::thread::current().id(),
             owner_dispatch.owner_thread,
@@ -487,7 +528,8 @@ where
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
-        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
+        super::host::install_configured_executors(&config);
+        super::host::install_host_storage(&config);
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.
@@ -495,6 +537,7 @@ where
         Ok(())
     }));
     teardown_platform_ui_runtime();
+    drop(agent);
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has
@@ -511,14 +554,16 @@ pub(super) struct AndroidFrameDriver {
     hot_reload: crate::app::hot_reload::ScenePlugin,
     device_recovery_backoff: std::sync::Arc<super::device_recovery::DeviceRecoveryBackoff>,
     surface_recreation_retry: std::sync::Arc<SurfaceRecreationRetry>,
+    background_pace: std::sync::Arc<BackgroundPace>,
 }
 
 impl AndroidFrameDriver {
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         let resize = self.lane.lock().resize_hook();
+        let physical = metrics.physical();
         resize.apply(
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         );
     }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
@@ -587,9 +632,9 @@ impl AndroidFrameDriver {
                 ui_runtime.needs_redraw(),
                 has_pending,
                 retry_deadline,
-                // Android's wake-deadline hook carries only the retry
-                // deadlines, so no fallback deferral exists to consult
-                // (ADR-0058): its backgrounded pump sleeps.
+                // Android paces only its backgrounded pump
+                // (`BackgroundPace`): a rendering wake has no fallback
+                // deferral to consult (ADR-0058).
                 FallbackGate::default(),
             );
             let scheduler = ui_runtime.scheduler();
@@ -628,21 +673,32 @@ impl AndroidFrameDriver {
             (action, now)
         });
 
+        if action != WakeAction::PumpBackground {
+            self.background_pace.clear();
+        }
         match action {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
+                // A wake before the pace deadline does not pump; the
+                // deadline, reported through the wake hook, brings the next.
+                if !self.background_pace.admit(now) {
+                    return;
+                }
                 // Frames disabled: service owner commands, async tasks, and
                 // input deadlines without animation or a visual frame. See
                 // `UiRuntime::pump_background` for the latch-first order.
                 ui_runtime.pump_background();
-                // Unconditional throttle: a self-re-arming task has
-                // no vsync/present call to bound it here either, and
-                // this arm has no gate-open signal to make the pace
-                // conditional the way desktop's does — see
-                // `BACKGROUNDED_PUMP_PACE`'s doc. Android keeps the
-                // sleep the desktop path dropped (ADR-0058): its frame
-                // source has no wake-deadline hook to arm instead.
-                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
+                // A self-re-arming task has no vsync or present to bound it
+                // here, so work that asks for another wake defers the next
+                // pump by a pace (ADR-0058). A deadline, not a sleep: the
+                // loop thread keeps delivering input and lifecycle events.
+                if keeps_frame_gate_open(
+                    ui_runtime.needs_redraw(),
+                    ui_runtime.scheduler().is_frame_scheduled(),
+                    ui_runtime.has_pending_work(),
+                ) {
+                    self.background_pace.defer(web_time::Instant::now());
+                }
                 return;
             }
             WakeAction::Render => {}
@@ -665,8 +721,8 @@ impl AndroidFrameDriver {
         // territory at the backoff's one-second cap. The
         // deadline is carried by the wake hook wired at step 0c
         // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so `AndroidPlatform::run`'s own ~16 ms idle poll
-        // consults the hook every iteration and forces a
+        // so `AndroidPlatform::run`'s poll blocks no longer than
+        // the hook's deadline and forces a
         // dispatch once the deadline is due (`flui-platform`'s
         // `platforms/android/mod.rs`).
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()

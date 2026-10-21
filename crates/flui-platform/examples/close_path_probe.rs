@@ -48,16 +48,17 @@ mod appkit_close_path_probe {
         // test is the same `windowWillClose:` → `handle_close` path an
         // on-screen close takes through its shared tail.
         let window = platform
-            .open_window(flui_platform::WindowOptions {
-                title: "close-path probe".to_string(),
-                size: flui_foundation::geometry::Size::new(400.0, 300.0),
-                resizable: false,
-                visible: false, // never order-front; the close route is what is tested
-                decorated: true,
-                min_size: None,
-                max_size: None,
-                ..Default::default()
-            })
+            .open_window(
+                flui_platform::WindowOptions::default()
+                .with_title("close-path probe".to_string())
+                .with_size(flui_foundation::geometry::Size::new(400.0, 300.0))
+                .with_resizable(false)
+                // never order-front; the close route is what is tested
+                .with_visible(false)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None),
+            )
             .expect("open_window must construct a real NSWindow on the owner/main thread");
 
         // The `on_close` callback #1148 obliges to fire during the close

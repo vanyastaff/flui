@@ -84,16 +84,30 @@ pub(crate) struct Tree {
 
 /// Walks the module trees under `roots` (crate root files).
 pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
-    walk_with_tests(roots, false)
+    walk_with_tests(roots, false, is_test_only)
+}
+
+/// Decides from an item's attributes whether it is compiled only for tests.
+pub(crate) type Scope = fn(&[Attribute]) -> bool;
+
+/// Walks like [`walk`] with `scope` deciding which modules are test-only: a gate whose notion of
+/// test code is wider than `cfg(test)` (ADR-0243 adds the testing features) follows its own
+/// declarations.
+pub(crate) fn walk_scoped(roots: impl IntoIterator<Item = PathBuf>, scope: Scope) -> Tree {
+    walk_with_tests(roots, false, scope)
 }
 
 /// Walk every source module, reporting unreadable or unresolved test modules
 /// too. Coverage discovery cannot silently discard a target-gated test file.
 pub(crate) fn walk_all(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
-    walk_with_tests(roots, true)
+    walk_with_tests(roots, true, is_test_only)
 }
 
-fn walk_with_tests(roots: impl IntoIterator<Item = PathBuf>, strict_tests: bool) -> Tree {
+fn walk_with_tests(
+    roots: impl IntoIterator<Item = PathBuf>,
+    strict_tests: bool,
+    scope: Scope,
+) -> Tree {
     let mut tree = Tree::default();
     // (file, whether it is a mod-rs file, whether it is only compiled for tests)
     let mut queue: Vec<(PathBuf, bool, bool)> = roots
@@ -116,7 +130,7 @@ fn walk_with_tests(roots: impl IntoIterator<Item = PathBuf>, strict_tests: bool)
             }
             Err(_) => continue,
         };
-        let outcome = read_file(&text, test);
+        let outcome = read_file(&text, test, scope);
         // spans are per-thread and grow with every parse; nothing holds one now
         proc_macro2::extra::invalidate_current_thread_spans();
         let parsed = match outcome {
@@ -193,15 +207,18 @@ struct Parsed {
     declarations: Vec<Declaration>,
 }
 
-fn read_file(text: &str, test: bool) -> Result<Parsed, String> {
+fn read_file(text: &str, test: bool, scope: Scope) -> Result<Parsed, String> {
     let file = syn::parse_file(text).map_err(|error| {
         let start = error.span().start();
         format!("{}:{}: {error}", start.line, start.column + 1)
     })?;
-    let test = test || is_test_only(&file.attrs);
+    let test = test || scope(&file.attrs);
     let mut collector = Collector {
+        scope,
         in_test: test,
-        ..Collector::default()
+        ranges: Vec::new(),
+        declarations: Vec::new(),
+        inline: Vec::new(),
     };
     for item in &file.items {
         collector.visit_item(item);
@@ -254,8 +271,9 @@ fn normalise(path: &Path) -> PathBuf {
 }
 
 /// Test-only item ranges and module declarations of one file.
-#[derive(Default)]
 struct Collector {
+    /// What makes an item test-only.
+    scope: Scope,
     ranges: Vec<(usize, usize)>,
     declarations: Vec<Declaration>,
     inline: Vec<String>,
@@ -276,7 +294,7 @@ impl Collector {
 
 impl<'ast> Visit<'ast> for Collector {
     fn visit_item(&mut self, item: &'ast Item) {
-        if !self.in_test && is_test_only(item_attrs(item)) {
+        if !self.in_test && (self.scope)(item_attrs(item)) {
             self.exclude(item);
             // only to learn which files are test modules
             self.in_test = true;
@@ -311,7 +329,7 @@ impl<'ast> Visit<'ast> for Collector {
             ImplItem::Macro(i) => &i.attrs,
             _ => &[],
         };
-        if is_test_only(attrs) {
+        if (self.scope)(attrs) {
             self.exclude(item);
         } else {
             visit::visit_impl_item(self, item);
@@ -326,7 +344,7 @@ impl<'ast> Visit<'ast> for Collector {
             TraitItem::Macro(i) => &i.attrs,
             _ => &[],
         };
-        if is_test_only(attrs) {
+        if (self.scope)(attrs) {
             self.exclude(item);
         } else {
             visit::visit_trait_item(self, item);
@@ -341,7 +359,7 @@ impl<'ast> Visit<'ast> for Collector {
             ForeignItem::Macro(i) => &i.attrs,
             _ => &[],
         };
-        if is_test_only(attrs) {
+        if (self.scope)(attrs) {
             self.exclude(item);
         } else {
             visit::visit_foreign_item(self, item);
@@ -379,7 +397,7 @@ fn path_attr(attrs: &[Attribute]) -> Option<String> {
     })
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
+pub(crate) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,

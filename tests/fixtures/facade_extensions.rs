@@ -40,9 +40,16 @@ impl CustomPainter for RectanglePainter {
         None
     }
 
-    fn semantics_builder(&self) -> Option<flui::painting::SemanticsBuilder> {
-        None
+    fn semantics_regions(&self, size: Size) -> Vec<flui::painting::SemanticsRegion> {
+        let mut config = flui::widgets::SemanticsConfiguration::new();
+        config.set_label("painted rectangle");
+        vec![flui::painting::SemanticsRegion::new(
+            flui::painting::SemanticsRegionKey(1),
+            Rect::from_origin_size(Point::ZERO, size),
+            config,
+        )]
     }
+
 }
 
 #[test]
@@ -59,6 +66,19 @@ fn custom_painter_records_a_rectangle() {
         Rect::from_origin_size(Point::ZERO, Size::new(24.0, 16.0))
     );
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
+
+    let mut laid = lay_out(
+        flui::widgets::CustomPaint::new()
+            .painter(Rc::new(RectanglePainter))
+            .size(Size::new(24.0, 16.0)),
+        loose(100.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let node = tree.find_by_label("painted rectangle").expect("the custom-paint region reaches the adapter tree");
+    let bounds = node.bounds().expect("laid-out region bounds");
+    assert_eq!((bounds.x1 - bounds.x0, bounds.y1 - bounds.y0), (24.0, 16.0));
 }
 
 #[derive(Debug, Clone, flui::animation::TwoWayConverter)]
@@ -90,7 +110,6 @@ impl CustomPainter for MotionPainter {
     fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
         Some(Rc::new(self.0.clone()))
     }
-    fn semantics_builder(&self) -> Option<flui::painting::SemanticsBuilder> { None }
 }
 
 #[test]
@@ -284,7 +303,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     let callback = fired.clone();
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
         .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+            GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
         )
         .on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
             callback.fetch_add(1, Ordering::SeqCst);
@@ -346,9 +365,11 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let observed = downs.clone();
     let tree = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_cx, _details: flui::widgets::DragDownDetails| {
-                observed.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(flui::widgets::DragSlot::horizontal().on_down(
+                move |_cx, _details: flui::widgets::DragDownDetails| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                },
+            ))
             .behavior(HitTestBehavior::Opaque)
             .child(SizedBox::new(40.0, 30.0)),
         loose(100.0),
@@ -366,13 +387,13 @@ struct DistanceRecognizer {
 }
 
 impl flui::interaction::GestureArenaMember for DistanceRecognizer {
-    fn accept_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn accept_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.accepted.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn reject_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn reject_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -466,7 +487,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
 }
 
 use flui::view::{
-    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, Instant,
+    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FrameTiming, Instant,
     InvalidDurationConfig, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
     Seconds, TaskToken,
 };
@@ -500,16 +521,14 @@ impl StatefulView for CapabilityView {
 }
 
 fn inspect_timing(timing: &FrameTiming) {
-    let _: flui::foundation::FrameId = timing.id;
-    let _: Instant = timing.start_time;
-    let phase: FramePhase = timing.phase;
+    let _: FrameId = timing.id;
+    let start: Instant = timing.start_time;
     let duration: FrameDuration = timing.frame_duration;
-    let elapsed: Milliseconds = timing.elapsed();
+    let elapsed: Milliseconds = timing.elapsed_at(start);
     let _: Seconds = elapsed.to_seconds();
     let _: Microseconds = elapsed.to_micros();
-    let _: BudgetPercentage = timing.utilization();
+    let _: BudgetPercentage = timing.utilization_at(start);
     assert!(duration.as_ms().value() > 0.0);
-    let _: Milliseconds = timing.phase_duration(phase);
 }
 
 struct PendingCapabilityTask {
@@ -609,8 +628,8 @@ use flui::interaction::{
     ClientToken, Code, DetachOutcome, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventHandler,
-    KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
+    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyCancelHandler, KeyEvent,
+    KeyEventHandler, KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
     ResolvedStep, TextInputClient, TextInputError, TextInputHandle, TraversalEdgeBehavior,
 };
 
@@ -635,6 +654,7 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<HitTestEntry>();
     nameable::<HitTestSnapshot>();
     nameable::<InteractionDispatchError>();
+    nameable::<KeyCancelHandler>();
     nameable::<KeyEventHandler>();
     nameable::<KeyEventResult>();
     nameable::<ReadingOrderPolicy>();

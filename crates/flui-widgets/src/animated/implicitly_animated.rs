@@ -142,11 +142,21 @@ impl<T: TwoWayConverter + 'static> ImplicitMotion<T> {
     }
 
     /// Move from `origin` to `target`, for a scalar progress whose consumer
-    /// re-anchors a value that is not a vector; returns whether it was admitted.
-    pub(crate) fn restart(&mut self, origin: T, target: T, motion: &MotionSpec) -> bool {
-        let result = flui_animation::MotionUpdate::run(|update| {
-            update.restart(&mut self.owner, origin, target, motion.clone())
-        });
+    /// re-anchors a value that is not a vector, running `admitted` once the
+    /// motion admits it and before the new run is published; returns whether
+    /// it was admitted. A refused or panicking preparation never runs
+    /// `admitted`, so the consumer's anchors change only with the run.
+    pub(crate) fn restart_then(
+        &mut self,
+        origin: T,
+        target: T,
+        motion: &MotionSpec,
+        admitted: impl FnOnce(),
+    ) -> bool {
+        let result = flui_animation::MotionUpdate::run_with(
+            |update| update.restart(&mut self.owner, origin, target, motion.clone()),
+            admitted,
+        );
         match result {
             Ok(()) => true,
             Err(error) => {

@@ -20,7 +20,9 @@ use flui_runtime::testing::{ScriptedSink, TestWindow};
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_scheduler::AppLifecycleState;
 use flui_view::prelude::*;
-use flui_widgets::{Align, GestureDetector, Listener, MouseRegion, SizedBox};
+use flui_widgets::{
+    Align, DragSlot, GestureDetector, Listener, MouseRegion, SizedBox, TransformSlot,
+};
 
 fn pump(realm: &mut UiRuntime) {
     let _ = realm.pump(
@@ -71,7 +73,7 @@ pub(crate) fn ime_commit_observes_preceding_measured_motion() {
 
 pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity() {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -90,8 +92,11 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
             .attach_root_widget(
                 &GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_scale_update(move |_, details| updates.set(details.scale))
-                    .on_scale_end(move |_, _| ended.set(ended.get() + 1))
+                    .transform(
+                        TransformSlot::new()
+                            .on_update(move |_, details| updates.set(details.scale))
+                            .on_end(move |_, _| ended.set(ended.get() + 1)),
+                    )
                     .child(SizedBox::new(400.0, 40.0)),
             )
             .expect("scale consumer");
@@ -157,7 +162,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
 }
 
 pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change() {
-    use flui_interaction::routing::{FocusNode, KeyEventResult};
+    use flui_interaction::focus::{FocusNode, KeyEventResult};
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -262,7 +267,7 @@ pub(crate) fn ime_commit_survives_competing_motion_and_owner_failures() {
 }
 
 fn assert_ime_motion_order(fail: bool) {
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_runtime::presentation::PointerResampling;
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -372,7 +377,7 @@ pub(crate) fn keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_re
 
 pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use std::rc::Weak;
@@ -511,7 +516,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
 
 fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -676,7 +681,7 @@ fn assert_motion_keyboard_order(
     motion_fails: bool,
     key_fails: bool,
 ) {
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -860,9 +865,9 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
                     .child(
                         GestureDetector::new()
                             .behavior(HitTestBehavior::Opaque)
-                            .on_horizontal_drag_end(move |_, details| {
+                            .drag(DragSlot::horizontal().on_end(move |_, details| {
                                 ended.borrow_mut().push(details.primary_velocity);
-                            })
+                            }))
                             .child(SizedBox::new(200.0, 40.0)),
                     ),
             )
@@ -991,11 +996,11 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
 struct AcceptLog(Rc<Cell<usize>>);
 
 impl GestureArenaMember for AcceptLog {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
         self.0.set(self.0.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 }
 
 pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {

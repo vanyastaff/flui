@@ -16,10 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{PointerKind, make_down_event_for_id};
-use flui_interaction::routing::PointerDispatch;
-use flui_interaction::settings::GestureSettings;
+use flui_interaction::gesture::GestureArena;
+use flui_interaction::gesture::GestureSettings;
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
 
 #[test]
@@ -30,9 +30,7 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
     let fired = Arc::new(AtomicBool::new(false));
     let in_cb = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::builder(arena.clone())
-        .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-        )
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)))
         .on_long_press_start(move |_details| in_cb.store(true, Ordering::SeqCst))
         .build();
 

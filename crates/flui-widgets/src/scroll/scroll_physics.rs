@@ -14,7 +14,7 @@
 //!
 //! - `BouncingScrollPhysics.create_ballistic_simulation` creates the spring
 //!   simulation but the caller is responsible for driving (ticking) it —
-//!   `Scrollable.on_pan_end` notes this explicitly.
+//!   `Scrollable`'s drag `on_end` notes this explicitly.
 //! - Parent-physics chaining (`ScrollPhysics.parent`) — not yet wired.
 
 use std::sync::Arc;
@@ -112,10 +112,35 @@ impl ScrollMetrics {
         Tolerance::for_device_pixel_ratio(self.device_pixel_ratio).ok()
     }
 
+    /// How far off a target, in logical pixels, still counts as on it:
+    /// [`rest_slop`] at these metrics' ratio.
+    pub(crate) fn rest_slop(&self) -> f64 {
+        rest_slop(self.device_pixel_ratio)
+    }
+
     /// The scroll range, or `None` when the extents are unordered or not
     /// finite.
     pub(crate) fn bounds(&self) -> Option<SimulationBounds> {
         SimulationBounds::new(self.min_scroll_extent, self.max_scroll_extent).ok()
+    }
+
+    /// The extents as `(min, max)` when `min <= max`, an infinite end
+    /// included; `None` for unordered extents or a NaN one, which nothing
+    /// can be clamped to.
+    pub(crate) fn ordered_extents(&self) -> Option<(f64, f64)> {
+        (self.min_scroll_extent <= self.max_scroll_extent)
+            .then_some((self.min_scroll_extent, self.max_scroll_extent))
+    }
+
+    /// The extent `pixels` lies past, if it lies outside the range.
+    fn edge_past(&self) -> Option<f64> {
+        if self.pixels < self.min_scroll_extent {
+            Some(self.min_scroll_extent)
+        } else if self.pixels > self.max_scroll_extent {
+            Some(self.max_scroll_extent)
+        } else {
+            None
+        }
     }
 
     /// The current fractional "page" at `viewport_fraction`, defensively
@@ -126,7 +151,7 @@ impl ScrollMetrics {
     /// viewport_dimension * viewport_fraction)`. This is the *public*, defensively-guarded
     /// formula — distinct from the internal recompute
     /// `ScrollPosition::apply_viewport_dimension` drives — used by both
-    /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
+    /// `PageController::page` and `PageSnap` (`nested/snap.rs`) so the
     /// two agree on exactly what "the current page" means.
     ///
     /// This snapshot alone never special-cases a collapsed
@@ -137,11 +162,14 @@ impl ScrollMetrics {
     /// (`page_view.rs`) is the one that consults the cached page first via
     /// `ScrollPosition::cached_page`, falling back to this formula only when
     /// the viewport isn't currently collapsed.
+    ///
+    /// Extents that are unordered or NaN clamp nothing: the page is read
+    /// from `pixels` as it is.
     #[must_use]
     pub fn page(&self, viewport_fraction: f64) -> f64 {
         let clamped = self
-            .pixels
-            .clamp(self.min_scroll_extent, self.max_scroll_extent);
+            .ordered_extents()
+            .map_or(self.pixels, |(min, max)| self.pixels.clamp(min, max));
         clamped.max(0.0) / (self.viewport_dimension * viewport_fraction).max(1.0)
     }
 
@@ -155,6 +183,18 @@ impl ScrollMetrics {
     #[must_use]
     pub fn pixels_from_page(&self, viewport_fraction: f64, page: f64) -> f64 {
         page * self.viewport_dimension * viewport_fraction
+    }
+}
+
+/// Half a device pixel at `device_pixel_ratio`, in logical pixels: the slop a
+/// ballistic run rests within (ADR-0155), so whatever came to rest a hair off
+/// a target counts as on it. Half a logical pixel for a ratio that is not
+/// finite and positive.
+pub(crate) fn rest_slop(device_pixel_ratio: f64) -> f64 {
+    if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
+        0.5 / device_pixel_ratio
+    } else {
+        0.5
     }
 }
 
@@ -209,7 +249,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The simulation positions are in logical pixels, matching
     /// `ScrollController.pixels()`. The caller is responsible for advancing
     /// (ticking) the simulation; see the `DEFERRED` note in
-    /// `Scrollable::on_pan_end`.
+    /// the drag `on_end` in `Scrollable`.
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
@@ -242,7 +282,10 @@ pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 /// Hard-clamps scroll position to `[min, max]`.
 ///
 /// Scroll cannot go past the content edge; the boundary snaps instantly and
-/// post-fling coast is bounded so the final position lands within range.
+/// post-fling coast is bounded so the final position lands within range. A
+/// release from outside the range (the content shrank under a run, or the
+/// offset was written past an edge) springs back to the nearest extent on a
+/// critically damped spring, whatever its velocity.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
@@ -279,8 +322,14 @@ impl Default for ClampingScrollPhysics {
 }
 
 impl ScrollPhysics for ClampingScrollPhysics {
+    /// `proposed_pixels` clamped to the extents; unchanged when the extents
+    /// are unordered or NaN, which bound nothing.
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
-        proposed_pixels.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
+        metrics
+            .ordered_extents()
+            .map_or(proposed_pixels, |(min, max)| {
+                proposed_pixels.clamp(min, max)
+            })
     }
 
     fn create_ballistic_simulation(
@@ -288,24 +337,29 @@ impl ScrollPhysics for ClampingScrollPhysics {
         metrics: &ScrollMetrics,
         velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
+        // Unordered extents or an invalid ratio: no run.
+        let bounds = metrics.bounds()?;
+        let tolerance = metrics.ballistic_tolerance()?;
+        // Past an edge: back to it at any velocity, critically damped.
+        if let Some(edge) = metrics.edge_past() {
+            let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
+                .expect("BUG: the clamping return spring is in the admitted domain");
+            let simulation =
+                SpringSimulation::new(spring, metrics.pixels, edge, velocity_px_per_sec, tolerance)
+                    .ok()?;
+            return Some(Box::new(simulation));
+        }
         // Skip fling below the configured threshold.
         if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
             return None;
         }
-        // If the position is already out of bounds (possible if the caller
-        // skipped boundary conditions), do not attempt a physics fling — let
-        // the caller snap it into range first.
-        if metrics.pixels < metrics.min_scroll_extent || metrics.pixels > metrics.max_scroll_extent
-        {
-            return None;
-        }
-        // Unordered extents, a NaN position or an invalid drag: no fling.
+        // A NaN position or an invalid drag: no fling.
         let simulation = BoundedFrictionSimulation::new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
-            metrics.bounds()?,
-            metrics.ballistic_tolerance()?,
+            bounds,
+            tolerance,
         )
         .ok()?;
         Some(Box::new(simulation))
@@ -344,14 +398,18 @@ impl ScrollPhysics for ClampingScrollPhysics {
 /// Resists outward motion past the content edge, then springs back to the
 /// boundary on release. Motion toward the edge is unrestricted.
 ///
-/// During a drag, positions past `[min, max]` are allowed but dampened by the
-/// `overscroll_spring_coefficient` (default 0.52). On release past an edge,
+/// During a drag, positions past `[min, max]` are allowed but dampened: by
+/// the `overscroll_spring_coefficient` (default 0.52) at the edge, stiffening
+/// as the overscroll grows toward the viewport's length, which a pull never
+/// reaches however long. On release past an edge,
 /// a spring returns the position to the nearest edge; a fling inside the
 /// range that friction would carry past an edge overscrolls on the same
 /// spring and returns ([`BouncingScrollSimulation`]).
 #[derive(Debug, Clone, Copy)]
 pub struct BouncingScrollPhysics {
-    /// Resistance applied when dragging past the edge, default 0.52.
+    /// Resistance applied when dragging past the edge, default 0.52: the
+    /// share of a pull at the edge that moves the content, falling with the
+    /// square of the viewport share left as the overscroll grows.
     /// Range `(0, 1)`: smaller = stiffer.
     pub overscroll_spring_coefficient: f64,
     /// Spring configuration used for the snap-back animation. The default is
@@ -383,21 +441,55 @@ impl Default for BouncingScrollPhysics {
     }
 }
 
+impl BouncingScrollPhysics {
+    /// How much farther out a pull of `pull` pixels carries content that is
+    /// `overscroll` pixels past an edge of a `viewport`-long viewport.
+    ///
+    /// The resistance per pixel is `coefficient · (1 − overscroll /
+    /// viewport)²`: the coefficient at the edge, stiffening toward nothing
+    /// as the overscroll nears the viewport's length, which it never
+    /// reaches. The resistance is integrated over the pull, so a pull split
+    /// over many events lands where one event carrying it all would. A
+    /// viewport that is not finite resists at the coefficient alone.
+    fn rubber_band(&self, overscroll: f64, pull: f64, viewport: f64) -> f64 {
+        let coefficient = self.overscroll_spring_coefficient;
+        if !viewport.is_finite() {
+            return pull * coefficient;
+        }
+        let viewport = viewport.max(1.0);
+        // The share of the viewport the overscroll has left to take.
+        let slack = (1.0 - overscroll / viewport).max(0.0);
+        if slack == 0.0 {
+            return 0.0;
+        }
+        // `d(slack)/d(pull) = −coefficient · slack² / viewport`, solved.
+        let rest = slack / (1.0 + coefficient * pull * slack / viewport);
+        viewport * (slack - rest)
+    }
+}
+
 impl ScrollPhysics for BouncingScrollPhysics {
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
-        let anchor = if proposed_pixels < metrics.min_scroll_extent {
-            metrics.pixels.min(metrics.min_scroll_extent)
-        } else if proposed_pixels > metrics.max_scroll_extent {
-            metrics.pixels.max(metrics.max_scroll_extent)
+        let Some((min, max)) = metrics.ordered_extents() else {
+            return proposed_pixels;
+        };
+        let (edge, anchor) = if proposed_pixels < min {
+            (min, metrics.pixels.min(min))
+        } else if proposed_pixels > max {
+            (max, metrics.pixels.max(max))
         } else {
             return proposed_pixels;
         };
         // Resist only the additional motion away from the edge. Reapplying
         // resistance to the total overshoot reverses small outward drags.
-        if (proposed_pixels < metrics.min_scroll_extent && proposed_pixels < anchor)
-            || (proposed_pixels > metrics.max_scroll_extent && proposed_pixels > anchor)
-        {
-            anchor + (proposed_pixels - anchor) * self.overscroll_spring_coefficient
+        let outward = proposed_pixels - anchor;
+        if (proposed_pixels < min && outward < 0.0) || (proposed_pixels > max && outward > 0.0) {
+            let farther = self.rubber_band(
+                (anchor - edge).abs(),
+                outward.abs(),
+                metrics.viewport_dimension,
+            );
+            anchor + farther.copysign(outward)
         } else {
             proposed_pixels
         }
@@ -411,14 +503,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
         let bounds = metrics.bounds()?;
         let tolerance = metrics.ballistic_tolerance()?;
         // If the position is past an edge, spring back regardless of velocity.
-        let edge = if metrics.pixels < metrics.min_scroll_extent {
-            Some(metrics.min_scroll_extent)
-        } else if metrics.pixels > metrics.max_scroll_extent {
-            Some(metrics.max_scroll_extent)
-        } else {
-            None
-        };
-        if let Some(edge) = edge {
+        if let Some(edge) = metrics.edge_past() {
             let spring = SpringSimulation::new(
                 self.spring,
                 metrics.pixels,

@@ -38,6 +38,7 @@ pub use crate::flush_registry::{
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
+pub use crate::window_handle::WindowSource;
 
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
 /// owner. The runtime's semantics agent is the implementation.
@@ -106,9 +107,9 @@ pub fn agent_answer<T>(pending: impl PendingAnswer<T> + 'static) -> AgentAnswer<
 #[derive(Debug)]
 pub struct FramePhaseMarker<T: Copy> {
     phase: Cell<T>,
-    /// Data-only fault injection for downstream test-utils consumers.
+    /// Data-only fault injection for downstream `testing` consumers.
     /// Consumed at the next build-to-finalize boundary.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     panic_once_at_boundary: Cell<bool>,
 }
 
@@ -117,7 +118,7 @@ impl<T: Copy> FramePhaseMarker<T> {
     pub fn new(initial_phase: T) -> Self {
         Self {
             phase: Cell::new(initial_phase),
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "testing"))]
             panic_once_at_boundary: Cell::new(false),
         }
     }
@@ -129,9 +130,9 @@ impl<T: Copy> FramePhaseMarker<T> {
 
     pub(crate) fn set_at_frame_boundary(&self, phase: T) {
         self.phase.set(phase);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "testing"))]
         let should_panic = self.panic_once_at_boundary.replace(false);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "testing"))]
         assert!(
             !should_panic,
             "frame phase marker — intentional one-shot test panic"
@@ -148,7 +149,7 @@ impl<T: Copy> FramePhaseMarker<T> {
     ///
     /// This is a data-only runtime test seam: it stores only a phase value
     /// and never accepts executable code across the widget binding's lock.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn arm_test_panic_once(&self) {
         self.panic_once_at_boundary.set(true);
     }
@@ -267,7 +268,9 @@ impl BindingRuntime for WidgetsBinding {
         marker: &FramePhaseMarker<T>,
         finalize_phase: T,
     ) {
-        self.draw_frame_impl(|| marker.set_at_frame_boundary(finalize_phase));
+        self.draw_frame_impl(crate::binding::BuildPass::FrameEntry, || {
+            marker.set_at_frame_boundary(finalize_phase);
+        });
     }
 
     fn lifecycle_source(&self) -> &LifecycleSource {

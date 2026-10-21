@@ -47,7 +47,7 @@ pub(super) enum Sink {
 pub(super) struct Run {
     program: Program,
     args: Vec<OsString>,
-    env: Vec<(&'static str, &'static str)>,
+    env: Vec<(&'static str, String)>,
     stdout: Sink,
     /// `2>/dev/null`.
     quiet_stderr: bool,
@@ -82,8 +82,8 @@ impl Run {
     }
 
     /// `KEY=value command`: set for this command only.
-    pub(super) fn env(mut self, key: &'static str, value: &'static str) -> Self {
-        self.env.push((key, value));
+    pub(super) fn env(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.env.push((key, value.into()));
         self
     }
 
@@ -161,8 +161,8 @@ pub(super) enum Step {
         announce: Option<Announce>,
     },
     /// Runs a check this process performs itself — an OS client API with no
-    /// command-line tool in front of it — and ends the plan with its exit
-    /// code, announced as a driver's is.
+    /// command-line tool in front of it. A pass goes on to the next step; a
+    /// failure ends the plan with its exit code, announced as a driver's is.
     Native { check: Native, announce: Announce },
     /// Ends the plan with 1 after `failure` and the last `tail` lines of
     /// `log` containing `excerpt`, unless each pattern matches a line of
@@ -211,6 +211,45 @@ pub(super) enum Native {
     WindowsInput { probe: PathBuf },
     /// The existing Notes tree through real input and UIA observations.
     WindowsNotes { probe: PathBuf },
+    /// The built interaction gallery driven screen by screen with real
+    /// input, read through UIA and its pixels (`device/windows_gallery.rs`,
+    /// Windows only); its captures land in `shots`.
+    WindowsGallery { gallery: PathBuf, shots: PathBuf },
+    /// The ChromeDriver matching the installed Chrome, fetched into `cache`
+    /// when missing and placed at `driver` (`device/web_input.rs`).
+    Chromedriver { cache: PathBuf, driver: PathBuf },
+    /// The built `web_input_probe` page driven over WebDriver BiDi
+    /// (`device/web_input.rs`); its recording lands in `recordings`.
+    WebInput {
+        page: PathBuf,
+        driver: PathBuf,
+        recordings: PathBuf,
+    },
+    /// The interaction gallery's page, built with its development agent, driven
+    /// screen by screen over WebDriver BiDi (`device/web_gallery.rs`); its
+    /// captures land in `shots`.
+    WebGallery {
+        page: PathBuf,
+        driver: PathBuf,
+        shots: PathBuf,
+    },
+    /// The built Android input probe, packaged, installed and driven over
+    /// `adb` (`device/android_input.rs`, any host with the SDK), its
+    /// sessions' recordings pulled into `recordings`.
+    AndroidInput {
+        probe: PathBuf,
+        recordings: PathBuf,
+        work: PathBuf,
+    },
+    /// The interaction gallery's library, packaged under `work`, installed
+    /// and driven screen by screen over `adb`, read through its development
+    /// agent and the screen's pixels (`device/android_gallery.rs`, any host
+    /// with the SDK); its captures land in `shots`.
+    AndroidGallery {
+        library: PathBuf,
+        work: PathBuf,
+        shots: PathBuf,
+    },
 }
 
 impl Native {
@@ -220,14 +259,50 @@ impl Native {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
             Self::WindowsInput { probe } => windows_input(&root.join(probe)),
             Self::WindowsNotes { probe } => windows_notes(&root.join(probe)),
+            Self::WindowsGallery { gallery, shots } => {
+                windows_gallery(&root.join(gallery), &root.join(shots))
+            }
+            Self::Chromedriver { cache, driver } => {
+                super::web_input::place_chromedriver(&root.join(cache), &root.join(driver))
+            }
+            Self::WebInput {
+                page,
+                driver,
+                recordings,
+            } => {
+                super::web_input::run(&root.join(page), &root.join(driver), &root.join(recordings))
+            }
+            Self::WebGallery {
+                page,
+                driver,
+                shots,
+            } => super::web_gallery::run(&root.join(page), &root.join(driver), &root.join(shots)),
+            Self::AndroidInput {
+                probe,
+                recordings,
+                work,
+            } => super::android_input::run(
+                &root.join(probe),
+                &root.join(recordings),
+                &root.join(work),
+            ),
+            Self::AndroidGallery {
+                library,
+                work,
+                shots,
+            } => super::android_gallery::run(
+                &root.join(library),
+                &root.join(work),
+                &root.join(shots),
+            ),
         }
     }
 }
 
 #[cfg(windows)]
 use super::{
-    windows_a11y::run as windows_a11y, windows_input::run as windows_input,
-    windows_notes::run as windows_notes,
+    windows_a11y::run as windows_a11y, windows_gallery::run as windows_gallery,
+    windows_input::run as windows_input, windows_notes::run as windows_notes,
 };
 
 /// Unreachable in practice: the check is skipped off Windows before any step
@@ -246,6 +321,11 @@ fn windows_input(_probe: &Path) -> anyhow::Result<u8> {
 #[cfg(not(windows))]
 fn windows_notes(_probe: &Path) -> anyhow::Result<u8> {
     anyhow::bail!("the native Notes driver only exists on Windows")
+}
+
+#[cfg(not(windows))]
+fn windows_gallery(_gallery: &Path, _shots: &Path) -> anyhow::Result<u8> {
+    anyhow::bail!("the gallery driver only exists on Windows")
 }
 
 /// Whether the plan goes on after a step.
@@ -317,7 +397,9 @@ impl<'a> Executor<'a> {
                 if let Some(line) = announce.line_for(code) {
                     println!("{line}");
                 }
-                return Ok(Flow::Exit(code));
+                if code != 0 {
+                    return Ok(Flow::Exit(code));
+                }
             }
             Step::RequireLog {
                 log,
@@ -371,7 +453,7 @@ impl<'a> Executor<'a> {
         let mut command = Command::new(self.executable(&run.program));
         command
             .args(&run.args)
-            .envs(run.env.iter().copied())
+            .envs(run.env.iter().map(|(key, value)| (*key, value)))
             .current_dir(self.root);
         match &run.stdout {
             Sink::Inherit => {}
@@ -672,6 +754,50 @@ impl fmt::Display for Step {
                     Native::WindowsA11y { probe } => ("uia-client", probe),
                     Native::WindowsInput { probe } => ("send-input", probe),
                     Native::WindowsNotes { probe } => ("native-notes", probe),
+                    Native::WindowsGallery { gallery, shots } => {
+                        return write!(
+                            f,
+                            "gallery-session {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(gallery)),
+                            quote(&show(shots))
+                        );
+                    }
+                    Native::Chromedriver { driver, .. } => ("fetch-chromedriver", driver),
+                    Native::WebInput { page, .. } => ("webdriver-bidi", page),
+                    Native::WebGallery { page, shots, .. } => {
+                        return write!(
+                            f,
+                            "gallery-page {} {}; if rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(page)),
+                            quote(&show(shots))
+                        );
+                    }
+                    Native::AndroidInput {
+                        probe,
+                        recordings,
+                        work,
+                    } => {
+                        return write!(
+                            f,
+                            "adb-session {} {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; if rc!=0: exit $rc",
+                            quote(&show(probe)),
+                            quote(&show(recordings)),
+                            quote(&show(work))
+                        );
+                    }
+                    Native::AndroidGallery {
+                        library,
+                        work,
+                        shots,
+                    } => {
+                        return write!(
+                            f,
+                            "adb-gallery {} {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(library)),
+                            quote(&show(work)),
+                            quote(&show(shots))
+                        );
+                    }
                 };
                 write!(
                     f,

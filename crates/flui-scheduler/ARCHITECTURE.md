@@ -8,6 +8,15 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### The frame budget is set to the display being produced for, before the frame begins
+
+`UpdateScheduler::set_budget_frame_duration` points the stats-only `FrameBudget` at an exact
+period (`FrameDuration::try_from_period` keeps 59.94 Hz from rounding to 60). The host sets it
+before `drive_frame` opens the frame because `handle_begin_frame` copies the budget's target
+into the frame's timing; a change made inside a frame applies to the next one. The `frame` span
+carries the period it judged the frame by as `period_us`, which is how a profiler that cannot be a
+framework dependency follows the display (`frame_span_carries_the_budget_period`).
+
 ### Lifecycle and timing observers preserve accepted delivery
 
 Lifecycle state and frame eligibility commit before notification. Reentrant
@@ -211,73 +220,28 @@ regressions each direction produced):
   queue's LENGTH unchanged from that callback's own perspective, so a count
   budget still reaches the fresh entry in the SAME call — measured: it ran
   in the same frame it was registered in.
-- [`TaskQueue::execute_until`](src/task.rs) pops the top of the heap only
-  while it still meets the priority threshold, one task at a time, bounded
-  by a COUNT: `queue.len()` at entry, read once under the first lock
-  acquisition, decremented once per pop, the loop stopping the moment
-  EITHER the budget is spent or the top's priority fails the threshold. A
-  count is sound here specifically because the heap has no mid-scan removal
-  API the way the transient deque's `cancel_frame_callback` does — nothing
-  can shrink the heap's contents out from under a budget read at entry
-  except this same call's own pops, so nothing can make a stale count lie.
-  An id watermark (tried first, and wrong) needed a side buffer to let a
-  reentrant task of the SAME or a HIGHER priority than something
-  still-eligible be popped, set aside, and skipped past without ending the
-  scan early — and that buffer is a plain local `Vec`, dropped on unwind
-  before it is ever re-queued: a LATER task in the same pass panicking lost
-  every task the scan had already set aside, measured (`A` enqueues `X`,
-  `B` panics → the heap is empty afterward, `X` never runs) as a NEW
-  regression the pre-#1057 batch drain never had, since nothing there ever
-  left the heap except what was already executing. The count budget has no
-  buffer to lose anything from, at the cost of a different, accepted
-  trade-off: a reentrant task of a HIGHER priority than a still-queued
-  sibling does not defer behind it the way an id watermark would — it
-  DISPLACES it, consuming the budget slot the sibling would otherwise have
-  used, pushing the sibling to the NEXT call rather than losing it. Simply
-  re-peeking the live heap with no bound at all (tried before either of
-  these) does not survive genuine reentrancy: a self-re-enqueuing task runs
-  without limit inside ONE call — measured: 500+ executions and no return,
-  hanging the frame, because `handle_draw_frame`'s own
-  `MAX_BUILD_REENTRY_PASSES` cap only ever fires BETWEEN calls to this
-  method and never got the chance.
-- `flush_microtasks` already had a pop-one-under-lock shape (the model the
-  other two now follow for that part). Before issue #1159 it carried no
-  bound at all beyond "until the queue is empty" — an unaudited state, not
-  silently assumed correct, since no reentrant-registration contract was
-  documented for microtasks the way issue #1058 documents one for transient
-  callbacks. Issue #1159 closed that gap: `flush_microtasks` is now an outer
-  loop over `flush_microtasks_pass`, a private helper with the SAME
-  count-budget shape as `TaskQueue::execute_until` (`queue.len()` read once,
-  under the first lock acquisition, decremented once per pop), capped at
-  `MAX_MICROTASK_REENTRY_PASSES` (32) outer passes with a `tracing::warn!`
-  fired once per call on the cap with work still queued, not a
-  process-wide latch. A microtask
-  enqueued reentrantly BY another one in the same pass still runs, one pass
-  later, before this flush call returns — nested-microtask
-  semantics are preserved — **but only up to the cap.** A FINITE chain
-  deeper than 32 passes (33 levels of nesting, no genuinely unbounded
-  re-enqueuing anywhere in it) is deferred exactly like an unbounded one:
-  whatever the cap leaves queued waits for the NEXT `flush_microtasks` call
-  (the following frame's `handle_begin_frame`), not this one. The cap
-  cannot tell a genuinely unbounded, self-re-enqueuing chain apart from a
-  merely deep finite one — both trip the SAME warning at the SAME depth,
-  and only the unbounded case would otherwise hang the frame. This bounds
-  reentrancy *depth*, not *width* — the same caveat `MAX_BUILD_REENTRY_PASSES`
-  states for the Build/Animation drain: a pass whose every popped microtask
-  enqueues two more still finishes in 32 passes, not because the fan-out is
-  bounded, but because passes are. Unlike the Build cap, there is no
-  trailing, unconditional second sweep here (`handle_draw_frame`'s own
-  `execute_until(Priority::Idle)` has no microtask analogue), so a capped
-  chain's observed run count is exactly the cap, not `+ 1`. A capped flush's
-  unrun leftovers stay queued and request nothing of their own —
-  `schedule_microtask` has never called `request_frame` the way `TaskQueue::add`
-  does for Build-or-higher priority, and this cap does not change that
-  pre-existing contract; a leftover simply waits for the next frame's
-  `handle_begin_frame` to flush it. An uncapped queue would let a microtask
-  that re-enqueues itself forever starve the frame; FLUI trades a one-frame
-  deferral on the legitimate-but-deep case, plus a small chance of
-  under-running a genuinely pathological one, for the guarantee that no
-  single frame hangs.
+- [`TaskQueue`](src/task.rs) keeps one FIFO lane per priority and drains
+  them highest priority first, one task at a time, bounded by an id
+  WATERMARK per lane: each lane's newest task id at entry. Task ids grow in
+  admission order and the lanes have no mid-scan removal, so a task queued
+  during the drain is excluded by `front().id <= watermark` wherever it
+  lands, at any priority. A task that re-queues itself therefore cannot run
+  twice in one drain or take older, lower-priority tasks' turns (a count
+  budget over one heap let a re-queueing `UserInput` task starve every older
+  `Build` task, frame after frame). No side buffer exists, so a panicking
+  task loses only itself.
+- `flush_microtasks` runs passes over the microtask queue, each pass the
+  entries queued when it began, so a microtask queued by another one runs
+  one pass later, still in this frame.
+- Both the Build drain in `handle_draw_frame` and `flush_microtasks` share
+  one run budget fixed at entry (`task_run_budget`: four runs per queued
+  entry, at least 256) across all passes, beside the 32-pass caps. The pass
+  caps bound depth; the budget bounds work: an entry that queues two more on
+  every run doubles the queue each pass, and a pass cap alone allowed about
+  2^32 runs in one frame. Idle tasks are admitted one at a time against the
+  frame's deadline, on the scheduler's clock. Whatever a bound leaves queued
+  runs next frame, which the frame requests; work queued between frames
+  (`schedule_microtask`, `add_task`) requests its frame when it is queued.
 
 The result: **the panicking entry itself is consumed; every entry still
 queued behind it is preserved and runs on the next completed frame — not
@@ -297,16 +261,16 @@ file's own `end_of_frame` resolves an outcome, and a dropped scheduler
 resolves `Err(SchedulerClosed)` entry below for the full contract and why
 issue #1162 shaped it this way.
 
-**The `frame_scheduled` contract for a catcher:** by the time any callback
-this recovery could be catching a panic from has even run,
-`handle_begin_frame` has already cleared `frame_scheduled` back to `false`
-unconditionally (before the transient-callback loop), so it reads `false`
-once abort cleanup returns — the same as after any other completed frame.
-Abort cleanup deliberately does **not** re-arm it: doing so would hot-loop
-a caller that keeps re-driving a deterministically panicking frame. A
-caller that catches the resumed panic and decides to keep going owns
-calling `request_frame()` itself, exactly as it would after any other frame
-that produced no visible work. See `OwnerFrame::drive_frame`'s contract.
+**The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
+cleared `frame_scheduled` before any callback ran. Abort cleanup re-arms it
+only for work accepted behind the failure (one-shot callbacks, microtasks,
+tasks), and a failed post-frame batch only for its queued tail: that work
+was promised a frame and nothing else asks for one once the caller resumes
+the panic. The failed entry was already removed, so the request cannot
+re-drive it. It does not re-arm for the failure itself, which would hot-loop
+a caller that keeps re-driving a deterministically panicking frame; a caller
+that catches the resumed panic and wants another frame calls
+`request_frame()` itself. See `OwnerFrame::drive_frame`'s contract.
 
 **The async zombie-slot fix (`AsyncDriver::poll_ready`):** a panic inside
 `future.poll` used to leave that task's slot in `Inner::tasks` holding
@@ -393,13 +357,6 @@ to become the one the caller observes.
   crate's panic policy is that a panic poisons the whole operation
   (`docs/PANIC-POLICY.md`); per-callback isolation would be a policy change
   well beyond a bookkeeping fix.
-
-**Trade-off accepted:** `TaskQueue::execute_until`'s count budget also accepts
-that a reentrant HIGHER-priority task displaces a still-queued, lower-
-priority sibling to the next call rather than deferring behind it the way
-`handle_begin_frame`'s id watermark does for transient callbacks — named
-above rather than left as an unstated difference between the two queues'
-bounds. **Unasserted:** no test pins this.
 
 ### No legacy, lock-tied frame-callback registration API
 
@@ -489,10 +446,14 @@ the call: it holds for `.transientCallbacks`/`.midFrameMicrotasks`, which
 precede the pipeline in the frame's slot order, but not for
 `.persistentCallbacks`, where the pipeline itself runs. What keeps a
 same-thread caller's demand from being lost is not these no-op arms but
-what the demand is for: a pipeline visual-update issued mid-frame is by
-construction already inside the frame that will observe it (the pipeline
-runs in `.persistentCallbacks`, and the other two mid-frame phases precede
-it), while animation continuation demand is committed by the presentation frame
+what the demand is for: a visual update issued before the pipeline is
+inside the frame that will observe it (the transient and microtask slots
+precede the pipeline). One issued in `.persistentCallbacks` may come after
+the pipeline consumed its dirt (a hover callback run from the frame's
+tail, a paint-time mark), so that arm records it, and the frame's driver
+reads `take_late_visual_update` once its pipeline is done and asks for the
+next frame when anything is still dirty. Animation continuation demand is
+committed by the presentation frame
 path and routed through its wake capability,
 independent of this phase gate. `UpdateScheduler::ensure_visual_update`
 implements the phase switch as a `match` over `phase()`, with every
@@ -575,7 +536,11 @@ are enabled, not iff the demand flipped `frame_scheduled`. The per-window
 poke must fire even when a frame is already scheduled — a multi-window
 UI runtime that dirties window B after window A, both from Idle, still expects
 B's window poked, so the closure must not gate the poke on the coalescing
-edge.
+edge. It coalesces per window instead: a latch each presentation owns lets
+the first accepted demand poke and stays closed until the next pump samples
+that presentation, so a hundred state changes before a frame make one
+platform request rather than a hundred (on Win32 a hidden window posts a
+message per request).
 
 **Re-entrancy re-proven, not assumed:** the closure fires while the caller
 holds the pipeline cell checked out, and now reaches
@@ -1035,9 +1000,9 @@ test pins this.
 
 `benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
-so this file is type-checked and lint-checked on every PR; what CI never
-does is link or run it (`bench-compile` only `cargo bench -p flui-rendering
---no-run`s). Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
+so this file is type-checked and lint-checked on every PR, and the `test`
+job's `cargo xtask build-all-targets` links it; what CI never does is run
+it. Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
 13th Gen Intel Core i9-13900K (32 threads) running `rustc 1.98.1 (48a229cea
 2026-09-01)`:
 

@@ -206,6 +206,17 @@ impl State {
         min_scroll_extent: f64,
         max_scroll_extent: f64,
     ) -> (bool, bool) {
+        // Unordered or NaN extents bound no offset: they are refused, and the
+        // committed range stays.
+        let ordered = min_scroll_extent <= max_scroll_extent;
+        if !ordered {
+            tracing::warn!(
+                min_scroll_extent,
+                max_scroll_extent,
+                "content extents that are unordered or NaN were refused"
+            );
+            return (false, true);
+        }
         if (self.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
             && (self.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
         {
@@ -1007,10 +1018,6 @@ impl ViewportOffset for ScrollPosition {
         // sees, or direction-dependent sliver behavior (a floating header's
         // reveal) runs on a permanently-Idle constraint.
         Self::user_scroll_direction(self)
-    }
-
-    fn allow_implicit_scrolling(&self) -> bool {
-        true
     }
 
     fn add_listener(&self, listener: Rc<dyn Fn()>) {

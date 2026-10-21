@@ -357,3 +357,185 @@ pub(crate) fn an_adopted_transition_settles_on_the_first_reduced_motion_frame() 
     assert_alpha(&app, 1.0, "settled on the first frame");
     assert!(!registry.has_running());
 }
+
+/// A route pushed through a handle before its navigator mounts is installed
+/// with no hook resolved yet. It adopts the hook once the navigator mounts:
+/// its builder wraps the page and its exit runs the hook's duration.
+pub(crate) fn a_route_pushed_before_mount_adopts_the_hook_at_mount() {
+    let (fade, builds) = CountingFade::counting(400);
+    let registry = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let _result = navigator.push(PageRoute::<()>::new(page));
+    let mut app = lay_out_animated(
+        VsyncScope::new(
+            registry.clone(),
+            PageTransitions::new(Navigator::new(navigator.clone())).page(fade),
+        ),
+        tight(200.0, 100.0),
+        registry,
+    );
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(500));
+    assert!(builds.get() > 0, "the hook's builder wraps the page");
+    assert_alpha(&app, 1.0, "settled");
+
+    assert!(navigator.pop());
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(200));
+    assert_alpha(&app, 0.5, "the exit runs the hook's 400 ms");
+}
+
+/// A builder whose `duration` pushes a page of `color` the first time the
+/// navigator reads it, the way a builder reaching a captured handle could.
+struct PushingFade {
+    navigator: NavigatorHandle,
+    color: Color,
+    millis: u64,
+    pushed: Cell<bool>,
+}
+
+impl PageTransitionBuilder for PushingFade {
+    fn duration(&self) -> Duration {
+        if !self.pushed.replace(true) {
+            let color = self.color;
+            let _result =
+                self.navigator
+                    .push(PageRoute::<()>::new(move |_ctx, _primary, _secondary| {
+                        ColoredBox::new(color)
+                            .child(SizedBox::new(80.0, 40.0))
+                            .into_view()
+                            .boxed()
+                    }));
+        }
+        ms(self.millis)
+    }
+
+    fn build(
+        &self,
+        _ctx: &dyn BuildContext,
+        primary: &RouteAnimation,
+        _secondary: &RouteAnimation,
+        child: BoxedView,
+    ) -> BoxedView {
+        FadeTransition::new(Rc::clone(primary), child)
+            .into_view()
+            .boxed()
+    }
+}
+
+/// A page pushed while the navigator reads a builder's durations adopts the
+/// hook being resolved: while mounting, not the empty hooks of a navigator
+/// that has none yet, and while replacing, not the outgoing ones. The exit
+/// runs the resolved builder's duration.
+pub(crate) fn a_route_pushed_while_durations_are_read_adopts_the_new_hooks() {
+    let registry = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let pushing = |millis: u64, color: Color| -> Rc<dyn PageTransitionBuilder> {
+        Rc::new(PushingFade {
+            navigator: navigator.clone(),
+            color,
+            millis,
+            pushed: Cell::new(false),
+        })
+    };
+    let app_with = |hook: Rc<dyn PageTransitionBuilder>| {
+        VsyncScope::new(
+            registry.clone(),
+            PageTransitions::new(Navigator::new(navigator.clone())).page(hook),
+        )
+    };
+
+    let mut app = lay_out_animated(
+        app_with(pushing(1000, PAGE)),
+        tight(200.0, 100.0),
+        registry.clone(),
+    );
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(500));
+    assert!(navigator.pop());
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(500));
+    assert_alpha(&app, 0.5, "mounting: the exit runs the hook's 1000 ms");
+    app.pump_for(ms(600));
+
+    app.pump_widget(app_with(pushing(100, NEXT_PAGE)));
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(500));
+    assert!(navigator.pop());
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(50));
+    let alpha = alpha_of(&app, NEXT_PAGE).expect("the page pushed during replacement is painted");
+    assert!(
+        (alpha - 0.5).abs() < 1e-9,
+        "replacing: the exit runs the new hook's 100 ms: alpha {alpha}"
+    );
+}
+
+/// A fade whose last owner's `Drop` panics.
+struct PanicOnDrop(Rc<Cell<usize>>);
+
+impl PageTransitionBuilder for PanicOnDrop {
+    fn duration(&self) -> Duration {
+        ms(100)
+    }
+
+    fn build(
+        &self,
+        _ctx: &dyn BuildContext,
+        primary: &RouteAnimation,
+        _secondary: &RouteAnimation,
+        child: BoxedView,
+    ) -> BoxedView {
+        FadeTransition::new(Rc::clone(primary), child)
+            .into_view()
+            .boxed()
+    }
+}
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+        panic!("a transition builder's Drop panicked");
+    }
+}
+
+/// When the navigator retires hooks whose page and popup builders both panic
+/// in `Drop`, the first panic is contained and the second builder is
+/// retained: unwinding out of the first slot must not drop the second into a
+/// double panic, which aborts the process.
+///
+/// Runs in a child process: the failure mode is an abort.
+pub(crate) fn retiring_hooks_whose_builders_both_panic_does_not_abort() {
+    if crate::common::child_process::selected_case().is_none() {
+        crate::common::child_process::run_rows(
+            "contracts::page_transition_hooks_retire_panicking_builders",
+            &["both_slots"],
+        );
+        return;
+    }
+    let drops = Rc::new(Cell::new(0));
+    let (navigator, mut app, registry) = mount(|navigator| {
+        PageTransitions::new(navigator)
+            .page(Rc::new(PanicOnDrop(Rc::clone(&drops))))
+            .popup(Rc::new(PanicOnDrop(Rc::clone(&drops))))
+            .boxed()
+    });
+    let _contained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        app.pump_widget(VsyncScope::new(
+            registry.clone(),
+            PageTransitions::new(Navigator::new(navigator.clone())),
+        ));
+    }));
+    assert_eq!(
+        drops.get(),
+        1,
+        "the second builder is retained, not dropped into a second panic"
+    );
+    crate::common::child_process::pass();
+}

@@ -9,9 +9,11 @@
 //! before its push animation starts: a hook replaced later reaches routes
 //! installed after the change, never a transition already running.
 //!
-//! A route installed with no hook in scope keeps the jump cut. A route pushed
-//! before its navigator mounts is installed by the mount's first flush, which
-//! runs after the navigator has read the hook.
+//! A route installed with no hook in scope keeps the jump cut. A route installed
+//! before its navigator has resolved its hooks (pushed before the navigator
+//! mounts, or while it re-reads them because a builder's `duration` pushed)
+//! waits, and adopts the builder and durations when they resolve; the entrance
+//! it already started keeps the duration it started with.
 //!
 //! Policy (which builder a platform gets) belongs to a design-system package;
 //! this module is only the mechanism, plus the one transition more than one
@@ -89,12 +91,29 @@ impl AdoptedTransition {
 }
 
 /// The hooks a navigator holds for the routes it installs, durations read.
-#[derive(Clone, Default)]
+///
+/// Each slot is its own [`Terminal`](super::lifecycle::Terminal): when the
+/// last owners of both builders have a panicking `Drop`, the first failure
+/// unwinds past the second slot, which then retains its builder instead of
+/// dropping it into a second panic.
+#[derive(Default)]
 pub(crate) struct AdoptedTransitions {
     /// For page routes (`PageRoute`).
-    pub(crate) page: Option<AdoptedTransition>,
+    page: super::lifecycle::Terminal<Option<AdoptedTransition>>,
     /// For popup routes (`PopupRoute`).
-    pub(crate) popup: Option<AdoptedTransition>,
+    popup: super::lifecycle::Terminal<Option<AdoptedTransition>>,
+}
+
+impl AdoptedTransitions {
+    /// The builder page routes adopt.
+    pub(crate) fn page(&self) -> Option<AdoptedTransition> {
+        self.page.clone()
+    }
+
+    /// The builder popup routes adopt.
+    pub(crate) fn popup(&self) -> Option<AdoptedTransition> {
+        self.popup.clone()
+    }
 }
 
 /// The two hook slots a navigator resolves: one per route kind.
@@ -110,9 +129,15 @@ impl PageTransitionHooks {
     /// Read each builder's durations. Runs user code: call it with no
     /// navigator lock held.
     pub(crate) fn adopt(self) -> AdoptedTransitions {
+        use super::lifecycle::Terminal;
+        // Secured before either builder runs user code, so a panic in the
+        // first leaves the second retained rather than unwound.
+        let Self { page, popup } = self;
+        let mut page = Terminal::new(page);
+        let mut popup = Terminal::new(popup);
         AdoptedTransitions {
-            page: self.page.map(AdoptedTransition::resolve),
-            popup: self.popup.map(AdoptedTransition::resolve),
+            page: Terminal::new(page.take_value().map(AdoptedTransition::resolve)),
+            popup: Terminal::new(popup.take_value().map(AdoptedTransition::resolve)),
         }
     }
 

@@ -61,11 +61,53 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
+/// Stash the host executors `config` injects, before anything resolves the
+/// loop's execution services (the host storage does, on install).
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
+    if let Some(executors) = config.executors.clone() {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
+    }
+}
+
+/// Give the host the storage `config` asks for, under the installed owner
+/// platform's data roots. Call once the owner platform and the host's
+/// executors are installed; without a configured directory, or where the
+/// platform has no data root, widgets get no storage.
+pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
+    let dirs = config.storage_dir.and_then(|name| {
+        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
+        if dirs.is_none() {
+            tracing::warn!(
+                storage_dir = name.as_str(),
+                "this platform has no data directory; widgets get no storage"
+            );
+        }
+        dirs
+    });
+    // Always installed, `None` included: a run without storage must not
+    // inherit the previous run's on this thread.
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+    // The run's receivers replace the last run's, for the same reason.
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.replace_receivers(config.memory_reclaimers.0.clone());
+}
+
+/// Have the host trim the GPU memory behind a new raster lane on a
+/// memory-pressure notice, for as long as the lane exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.track_raster_lane(lane);
+}
+
 /// Shared host services cannot depend on a desktop window-request error.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostServicesError {
     #[error(transparent)]
     Preferences(#[from] flui_platform::PlatformError),
+    #[error("display sampling failed")]
+    Displays(#[source] flui_platform::PlatformError),
     #[error(transparent)]
     Owner(#[from] flui_runtime::owner::DispatchError),
     #[error(transparent)]
@@ -111,6 +153,76 @@ pub(super) fn refresh_preferences_with(
     Ok(())
 }
 
+/// Sample the platform's displays, accept the snapshot, then tell every
+/// followed window which display it is on (ADR-0236).
+///
+/// Follows the preference rules of ADR-0172: the sample runs outside any host
+/// borrow, an obsolete result (the host or the platform was replaced during the
+/// read) is discarded, the snapshot is committed before any window is notified,
+/// and a failed read keeps the last accepted snapshot. A window that fails to
+/// apply its update neither stops the others nor loses the update: the first
+/// failure is rethrown once every window has been offered its value, and the
+/// next sample offers the same value again.
+pub(super) fn refresh_displays_with(
+    read: impl FnOnce(
+        &flui_platform::OwnerPlatform,
+    ) -> Result<flui_platform_api::DisplaySnapshot, flui_platform::PlatformError>,
+) -> Result<(), HostServicesError> {
+    let (owner, host) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (state.owner_platform.clone(), state.installed_host.clone())
+    });
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    let observation = read(&owner);
+    // A native sample may pump messages, replacing either side of this pair.
+    let current = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state
+            .owner_platform
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, &owner))
+            && state.installed_host.same_host(&host)
+    });
+    if !current {
+        return Ok(());
+    }
+    let failure = match observation {
+        Ok(snapshot) => {
+            host.displays().accept(snapshot);
+            None
+        }
+        // The accepted snapshot stands. Windows still get their value
+        // re-derived below, so a window that moved is not left behind.
+        Err(error) => host
+            .displays()
+            .note_failure(error.to_string())
+            .then_some(error),
+    };
+    deliver_displays(&host);
+    failure.map_or(Ok(()), |error| Err(HostServicesError::Displays(error)))
+}
+
+/// Offer every followed window the display it is on according to the accepted
+/// snapshot, each in its own containment so one failing window cannot cancel
+/// the rest.
+fn deliver_displays(host: &super::InstalledHost) {
+    use super::owner_dispatch::{RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime};
+
+    let mut first = None;
+    for (dispatcher, update) in host.displays().updates() {
+        super::installed_host::contain(&mut first, || {
+            // A refused delivery means the window is gone; nothing is owed.
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::DisplayChanged(update)),
+            );
+        });
+    }
+    super::installed_host::finish(first);
+}
+
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(super) fn drive_native_text_sizing() {
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
@@ -123,6 +235,13 @@ pub(super) fn drive_native_text_sizing() {
                     refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
                 {
                     tracing::warn!(%error, "mobile system preference refresh failed");
+                }
+            });
+            super::installed_host::contain(&mut first, || {
+                if let Err(error) =
+                    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                {
+                    tracing::warn!(%error, "mobile display refresh failed");
                 }
             });
             if APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host)) {
@@ -174,14 +293,135 @@ pub(super) fn build_ui_runtime(
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
+    if let Some(transfer) = APP_RUNTIME.with(|slot| slot.borrow().data_transfer()) {
+        host = host
+            .with_data_transfer(transfer.source)
+            .with_process_nonce(transfer.nonce);
+    }
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }
-    Ok(crate::app::ui_runtime::UiRuntime::new(
-        window,
-        scale_factor,
-        host,
-    )?)
+    let native = Arc::clone(window.window());
+    let ui_runtime = crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host)?;
+    attach_window_control(&ui_runtime, &native);
+    Ok(ui_runtime)
+}
+
+/// Answer one phase of the user's session ending (ADR-0237).
+///
+/// A query becomes one [`flui_platform::HostNotice::SessionEnding`] for every
+/// presentation, all sharing one request: the answer is `Block` while any
+/// subscriber holds a block on it. The request is kept until the session end is
+/// cancelled or happens, so the blocks outlive the query. Cancelling and ending
+/// are notices to the same subscribers and release what is still held.
+///
+/// The query is answered only after every subscriber has run. When a runtime's
+/// turn is busy (a session end arriving from inside another callback) its
+/// subscribers cannot run yet, so no block could be known: the answer is
+/// `Proceed`, with a diagnostic, rather than a `Proceed` that looks like "nobody
+/// objects". Either way the request's book closes with the answer, so a block
+/// taken afterwards is refused instead of silently too late.
+///
+/// When the last block is later released, the platform is told
+/// (`Platform::release_session_end`) so it can let the session go on.
+fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer {
+    use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
+
+    match phase {
+        SessionEndPhase::Query => {
+            let request = SessionEndRequest::new().on_release(|| {
+                // The platform is told the application is done with the
+                // session end it asked to wait for.
+                let _ = with_owner_platform(flui_platform::OwnerPlatform::release_session_end);
+            });
+            let displaced = APP_RUNTIME.with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut state| state.session_end.replace(request.clone()))
+            });
+            drop(displaced);
+            // A subscriber that panics still gets the platform its answer, and
+            // the book still closes: the panic is contained here, a native
+            // callback boundary, and reported.
+            let delivery = deliver_contained(&HostNotice::SessionEnding(request.clone()));
+            let answer = request.answer();
+            match delivery {
+                Some(delivery) if delivery.is_complete() => answer,
+                Some(delivery) => {
+                    tracing::warn!(
+                        queued = delivery.queued,
+                        refused = delivery.refused,
+                        "a session end arrived while the owner was busy; its subscribers could \
+                         not run before the answer, so the session is allowed to end"
+                    );
+                    SessionEndAnswer::Proceed
+                }
+                // A panicking subscriber counts as "proceed" (R25).
+                None => SessionEndAnswer::Proceed,
+            }
+        }
+        SessionEndPhase::Cancelled | SessionEndPhase::Ending => {
+            let released = APP_RUNTIME.with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut state| state.session_end.take())
+            });
+            drop(released);
+            let notice = if phase == SessionEndPhase::Cancelled {
+                HostNotice::SessionEndCancelled
+            } else {
+                HostNotice::SessionEnded
+            };
+            deliver_contained(&notice);
+            SessionEndAnswer::Proceed
+        }
+        // A phase this host does not know asks for nothing.
+        _ => SessionEndAnswer::Proceed,
+    }
+}
+
+/// Deliver a session-end notice to every runtime, containing a subscriber's
+/// panic: the callers answer a native callback (`WM_QUERYENDSESSION`), where an
+/// unwind would abort the process or skip the answer. The first panic is
+/// reported and `None` is returned; otherwise how the notice was delivered.
+fn deliver_contained(
+    notice: &flui_platform::HostNotice,
+) -> Option<super::owner_dispatch::NoticeDelivery> {
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
+    if let Some(payload) = failure.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(&*payload),
+            "a session-end subscriber panicked; the session end is answered regardless"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    delivery
+}
+
+/// Give the UI runtime's primary presentation the control of its window, so
+/// `LifecycleContext::window` answers from the first `init_state` on: the root
+/// is attached after this returns.
+fn attach_window_control(
+    ui_runtime: &crate::app::ui_runtime::UiRuntime,
+    window: &Arc<dyn flui_platform::traits::PlatformWindow>,
+) {
+    let (queues, wake, router) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (
+            Rc::clone(&state.window_commands),
+            state.owner_turn_wake.clone(),
+            state.close_requests(),
+        )
+    });
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    let wake = wake.unwrap_or_else(|| Rc::new(|| false));
+    let source = crate::app::window_control::window_source(window, address, &queues, wake, router);
+    let attached = ui_runtime.install_window(address.presentation_id, source);
+    debug_assert!(attached, "a fresh UI runtime has its primary presentation");
 }
 
 // ============================================================================
@@ -254,6 +494,17 @@ pub(crate) fn install_owner_platform(
             if APP_RUNTIME
                 .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
             {
+                // The owner's turn starts with the commands application code
+                // queued for its windows, before anything of this turn runs. A
+                // command that panics does not cost the turn the rest of its
+                // work: its panic is held apart, so the frame still runs, and
+                // is raised when the turn ends.
+                let mut commands = None;
+                super::installed_host::contain(&mut commands, || {
+                    super::owner_dispatch::apply_queued_window_commands(
+                        std::thread::current().id(),
+                    );
+                });
                 let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                 super::owner_dispatch::with_owner_callback(|_| {
                     let current = || {
@@ -264,6 +515,7 @@ pub(crate) fn install_owner_platform(
                         })
                     };
                     if !current() {
+                        super::installed_host::finish(commands);
                         return;
                     }
                     let mut first = None;
@@ -272,6 +524,13 @@ pub(crate) fn install_owner_platform(
                             refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
                         {
                             tracing::warn!(%error, "system preference refresh failed");
+                        }
+                    });
+                    super::installed_host::contain(&mut first, || {
+                        if let Err(error) =
+                            refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                        {
+                            tracing::warn!(%error, "display refresh failed");
                         }
                     });
                     #[cfg(not(target_arch = "wasm32"))]
@@ -293,7 +552,8 @@ pub(crate) fn install_owner_platform(
                             );
                         }
                     }
-                    super::installed_host::finish(first);
+                    flui_foundation::panic::FirstPanic::fold(&mut commands, first);
+                    super::installed_host::finish(commands);
                 });
             }
         }))?;
@@ -305,9 +565,16 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
+    // System notices (ADR-0237): the platform reports them on the owner thread,
+    // and every UI runtime's subscribers receive them from there.
+    owner.on_host_notice(Box::new(|notice| {
+        super::owner_dispatch::deliver_host_notice(&notice.into());
+    }));
+    owner.on_session_end(Box::new(answer_session_end));
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
     // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();
+    let data_transfer = owner.shared().data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
@@ -315,7 +582,11 @@ pub(crate) fn install_owner_platform(
                 .owner_install_generation
                 .checked_add(1)
                 .expect("BUG: owner install generation exhausted");
-            let previous_clipboard = state.set_platform_clipboard(clipboard);
+            // The displaced source retires with the clipboard, outside this borrow.
+            let previous_clipboard = (
+                state.set_platform_clipboard(clipboard),
+                state.set_platform_data_transfer(data_transfer),
+            );
             let previous_host =
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
             let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
@@ -353,6 +624,11 @@ pub(crate) fn install_owner_platform(
     super::installed_host::contain(&mut first, || {
         if let Err(error) = refresh_preferences_with(flui_platform::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
+        }
+    });
+    super::installed_host::contain(&mut first, || {
+        if let Err(error) = refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot) {
+            tracing::warn!(%error, "initial display observation failed");
         }
     });
     super::installed_host::contain(&mut first, || previous_host.shutdown());

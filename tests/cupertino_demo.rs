@@ -117,7 +117,7 @@ impl MountedDemo {
     fn hit_test(&self, position: Offset) -> HitTestResult {
         self.pipeline_owner.with(|owner| {
             let mut result = HitTestResult::new();
-            owner.hit_test(position, &mut result);
+            owner.hit_test(position, PointerKind::Mouse, &mut result);
             result
         })
     }

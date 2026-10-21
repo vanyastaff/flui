@@ -14,6 +14,7 @@ pub(crate) mod devices;
 pub(crate) mod doctor;
 pub(crate) mod emulators;
 pub(crate) mod format;
+pub(crate) mod mcp;
 pub(crate) mod platform;
 pub(crate) mod run;
 pub(crate) mod test;

@@ -341,6 +341,32 @@ pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
     });
 }
 
+/// A fade to transparent keeps the opaque end's colour however little alpha is left:
+/// the result is finite, its alpha is the straight mix, and its channels stay on the
+/// source colour; once the alpha vanishes it is fully transparent.
+pub(crate) fn lerp_to_transparent_keeps_the_hue_at_vanishing_alpha() {
+    let faint = Color::from_rgba_f32_array([0.145_098_05, 0.074_509_81, 0.701_960_8, 1.0 / 255.0]);
+    for source in [faint, Color::from_rgba_f32_array([0.9, 0.2, 0.4, 0.0001])] {
+        let [r, g, b, alpha] = source.to_rgba_f32_array();
+        for t in [0.5, 0.9, 0.998_631_274_725_139_5, 0.999_999, 1.0 - 1e-9] {
+            let got = Color::lerp(source, Color::TRANSPARENT, t);
+            let channels = got.to_rgba_f32_array();
+            assert!(channels.iter().all(|c| c.is_finite()), "{got:?} at {t}");
+            let want = f64::from(alpha) * (1.0 - t);
+            assert!(
+                (f64::from(got.opacity()) - want).abs() <= 2e-7,
+                "{got:?} at {t}"
+            );
+            if got.is_transparent() {
+                continue;
+            }
+            for (got, want) in channels.into_iter().zip([r, g, b]) {
+                assert!((got - want).abs() <= 2e-5, "{got:?} vs {want} at {t}");
+            }
+        }
+    }
+}
+
 /// `t = 0` and `t = 1` return the endpoints exactly, through both the clamping
 /// `Color::lerp` and the extrapolating `Lerp` impl.
 pub(crate) fn lerp_endpoints_are_exact() {
@@ -431,4 +457,21 @@ pub(crate) fn lerp_outside_the_segment_saturates_and_nan_keeps_begin() {
     }
     assert_eq!(Color::lerp(opaque, clear, f64::NAN), opaque);
     assert_eq!(opaque.lerp_to(&clear, f64::NAN), opaque);
+}
+
+pub(crate) fn a_colour_describes_itself_by_its_exact_channels() {
+    use flui_foundation::inspect::{Rgba, ToValue, Value};
+    let colour = Color::rgba(255, 128, 0, 128);
+    assert_eq!(
+        colour.to_value(),
+        Value::Color(Rgba::new(
+            colour.red_f32(),
+            colour.green_f32(),
+            colour.blue_f32(),
+            colour.alpha_f32()
+        )),
+        "the description carries the channels unrounded"
+    );
+    assert_eq!(colour.to_value().to_string(), "#FF800080");
+    assert_eq!(Color::rgb(16, 32, 48).to_value().to_string(), "#102030");
 }

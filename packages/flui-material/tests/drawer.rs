@@ -23,7 +23,7 @@ use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData, SizedBox, V
 
 #[derive(Clone, StatelessView)]
 struct DrawerFlingProfile {
-    provider: flui_interaction::settings::GestureSettingsProvider,
+    provider: flui_interaction::gesture::GestureSettingsProvider,
     child: flui_sdk::view::BoxedView,
 }
 
@@ -408,7 +408,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             Duration::from_millis(10),
         );
         let mut previous_at = Duration::ZERO;
-        for (index, event) in drag.events().iter().enumerate() {
+        for (index, event) in drag.pointer_events().iter().enumerate() {
             binding.pump_frame(event.at.saturating_sub(previous_at));
             previous_at = event.at;
             // The early moves win the gesture arena and mount the panel.
@@ -417,7 +417,9 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             let before = (4..=5).contains(&index).then(|| {
                 drawer_scene_sample(binding.layer_tree().expect("dragging panel"), marker).0
             });
-            binding.dispatch_pointer(&event.to_event(), |position| binding.hit_test(position));
+            binding.dispatch_pointer(&event.to_event(), |position| {
+                binding.hit_test(position, event.device)
+            });
             if let Some(before) = before {
                 binding.pump_frame(Duration::ZERO);
                 if !(both && index == 5) {
@@ -608,7 +610,7 @@ fn drawer_settling_uses_profile(initially_open: bool) {
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };
-        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
         let slot = Rc::new(RefCell::new(None));
         let probe = HandleProbe {
             slot: Rc::clone(&slot),

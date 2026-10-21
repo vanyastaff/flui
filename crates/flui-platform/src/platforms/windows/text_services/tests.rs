@@ -41,6 +41,13 @@ fn composing_store() -> Rc<InMemoryTextStore> {
     store
 }
 
+/// The case window `hwnd` with the identity of its context.
+fn window_ref(hwnd: HWND) -> super::super::platform::WindowRef {
+    let identity = super::super::platform::with_window_context(hwnd, "test", |c| c.identity)
+        .expect("the case window's context");
+    super::super::platform::WindowRef::new(hwnd, identity)
+}
+
 /// An entry into this thread's STA (nested in the platform's) for services
 /// activated directly.
 fn apartment() -> Rc<super::super::com_apartment::ComApartment> {
@@ -55,7 +62,7 @@ fn erased(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
 /// answered `Deferred`; when TSF has shut down by the time the call
 /// returns, the composition is committed in place.
 fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     services.enter();
@@ -72,7 +79,7 @@ fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
 /// The same when the store's document is gone by the time the call
 /// returns (it was poisoned, or reopening it failed).
 fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     services.enter();
@@ -92,7 +99,7 @@ fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
 /// the shutdown waits for the call to return, and a completion asked for
 /// meanwhile still commits its store in place.
 fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     services.enter();
@@ -118,7 +125,7 @@ fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
 /// A store the host does not serve, queued focus changes included, is
 /// refused; so is any store once TSF has shut down.
 fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let (a, b) = (composing_store(), composing_store());
     services.focus_store(Some(erased(&a)));
     assert_eq!(
@@ -247,7 +254,7 @@ impl tracing::Subscriber for PanicsOnTsfErrors {
 /// teardown's payload is retained rather than destroyed, and TSF is back on
 /// the empty document.
 fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let dropped = Arc::new(AtomicBool::new(false));
@@ -378,7 +385,7 @@ fn start_tsf_composition(services: &TextServices, length: i32) -> ITfComposition
 /// teardown came first, so the owner's containment reports it, not the
 /// recovery's failure.
 fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     let gate = CommitGate::new();
     store.set_commit_gate(gate.clone());
@@ -455,7 +462,7 @@ fn tsf_sees_no_hidden_text(context: &ITfContext) -> bool {
 /// `OnStatusChange` carries only dynamic ones. A protection change on the
 /// focused field reaches TSF as a new context, whose status TSF reports.
 fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = InMemoryTextStore::new("secret");
     store.set_commit_gate(CommitGate::new());
     services.focus_store(Some(erased(&store)));
@@ -476,7 +483,7 @@ fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
 /// in the document that owns it before the document is replaced, so the
 /// store keeps no composing range that no context owns, and keeps its text.
 fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let _composition = start_tsf_composition(&services, 2);
@@ -494,7 +501,7 @@ fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
 /// The same when TSF refuses to end the composition (the store refuses its
 /// synchronous lock): the composition is committed in place instead.
 fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     assert_eq!(
         project_ime_event(
@@ -556,7 +563,7 @@ impl tracing::Subscriber for PanicsOnDiagnostic {
 /// diagnostic: the retirement came first, so the host operation raises it,
 /// and TSF is still back on the empty document.
 fn a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let manager = match &*services.serving.borrow() {
@@ -614,7 +621,7 @@ fn associates_the_empty_document(services: &TextServices) -> bool {
 /// still taken away from TSF, and the host operation raises the failure
 /// once that is done.
 fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     store.fail_retirement.set(true);
@@ -642,7 +649,7 @@ fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND)
 /// panics while the poisoned document is dropped as the call returns: no
 /// panic leaves the COM entry, and the document is still released.
 fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWND) {
-    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let tsf_store = document_store(&services);
@@ -669,6 +676,18 @@ fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWN
     }));
     assert!(next.is_ok(), "the failure is not raised a second time");
     services.shutdown();
+}
+
+/// A document's store holds the window's `Rc` state, so it does not claim to
+/// be agile: another apartment reaches it through a proxy to TSF's.
+fn a_document_store_is_bound_to_its_apartment(hwnd: HWND) {
+    use windows::Win32::System::Com::IAgileObject;
+
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    services.focus_store(Some(erased(&composing_store())));
+    let agile = document_store(&services).cast::<IAgileObject>().is_ok();
+    services.shutdown();
+    assert!(!agile, "the document's store claims to be agile");
 }
 
 /// What `GetStatus` answers for each store status: hidden text exactly when
@@ -703,12 +722,12 @@ fn a_window_offers_its_text_services_as_its_host() {
 
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui window host".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui window host")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let win32 = window
         .as_any()
@@ -753,6 +772,168 @@ fn a_window_offers_its_text_services_as_its_host() {
     );
 }
 
+/// Records which sink notifications the text services sent.
+struct SinkNotifications(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for SinkNotifications {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Notification {
+            message: Option<String>,
+            what: Option<String>,
+        }
+        impl tracing::field::Visit for Notification {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "what" {
+                    self.what = Some(value.to_owned());
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                match field.name() {
+                    "message" => self.message = Some(format!("{value:?}")),
+                    "what" => self.what = Some(format!("{value:?}").trim_matches('"').to_owned()),
+                    _ => {}
+                }
+            }
+        }
+        let mut notification = Notification::default();
+        event.record(&mut notification);
+        if notification.message.as_deref() == Some("sink notification")
+            && let Some(what) = notification.what
+        {
+            self.0.lock().expect("notification log").push(what);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Moving a window, ending a size-and-move loop and a DPI change tell TSF
+/// the focused field's layout changed, so an input method's candidate
+/// window follows the text; with no field focused nothing is sent.
+#[test]
+fn a_moved_window_tells_tsf_its_layout_changed() {
+    use crate::traits::{HostWindow as _, OwnerThreadToken};
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
+        WM_DPICHANGED, WM_EXITSIZEMOVE,
+    };
+
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui moved field")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
+        .expect("window");
+    let win32 = window
+        .as_any()
+        .downcast_ref::<super::super::WindowsWindow>()
+        .expect("Win32 window");
+    let hwnd = win32.hwnd();
+    let host = win32
+        .text_store_host(OwnerThreadToken::new())
+        .expect("a real window offers its host");
+    fn count(notifications: &std::sync::Mutex<Vec<String>>) -> usize {
+        notifications
+            .lock()
+            .expect("notification log")
+            .iter()
+            .filter(|what| *what == "OnLayoutChange")
+            .count()
+    }
+    fn move_window(hwnd: HWND, dx: i32) {
+        let mut rect = RECT::default();
+        // SAFETY: the case's own window on its owner thread; `rect` is a
+        // live local.
+        unsafe {
+            GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
+            SetWindowPos(
+                hwnd,
+                None,
+                rect.left + dx,
+                rect.top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("move the window");
+        }
+    }
+    let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let layout_changes = || count(&notifications);
+    let move_by = |dx: i32| move_window(hwnd, dx);
+    tracing::subscriber::with_default(SinkNotifications(Arc::clone(&notifications)), || {
+        move_by(10);
+        assert_eq!(layout_changes(), 0, "no field is focused");
+
+        let store = composing_store();
+        host.focus_store(Some(erased(&store)));
+        notifications.lock().expect("notification log").clear();
+        move_by(10);
+        assert_eq!(layout_changes(), 1, "a move changes the field's layout");
+        // SAFETY: the case's own window; the message carries no pointer.
+        unsafe { SendMessageW(hwnd, WM_EXITSIZEMOVE, None, None) };
+        assert_eq!(layout_changes(), 2, "the end of a size-and-move loop does");
+        let mut rect = RECT::default();
+        // SAFETY: the case's own window; `WM_DPICHANGED` carries the address
+        // of the suggested rectangle, a live local here, at the DPI it has.
+        unsafe {
+            GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
+            let dpi = (window.scale_factor() * 96.0).round() as usize;
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM((dpi << 16) | dpi)),
+                Some(LPARAM(&raw const rect as isize)),
+            );
+        }
+        assert!(layout_changes() >= 3, "a DPI change does");
+
+        // Moved while a lock is held (a listener of an edit TSF's grant made),
+        // the field reports it once the lock is released: TSF answers with a
+        // synchronous lock request, which a held lock would refuse.
+        let before = layout_changes();
+        let during = Rc::new(Cell::new(None));
+        let (seen, log, raw) = (
+            Rc::clone(&during),
+            Arc::clone(&notifications),
+            hwnd.0 as isize,
+        );
+        let outcome = store.request_lock(
+            LockGrant::read(move |_| {
+                move_window(HWND(raw as *mut _), 10);
+                seen.set(Some(count(&log)));
+            }),
+            LockTiming::Sync,
+        );
+        assert_eq!(
+            outcome,
+            Ok(LockOutcome::Granted),
+            "the read lock is granted"
+        );
+        assert_eq!(during.get(), Some(before), "nothing is sent under the lock");
+        assert_eq!(
+            layout_changes(),
+            before + 1,
+            "the move is reported once the lock is released"
+        );
+        host.focus_store(None);
+    });
+    window.close();
+}
+
 /// One row: its name, and the case run against the shared window.
 type Row = (&'static str, fn(HWND));
 
@@ -760,12 +941,12 @@ type Row = (&'static str, fn(HWND));
 fn the_text_services_answer_a_completion_for_its_store() {
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui text services".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui text services")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let hwnd = window
         .as_any()
@@ -821,6 +1002,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
             "teardown with a panicking retirement and Pop diagnostic",
             a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure,
         ),
+        (
+            "document store bound to its apartment",
+            a_document_store_is_bound_to_its_apartment,
+        ),
     ];
     let mut failed = Vec::new();
     for &(name, case) in cases {
@@ -859,12 +1044,140 @@ impl tracing::Subscriber for PanicsOn {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-/// Whether a top-level window titled `title` exists in this process.
-fn window_titled(title: &str) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title = windows_core::HSTRING::from(title);
-    // SAFETY: `title` is a live NUL-terminated string for the call.
-    unsafe { FindWindowW(windows_core::PCWSTR::null(), &title) }.is_ok()
+/// Whether this owner thread still has a top-level window titled `title`.
+fn owner_thread_window_titled(title: &str) -> bool {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindowTextW};
+    use windows_core::BOOL;
+
+    struct Search {
+        title: Vec<u16>,
+        buffer: Vec<u16>,
+        found: bool,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, state: LPARAM) -> BOOL {
+        // SAFETY: enumeration is synchronous on the caller; state points to
+        // its live exclusive Search, and the buffer is writable for the call.
+        let search = unsafe { &mut *(state.0 as *mut Search) };
+        let length = unsafe { GetWindowTextW(hwnd, &mut search.buffer) } as usize;
+        search.found |= search.buffer[..length] == search.title;
+        BOOL(1)
+    }
+    let title: Vec<u16> = title.encode_utf16().collect();
+    let mut search = Search {
+        buffer: vec![0; title.len() + 2],
+        title,
+        found: false,
+    };
+    // SAFETY: only the calling thread's windows are visited; Search remains
+    // live until enumeration finishes and the callback never unwinds.
+    unsafe {
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(visit),
+            LPARAM((&raw mut search) as isize),
+        )
+    }
+    .expect("enumerate this owner thread's windows");
+    search.found
+}
+
+#[test]
+fn orphan_detection_ignores_a_foreign_owner_but_still_finds_its_own_window() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
+        TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+    };
+    use windows_core::{HSTRING, w};
+
+    const TITLE: &str = "flui orphan oracle foreign owner";
+    struct HiddenWindow(HWND);
+    impl HiddenWindow {
+        fn new() -> Self {
+            let title = HSTRING::from(TITLE);
+            // SAFETY: the system STATIC class owns this hidden top-level
+            // window; its title stays live through creation. Only this owner
+            // thread accesses the wrapper and destroys its HWND.
+            Self(
+                unsafe {
+                    CreateWindowExW(
+                        WINDOW_EX_STYLE(0),
+                        w!("STATIC"),
+                        &title,
+                        WINDOW_STYLE(0),
+                        0,
+                        0,
+                        100,
+                        50,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                }
+                .expect("hidden oracle window"),
+            )
+        }
+    }
+    impl Drop for HiddenWindow {
+        fn drop(&mut self) {
+            // SAFETY: this wrapper owns the live HWND on its creating thread.
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+    struct ForeignOwner {
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for ForeignOwner {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_worker = Arc::clone(&stop);
+    let (ready, waiting) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _window = HiddenWindow::new();
+        ready.send(()).expect("test waits for foreign owner");
+        let mut message = MSG::default();
+        while !stop_worker.load(Ordering::Acquire) {
+            // SAFETY: this owner pumps only its own thread queue; message is
+            // writable for PeekMessage and initialized before dispatch.
+            unsafe {
+                while PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&raw const message);
+                    DispatchMessageW(&raw const message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let _foreign = ForeignOwner {
+        stop,
+        worker: Some(worker),
+    };
+    waiting.recv().expect("foreign owner has a live window");
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "foreign window is not our orphan"
+    );
+    let own = HiddenWindow::new();
+    assert!(
+        owner_thread_window_titled(TITLE),
+        "our live window is detected"
+    );
+    drop(own);
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "our window is gone while foreign owner remains"
+    );
 }
 
 /// A subscriber that panics on the activation's own diagnostic neither
@@ -880,12 +1193,12 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
         catch_unwind(AssertUnwindSafe(|| {
-            platform.open_window(WindowOptions {
-                title: TITLE.into(),
-                size: Size::new(200.0, 80.0),
-                visible: false,
-                ..Default::default()
-            })
+            platform.open_window(
+                WindowOptions::default()
+                    .with_title(TITLE)
+                    .with_size(Size::new(200.0, 80.0))
+                    .with_visible(false),
+            )
         }))
     });
     match opened {
@@ -906,11 +1219,14 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
         }
         Ok(Err(error)) => panic!("the open failed: {error}"),
         Err(_) => assert!(
-            !window_titled(TITLE),
+            !owner_thread_window_titled(TITLE),
             "the panic left an orphaned native window behind"
         ),
     }
-    assert!(!window_titled(TITLE), "no native window is left");
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "no native window is left"
+    );
 }
 
 /// A window destroyed while its text services activate (by a message the
@@ -926,12 +1242,12 @@ fn a_window_destroyed_during_activation_fails_the_open() {
     }
     let platform = super::super::WindowsPlatform::new().expect("platform");
     super::super::window::BEFORE_TSF_ACTIVATION.set(Some(destroy));
-    let opened = platform.open_window(WindowOptions {
-        title: "flui destroyed during activation".into(),
-        size: Size::new(200.0, 80.0),
-        visible: false,
-        ..Default::default()
-    });
+    let opened = platform.open_window(
+        WindowOptions::default()
+            .with_title("flui destroyed during activation")
+            .with_size(Size::new(200.0, 80.0))
+            .with_visible(false),
+    );
     super::super::window::BEFORE_TSF_ACTIVATION.set(None);
     assert!(
         matches!(opened, Err(crate::traits::OpenWindowError::Backend { .. })),
@@ -949,43 +1265,97 @@ fn a_window_destroyed_during_activation_fails_the_open() {
 /// then shut down outside any apartment).
 #[test]
 fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
+    use std::sync::mpsc;
+    use windows::Win32::System::Com::{
+        APTTYPE, APTTYPEQUALIFIER, COINIT_MULTITHREADED, CoGetApartmentType, CoInitializeEx,
+        CoUninitialize,
+    };
+
     use super::super::com_apartment::thread_in_apartment;
     use super::SHUTDOWN_IN_APARTMENT;
 
-    assert!(!thread_in_apartment(), "the test thread starts outside COM");
+    struct HeldMta {
+        release: mpsc::Sender<()>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for HeldMta {
+        fn drop(&mut self) {
+            let _ = self.release.send(());
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    assert!(!thread_in_apartment(), "the test thread starts outside STA");
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui outlives its platform".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui outlives its platform")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let hwnd = window
         .as_any()
         .downcast_ref::<super::super::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
-    assert!(
-        super::super::platform::with_window_context(hwnd, "test", |context| {
-            context.text_services.borrow().is_some()
-        })
-        .unwrap_or(false),
-        "the window's text services are active"
-    );
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "Observe the drop-only apartment hold without extending its lifetime."
+    )]
+    let apartment = super::super::platform::with_window_context(hwnd, "test", |context| {
+        context
+            .text_services
+            .borrow()
+            .as_ref()
+            .map(|services| Rc::downgrade(&services._apartment))
+    })
+    .flatten()
+    .expect("the window's text services are active");
+
+    // A second COM client may keep the process MTA alive while this
+    // window releases its own STA. Hold it until the assertion, including
+    // panic cleanup, so the apartment query has a deterministic context.
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        // SAFETY: no pointer arguments; success is balanced on this thread.
+        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let _ = ready_tx.send(initialized.0);
+        if initialized.is_ok() {
+            let _ = released.recv();
+            // SAFETY: matches this worker's successful initialization.
+            unsafe { CoUninitialize() };
+        }
+    });
+    let _mta = HeldMta {
+        release,
+        worker: Some(worker),
+    };
+    assert!(ready_rx.recv().expect("MTA worker initialized") >= 0);
 
     SHUTDOWN_IN_APARTMENT.set(None);
     drop(platform);
     window.close();
     drop(window);
+    assert!(
+        apartment.upgrade().is_none(),
+        "the window released the last owned apartment lease"
+    );
     assert_eq!(
         SHUTDOWN_IN_APARTMENT.get(),
         Some(true),
         "the window's text services shut down inside the COM apartment"
     );
+    let mut kind = APTTYPE::default();
+    let mut qualifier = APTTYPEQUALIFIER::default();
+    // SAFETY: both out-pointers refer to live writable locals.
+    let observed = unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) };
     assert!(
         !thread_in_apartment(),
-        "the apartment ends with its last holder"
+        "the apartment ends with its last holder; observed={observed:?}, kind={kind:?}, qualifier={qualifier:?}"
     );
 }

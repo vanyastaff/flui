@@ -1,5 +1,5 @@
 //! [`RawTextField`] — an [`EditableText`] with a plain border decoration and
-//! tap-to-focus behavior, for callers with no `Theme` ancestor.
+//! press-to-focus behavior, for callers with no `Theme` ancestor.
 //!
 //! The themed text field lives in
 //! [`flui_material::TextField`](https://docs.rs/flui-material) (M3
@@ -32,9 +32,10 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
+use flui_platform_api::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
-use crate::interaction::GestureDetector;
+use crate::interaction::Listener;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
 use crate::support::ref_callback;
@@ -45,9 +46,9 @@ use crate::text::editable_text::{EditableText, SubmitCallback, TextChanged};
 // RawTextField
 // ============================================================================
 
-/// A plain decorated, tap-to-focus single-line text input field — wraps
+/// A plain decorated, press-to-focus single-line text input field — wraps
 /// [`EditableText`] with a fixed [`DecoratedBox`] border and a
-/// [`GestureDetector`] that requests focus on tap. See the module docs: this
+/// [`Listener`] that requests focus when a pointer presses it. See the module docs: this
 /// is a theme-free stand-in, not the Material `TextField` — prefer
 /// `flui_material::TextField` whenever a `Theme` ancestor is available.
 ///
@@ -76,10 +77,14 @@ pub struct RawTextField {
     content_padding: EdgeInsets,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::input_purpose`].
+    input_purpose: TextInputPurpose,
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
     /// Forwarded to [`EditableText::invalid`].
     invalid: bool,
+    /// Forwarded to [`EditableText::identifier`].
+    identifier: Option<std::sync::Arc<str>>,
     /// Forwarded to [`EditableText::on_changed`].
     on_changed: Option<TextChanged>,
     /// Forwarded to [`EditableText::on_submitted`] — see
@@ -99,8 +104,10 @@ impl std::fmt::Debug for RawTextField {
             .field("caret_color", &self.caret_color)
             .field("content_padding", &self.content_padding)
             .field("obscure_text", &self.obscure_text)
+            .field("input_purpose", &self.input_purpose)
             .field("enabled", &self.enabled)
             .field("invalid", &self.invalid)
+            .field("identifier", &self.identifier)
             .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
             .finish()
@@ -118,8 +125,10 @@ impl RawTextField {
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(8.0, 12.0),
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             enabled: true,
             invalid: false,
+            identifier: None,
             on_changed: None,
             on_submitted: None,
         }
@@ -131,6 +140,14 @@ impl RawTextField {
     #[must_use]
     pub fn invalid(mut self, invalid: bool) -> Self {
         self.invalid = invalid;
+        self
+    }
+
+    /// Names the field's node for tests and automation (ADR-0240). Forwards
+    /// to [`EditableText::identifier`].
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -164,6 +181,14 @@ impl RawTextField {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// What the field is for (default [`TextInputPurpose::Text`]). Forwards
+    /// to [`EditableText::input_purpose`].
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.input_purpose = purpose;
         self
     }
 
@@ -250,8 +275,10 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text)
+            .input_purpose(view.input_purpose)
             .enabled(view.enabled)
-            .invalid(view.invalid);
+            .invalid(view.invalid)
+            .identifier_if(view.identifier.as_ref());
         if let Some(height) = view.caret_height {
             editable = editable.caret_height(height);
         }
@@ -265,9 +292,13 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let padded = Padding::new(view.content_padding).child(editable);
         let decorated = DecoratedBox::new(field_border_decoration()).child(padded);
 
+        // The press focuses the field, as the press on its text does. A tap
+        // would not: the field's double-tap holds a tap for the double-tap
+        // time, and a focus it requested then would take the focus back from
+        // wherever the keyboard moved it meanwhile.
         let focus_node = Rc::clone(&self.focus_node);
-        GestureDetector::new()
-            .on_tap(move |_cx| {
+        Listener::new()
+            .on_pointer_down(move |_cx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(decorated)

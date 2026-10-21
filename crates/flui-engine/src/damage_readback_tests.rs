@@ -1173,6 +1173,79 @@ fn an_updated_texture_repaints_under_an_unchanged_picture() {
     );
 }
 
+/// A registered texture's frames reach the screen through the backend's
+/// update: a same-size frame replaces the allocation, a resized one
+/// re-registers it, and a dropped registration leaves nothing to draw.
+#[test]
+fn registry_frames_upload_replace_resize_and_retire() {
+    use flui_layer::TextureRegistry;
+    use flui_painting::paint::{FilterQuality, Image};
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+    let registration = registry.register().expect("id");
+    let texture = registration.id();
+    let root = ContentToken::mint();
+    let draw = |canvas: &mut Canvas| {
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+    };
+    let solid = |side: u32, rgba: [u8; 4]| {
+        Image::from_rgba8(side, side, rgba.repeat((side * side) as usize))
+    };
+    for (side, rgba) in [(2, RED), (2, BLUE), (4, GREEN)] {
+        registration.submit_frame(solid(side, rgba));
+        capture
+            .apply_texture_updates(registry.take_updates())
+            .expect("the frame uploads");
+        let card = ContentToken::mint();
+        let tree = scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &card,
+                at: Offset::new(40.0, 40.0),
+                paint: &draw,
+            }],
+            None,
+        );
+        capture.mark_full_repaint();
+        capture.render_scene(&tree).expect("the frame renders");
+        let shown = px(&capture.read_rgba().expect("readback"), 56, 56);
+        assert!(near(shown, rgba, 2), "{side}x{side} frame shows {shown:?}");
+    }
+    drop(registration);
+    capture
+        .apply_texture_updates(registry.take_updates())
+        .expect("retirement applies");
+    let card = ContentToken::mint();
+    let tree = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::new(40.0, 40.0),
+            paint: &draw,
+        }],
+        None,
+    );
+    capture.mark_full_repaint();
+    assert!(
+        capture.render_scene(&tree).is_err(),
+        "a retired texture is no longer drawable"
+    );
+}
+
 /// A partial frame whose damage cuts through destination-reading blends (a
 /// Multiply rect, a ColorBurn circle, a Screen save-layer) presents the same
 /// pixels as the frame rendered in full, everywhere. Such a shape composites

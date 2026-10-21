@@ -174,16 +174,14 @@ fn main() {
     let platform = current_platform().expect("failed to initialize platform");
     tracing::info!("platform: {}", platform.name());
 
-    let options = WindowOptions {
-        title: "FLUI Filter Demo — Gaussian Blur (SceneBuilder API)".to_string(),
-        size: Size::new(900.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: None,
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("FLUI Filter Demo — Gaussian Blur (SceneBuilder API)".to_string())
+        .with_size(Size::new(900.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(None)
+        .with_max_size(None);
 
     let window = platform
         .open_window(options)
@@ -229,9 +227,9 @@ fn main() {
 
     // Resize callback: update the renderer's surface dimensions.
     let renderer_for_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |new_size, scale_factor| {
-        let surface_width = (new_size.width * scale_factor) as u32;
-        let surface_height = (new_size.height * scale_factor) as u32;
+    window.on_resize(Box::new(move |metrics| {
+        let surface_width = metrics.physical().width.unsigned_abs();
+        let surface_height = metrics.physical().height.unsigned_abs();
         renderer_for_resize
             .lock()
             .unwrap()

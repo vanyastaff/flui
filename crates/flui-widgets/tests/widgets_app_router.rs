@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::Vsync;
-use flui_interaction::routing::FocusScopeNode;
+use flui_interaction::focus::FocusScopeNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;

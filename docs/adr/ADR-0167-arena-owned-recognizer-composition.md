@@ -1,8 +1,8 @@
 # ADR-0167: Arena-owned recognizer composition
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-10-07
-- **Superseded-by:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md) on merge of its implementation; until then this record describes `main`
+- **Superseded-by:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md)
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0159](ADR-0159-gesture-arena-owner-delivery.md),
   [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md)

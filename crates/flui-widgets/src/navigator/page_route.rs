@@ -29,7 +29,7 @@
 //!
 //! # Not implemented, inherited from the private layers
 //!
-//! Everything `modal_route.rs` records: no `FocusScope`, no `BlockSemantics` or
+//! Everything `modal_route.rs` records: no `BlockSemantics` or
 //! barrier semantics, no animated barrier colour tween, no `PopScope`, no
 //! local-history routes, no predictive back. Plus, here: no fullscreen-dialog flag,
 //! no snapshotting, no barrier label, no backdrop filter. None of these is claimed.
@@ -308,6 +308,18 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
     #[must_use]
     pub fn with_current_result(mut self, result: T) -> Self {
         self.modal = self.modal.with_current_result(result);
+        self
+    }
+
+    /// Whether the page route below runs its covered transition while this one
+    /// enters and leaves; default `true`.
+    ///
+    /// `false` keeps the page below still, for a transition that owns the whole
+    /// scene: a container transform measures its source on the page below and
+    /// must grow from, and shrink back to, where the source actually sits.
+    #[must_use]
+    pub fn animates_route_below(mut self, animates: bool) -> Self {
+        self.modal = self.modal.can_transition_from(animates);
         self
     }
 

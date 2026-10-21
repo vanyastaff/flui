@@ -258,6 +258,14 @@ pub(super) enum QuitNotification {
     Notified,
 }
 
+/// The platform instance's data-transfer source and its nonce, handed to every
+/// UI runtime the host builds so their drags name one platform instance.
+#[derive(Clone)]
+pub(crate) struct PlatformDataTransfer {
+    pub(crate) source: Arc<dyn flui_platform_api::DataTransferSource>,
+    pub(crate) nonce: flui_platform_api::drag::ProcessNonce,
+}
+
 /// The loop-scoped composition root: installed host, platform event-loop
 /// capabilities and the once-resolved [`SharedEngineServices`].
 ///
@@ -269,6 +277,14 @@ pub(crate) struct AppRuntime {
     /// One strong logical/native owner, retained by active callback completion.
     pub(super) installed_host: InstalledHost,
     pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
+    /// The commands application code queued for its windows; applied at the
+    /// start of each owner turn.
+    pub(super) window_commands: Rc<super::window_control::WindowCommandQueues>,
+    /// The session end the host is answering: every presentation's subscribers
+    /// hold their blocks on this one request, so the answer to the operating
+    /// system is the aggregate. Kept from the query until the session end is
+    /// cancelled or happens.
+    pub(super) session_end: Option<flui_platform::SessionEndRequest>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -379,11 +395,29 @@ pub(crate) struct AppRuntime {
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
     platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+    /// The platform instance's data-transfer source and the nonce that names
+    /// this platform instance's drags (ADR-0211 §3), installed and cleared
+    /// with the clipboard. Every UI runtime this host builds takes both.
+    platform_data_transfer: Arc<Mutex<Option<PlatformDataTransfer>>>,
     /// The byte storage every UI runtime this host builds hands its widgets,
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
     pub(super) host_storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    /// What this host gives back on a memory-pressure notice: one receiver every
+    /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
+    pub(super) host_memory: Arc<super::host_memory::HostMemory>,
+    /// The windows that remember their placement, keyed by presentation, so a
+    /// window closing or the session ending can write the final one.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) placement_recorders: Vec<(
+        flui_foundation::PresentationAddress,
+        Rc<super::placement_recorder::PlacementRecorder>,
+    )>,
 }
 
 impl AppRuntime {
@@ -456,7 +490,17 @@ impl AppRuntime {
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
+            platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
+            window_commands: Rc::default(),
+            session_end: None,
+            host_memory: Arc::default(),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            placement_recorders: Vec::new(),
         }
     }
 
@@ -579,17 +623,6 @@ impl AppRuntime {
     /// A stash arriving after execution services already exist is ignored
     /// with a warning rather than rebuilt: pools may already be running
     /// work, and silently swapping executors mid-run would strand it.
-    // Its one production caller (bootstrap_desktop's config wiring) is
-    // desktop-only; android/wasm have no host-injection entry point yet.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "host executors are injected via AppConfig on the desktop bootstrap \
-                      only; android/web bootstraps gain the wiring with their own \
-                      host-injection slice"
-        )
-    )]
     pub(super) fn install_host_executors(&mut self, host: HostExecutors) {
         if self.execution.get().is_some() {
             tracing::warn!(
@@ -842,10 +875,28 @@ impl AppRuntime {
             .frame_deadline(self.installed_host.logical());
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let frame = None;
+        // A window placement held back by the write throttle is written when
+        // its interval is over. Frame-independent like text sizing: a
+        // minimized window has frames disabled, and the write must not wait
+        // for it to come back (`after_turn` ticks the recorders).
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let placement = super::placement_recorder::earliest_due(
+            std::time::Instant::now(),
+            self.placement_recorders
+                .iter()
+                .map(|(_, recorder)| recorder),
+        );
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let placement = None;
         [
             runtime,
             frame,
             self.installed_host.native().text_sizing_deadline(),
+            placement,
         ]
         .into_iter()
         .flatten()
@@ -1083,13 +1134,41 @@ impl AppRuntime {
     )]
     pub(super) fn clear_platform_clipboard(&self) {
         let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_data_transfer.lock().take();
     }
 
-    /// Resolve the host's byte storage from the run's `config`, once, when
-    /// the host starts: every UI runtime the runners and secondary windows build
-    /// afterwards takes this one (`runner::host::build_ui_runtime`).
-    pub(super) fn install_host_storage(&mut self, config: &super::AppConfig) {
-        self.host_storage = super::storage_host::host_storage(config);
+    /// Install the platform's data-transfer source, minting the nonce of this
+    /// platform instance once (ADR-0211 §3). Returns the displaced pair for
+    /// retirement outside the caller's borrow.
+    pub(super) fn set_platform_data_transfer(
+        &self,
+        source: Arc<dyn flui_platform_api::DataTransferSource>,
+    ) -> Option<PlatformDataTransfer> {
+        self.platform_data_transfer
+            .lock()
+            .replace(PlatformDataTransfer {
+                source,
+                nonce: flui_platform_api::drag::ProcessNonce::mint(),
+            })
+    }
+
+    /// The installed data-transfer source and nonce, for the UI runtimes the
+    /// runners build.
+    pub(super) fn data_transfer(&self) -> Option<PlatformDataTransfer> {
+        self.platform_data_transfer.lock().clone()
+    }
+
+    /// Install the host's byte storage under `dirs`, or none, once, when the
+    /// host starts: every UI runtime the runners and secondary windows build
+    /// afterwards takes this one (`runner::host::build_ui_runtime`). `None`
+    /// replaces a storage an earlier run on this thread left, whose IO pool
+    /// is gone. Its IO runs on this loop's execution services, resolved here
+    /// if no runner resolved them yet, so install the host's executors first.
+    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_platform::storage::DataDirs>) {
+        self.host_storage = dirs.map(|dirs| {
+            let io = Arc::downgrade(self.ensure_execution());
+            super::storage_host::host_storage(dirs, io)
+        });
     }
 
     /// The host's byte storage, if the run configured one.
@@ -1218,6 +1297,7 @@ impl Drop for AppRuntime {
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
         let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_data_transfer.lock().take();
     }
 }
 

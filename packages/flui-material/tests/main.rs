@@ -41,6 +41,9 @@ mod flexible_space_bar;
 #[path = "floating_action_button.rs"]
 mod floating_action_button;
 
+#[path = "gesture_alternatives.rs"]
+mod gesture_alternatives;
+
 #[path = "icon_button.rs"]
 mod icon_button;
 
@@ -65,11 +68,17 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "open_container.rs"]
+mod open_container;
+
 #[path = "page_transitions.rs"]
 mod page_transitions;
 
 #[path = "progress_indicator.rs"]
 mod progress_indicator;
+
+#[path = "progress_variants.rs"]
+mod progress_variants;
 
 #[path = "radio.rs"]
 mod radio;
@@ -116,6 +125,10 @@ fn action_component_contracts() {
         (
             "elevated_button::elevated button with text child announces one labelled button node",
             elevated_button::elevated_button_with_text_child_announces_one_labelled_button_node,
+        ),
+        (
+            "elevated_button::material controls publish their identifier",
+            elevated_button::material_controls_publish_their_identifier,
         ),
         (
             "elevated_button::widget level style wins over the elevated button theme",
@@ -223,8 +236,8 @@ fn ink_feedback_contracts() {
             ink_ripple::a_long_press_winning_the_arena_cancels_the_wave,
         ),
         (
-            "ink_ripple::rejecting one contact leaves the other pressing",
-            ink_ripple::rejecting_one_contact_leaves_the_other_pressing,
+            "ink_ripple::a second contact grows no wave beside a pending tap",
+            ink_ripple::a_second_contact_grows_no_wave_beside_a_pending_tap,
         ),
         (
             "ink_ripple::releasing another button leaves the primary pressing",
@@ -329,6 +342,10 @@ fn text_input_contracts() {
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
         ),
         (
+            "text_field::the input purpose reaches the text store",
+            text_field::the_input_purpose_reaches_the_text_store,
+        ),
+        (
             "text_field::the field carries its label hint and error for assistive technology",
             text_field::the_field_carries_its_label_hint_and_error_for_assistive_technology,
         ),
@@ -420,6 +437,10 @@ fn overlay_contracts() {
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "open_container::open container morph by scenario",
+            open_container::open_container_morph_by_scenario,
+        ),
         (
             "page_transitions::page transitions by platform and variant",
             page_transitions::page_transitions_by_platform_and_variant,
@@ -612,6 +633,10 @@ fn navigation_and_layout_contracts() {
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
         ),
+        (
+            "scaffold::plain body text takes the theme body style and components keep theirs",
+            scaffold::plain_body_text_takes_the_theme_body_style_and_components_keep_theirs,
+        ),
     ]);
 }
 
@@ -663,6 +688,10 @@ fn theme_and_app_contracts() {
             material_app::theme_mode_switch_animates_through_a_blended_theme,
         ),
         (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
+        ),
+        (
             "material_app::two presentations resolve different themes simultaneously",
             material_app::two_presentations_resolve_different_themes_simultaneously,
         ),
@@ -701,6 +730,50 @@ fn linear_progress_indeterminate_keyframes() {
     ]);
 }
 
+/// The progress indicator family: gap and stop, circular and wavy variants, the value
+/// policy, reduced motion, and the Material refresh indicator.
+#[test]
+fn progress_indicator_variants() {
+    common::run_cases(&[
+        (
+            "linear gap and stop",
+            progress_variants::linear_gap_and_stop,
+        ),
+        (
+            "circular determinate arcs",
+            progress_variants::circular_determinate_arcs,
+        ),
+        (
+            "determinate values stay finite",
+            progress_variants::determinate_values_stay_finite,
+        ),
+        (
+            "circular indeterminate is the activity arc",
+            progress_variants::circular_indeterminate_is_the_activity_arc,
+        ),
+        (
+            "waves rise, lie flat and travel",
+            progress_variants::waves_rise_lie_flat_and_travel,
+        ),
+        (
+            "wave amplitude eases in",
+            progress_variants::wave_amplitude_eases_in,
+        ),
+        (
+            "flat waves need no frames",
+            progress_variants::flat_waves_need_no_frames,
+        ),
+        (
+            "huge layouts stay bounded",
+            progress_variants::huge_layouts_stay_bounded,
+        ),
+        (
+            "material app refresh shows the circular indicator",
+            progress_variants::material_app_refresh_shows_the_circular_indicator,
+        ),
+    ]);
+}
+
 /// `LinearProgressIndicator`: the switch to a determinate value.
 #[test]
 fn linear_progress_switches_to_determinate() {
@@ -724,6 +797,34 @@ fn linear_progress_switches_to_determinate() {
         (
             "progress_indicator::negative zero announces zero percent",
             progress_indicator::negative_zero_announces_zero_percent,
+        ),
+    ]);
+}
+
+/// A `TabBarView`'s alternatives to a swipe (ADR-0216): the input-path matrix
+/// rows, whose single-pointer path is the `TabBar` beside it.
+#[test]
+fn gesture_alternatives() {
+    common::run_cases(&[
+        (
+            "gesture_alternatives::tab_bar_view_with_its_tab_bar",
+            gesture_alternatives::tab_bar_view_with_its_tab_bar,
+        ),
+        (
+            "gesture_alternatives::tab_bar_view_without_a_tab_bar",
+            gesture_alternatives::tab_bar_view_without_a_tab_bar,
+        ),
+        (
+            "gesture_alternatives::the_end_tabs_have_no_step_beyond_them",
+            gesture_alternatives::the_end_tabs_have_no_step_beyond_them,
+        ),
+        (
+            "gesture_alternatives::unmounting_the_tab_bar_unregisters_it",
+            gesture_alternatives::unmounting_the_tab_bar_unregisters_it,
+        ),
+        (
+            "gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one",
+            gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
         ),
     ]);
 }

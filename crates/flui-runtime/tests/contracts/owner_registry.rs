@@ -156,13 +156,7 @@ impl OwnerEffects for Effects {
             });
         }
     }
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
     fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
     fn after_turn(&self, recovery: RecoveryState) {
         self.completion.set(recovery);
@@ -182,7 +176,7 @@ fn prepared_sibling_commits_follow_the_frame_in_one_fifo() {
     owner
         .frame_dispatcher(initial)
         .expect("frame")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("delivery");
     assert_eq!(
         *effects.trace.borrow(),
@@ -209,7 +203,7 @@ fn shutdown_cancels_every_pending_bundle_before_checkout_returns() {
     owner
         .frame_dispatcher(initial)
         .expect("frame")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("delivery");
     assert_eq!(
         *effects.trace.borrow(),
@@ -251,9 +245,10 @@ fn cancellation_failures_preserve_the_first_and_finish_the_pending_tail() {
         let effects = Effects::new(&owner, true);
         effects.cancellation_failures.set(failures);
         let frame = owner.frame_dispatcher(initial).expect("frame");
-        let failure =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame.deliver(&effects)))
-                .expect_err("cancellation failure resumes");
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frame.deliver(crate::VSYNC, &effects)
+        }))
+        .expect_err("cancellation failure resumes");
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"first cancellation"));
         assert_eq!(effects.retired.get(), 2);
         assert!(effects.pending.borrow().is_empty());
@@ -316,7 +311,7 @@ fn native_shutdown_covers_all_presentations_and_preserves_its_failure() {
             owner
                 .frame_dispatcher(initial)
                 .expect("frame")
-                .deliver(&effects)
+                .deliver(crate::VSYNC, &effects)
         }));
         if fail {
             let failure = result.expect_err("native failure resumes after cancellation");

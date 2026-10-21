@@ -7,20 +7,22 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    shared::WindowCallbacks,
+    WindowExecutionState,
+    shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{
-        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowId,
+        CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
+        WindowMode, WindowState,
     },
 };
 
 use super::{
-    display::WebDisplay,
+    display::WebDisplays,
     registration::{CanvasClaim, Registration, effective_focus},
 };
 
@@ -32,6 +34,82 @@ pub struct WebWindow {
     callbacks: Arc<WindowCallbacks>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
+    drag: RefCell<Option<super::drag::CanvasDrag>>,
+    text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
+    /// The platform's display state, which names the screen this window is on.
+    displays: Arc<WebDisplays>,
+    /// The published window state (ADR-0237).
+    snapshot: Arc<WindowStateCell>,
+}
+
+/// What the layout, focus and visibility observers need to republish the
+/// window state after they changed it.
+#[derive(Clone)]
+pub(super) struct StatePublisher {
+    cell: Arc<WindowStateCell>,
+    canvas: web_sys::HtmlCanvasElement,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+    displays: Arc<WebDisplays>,
+}
+
+impl StatePublisher {
+    /// The published state, read from the page again first when something
+    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// revision.
+    fn current(&self) -> WindowState {
+        let published = self.cell.state_with(|| {
+            sample_state(&self.canvas, &self.state, self.displays.current_display())
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The window may differ from its published state: read it again.
+    pub(super) fn publish(&self) {
+        self.cell.invalidate();
+        let _ = self.current();
+    }
+}
+
+/// The window as the page reports it now. A canvas has no frame, no global
+/// position and no limits of its own; the layout sets its size.
+fn sample_state(
+    canvas: &web_sys::HtmlCanvasElement,
+    state: &Mutex<WebWindowState>,
+    display: Option<flui_platform_api::DisplayId>,
+) -> WindowState {
+    let (title, size, focused, visible) = {
+        let state = state.lock();
+        (
+            state.title.clone(),
+            Size::new(state.width, state.height),
+            state.focused,
+            state.visible,
+        )
+    };
+    // The canvas, or an element that holds it: another element of the page (a
+    // video) can be fullscreen while this window is not, and an application
+    // that wraps the canvas in a container makes that container fullscreen.
+    let fullscreen = canvas.owner_document().is_some_and(|document| {
+        document
+            .fullscreen_element()
+            .is_some_and(|element| element.contains(Some(canvas)))
+    });
+    WindowState::new(WindowGeometry::new(None, size), size)
+        .with_mode(if fullscreen {
+            WindowMode::Fullscreen
+        } else {
+            WindowMode::Normal
+        })
+        .with_visible(visible)
+        .with_focused(focused)
+        .with_title(Some(title))
+        .with_resizable(false)
+        .with_decorated(false)
+        .with_display(display)
 }
 
 struct WebWindowState {
@@ -39,9 +117,12 @@ struct WebWindowState {
     width: f64,
     height: f64,
     scale_factor: f64,
+    /// The canvas's backing store, which is the surface's physical size.
+    backing: DeviceSize,
     focused: bool,
     visible: bool,
-    fullscreen: bool,
+    /// What the Page Lifecycle API last said: a frozen page runs no script.
+    execution: WindowExecutionState,
 }
 
 // SAFETY: WASM is single-threaded — no data races possible
@@ -59,17 +140,43 @@ fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f64, f64, f64)> {
     (width > 0 && height > 0).then(|| (width as f64, height as f64, window.device_pixel_ratio()))
 }
 
-/// Set the canvas's backing store to `logical × scale`, rounded, so the
-/// surface renders one texel per device pixel. Skipped when unchanged:
-/// assigning `width`/`height` clears a canvas even to the same value.
-fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f64, height: f64, scale: f64) {
-    let phys_width = (width * scale).round() as u32;
-    let phys_height = (height * scale).round() as u32;
-    if canvas.width() != phys_width {
-        canvas.set_width(phys_width);
+/// The page's `prefers-color-scheme: dark` query; `None` where the browser
+/// cannot evaluate it, which reads as light.
+pub(super) fn dark_scheme_query() -> Option<web_sys::MediaQueryList> {
+    web_sys::window()?
+        .match_media("(prefers-color-scheme: dark)")
+        .ok()
+        .flatten()
+}
+
+/// A canvas size in device pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DeviceSize {
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+impl DeviceSize {
+    /// `logical × scale`, rounded: the device pixels a box probably covers.
+    /// The browser snaps a box to device pixels from its position too, so
+    /// this can be a pixel off the size it really laid out.
+    fn estimate(width: f64, height: f64, scale: f64) -> Self {
+        Self {
+            width: (width * scale).round() as u32,
+            height: (height * scale).round() as u32,
+        }
     }
-    if canvas.height() != phys_height {
-        canvas.set_height(phys_height);
+}
+
+/// Size the canvas's backing store so the surface renders one texel per
+/// device pixel. Skipped when unchanged: assigning `width`/`height` clears a
+/// canvas even to the same value.
+fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
+    if canvas.width() != size.width {
+        canvas.set_width(size.width);
+    }
+    if canvas.height() != size.height {
+        canvas.set_height(size.height);
     }
 }
 
@@ -104,11 +211,12 @@ impl WebWindow {
     /// [`OpenWindowError::Backend`] when the browser environment lacks the
     /// pieces this needs (no global window/document/body) or the canvas
     /// element cannot be created.
-    pub fn new(
+    pub(super) fn new(
         id: WindowId,
         title: &str,
         width: f64,
         height: f64,
+        displays: Arc<WebDisplays>,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -159,10 +267,18 @@ impl WebWindow {
             let _ = style.set_property("height", &format!("{height}px"));
             (width, height, window.device_pixel_ratio())
         });
-        apply_backing_size(&canvas, width, height, scale_factor);
+        let backing = DeviceSize::estimate(width, height, scale_factor);
+        apply_backing_size(&canvas, backing);
 
         // Make canvas focusable for keyboard events
         canvas.set_tab_index(0);
+
+        // Every touch on the canvas is the application's: with the default
+        // `touch-action`, the browser claims a touch that moves past its
+        // slop for its own panning or zooming and cancels the pointer, so a
+        // swipe, a drag or a pinch dies a few pixels in. Set inline, so a
+        // page's stylesheet cannot hand the gestures back to the browser.
+        let _ = canvas.style().set_property("touch-action", "none");
 
         // Set page title
         document.set_title(title);
@@ -172,32 +288,53 @@ impl WebWindow {
             width,
             height,
             scale_factor,
+            backing,
             focused: effective_focus(&canvas),
             visible: !document.hidden(),
-            fullscreen: false,
+            execution: WindowExecutionState::Running,
         };
 
+        let state = Arc::new(Mutex::new(state));
+        let initial = sample_state(&canvas, &state, displays.current_display());
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
             retire_frame_slot: RefCell::new(None),
+            drag: RefCell::new(None),
+            text: RefCell::new(None),
             canvas,
-            state: Arc::new(Mutex::new(state)),
+            state,
             callbacks: Arc::new(WindowCallbacks::new()),
+            displays,
+            snapshot: Arc::new(WindowStateCell::new(initial)),
         })
+    }
+
+    /// The handle by which an observer republishes this window's state.
+    pub(super) fn publisher(&self) -> StatePublisher {
+        StatePublisher {
+            cell: Arc::clone(&self.snapshot),
+            canvas: self.canvas.clone(),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+            displays: Arc::clone(&self.displays),
+        }
     }
 
     /// A handle for the layout-tracking listeners `super::events` registers:
     /// re-reads the canvas's CSS box and the device pixel ratio, and, when
-    /// either changed, resizes the backing store, updates the tracked size
-    /// and dispatches a resize followed by a frame request. A no-op when
-    /// nothing changed (a `ResizeObserver` reports once on registration,
-    /// and a `resize` event fires for scrolls on some mobile browsers).
+    /// either or the backing size changed, resizes the backing store, updates
+    /// the tracked size and dispatches a resize followed by a frame request.
+    /// A no-op when nothing changed (a `ResizeObserver` reports once on
+    /// registration, and a `resize` event fires for scrolls on some mobile
+    /// browsers).
     pub(super) fn layout_sync(&self) -> LayoutSync {
         LayoutSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
+            publisher: self.publisher(),
+            observed: Cell::new(None),
         }
     }
 
@@ -213,6 +350,7 @@ impl WebWindow {
 
     pub(super) fn install(
         &self,
+        transfer: &Arc<super::drag::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -220,7 +358,10 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        super::events::register_event_listeners(self, &mut registration)?;
+        let services = super::events::register_event_listeners(self, transfer, &mut registration)?;
+        services.drag.arm();
+        *self.drag.borrow_mut() = Some(services.drag);
+        *self.text.borrow_mut() = Some(services.text);
         *self.registration.borrow_mut() = Some(registration);
         *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
         Ok(())
@@ -232,6 +373,16 @@ impl WebWindow {
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().focused),
+            publisher: self.publisher(),
+        }
+    }
+
+    /// The handle by which the Page Lifecycle listeners `super::events`
+    /// registers set the window's execution state.
+    pub(super) fn execution_sync(&self) -> ExecutionSync {
+        ExecutionSync {
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
         }
     }
 
@@ -245,6 +396,7 @@ impl WebWindow {
             callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().visible),
             accepting,
+            publisher: self.publisher(),
         }
     }
 
@@ -254,6 +406,14 @@ impl WebWindow {
             return;
         };
         registration.fence();
+        let drag = self.drag.borrow_mut().take();
+        if let Some(drag) = drag {
+            drag.retire();
+        }
+        let text = self.text.borrow_mut().take();
+        if let Some(text) = text {
+            text.retire();
+        }
         let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
         if let Some(retire) = retire_frame_slot {
             retire();
@@ -293,6 +453,7 @@ pub(super) struct FocusSync {
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
+    publisher: StatePublisher,
 }
 
 impl FocusSync {
@@ -302,8 +463,12 @@ impl FocusSync {
             return;
         }
         let state = Arc::clone(&self.state);
-        self.callbacks
-            .dispatch_focus_observation(focused, move || state.lock().focused = focused);
+        let cell = Arc::clone(&self.publisher.cell);
+        self.callbacks.dispatch_focus_observation(focused, move || {
+            state.lock().focused = focused;
+            cell.invalidate();
+        });
+        self.publisher.publish();
     }
 }
 
@@ -313,6 +478,7 @@ pub(super) struct VisibilitySync {
     callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
     accepting: Rc<Cell<bool>>,
+    publisher: StatePublisher,
 }
 
 impl VisibilitySync {
@@ -323,8 +489,35 @@ impl VisibilitySync {
             return;
         }
         let state = Arc::clone(&self.state);
+        let cell = Arc::clone(&self.publisher.cell);
         self.callbacks
-            .dispatch_visibility_observation(visible, move || state.lock().visible = visible);
+            .dispatch_visibility_observation(visible, move || {
+                state.lock().visible = visible;
+                cell.invalidate();
+            });
+        self.publisher.publish();
+    }
+}
+
+/// Records what the Page Lifecycle API says about the page and reports each
+/// change once; see [`WebWindow::execution_sync`].
+pub(super) struct ExecutionSync {
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+}
+
+impl ExecutionSync {
+    /// The page is frozen (`Suspended`) or runs again (`Running`). The state
+    /// lock is released before the dispatch, which runs embedder callbacks.
+    pub(super) fn set(&self, next: WindowExecutionState) {
+        {
+            let mut state = self.state.lock();
+            if state.execution == next {
+                return;
+            }
+            state.execution = next;
+        }
+        self.callbacks.dispatch_execution_state_change(next);
     }
 }
 
@@ -333,37 +526,107 @@ pub(super) struct LayoutSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
+    publisher: StatePublisher,
+    /// The device-pixel size the `ResizeObserver` last reported, with the
+    /// CSS box it was reported for.
+    observed: Cell<Option<ObservedSize>>,
+}
+
+/// A `ResizeObserverEntry`'s `devicePixelContentBoxSize`: the device pixels
+/// the browser laid the box out at, exact where the estimate can be a pixel
+/// off. It holds while the CSS box it was reported for does, across a change
+/// of the device pixel ratio too: the device-pixel observer reports a ratio
+/// change that moves the device box, so one it does not report left the box
+/// as it was, which the estimate at the new ratio may not be.
+#[derive(Clone, Copy)]
+struct ObservedSize {
+    css: (f64, f64),
+    device: DeviceSize,
 }
 
 impl LayoutSync {
+    /// A `ResizeObserver` reported the canvas, with its device-pixel size
+    /// where the browser gives one and it can be used: record it for the
+    /// current CSS box, replacing the last, and sync.
+    pub(super) fn observe(&self, device: Option<DeviceSize>) {
+        let observed = device
+            .zip(layout_size(&self.canvas))
+            .map(|(device, (width, height, _))| ObservedSize {
+                css: (width, height),
+                device,
+            });
+        self.observed.set(observed);
+        self.sync();
+    }
+
     /// Bring the backing store and the tracked size up to the layout; see
-    /// [`WebWindow::layout_sync`]. The state lock is released before the
-    /// dispatch, which runs embedder callbacks.
+    /// [`WebWindow::layout_sync`]. The backing store is the observed device
+    /// size while the CSS box is the one it was observed for, and the
+    /// estimate otherwise: a `resize` event can run before the observer
+    /// reports the new box. The state lock is released before the dispatch,
+    /// which runs embedder callbacks.
     pub(super) fn sync(&self) {
         let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
             return;
         };
+        let backing = self
+            .observed
+            .get()
+            .filter(|observed| observed.css == (width, height))
+            .map_or_else(
+                || DeviceSize::estimate(width, height, scale_factor),
+                |observed| observed.device,
+            );
         let changed = {
             let mut state = self.state.lock();
             let changed = state.width != width
                 || state.height != height
-                || state.scale_factor != scale_factor;
+                || state.scale_factor != scale_factor
+                || state.backing != backing;
             state.width = width;
             state.height = height;
             state.scale_factor = scale_factor;
+            state.backing = backing;
             changed
         };
         if !changed {
             return;
         }
-        apply_backing_size(&self.canvas, width, height, scale_factor);
-        self.callbacks
-            .dispatch_resize(Size::new(width, height), scale_factor);
+        apply_backing_size(&self.canvas, backing);
+        self.publisher.publish();
+        let physical = flui_foundation::geometry::DeviceSize::new(
+            i32::try_from(backing.width).unwrap_or(i32::MAX),
+            i32::try_from(backing.height).unwrap_or(i32::MAX),
+        );
+        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor) {
+            self.callbacks.dispatch_resize(metrics);
+        }
         self.callbacks.dispatch_request_frame();
     }
 }
 
-impl crate::traits::HostWindow for WebWindow {}
+impl crate::traits::HostWindow for WebWindow {
+    /// The canvas's `EditContext` or hidden textarea, serving the focused
+    /// field's store; `None` once the window closed.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        self.text
+            .borrow()
+            .as_ref()
+            .map(|text| Rc::clone(text) as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+    }
+}
+
+/// What every browser window honours, known before one exists
+/// (`Platform::window_capabilities`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.enters_fullscreen = true;
+    capabilities
+}
 
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
@@ -371,14 +634,12 @@ impl PlatformWindow for WebWindow {
     }
 
     fn physical_size(&self) -> Size<i32> {
-        // Rounded, exactly as `apply_backing_size` sizes the canvas's
-        // backing store, so the surface the embedder configures from this
-        // answer and the store it renders into agree at fractional device
-        // pixel ratios (981 CSS px at 1.5 is 1472, not 1471).
-        let state = self.state.lock();
+        // The canvas's backing store, so the surface the embedder configures
+        // from this answer and the store it renders into agree.
+        let backing = self.state.lock().backing;
         Size::new(
-            (state.width * state.scale_factor).round() as i32,
-            (state.height * state.scale_factor).round() as i32,
+            i32::try_from(backing.width).unwrap_or(i32::MAX),
+            i32::try_from(backing.height).unwrap_or(i32::MAX),
         )
     }
 
@@ -391,12 +652,13 @@ impl PlatformWindow for WebWindow {
         self.state.lock().scale_factor
     }
 
-    fn request_redraw(&self) {
-        let accepting = self.registration.borrow().is_some();
-        if accepting {
-            self.callbacks.dispatch_request_frame();
-        }
-    }
+    /// Served by the page's next animation frame: the platform's
+    /// `requestAnimationFrame` loop dispatches a frame request on every one,
+    /// and the embedder's frame skips when nothing is dirty. Never inside
+    /// this call: a frame that asks for the next one (a running animation)
+    /// would get it at once, at the same frame time, inside its own
+    /// dispatch, in a loop that holds the page's only thread.
+    fn request_redraw(&self) {}
 
     fn is_focused(&self) -> bool {
         self.state.lock().focused
@@ -406,27 +668,54 @@ impl PlatformWindow for WebWindow {
         self.state.lock().visible
     }
 
-    fn bounds(&self) -> Bounds<f64> {
-        let state = self.state.lock();
-        Bounds::new(Point::new(0.0, 0.0), Size::new(state.width, state.height))
+    fn execution_state(&self) -> WindowExecutionState {
+        self.state.lock().execution
     }
 
-    fn content_size(&self) -> Size<f64> {
-        self.logical_size()
+    // ==================== State and commands (ADR-0237) ====================
+
+    fn state(&self) -> WindowState {
+        self.publisher().current()
     }
 
-    fn window_bounds(&self) -> WindowBounds {
-        let state = self.state.lock();
-        let bounds = Bounds::new(Point::default(), Size::new(state.width, state.height));
-        if state.fullscreen {
-            WindowBounds::Fullscreen(bounds)
-        } else {
-            WindowBounds::Windowed(bounds)
+    fn capabilities(&self) -> WindowCapabilities {
+        window_capabilities()
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.registration.borrow().is_none() {
+            return Err(WindowCommandError::Closed);
         }
-    }
-
-    fn is_fullscreen(&self) -> bool {
-        self.state.lock().fullscreen
+        command.admit(&PlatformWindow::capabilities(self))?;
+        match command {
+            WindowCommand::SetTitle(title) => {
+                self.state.lock().title.clone_from(&title);
+                if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                    document.set_title(&title);
+                }
+            }
+            WindowCommand::SetMode(WindowMode::Fullscreen) => {
+                let el: &web_sys::Element = self.canvas.as_ref();
+                el.request_fullscreen()
+                    .map_err(|error| WindowCommandError::Backend {
+                        message: format!("{error:?}"),
+                    })?;
+            }
+            WindowCommand::SetMode(WindowMode::Normal) => {
+                if let Some(document) = self.canvas.owner_document()
+                    && document.fullscreen_element().is_some()
+                {
+                    document.exit_fullscreen();
+                }
+            }
+            // Every other command is refused by `admit` through a capability
+            // this backend leaves `false`.
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        // The page answers a fullscreen request later, with
+        // `fullscreenchange`; the title is ours to report at once.
+        self.publisher().publish();
+        Ok(())
     }
 
     fn is_active(&self) -> bool {
@@ -434,41 +723,21 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window()
-            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
-            && mql.matches()
-        {
-            return WindowAppearance::Dark;
-        }
-        WindowAppearance::Light
-    }
-
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
-    }
-
-    fn get_title(&self) -> String {
-        self.state.lock().title.clone()
-    }
-
-    fn set_title(&self, title: &str) {
-        self.state.lock().title = title.to_string();
-        if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-            document.set_title(title);
-        }
-    }
-
-    fn toggle_fullscreen(&self) {
-        let is_fullscreen = self.state.lock().fullscreen;
-        if is_fullscreen {
-            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-                document.exit_fullscreen();
-            }
+        if dark_scheme_query().is_some_and(|query| query.matches()) {
+            WindowAppearance::Dark
         } else {
-            let el: &web_sys::Element = self.canvas.as_ref();
-            let _ = el.request_fullscreen();
+            WindowAppearance::Light
         }
-        self.state.lock().fullscreen = !is_fullscreen;
+    }
+
+    /// The browser's screen the page is on: the one screen of a tab, or the
+    /// current screen when the Window Management API lists several. The id is
+    /// the snapshot's, so the host derives the period from it.
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        if self.registration.borrow().is_none() {
+            return None;
+        }
+        self.displays.current_display()
     }
 
     fn close(&self) {
@@ -477,6 +746,16 @@ impl PlatformWindow for WebWindow {
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
         // Not applicable for web canvas
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        self.drag.borrow().as_ref().map(|drag| {
+            Arc::clone(&drag.source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+        })
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::new(super::haptics::WebHaptics))
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -490,18 +769,22 @@ impl PlatformWindow for WebWindow {
 
     fn on_input(
         &self,
-        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult + Send>,
+        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult>,
     ) {
-        self.install_callback(&self.callbacks.on_input, callback);
+        if self.registration.borrow().is_some() {
+            self.callbacks.set_input_callback(callback);
+        } else {
+            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+        }
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
         self.install_callback(&self.callbacks.on_request_frame, callback);
     }
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
+    fn on_resize(&self, callback: Box<dyn FnMut(flui_foundation::geometry::WindowMetrics) + Send>) {
         self.install_callback(&self.callbacks.on_resize, callback);
     }
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_moved, callback);
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.install_callback(&self.callbacks.on_state_changed, callback);
     }
     fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
         self.install_callback(&self.callbacks.on_close, callback);

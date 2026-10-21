@@ -1,0 +1,19 @@
+error[E0432]: unresolved import `flui::platform::input_capabilities::InputCapabilities`
+ --> tests/ui/unstable_input/input_capabilities_need_unstable_input.rs:3:5
+  |
+3 | use flui::platform::input_capabilities::InputCapabilities;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----------------
+  |                                         |
+  |                                         no `InputCapabilities` in `platform::input_capabilities`
+
+error[E0603]: module `input_capabilities` is private
+ --> tests/ui/unstable_input/input_capabilities_need_unstable_input.rs:3:21
+  |
+3 | use flui::platform::input_capabilities::InputCapabilities;
+  |                     ^^^^^^^^^^^^^^^^^^ private module
+  |
+note: the module `input_capabilities` is defined here
+ --> src/lib.rs
+  |
+  |     mod input_capabilities {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^

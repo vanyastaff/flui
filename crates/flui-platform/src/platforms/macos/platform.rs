@@ -14,17 +14,13 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     executor::BackgroundExecutor,
-    shared::PlatformHandlers,
+    shared::{PlatformHandlers, system_notice::SystemNotices},
     traits::{
-        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
+        PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
-
-/// Capabilities descriptor shared by all macOS platform instances.
-static MACOS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// macOS platform state
 pub struct MacOSPlatform {
@@ -52,6 +48,18 @@ pub struct MacOSPlatform {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// The id registry and last snapshot of the displays; shared with every
+    /// window so each names its screen by the same identity.
+    displays: Arc<display::MacosDisplays>,
+
+    /// Marks `displays` stale and wakes the owner when AppKit reports a
+    /// change of screen parameters; removed when the platform is dropped.
+    _screen_observer: display::ScreenObserver,
+
+    /// Where sleep, wake, lock and memory notices go, and what a wake marks
+    /// stale before the host hears of it.
+    notices: Arc<SystemNotices>,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -165,6 +173,11 @@ impl MacOSPlatform {
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
+            let displays = Arc::new(display::MacosDisplays::new());
+            let screen_observer =
+                display::ScreenObserver::new(&displays, &loop_control.owner_signal);
+            let notices = Arc::new(SystemNotices::default());
+            notices.mark_stale_on_wake(&displays);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -174,6 +187,9 @@ impl MacOSPlatform {
                 wake_pump,
                 background_executor,
                 config,
+                displays,
+                _screen_observer: screen_observer,
+                notices,
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -188,9 +204,67 @@ impl MacOSPlatform {
     pub fn app(&self) -> &Retained<NSApplication> {
         &self.app
     }
+
+    /// Turn a position and a normal rectangle measured on a display into
+    /// global logical pixels, which is all a window knows how to place. A
+    /// display that is gone leaves them global, as the options document.
+    fn measure_placement_globally(&self, options: &mut WindowOptions) {
+        let Some(display) = options.display.take() else {
+            return;
+        };
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Ok(snapshot) = self.displays.snapshot(mtm) else {
+            return;
+        };
+        let display = snapshot.get(display);
+        options.position = options
+            .position
+            .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
+        if let Some(normal) = options.normal_geometry.as_mut() {
+            normal.position = normal
+                .position
+                .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
+        }
+    }
 }
 
 impl Platform for MacOSPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
+    fn window_frame_inset(&self, _scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::window_frame_inset");
+        debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
+        // AppKit measures a frame in points, so the scale does not enter.
+        let main = MainThreadMarker::new().expect(
+            "BUG: the owner thread is the AppKit main thread, which the assertions above check",
+        );
+        super::window::decorated_frame_inset(main)
+    }
+
+    fn on_session_end(
+        &self,
+        callback: Box<
+            dyn FnMut(flui_platform_api::SessionEndPhase) -> flui_platform_api::SessionEndAnswer
+                + Send,
+        >,
+    ) {
+        let previous = self.handlers.lock().session_end.replace(callback);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
+        self.notices.set_hook(callback);
+    }
+
+    fn release_session_end(&self) {
+        self.loop_control.session_end_released();
+    }
+
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.preferences.read()
     }
@@ -215,12 +289,20 @@ impl Platform for MacOSPlatform {
         let ownership =
             super::loop_control::LoopOwnership::acquire(&app, Arc::clone(&self.loop_control))?;
         let signal = Arc::clone(&self.loop_control.owner_signal);
+        let loop_control = Arc::clone(&self.loop_control);
+        let notices = Arc::clone(&self.notices);
         let platform: Arc<dyn Platform> = Arc::new(*self);
         let hooks: Arc<dyn OwnerHooks> =
             Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
+        // The sources start listening only now: the application has installed
+        // its hooks while it bootstrapped, and a notice that arrived earlier
+        // would find none and be lost.
+        let notice_sources =
+            super::system_notices::SystemNoticeSources::new(&notices, &loop_control);
         ownership.run();
+        drop(notice_sources);
         drop(ownership);
 
         Ok(())
@@ -235,22 +317,31 @@ impl Platform for MacOSPlatform {
 
     fn open_window(
         &self,
-        options: WindowOptions,
+        mut options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
         self.affinity
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         if !self.loop_control.accepts_windows() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
+        self.measure_placement_globally(&mut options);
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
+        self.notices.mark_stale_on_wake(window.state_cell());
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
         // a later install would be silently ignored rather than racing.
         window.install_loop_control(Arc::downgrade(&self.loop_control));
         window.install_wake_pump(Arc::downgrade(&self.wake_pump));
+        window.bind_displays(Arc::clone(&self.displays));
+        let callbacks = window.callbacks();
+        callbacks.set_input_capabilities(crate::shared::input_availability::macos());
+        callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            &self.loop_control.owner_signal,
+            callbacks,
+        ));
 
         Ok(window)
     }
@@ -267,19 +358,14 @@ impl Platform for MacOSPlatform {
         Some(WindowId(ptr))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.affinity.debug_assert_owner("MacOSPlatform::displays");
-        debug_assert_appkit_main_thread("MacOSPlatform::displays");
-        display::enumerate_displays()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.affinity
-            .debug_assert_owner("MacOSPlatform::primary_display");
-        debug_assert_appkit_main_thread("MacOSPlatform::primary_display");
-        display::enumerate_displays()
-            .into_iter()
-            .find(|d| d.is_primary())
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        self.displays.snapshot(mtm)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -292,17 +378,13 @@ impl Platform for MacOSPlatform {
         Arc::new(NullDataTransferSource)
     }
 
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &MACOS_CAPABILITIES
-    }
-
     fn name(&self) -> &'static str {
         "macOS (AppKit)"
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let previous = self.handlers.lock().exit_policy.replace(hook);
-        drop(previous);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn request_exit_policy_reevaluation(&self) {

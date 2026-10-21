@@ -9,16 +9,39 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
 
 use crate::keyboard::Modifiers;
 use crate::{
-    CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
-    PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowExecutionState, WindowId, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
+/// What lies under a point given in one window's coordinates, as
+/// [`PlatformWindow::window_at`] answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WindowAt {
+    /// The content of a window of the same platform instance is topmost there:
+    /// `window` (the asking window itself included) at `position`, in that
+    /// window's logical pixels.
+    Window {
+        /// The window whose content is under the point.
+        window: WindowId,
+        /// The point in that window's logical pixels.
+        position: Point<f64>,
+    },
+    /// No window content of this platform instance is under the point: the
+    /// desktop, another application's window, a window frame, or a point no
+    /// display can hold.
+    Outside,
+    /// The backend cannot place its windows on one desktop (Wayland, the web,
+    /// mobile), so it cannot tell.
+    Unknown,
+}
 
 /// Trait for platform window abstraction
 ///
@@ -71,7 +94,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// ```
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -95,6 +121,16 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -115,7 +151,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// ```compile_fail,E0407
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -139,6 +178,16 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -172,6 +221,12 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
+
+    /// The drawable area and scale the window reports now, or why it is not a drawable area
+    /// (a minimised window's zero size, a scale that is not finite and positive).
+    fn metrics(&self) -> Result<WindowMetrics, InvalidMetrics> {
+        WindowMetrics::new(self.physical_size(), self.scale_factor())
+    }
 
     /// Query gesture geometry for this presentation's native coordinate context.
     ///
@@ -261,32 +316,52 @@ pub trait PlatformWindow: Send + Sync {
     /// Check if window is visible
     fn is_visible(&self) -> bool;
 
+    // ==================== State and commands (ADR-0237) ====================
+
+    /// The window's state as the operating system reports it now.
+    ///
+    /// An immutable snapshot with a [`WindowRevision`](crate::WindowRevision):
+    /// the revision grows when something differs from the previous call and
+    /// stays when nothing does. The snapshot describes what the OS did, not
+    /// what a command asked for. Call it on the owner thread.
+    ///
+    /// Required, with no default: a window that cannot publish a state of its
+    /// own says so with a snapshot built from what it knows, not by inheriting
+    /// one that would never change.
+    fn state(&self) -> WindowState;
+
+    /// Which [`WindowCommand`]s [`apply`](Self::apply) carries out.
+    ///
+    /// Required: a window states what it honours instead of inheriting a
+    /// claim.
+    fn capabilities(&self) -> WindowCapabilities;
+
+    /// Request a change to the window.
+    ///
+    /// Accepted means requested: the outcome is visible only in the next
+    /// [`state`](Self::state), because the OS may clamp, delay or refuse it.
+    /// Call it on the owner thread. An implementation begins with
+    /// [`WindowCommand::admit`] against its own
+    /// [`capabilities`](Self::capabilities), so it refuses with
+    /// [`WindowCommandError::Unsupported`] exactly when a capability is
+    /// `false`, and with [`WindowCommandError::InvalidGeometry`] before the OS
+    /// is called.
+    ///
+    /// # Errors
+    /// [`WindowCommandError`].
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError>;
+
+    /// Register a callback meaning "[`state`](Self::state) may answer
+    /// differently now".
+    ///
+    /// Called on the owner thread after a new snapshot was published, outside
+    /// any lock the window holds. The callback carries no payload: it re-reads
+    /// `state()` and compares revisions.
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
     // ==================== Query Methods (US2) ====================
-
-    /// Get the window bounds (position + size) in logical pixels
-    fn bounds(&self) -> Bounds<f64> {
-        Bounds::default()
-    }
-
-    /// Get the content (client area) size in logical pixels
-    fn content_size(&self) -> Size<f64> {
-        self.logical_size()
-    }
-
-    /// Get the window bounds state (windowed, maximized, or fullscreen)
-    fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(self.bounds())
-    }
-
-    /// Check if window is maximized
-    fn is_maximized(&self) -> bool {
-        false
-    }
-
-    /// Check if window is in fullscreen mode
-    fn is_fullscreen(&self) -> bool {
-        false
-    }
 
     /// Check if window is the active (foreground) window
     fn is_active(&self) -> bool {
@@ -308,23 +383,25 @@ pub trait PlatformWindow: Send + Sync {
         Modifiers::NONE
     }
 
-    /// Get the window's current appearance (light/dark)
+    /// The light/dark appearance the system currently applies to this window.
+    ///
+    /// This is the user's system theme, never a value the backend chose for
+    /// its own window chrome. A backend that cannot observe the theme reports
+    /// [`WindowAppearance::Light`].
     fn appearance(&self) -> WindowAppearance {
         WindowAppearance::default()
     }
 
-    /// Get the display this window is currently on
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        None
-    }
-
-    /// The refresh period of the display this window is currently on, when
-    /// the backend can tell — the interval an embedder's own frame pacing
-    /// should never produce faster than. `None` when unknown (no monitor
-    /// reported, a backend without the query); an embedder then falls back
-    /// to a documented default rather than guessing. Re-query after a move
-    /// or resize: a window can change monitors, and monitors differ.
-    fn refresh_period(&self) -> Option<std::time::Duration> {
+    /// The display this window is on right now, named by the identity the
+    /// platform's [`DisplaySnapshot`](crate::DisplaySnapshot) uses.
+    ///
+    /// `None` when the backend cannot tell (no monitor reported, a window
+    /// before its first placement, a backend without the query, an output the
+    /// platform could not issue an id for). A consumer reads that as an unknown
+    /// display, never as the primary one. The display's refresh period and
+    /// scale come from the snapshot, not from here: the window names the
+    /// display and the snapshot describes it.
+    fn display_id(&self) -> Option<DisplayId> {
         None
     }
 
@@ -346,17 +423,57 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
-    /// Get the window title
-    fn get_title(&self) -> String {
-        String::new()
+    /// Get this window's system-chrome capability (system-bar overlay style),
+    /// if the backend draws system bars over its content. `None` on desktop.
+    fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>> {
+        None
+    }
+
+    /// Get this window's OS drag source, if the backend can start OS drag
+    /// sessions (ADR-0211). `None` for backends without one; their
+    /// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
+    /// says `Unavailable`, and a drag that needs the OS stays in-window.
+    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>> {
+        None
+    }
+
+    /// Which window's content is topmost under `position`, given in this
+    /// window's logical pixels and possibly outside it, honouring the stacking
+    /// order of every window on the desktop. A drag on this window's pointer
+    /// capture uses it to reach the other windows of its process without an OS
+    /// session (ADR-0211 §2).
+    ///
+    /// Owner thread only. The default, for a backend that cannot place its
+    /// windows on one desktop, answers [`WindowAt::Unknown`].
+    fn window_at(&self, position: Point<f64>) -> WindowAt {
+        let _ = position;
+        WindowAt::Unknown
+    }
+
+    /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).
+    ///
+    /// The framework calls it on every composited frame with the window's whole set,
+    /// whether or not it changed. The backend projects the set to device pixels with the
+    /// window's current scale through
+    /// [`ProjectedInputRegions`](crate::input_regions::ProjectedInputRegions) and updates
+    /// the OS only when the projection, the scale or the display changed, so no caller-side
+    /// comparison can hide a scale or display change from it.
+    ///
+    /// A scale change or a move to another display need not composite a frame, so the
+    /// framework also re-sends the last set when the presentation's pixel ratio changes
+    /// when a published [`state`](Self::state) puts the window somewhere else: another
+    /// position, display or frame. A backend whose window can change displays at an equal
+    /// scale must publish that state and raise [`on_state_changed`](Self::on_state_changed),
+    /// or the OS keeps the previous display's projection until the next composited frame.
+    ///
+    /// A backend whose OS honours no input region keeps this default, which ignores the set,
+    /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
+    /// as `Unavailable`. Owner thread only.
+    fn set_input_regions(&self, regions: &[crate::input_regions::InputRegion]) {
+        let _ = regions;
     }
 
     // ==================== Control Methods (US2) ====================
-
-    /// Set the window title
-    fn set_title(&self, title: &str) {
-        let _ = title;
-    }
 
     /// Show this window, unminimizing it and requesting foreground focus.
     /// Preserves maximized/fullscreen mode and the existing widget tree.
@@ -388,23 +505,6 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
-
-    /// Minimize the window
-    fn minimize(&self) {}
-
-    /// Maximize the window
-    fn maximize(&self) {}
-
-    /// Restore the window from minimized or maximized state
-    fn restore(&self) {}
-
-    /// Toggle fullscreen mode
-    fn toggle_fullscreen(&self) {}
-
-    /// Resize the window to the given logical size
-    fn resize(&self, size: Size<f64>) {
-        let _ = size;
-    }
 
     /// Close and destroy the window — a decision already made, not a
     /// request.
@@ -471,7 +571,12 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// The callback receives a `PlatformInput` and returns a
     /// `DispatchEventResult` indicating whether the event was consumed.
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+    ///
+    /// It need not be `Send` (ADR-0082 §4): a backend stores it for the
+    /// window's owner thread only, refuses a registration from any other
+    /// thread (dropping the callback on the thread that made it), and runs
+    /// and drops it on the owner, so it may capture an `Rc`.
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         let _ = callback;
     }
 
@@ -485,13 +590,10 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Register a callback for window resize events
     ///
-    /// Called with the new logical size and current scale factor.
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for window move events
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+    /// Called with the window's new [`WindowMetrics`]: its drawable area in device pixels and
+    /// the ratio to logical pixels. A report that is not a drawable area (a zero size, a
+    /// non-finite scale) is never delivered.
+    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
         let _ = callback;
     }
 
@@ -588,9 +690,41 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
-    /// Register a callback for system appearance changes (light/dark theme)
+    /// Register a callback for changes to [`appearance`](Self::appearance).
+    ///
+    /// Called on the owner thread after the value `appearance()` returns has
+    /// changed; the callback carries no payload, so it re-reads `appearance()`.
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
+    }
+
+    /// Register a callback meaning "the display this window is on may have
+    /// changed".
+    ///
+    /// Called on the owner thread when the window moves to another display,
+    /// when its display's scale changes, or when the backend otherwise suspects
+    /// [`display_id`](Self::display_id) answers differently now. The callback
+    /// carries no payload and the hint may be spurious: the consumer re-reads
+    /// the platform's snapshot and the window's `display_id()`, and acts only on
+    /// a real difference. A backend that never learns of a change never calls it.
+    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Tell the system which refresh rate this window wants from its display.
+    ///
+    /// [`FrameRateHint::High`](crate::FrameRateHint::High) asks for the display's highest rate while the
+    /// window animates or is touched; [`FrameRateHint::Default`](crate::FrameRateHint::Default) withdraws the
+    /// request and leaves the choice to the system. It is a request, not a
+    /// command: the system may keep any rate. A native surface carries the
+    /// request, so a host sends the current hint again after the surface was
+    /// replaced. A backend without such a request, or one running on an
+    /// operating system version that lacks it, ignores the hint; that is the
+    /// default.
+    ///
+    /// Called on the owner thread.
+    fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) {
+        let _ = hint;
     }
 
     /// Register a callback for the GPU surface's availability.

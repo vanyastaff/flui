@@ -78,6 +78,8 @@ pub mod context;
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
+pub mod input_regions;
+pub mod inspect;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
@@ -156,7 +158,7 @@ pub mod prelude {
     pub use crate::{
         RenderUpdateImpact,
         binding::{
-            RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
+            RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
             debug_dump_render_tree, debug_dump_semantics_tree,
         },
         parent_data::{
@@ -179,7 +181,7 @@ pub mod prelude {
     //.
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, SemanticsBuilder,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };

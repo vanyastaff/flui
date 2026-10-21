@@ -100,12 +100,11 @@ pub trait FlowDelegate: Debug {
     ///
     /// Use the context to paint each child with a specific transform matrix.
     ///
-    /// Must be a pure function of `self` (plus each child's size, read via
-    /// [`FlowPaintingContext::child_size`]): `RenderFlow` replays this call
-    /// a second time, against a non-drawing context, to recover per-child
-    /// transforms for hit testing (paint's `&self` gives it nowhere to
-    /// cache them). A delegate that consults external mutable state or
-    /// randomness here will make paint and hit-test silently disagree —
+    /// Must be a pure function of `self` and the context's allocated size
+    /// and child sizes: `RenderFlow` replays this call against a non-drawing
+    /// context for coordinate conversion and semantic child selection, while
+    /// hit testing reads what paint recorded. A delegate that consults external mutable state or
+    /// randomness here will make paint and those queries silently disagree —
     /// the same implicit purity assumption [`Self::should_repaint`] and
     /// [`Self::should_relayout`] already rely on.
     ///
@@ -137,11 +136,13 @@ pub trait FlowDelegate: Debug {
     fn should_repaint(&self, old_delegate: &dyn FlowDelegate) -> bool;
 
     /// An optional repaint [`Listenable`]: when it notifies, the hosting
-    /// `RenderFlow` marks itself needing paint, letting a flow driven by an
-    /// animation repaint without a widget rebuild.
+    /// `RenderFlow` requests paint and semantics together, letting a flow
+    /// driven by an animation update presentation without a widget rebuild.
     ///
-    /// Implementations that return `Some` MUST return the *same* instance
-    /// across calls, so the host can unsubscribe on detach / delegate swap.
+    /// The host retains the returned source with its registration and removes
+    /// that exact registration on detach, replacement or owner release. It
+    /// does not call this getter again to discover the cancellation target.
+    /// A changed return value takes effect on the next attachment or replacement.
     /// Defaults to `None`.
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
@@ -155,25 +156,21 @@ pub trait FlowDelegate: Debug {
 ///
 /// Carries a delegate's [`FlowDelegate::paint_children`] call through to
 /// either a live [`PaintCx`] (real paint — [`Self::for_paint`]) or a
-/// recording-only replay with nowhere to draw (hit-test — [`Self::for_replay`]).
-/// `RenderFlow::paint` and `RenderFlow::hit_test` are both `&self`, so
-/// there is nowhere on the render object to cache "what transform did
-/// paint assign to child N" for hit-test to read back later. Hit-test
-/// instead re-invokes
-/// [`FlowDelegate::paint_children`] a second time against a `for_replay`
-/// context: same recorded `(index -> transform)` data, no live [`PaintCx`]
-/// to draw into.
+/// recording-only replay with nowhere to draw ([`Self::for_replay`]). Both
+/// modes record the same `(paint order, index -> transform)` data: paint's
+/// record is what `RenderFlow` hit-tests, and a replay answers semantics and
+/// coordinate queries, which also run before the first paint.
 pub struct FlowPaintingContext<'ctx, 'cx> {
     size: Size,
     child_sizes: &'ctx [Size],
     /// `Some` in paint mode (drives the real paint pipeline); `None`
-    /// during a hit-test replay (recording only, nothing is drawn).
+    /// during a replay (recording only, nothing is drawn).
     live: Option<&'ctx mut PaintCx<'cx, Variable>>,
     /// Child indices in the order `paint_child` was called. Hit-testing walks
     /// this in reverse (top-most painted first).
     paint_order: &'ctx mut Vec<usize>,
     /// Every child's most recently recorded transform, indexed by child
-    /// index. Recorded in both modes so hit-test's replay pass produces
+    /// index. Recorded in both modes so a replay pass produces
     /// the identical data paint's real pass would have.
     transforms: &'ctx mut Vec<Option<Matrix4>>,
     /// Per-child dup-paint guard: no child may be painted twice in one
@@ -220,7 +217,7 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
         }
     }
 
-    /// Builds a replay-only context for hit-testing: records the same
+    /// Builds a replay-only context: records the same
     /// `(paint_order, transforms)` a real paint pass would have produced,
     /// but draws nothing (there is no live [`PaintCx`] to draw into).
     pub fn for_replay(
@@ -282,16 +279,39 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// painted earlier in the same `paint_children` call (the
     /// double-paint assert).
     pub fn paint_child(&mut self, index: usize, transform: Matrix4) {
+        self.paint_child_with_opacity(index, transform, crate::traits::PaintOpacity::new(1.0));
+    }
+
+    /// Paints a transformed child under one continuous group opacity.
+    ///
+    /// Zero opacity omits the child from paint, hit-testing and semantics.
+    /// The call still occupies its child slot: painting it twice in one pass
+    /// is refused even if the first call was transparent. Partial opacity
+    /// preserves geometry and input. Uses the same replay in every mode.
+    ///
+    /// # Panics
+    /// Panics for an invalid index or a second call for the same child.
+    pub fn paint_child_with_opacity(
+        &mut self,
+        index: usize,
+        transform: Matrix4,
+        opacity: crate::traits::PaintOpacity,
+    ) {
         assert!(index < self.child_sizes.len(), "Child index out of bounds");
         assert!(
             !self.painted[index],
             "paint_child called twice for child {index} in one paint_children pass"
         );
         self.painted[index] = true;
+        if opacity.alpha() == 0.0 {
+            return;
+        }
         self.paint_order.push(index);
         self.transforms[index] = Some(transform);
         if let Some(ctx) = self.live.as_deref_mut() {
-            ctx.with_transform(transform, |ctx| ctx.paint_child(index));
+            ctx.with_transform(transform, |ctx| {
+                ctx.with_opacity(opacity, |ctx| ctx.paint_child(index));
+            });
         }
     }
 

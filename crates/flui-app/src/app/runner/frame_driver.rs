@@ -81,7 +81,7 @@ pub(super) enum FrameDriver {
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
-type TestResize = Box<dyn FnMut(flui_foundation::geometry::Size<f64>, f64)>;
+type TestResize = Box<dyn FnMut(flui_foundation::geometry::WindowMetrics)>;
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) struct TestFrameDriver {
@@ -123,7 +123,7 @@ impl FrameDriver {
             }
         }
     }
-    fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         match self {
             #[cfg(all(
                 test,
@@ -137,17 +137,17 @@ impl FrameDriver {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::Desktop(driver) => driver.resize(size, scale_factor),
+            Self::Desktop(driver) => driver.resize(metrics),
             #[cfg(target_os = "android")]
-            Self::Android(driver) => driver.resize(size, scale_factor),
+            Self::Android(driver) => driver.resize(metrics),
             #[cfg(target_os = "ios")]
-            Self::Ios(driver) => driver.resize(size, scale_factor),
+            Self::Ios(driver) => driver.resize(metrics),
             #[cfg(target_arch = "wasm32")]
-            Self::Web(driver) => driver.resize(size, scale_factor),
+            Self::Web(driver) => driver.resize(metrics),
             #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             Self::Test(driver) => {
                 if let Some(resize) = driver.resize.as_mut() {
-                    resize(size, scale_factor);
+                    resize(metrics);
                 }
             }
         }
@@ -163,13 +163,20 @@ impl FrameDriver {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::TestDeadlines(_) => {}
+            Self::TestDeadlines(deadlines) => {
+                // A pump that presented nothing: the arm the desktop driver makes.
+                deadlines.defer_after_no_present(
+                    runtime,
+                    record.binding.0.presentation_id,
+                    web_time::Instant::now(),
+                );
+            }
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::Desktop(driver) => driver.wake(runtime),
+            Self::Desktop(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_os = "android")]
             Self::Android(driver) => driver.wake(runtime),
             #[cfg(target_os = "ios")]
@@ -296,7 +303,13 @@ impl FrameDrivers {
                 let enabled = logical
                     .runtime_status(record.binding.0.ui_runtime_id)
                     .is_ok_and(|status| status.frames_enabled);
-                record.deadlines.as_ref()?.next_wake(enabled)
+                // The presentation's own current period: a window moved to a
+                // display with another refresh rate, or none, is not paced by
+                // the display it left.
+                let period = logical
+                    .presentation_refresh_interval(record.binding.0)
+                    .unwrap_or(flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD);
+                record.deadlines.as_ref()?.next_wake(enabled, period)
             })
             .min()
     }
@@ -412,11 +425,11 @@ impl FrameDriverLease {
             .expect("BUG: active frame lease owns its driver")
             .installed(&self.record);
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         self.driver
             .as_mut()
             .expect("BUG: active frame lease owns its driver")
-            .resize(size, scale_factor);
+            .resize(metrics);
     }
     pub(super) fn wake(&mut self, runtime: &mut UiRuntime) {
         self.driver

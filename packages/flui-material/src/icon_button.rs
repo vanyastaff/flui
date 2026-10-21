@@ -115,6 +115,8 @@
 //!   `on_long_press`, `states_controller` (external) — no override surface
 //!   yet, matching every other V1 button in this crate.
 
+use std::sync::Arc;
+
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
 use flui_sdk::{
@@ -146,6 +148,7 @@ pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 pub struct IconButton {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
+    identifier: Option<Arc<str>>,
     icon: BoxedView,
 }
 
@@ -166,7 +169,8 @@ impl IconButton {
         Self {
             on_pressed: None,
             style: None,
-            icon: BoxedView(Box::new(icon.into_view())),
+            identifier: None,
+            icon: BoxedView::new(icon.into_view()),
         }
     }
 
@@ -186,6 +190,14 @@ impl IconButton {
     #[must_use]
     pub fn style(mut self, style: ButtonStyle) -> Self {
         self.style = Some(style);
+        self
+    }
+
+    /// Names the button's node for tests and automation (ADR-0240): exported as
+    /// UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -252,7 +264,7 @@ impl StatelessView for IconButton {
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }
-        core
+        core.identifier(self.identifier.clone())
     }
 }
 

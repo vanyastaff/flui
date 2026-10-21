@@ -84,7 +84,7 @@ struct MountedAnimation {
     controller: AnimationController,
     peer: AnimationController,
     completion: flui_scheduler::PostFrameHandle,
-    arena: flui_interaction::arena::GestureArena,
+    arena: flui_interaction::gesture::GestureArena,
 }
 
 struct SamplingState {
@@ -429,7 +429,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
     clock.advance(Duration::from_millis(250));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
     let attempt = {
-        let _diagnostics = tracing::subscriber::set_default(LateFontDiagnostic {
+        let _diagnostics = crate::scoped_diagnostics(LateFontDiagnostic {
             armed: AtomicBool::new(true),
             calls: Arc::clone(&diagnostic_calls),
         });
@@ -511,21 +511,21 @@ fn late_font_diagnostic_case(change_on_report: bool) {
 }
 
 struct BackgroundDeadline {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     effects: Rc<Cell<usize>>,
     panic_after_effect: bool,
 }
 
-impl flui_interaction::arena::GestureArenaMember for BackgroundDeadline {
-    fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
+impl flui_interaction::gesture::GestureArenaMember for BackgroundDeadline {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.effects.set(self.effects.get() + 1);
         if self.panic_after_effect {
             std::panic::panic_any("unknown background deadline progress");
@@ -640,17 +640,17 @@ fn background_deadline_case(unknown: bool) {
     let sibling_effects = Rc::new(Cell::new(0));
     let unknown_effects = Rc::new(Cell::new(0));
     let primary_timer = Rc::new(BackgroundDeadline {
-        due: Cell::new(Some(due)),
+        due: Cell::new(Some(crate::event_at(&clock, due))),
         effects: Rc::clone(&primary_effects),
         panic_after_effect: false,
     });
     let sibling_timer = Rc::new(BackgroundDeadline {
-        due: Cell::new(Some(due)),
+        due: Cell::new(Some(crate::event_at(&clock, due))),
         effects: Rc::clone(&sibling_effects),
         panic_after_effect: false,
     });
     let unknown_timer = Rc::new(BackgroundDeadline {
-        due: Cell::new(Some(due)),
+        due: Cell::new(Some(crate::event_at(&clock, due))),
         effects: Rc::clone(&unknown_effects),
         panic_after_effect: true,
     });

@@ -225,6 +225,9 @@ impl UiRuntime {
         clock: &mut dyn FrameClockSource,
         sink: &mut dyn FrameSink,
     ) -> FrameOutcome {
+        // Records a tap admitted reentrantly wait for this owner turn.
+        self.begin_recorded_input();
+        self.deliver_input_records();
         let now = clock.frame_time();
         let deadline = clock.idle_deadline(now);
         let mut frame_time = None;
@@ -238,6 +241,8 @@ impl UiRuntime {
                     deadline,
                     || {
                         frame_time = Some(FrameTimeGuard::publish(self, now));
+                        // Before the frame begins: it copies the budget's target.
+                        ui_runtime.publish_frame_budget();
                         geometry_turn = Some(ui_runtime.begin_geometry_turn());
                         let report = ui_runtime.drain_commands();
                         if report != DrainReport::default() {
@@ -257,6 +262,8 @@ impl UiRuntime {
         let admitted = frame_time.is_some();
         drop(geometry_turn);
         drop(frame_time);
+        // The verdicts the frame made (deadlines) follow its frame row.
+        self.deliver_input_records();
         if !admitted {
             return outcome.unwrap_or_else(|failure| resume_unwind(failure));
         }
@@ -280,6 +287,8 @@ impl UiRuntime {
     /// run after admission and demand consumption, before polling. Preparation
     /// failure preserves ready tasks and retries their wake delivery.
     pub fn pump_background(&mut self) {
+        self.begin_recorded_input();
+        self.deliver_input_records();
         let mut turn = None;
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             self.enter(|ui_runtime| {

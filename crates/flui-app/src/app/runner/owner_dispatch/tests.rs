@@ -94,6 +94,26 @@ impl PlatformWindow for ReentrantIdentityWindow {
     ) -> Result<(), flui_platform_api::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -240,7 +260,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 let installation = prepare_platform_ui_runtime(runtime, Arc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 installation
-                    .submit_web(test_resize_driver(|_, _| {}), &shared)
+                    .submit_web(test_resize_driver(|_| {}), &shared)
                     .expect("publish initialization");
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
@@ -299,6 +319,24 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                             .lifecycle_state()),
                         AppLifecycleState::Resumed,
                         "restored native focus reaches the installed owner"
+                    );
+                }
+                if matches!(change, NativeChange::Unchanged) {
+                    native.simulate_execution_state(WindowExecutionState::Suspended);
+                    assert_eq!(
+                        observe_runtime(dispatcher, |runtime| runtime
+                            .scheduler()
+                            .lifecycle_state()),
+                        AppLifecycleState::Paused,
+                        "a frozen page reaches the installed owner"
+                    );
+                    native.simulate_execution_state(WindowExecutionState::Running);
+                    assert_eq!(
+                        observe_runtime(dispatcher, |runtime| runtime
+                            .scheduler()
+                            .lifecycle_state()),
+                        AppLifecycleState::Resumed,
+                        "a resumed page reaches the installed owner"
                     );
                 }
                 teardown_platform_ui_runtime();
@@ -830,7 +868,7 @@ fn carried_work_shares_one_callback_budget_across_runtimes() {
 }
 
 fn test_resize_driver(
-    resize: impl FnMut(flui_foundation::geometry::Size<f64>, f64) + 'static,
+    resize: impl FnMut(flui_foundation::geometry::WindowMetrics) + 'static,
 ) -> super::super::frame_driver::FrameDriver {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     FrameDriver::Test(TestFrameDriver {
@@ -865,7 +903,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         install_input_wiring(dispatcher, window.as_ref());
         let resize_trace = Rc::clone(&trace);
         installation
-            .frame_driver(test_resize_driver(move |_, _| {
+            .frame_driver(test_resize_driver(move |_| {
                 resize_trace.borrow_mut().push("resize");
             }))
             .expect("prepare resize driver");
@@ -888,10 +926,9 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
                 for width in [810.0, 820.0] {
                     dispatch_platform_ui_runtime(
                         dispatcher,
-                        RuntimeTask::Event(RuntimeEvent::Resized {
-                            size: flui_foundation::geometry::Size::new(width, 600.0),
-                            scale_factor: 1.0,
-                        }),
+                        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(
+                            width, 600.0, 1.0,
+                        ))),
                     )
                     .expect("resize");
                     if width == 810.0 {
@@ -1309,6 +1346,148 @@ fn owner_wake_refreshes_installed_preference_consumers() {
         "owner wake did not deliver the headless source's absent text-scale observation"
     );
     teardown_platform_ui_runtime();
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+    use flui_platform::{HeadlessPlatform, Platform};
+
+    let _clear = OwnerHostClearGuard::arm();
+    let platform = HeadlessPlatform::new();
+    let window = test_window();
+    let native = Arc::clone(&window);
+    let drawn = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&drawn);
+    let observed = Arc::clone(&window);
+    let installed = Rc::new(RefCell::new(None));
+    let output = Rc::clone(&installed);
+    Box::new(platform)
+        .run(Box::new(move |owner| {
+            install_owner_platform(owner)?;
+            let runtime = super::super::host::build_ui_runtime(Arc::clone(&native), 1.0)?;
+            let address = flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            };
+            let mut installation = prepare_platform_ui_runtime(runtime, native);
+            let dispatcher = installation.dispatcher();
+            let frame = installation
+                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                    installed: None,
+                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
+                    prelude: Some(Box::new(move || {
+                        seen.borrow_mut().push(observed.state().title);
+                    })),
+                    resize: None,
+                }))
+                .expect("prepare driver");
+            installation
+                .submit()
+                .outcome()
+                .expect("idle publication")
+                .expect("installed");
+            output.replace(Some((dispatcher, frame.binding, address)));
+            Ok(())
+        }))
+        .expect("headless bootstrap");
+    let (dispatcher, frame, address) = installed.borrow().expect("installed frame");
+    let handle = APP_RUNTIME
+        .with(|slot| slot.borrow().window_commands.handle_for(address))
+        .expect("the window's handle");
+    handle.set_title("queued").expect("accepted");
+    // The frame turn comes first, as a paint does, and it is the only turn:
+    // its frame must not see the command, and the command must not wait for
+    // another turn (the one its wake asked for may never come).
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    assert!(
+        drawn
+            .borrow()
+            .last()
+            .is_some_and(|title| title.as_deref() != Some("queued")),
+        "the frame ran inside the paint callback, where a command's resize is held back: {:?}",
+        drawn.borrow()
+    );
+    assert_eq!(
+        window.state().title.as_deref(),
+        Some("queued"),
+        "applied once the frame is done"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn platform_brightness_follows_the_window_appearance() {
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+    use flui_platform::{HeadlessPlatform, Platform, WindowAppearance};
+    use flui_platform_api::Brightness;
+    use flui_view::prelude::*;
+
+    #[derive(Clone, StatelessView)]
+    struct Reader(Rc<RefCell<Vec<Option<Brightness>>>>);
+    impl StatelessView for Reader {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            self.0
+                .borrow_mut()
+                .push(flui_widgets::MediaQuery::platform_brightness_of(ctx));
+            flui_widgets::Text::new("Brightness")
+        }
+    }
+    let _clear = OwnerHostClearGuard::arm();
+    let window = test_window();
+    let native = window
+        .as_any()
+        .downcast_ref::<flui_platform::MockWindow>()
+        .expect("headless window")
+        .clone();
+    // The desktop is already dark when the window opens.
+    native.simulate_appearance(WindowAppearance::Dark);
+    // The window registry owns a live window; this test stands in for it.
+    let live = Arc::clone(&window);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let reader = Rc::clone(&observed);
+    let installed = Rc::new(RefCell::new(None));
+    let output = Rc::clone(&installed);
+    Box::new(HeadlessPlatform::new())
+        .run(Box::new(move |owner| {
+            install_owner_platform(owner)?;
+            let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+            runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
+            let mut installation = prepare_platform_ui_runtime(runtime, window);
+            let dispatcher = installation.dispatcher();
+            let frame = installation
+                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                    installed: None,
+                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
+                    prelude: None,
+                    resize: None,
+                }))
+                .expect("prepare driver");
+            installation.observe_appearance();
+            installation
+                .submit()
+                .outcome()
+                .expect("idle publication")
+                .expect("installed");
+            output.replace(Some((dispatcher, frame.binding)));
+            Ok(())
+        }))
+        .expect("headless bootstrap");
+    let (dispatcher, frame) = installed.borrow().expect("installed frame");
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
+    assert_eq!(
+        &*observed.borrow(),
+        &[Some(Brightness::Dark)],
+        "the first build saw a light theme on a dark desktop"
+    );
+    native.simulate_appearance(WindowAppearance::Light);
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("changed frame");
+    assert_eq!(
+        &*observed.borrow(),
+        &[Some(Brightness::Dark), Some(Brightness::Light)],
+        "a live theme change did not reach the media query"
+    );
+    teardown_platform_ui_runtime();
+    drop(live);
 }
 
 fn obsolete_native_observation_cannot_update_a_replacement_host() {
@@ -1732,10 +1911,9 @@ fn resized_rescales_only_the_addressed_presentation() {
 
     dispatch_platform_ui_runtime(
         secondary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(640.0, 480.0),
-            scale_factor: rescaled,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(
+            640.0, 480.0, rescaled,
+        ))),
     )
     .expect("the secondary presentation is live");
 
@@ -1763,10 +1941,11 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     let surface = Rc::new(Cell::new((800_u32, 600_u32)));
     let applied = Rc::clone(&surface);
-    let driver = test_resize_driver(move |size, scale_factor| {
+    let driver = test_resize_driver(move |metrics| {
+        let physical = metrics.physical();
         applied.set((
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         ));
     });
     let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
@@ -1792,10 +1971,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_ui_runtime(
         secondary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(320.0, 200.0),
-            scale_factor: 2.5,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(320.0, 200.0, 2.5))),
     )
     .expect("the secondary presentation is live");
     assert_eq!(
@@ -1811,10 +1987,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_ui_runtime(
         primary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(500.0, 400.0),
-            scale_factor: 2.0,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(500.0, 400.0, 2.0))),
     )
     .expect("the primary presentation is live");
     assert_eq!(
@@ -1826,6 +1999,34 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
     teardown_platform_ui_runtime();
 }
 
+/// The surface is configured with the device pixels the platform reported, not with
+/// `logical × scale` truncated back to pixels (115 px at 1.75 is 65.71… logical, and
+/// truncating the product gave 114).
+#[cfg(not(target_os = "ios"))]
+fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
+    use std::{cell::Cell, rc::Rc};
+
+    let surface = Rc::new(Cell::new((0_u32, 0_u32)));
+    let applied = Rc::clone(&surface);
+    let driver = test_resize_driver(move |metrics| {
+        let physical = metrics.physical();
+        applied.set((
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
+        ));
+    });
+    let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
+    let reported = flui_foundation::geometry::WindowMetrics::new(
+        flui_foundation::geometry::DeviceSize::new(115, 201),
+        1.75,
+    )
+    .expect("valid window metrics");
+    dispatch_platform_ui_runtime(primary, RuntimeTask::Event(RuntimeEvent::Resized(reported)))
+        .expect("the primary presentation is live");
+    assert_eq!(surface.get(), (115, 201));
+
+    teardown_platform_ui_runtime();
+}
 /// Installs UI runtime A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
@@ -2422,6 +2623,10 @@ fn owner_dispatch_matrix() {
                 "owner_wake_refreshes_installed_preference_consumers",
                 owner_wake_refreshes_installed_preference_consumers as fn(),
             ),
+            (
+                "platform_brightness_follows_the_window_appearance",
+                platform_brightness_follows_the_window_appearance as fn(),
+            ),
             #[cfg(target_os = "windows")]
             (
                 "windows_bootstrap_accepts_preferences_before_the_first_window",
@@ -2480,6 +2685,11 @@ fn owner_dispatch_matrix() {
                 "native_keyboard_cannot_overtake_queued_window_changes_and_keys",
                 native_keyboard_cannot_overtake_queued_window_changes_and_keys as fn(),
             ),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            (
+                "a_frame_turn_applies_queued_window_commands_after_its_frame",
+                a_frame_turn_applies_queued_window_commands_after_its_frame as fn(),
+            ),
             (
                 "late_event_never_crosses_ui_runtime_incarnations",
                 late_event_never_crosses_ui_runtime_incarnations as fn(),
@@ -2515,6 +2725,11 @@ fn owner_dispatch_matrix() {
             (
                 "resizing_a_secondary_leaves_the_primary_surface_alone",
                 resizing_a_secondary_leaves_the_primary_surface_alone as fn(),
+            ),
+            #[cfg(not(target_os = "ios"))]
+            (
+                "resize_reaches_the_surface_in_the_pixels_the_platform_reported",
+                resize_reaches_the_surface_in_the_pixels_the_platform_reported as fn(),
             ),
             (
                 "closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits",
@@ -2566,3 +2781,12 @@ fn owner_dispatch_matrix() {
 // ========================================================================
 // Close-request veto (issue #558)
 // ========================================================================
+
+/// A window's metrics from a logical size and scale, as a platform reports them.
+fn window_metrics(width: f64, height: f64, scale: f64) -> flui_foundation::geometry::WindowMetrics {
+    flui_foundation::geometry::WindowMetrics::from_logical(
+        flui_foundation::geometry::Size::new(width, height),
+        scale,
+    )
+    .expect("valid window metrics")
+}

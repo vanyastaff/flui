@@ -46,7 +46,7 @@ all of it.
 
 One import does exactly that below the host tier. `flui-interaction` depends on `flui-platform`
 (`crates/flui-interaction/Cargo.toml:31`) for `use flui_platform::traits::PlatformTextInput;`
-(`crates/flui-interaction/src/text_input.rs:27`), its only `flui_platform` import. The widget
+(`crates/flui-interaction/src/text_input/mod.rs:27`), its only `flui_platform` import. The widget
 harness adds a second edge under its `testing` feature (`crates/flui-widgets/Cargo.toml:94`),
 for a fake text input (`crates/flui-widgets/src/testing/harness.rs:157,170`). Because
 `flui-platform`'s default feature is `desktop = ["dep:winit"]`
@@ -77,10 +77,10 @@ keep:
   `window.rs:679-683`) and returns `PlatformAccessibility`, which speaks AccessKit
   (`window.rs:263-265`).
 - A second, older window family (`Window`, `WindowManager`, `WindowBuilder`, a crate-local
-  `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
+  `RawWindowHandle` enum, in a module since removed by ADR-0237) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
   uses it; neither `PlatformEmbedder` (retired by the adopted §5 subset), `PlatformCapabilities`
-  (`src/traits/capabilities.rs:13`, returned by `Platform::capabilities`, `platform.rs:557`),
+  (then in `traits/capabilities.rs`, returned by `Platform::capabilities`; removed by ADR-0213),
   `BasicVelocityTracker` (also retired) nor `LinuxPlatform`
   (`src/platforms/linux/mod.rs:108`) has a user outside the crate (`grep -rln` over `crates`,
   `src`, `examples`, `tools`). `LinuxPlatform::new` is an `unimplemented!` stub
@@ -100,8 +100,9 @@ keep:
 and tests program against, and nothing that names an OS, winit, AccessKit or tokio:
 
 - the per-window contract `PlatformWindow`, without `as_winit` and without `accessibility()`;
-- the capability traits `PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`,
-  `DataTransferSource` and their vocabulary (`DataTransferOffer`, `ClipboardItem`);
+- the capability traits `PlatformTextInput`, `PlatformHaptics`, `Clipboard`,
+  `DataTransferSource` and their vocabulary (`DataTransferOffer`, `ClipboardItem`); display
+  vocabulary is `DisplaySnapshot` and its types, which replaced `PlatformDisplay` (ADR-0236);
 - the input and window vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   `WindowEvent`, `WindowId`, `WindowOptions`, `WindowMode`, `WindowAppearance`, `WindowBounds`,
   `WindowExecutionState` (the single lifecycle state machine of ADR-0035), `CursorError`, and the
@@ -155,7 +156,7 @@ it stays with #560. Keeping `Platform` out of the Stable crate is what keeps `Ta
 
 **First change (accepted).** Every item §1 lists except `PlatformWindow` and the ADR-0084 seam
 moves to `flui-platform-api` with its signature unchanged: `PlatformTextInput`,
-`PlatformHaptics`, `PlatformDisplay`/`DisplayId`, `Clipboard`/`ClipboardItem`, the whole
+`PlatformHaptics`, `PlatformDisplay`/`DisplayId` (since replaced by `DisplaySnapshot`, ADR-0236), `Clipboard`/`ClipboardItem`, the whole
 `data_transfer` module, the input vocabulary (`PlatformInput`, `DispatchEventResult`,
 `DragDropEvent`, the re-exported `ui-events` pointer and keyboard types, the pixel conversion
 helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOptions`,
@@ -247,6 +248,19 @@ elsewhere). Every setter installs through that gate, an off-owner `open_window` 
 `WindowContext` and `OwnerControlContext` are pinned `!Send + !Sync`. The tests live in
 `crates/flui-platform/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
 `platform.rs` `tests`) and `shared/owner_signal.rs`.
+
+**The input callback, every backend, steps 1 and 2 (2026-10-13).** The shared backends (winit,
+headless, AppKit, UIKit, Android, web) hold a window's input callback in an `OwnerSlot`
+(`shared/owner_slot.rs`): the value lives in its owner thread's table, keyed by the slot, and is
+created, run and dropped on that thread only; a registration from another thread is refused and
+the callback dropped on the thread that made it, and a slot dropped elsewhere leaves its value to
+the owner thread's exit. Win32 keeps it in its `WindowContext` as above. With every backend
+owner-only for this callback, `PlatformWindow::on_input` takes `Box<dyn FnMut(PlatformInput) ->
+DispatchEventResult>` without `Send` (ADR-0207 §8); the refusal, not a registrar type, is what
+keeps that sound, and the other `on_*` callbacks keep `+ Send` until their slots move the same way.
+`an_input_callback_registered_off_the_owner_thread_is_refused` and the `ui_pass` fixture
+`input_callback_captures_rc` pin it. Only the headless and Win32 paths ran on the implementing
+host; AppKit, UIKit, Android and web are type-checked (UIKit not even that without `clang`).
 
 ### 5. One backend per OS
 

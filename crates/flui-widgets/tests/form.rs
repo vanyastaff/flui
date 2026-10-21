@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_widgets::{
     AutovalidateMode, Form, FormFieldHandle, FormHandle, FormHandleAlreadyAttached,

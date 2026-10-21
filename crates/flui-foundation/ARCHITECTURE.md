@@ -1,8 +1,33 @@
 # flui-foundation Architecture
 
-Design notes for the base crate every other FLUI crate builds on: IDs, the shared geometry values, listener notification, the signal read contract and the train guard.
+Design notes for the base crate every other FLUI crate builds on: IDs, geometry,
+listener notification, the signal read contract and the train guard.
+
+## Binding-owned input sequence identities
+
+`InputSequenceId` is a nonzero, presentation-local identity issued by an
+owner-local `IdMint<InputSequenceId>` (ADR-0207 §4). It is distinct from reusable
+device pointer IDs and from arena-local member generations. Exhaustion refuses
+permanently; earlier identities remain valid labels for accepted contacts and
+their motion (`an_exhausted_sequence_mint_refuses_permanently`). Binding-driven
+gesture tests cover actual admission and pointer reuse
+(`binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused`). This
+supplies the identity contract required by
+[ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md), without making
+process-global state or serialization a second identity issuer.
 
 ## The geometry values (`geometry`)
+
+`Matrix4::project_plane_point` checks the forward projection of the local
+`z = 0` plane. It refuses the camera horizon, hidden points, non-finite inputs
+and unrepresentable output. Its homogeneous quotient ignores irrelevant depth
+coefficients and preserves positive common matrix scales. An affine quotient
+can remain representable when its intermediate product overflows; divide
+coefficients by the positive homogeneous weight before retrying that coordinate.
+The public `matrix_tolerance_requires_finite_values` family pins this alongside
+tilted planes, tiny/huge common scales and finite extremes. Inverse planar
+queries share this arithmetic, while general 3D unprojection keeps the ray-plane
+intersection contract.
 
 The `f64` implementation of `Lerp` preserves authored endpoint bits. A fused
 multiply-add recovers a representable extrapolation after product overflow;
@@ -180,6 +205,34 @@ does. `two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this 
 manifest's `links` value into one graph and requires the resolver to refuse it. Dropping the key,
 or moving it to a crate that not every train depends on, re-opens the E0308 failure the guard
 exists to prevent.
+
+---
+
+## Typed inspection (`inspect`)
+
+`inspect` is ADR-0242's description model, landed beside `debug`'s `Diagnosticable`, which the
+workspace migrates off and then deletes. Invariants:
+
+- **Describing allocates only in the sink.** `Inspect::inspect` writes borrowed `Field`s into
+  one `&mut dyn Sink`; `Value` is `Copy` and owns nothing. `inspect_allocation` (its own test
+  target, because it installs a counting allocator) walks every value kind, a sequence and a
+  `Debug` field with a counting sink and requires zero allocations; the snapshot sink is its
+  positive control.
+- **The value set is closed.** A consumer that handles every `Value` handles every description,
+  which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
+  colour type lives in `flui-painting`, so a description carries `Rgba` channels.
+- **Values compare by value; `Value::Debug` equals nothing,** itself included, because its type
+  is unknown. A snapshot counts `Debug` fields per node so a ratchet can drive them down.
+- **Identity and structure belong to the tree.** An object never describes its children or its
+  id: `InspectTree` yields `InspectId`s over the generational ids, children, `Links` and the
+  tree's own facts. A reused slot prints with its generation (`r12.2`), so a stale id never reads
+  as the node that replaced it.
+- **One pinned text form.** `Display` for `Size` (`360x48`), `Offset` (`@8,8`), `Rect`
+  (`8,8 344x32`), `EdgeInsets` (`8` or `top,right,bottom,left`) and every `Value` prints numbers
+  in Rust's shortest round-trip form, and `geometry_text_parses_back_to_the_same_values` parses
+  them back bit for bit. `Debug` is not an output format.
+- **The diff's tolerance is the unit's.** Pixels for geometry and `logical_px`/`device_px`
+  fields, and an exact comparison for a field with no unit.
 
 ---
 

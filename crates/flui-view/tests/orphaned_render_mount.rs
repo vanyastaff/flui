@@ -102,7 +102,6 @@ fn misuse_tree() -> (
 // out — there the mount succeeds and the tracing::error event is the only
 // signal, which no test here asserts.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "orphan the render object")]
 fn a_render_child_mounted_under_a_renderless_owner_carrying_parent_is_refused() {
     // Direct insert: the mount's containment window converts the refusal

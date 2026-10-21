@@ -153,16 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "FLUI Scene Render — GPU Compositor Proof"
     };
 
-    let options = WindowOptions {
-        title: title.to_string(),
-        size: Size::new(800.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: None,
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title(title.to_string())
+        .with_size(Size::new(800.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(None)
+        .with_max_size(None);
 
     // Create window before running the event loop (run() takes ownership)
     let window = platform
@@ -237,9 +235,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register resize callback
     let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width * scale_factor) as u32;
-        let h = (size.height * scale_factor) as u32;
+    window.on_resize(Box::new(move |metrics| {
+        let w = metrics.physical().width.unsigned_abs();
+        let h = metrics.physical().height.unsigned_abs();
         renderer_resize.lock().unwrap().resize(w, h);
     }));
 

@@ -1,4 +1,4 @@
-//! Window vocabulary: identity, creation options, modes, lifecycle state and
+//! Window vocabulary: identity, creation options, lifecycle state and
 //! the events a backend reports about its windows.
 //!
 //! These are the values the per-window contract,
@@ -6,7 +6,9 @@
 //! `flui_platform::Platform` that opens windows (which stays in
 //! `flui-platform`, ADR-0082 §2) use in their signatures.
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
+
+use crate::{WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -38,12 +40,31 @@ pub enum WindowReveal {
     AfterFirstFrame,
 }
 
-/// Window creation options
+/// Window creation options.
+///
+/// Adding an option is not a breaking change: the type is `#[non_exhaustive]`,
+/// so it is built from [`Default`] with the `with_*` methods.
+///
+/// # Geometry
+///
+/// [`size`](Self::size) is the **content** size: what
+/// [`WindowState::content_size`](crate::WindowState::content_size) reports
+/// after the window opens. The backend adds the window's frame (title bar and
+/// borders) to ask the window system for the outer window, so reopening a
+/// window with the size it last reported does not shrink it by its frame.
+///
+/// [`position`](Self::position) and
+/// [`normal_geometry`](Self::normal_geometry) are measured from the origin of
+/// the usable area of [`display`](Self::display) in that display's logical
+/// pixels when a display is given, and in global logical pixels when it is
+/// not. A backend converts through the display's own scale, so a desktop of
+/// mixed scales needs no single global scale.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct WindowOptions {
     /// Window title
     pub title: String,
-    /// Initial window size (logical pixels)
+    /// Initial content size (logical pixels).
     pub size: Size<f64>,
     /// Whether window is resizable
     pub resizable: bool,
@@ -66,6 +87,108 @@ pub struct WindowOptions {
     pub min_size: Option<Size<f64>>,
     /// Maximum window size
     pub max_size: Option<Size<f64>>,
+    /// The display `position` and `normal_geometry` are measured on; `None`
+    /// measures them in global logical pixels. A display that no longer exists
+    /// is treated as `None`.
+    pub display: Option<crate::DisplayId>,
+    /// Initial outer position, relative to [`display`](Self::display); `None`
+    /// lets the system place the window. A backend that cannot place a window
+    /// at open ignores it, and says so through its
+    /// [`WindowCapabilities::places_at_open`](crate::WindowCapabilities::places_at_open).
+    pub position: Option<Point<f64>>,
+    /// The mode the window opens in. A backend that cannot enter it opens the
+    /// window in [`WindowMode::Normal`], which its first snapshot shows.
+    pub mode: WindowMode,
+    /// The outer rectangle the window returns to from a maximized or fullscreen
+    /// opening mode, so a restored maximized window keeps its earlier bounds.
+    /// Measured like [`position`](Self::position).
+    pub normal_geometry: Option<WindowGeometry>,
+}
+
+impl WindowOptions {
+    /// Set the title.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// Set the initial content size.
+    #[must_use]
+    pub const fn with_size(mut self, size: Size<f64>) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// Set whether the window is resizable.
+    #[must_use]
+    pub const fn with_resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+
+    /// Set whether the window is visible initially.
+    #[must_use]
+    pub const fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
+    /// Set when a visible window first becomes visible to the viewer.
+    #[must_use]
+    pub const fn with_reveal(mut self, reveal: WindowReveal) -> Self {
+        self.reveal = reveal;
+        self
+    }
+
+    /// Set whether the window is decorated.
+    #[must_use]
+    pub const fn with_decorated(mut self, decorated: bool) -> Self {
+        self.decorated = decorated;
+        self
+    }
+
+    /// Set the minimum content size.
+    #[must_use]
+    pub const fn with_min_size(mut self, min_size: Option<Size<f64>>) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum content size.
+    #[must_use]
+    pub const fn with_max_size(mut self, max_size: Option<Size<f64>>) -> Self {
+        self.max_size = max_size;
+        self
+    }
+
+    /// Set the display the position is measured on.
+    #[must_use]
+    pub const fn with_display(mut self, display: Option<crate::DisplayId>) -> Self {
+        self.display = display;
+        self
+    }
+
+    /// Set the initial outer position.
+    #[must_use]
+    pub const fn with_position(mut self, position: Option<Point<f64>>) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Set the mode the window opens in.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: WindowMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Set the rectangle a maximized or fullscreen window returns to.
+    #[must_use]
+    pub const fn with_normal_geometry(mut self, normal_geometry: Option<WindowGeometry>) -> Self {
+        self.normal_geometry = normal_geometry;
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -79,6 +202,10 @@ impl Default for WindowOptions {
             decorated: true,
             min_size: None,
             max_size: None,
+            display: None,
+            position: None,
+            mode: WindowMode::Normal,
+            normal_geometry: None,
         }
     }
 }
@@ -98,87 +225,6 @@ impl WindowId {
     /// Get the raw ID value.
     pub fn as_u64(self) -> u64 {
         self.0
-    }
-}
-
-/// Window display mode with restoration data
-///
-/// Combines window state (normal/minimized/maximized/fullscreen) with the data
-/// needed to restore from each state. This design ensures type-safety:
-/// restoration data is only available when in the corresponding state.
-///
-/// Platform-specific restoration data (e.g., window style bits) should be
-/// stored in the platform's own `WindowContext` or equivalent struct.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// match window_mode {
-///     WindowMode::Normal => println!("Window is in normal state"),
-///     WindowMode::Fullscreen { restore_bounds } => {
-///         println!("Window is fullscreen, can restore to {:?}", restore_bounds);
-///     }
-///     _ => {}
-/// }
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub enum WindowMode {
-    /// Normal windowed state
-    #[default]
-    Normal,
-
-    /// Window is minimized (iconified)
-    Minimized {
-        /// Bounds before minimization for restoration
-        previous: Bounds<i32>,
-    },
-
-    /// Window is maximized
-    Maximized {
-        /// Bounds before maximization for restoration
-        previous: Bounds<i32>,
-    },
-
-    /// Window is in fullscreen mode
-    Fullscreen {
-        /// Bounds before fullscreen for restoration
-        restore_bounds: Bounds<i32>,
-    },
-}
-
-impl WindowMode {
-    /// Check if window is in fullscreen mode
-    #[inline]
-    pub fn is_fullscreen(&self) -> bool {
-        matches!(self, WindowMode::Fullscreen { .. })
-    }
-
-    /// Check if window is minimized
-    #[inline]
-    pub fn is_minimized(&self) -> bool {
-        matches!(self, WindowMode::Minimized { .. })
-    }
-
-    /// Check if window is maximized
-    #[inline]
-    pub fn is_maximized(&self) -> bool {
-        matches!(self, WindowMode::Maximized { .. })
-    }
-
-    /// Check if window is in normal windowed mode
-    #[inline]
-    pub fn is_normal(&self) -> bool {
-        matches!(self, WindowMode::Normal)
-    }
-
-    /// Validate if transition to new mode is allowed
-    ///
-    /// All transitions are currently allowed except transitioning to the same
-    /// state. This method exists as a hook for adding transition
-    /// restrictions in the future.
-    pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
-        // All transitions allowed except same state
-        !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
     }
 }
 
@@ -234,6 +280,16 @@ pub enum WindowAppearance {
     VibrantDark,
 }
 
+impl From<WindowAppearance> for crate::Brightness {
+    /// The light/dark half of an appearance; vibrancy is a material, not a theme.
+    fn from(appearance: WindowAppearance) -> Self {
+        match appearance {
+            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
+        }
+    }
+}
+
 /// Window background appearance (backdrop material)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum WindowBackgroundAppearance {
@@ -248,17 +304,6 @@ pub enum WindowBackgroundAppearance {
     MicaBackdrop,
     /// Windows 11 Mica Alt backdrop
     MicaAltBackdrop,
-}
-
-/// Window bounds state (windowed, maximized, or fullscreen)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum WindowBounds {
-    /// Normal windowed mode with specific bounds
-    Windowed(Bounds<f64>),
-    /// Maximized with bounds
-    Maximized(Bounds<f64>),
-    /// Fullscreen with bounds
-    Fullscreen(Bounds<f64>),
 }
 
 /// Failure to apply a cursor to one exact platform window.
@@ -344,51 +389,5 @@ pub enum WindowEvent {
     RedrawRequested {
         /// The window that must be repainted
         window_id: WindowId,
-    },
-
-    /// Window was moved (position in logical pixels)
-    Moved {
-        /// The window that was moved
-        window_id: WindowId,
-        /// New top-left position in logical pixels
-        position: Point<f64>,
-    },
-
-    /// Window was minimized (iconified)
-    Minimized {
-        /// The window that was minimized
-        window_id: WindowId,
-    },
-
-    /// Window was maximized
-    Maximized {
-        /// The window that was maximized
-        window_id: WindowId,
-        /// Maximized client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window was restored from minimized or maximized state
-    Restored {
-        /// The window that was restored
-        window_id: WindowId,
-        /// Restored client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window entered fullscreen mode
-    Fullscreen {
-        /// The window that entered fullscreen
-        window_id: WindowId,
-        /// Size of the fullscreen window (monitor size)
-        size: Size<i32>,
-    },
-
-    /// Window exited fullscreen mode
-    ExitFullscreen {
-        /// The window that left fullscreen
-        window_id: WindowId,
-        /// Restored window size
-        size: Size<i32>,
     },
 }

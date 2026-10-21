@@ -9,32 +9,30 @@
 //! The `asset-images` feature exposes `AssetImage`, an async provider backed
 //! by `flui-assets`; `network-images` additionally exposes `NetworkImage`,
 //! an async HTTP/HTTPS provider. Both are off by default so stable builds do
-//! not pull in `flui-assets`/`futures-util`/`lru` unless asked for. (Not
+//! not pull in `flui-assets` unless asked for. (Not
 //! doc-linked above: these items only exist when their feature is enabled,
 //! and this module's own doc is built unconditionally.)
 
 mod cache_key;
 mod image;
 mod provider;
+mod texture;
 
 #[cfg(feature = "asset-images")]
 mod asset_image;
-#[cfg(feature = "asset-images")]
-mod decode_cache;
 #[cfg(feature = "network-images")]
 mod network_image;
 #[cfg(feature = "asset-images")]
 mod resolve;
 
 pub use cache_key::ImageCacheKey;
-#[cfg(feature = "network-images")]
-pub use cache_key::NetworkImageKey;
 pub use image::Image;
 #[cfg(feature = "asset-images")]
 pub use image::ImageState;
 pub use provider::{
     DirectImageProvider, FileImage, ImageProvider, ImageProviderError, MemoryImage,
 };
+pub use texture::{Texture, TextureState};
 
 #[cfg(feature = "asset-images")]
 pub use asset_image::AssetImage;

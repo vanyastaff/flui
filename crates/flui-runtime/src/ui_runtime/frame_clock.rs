@@ -5,7 +5,6 @@ use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_foundation::PresentationId;
-use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -59,7 +58,7 @@ impl UiRuntime {
     /// Checked in order:
     ///
     /// 1. the test override (`set_now_secs_for_test`, compiled only for
-    ///    tests and `test-support`), for deterministic stepping through a
+    ///    tests and `testing`), for deterministic stepping through a
     ///    bare `draw_frame`/`render_frame`. An override that is not a valid
     ///    duration (NaN, ±∞, negative) reads as raw time zero, which every
     ///    clock past its first frame treats as stale and holds;
@@ -70,7 +69,7 @@ impl UiRuntime {
     /// 3. the UI runtime's clock source now, for a frame driven outside a pump
     ///    (the wall clock for a host's `ClockSource::Platform`).
     pub(super) fn raw_frame_time(&self) -> Duration {
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(any(test, feature = "testing"))]
         {
             let bits = self.now_secs_override.load(Ordering::Relaxed);
             if bits != 0 {
@@ -91,7 +90,7 @@ impl UiRuntime {
     /// nonzero bit pattern so `raw_frame_time`'s `bits != 0` check (its "no
     /// override installed" test) cannot mistake an explicit zero override
     /// for an absent one.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_now_secs_for_test(&self, secs: f64) {
         let bits = secs.to_bits();
         let stored = if bits == 0 { 1u64 } else { bits };
@@ -138,6 +137,14 @@ impl UiRuntime {
     /// that was never its own (the platform-window half of this same
     /// requirement is each presentation's own `on_need_visual_update`
     /// wiring, `presentation.rs`).
+    /// [`Self::request_redraw_for`] for presentation `id`; nothing when this
+    /// UI runtime no longer hosts it (its close was delivered first).
+    pub(crate) fn request_redraw_of(&self, id: PresentationId) {
+        if let Some(presentation) = self.presentations.get(id) {
+            self.request_redraw_for(presentation);
+        }
+    }
+
     pub(super) fn request_redraw_for(&self, presentation: &PresentationState) {
         self.needs_redraw.store(true, Ordering::Relaxed);
         presentation.mark_redraw_pending();
@@ -389,18 +396,15 @@ impl UiRuntime {
             .set_performance_overlay(enabled);
     }
 
-    /// Perform haptic feedback on this presentation's window. See the
-    /// retired `AppBinding::perform_haptic_feedback`'s doc.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and this specific forwarding \
-                  wrapper is untested (the haptics tests exercise \
-                  PresentationState::perform_haptic_feedback directly)"
-    )]
-    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        self.presentations
-            .primary()
-            .perform_haptic_feedback(feedback);
+    /// The primary presentation's haptics handle, as its widgets acquire it
+    /// through `LifecycleContext::haptics` outside any `HapticsMode`.
+    ///
+    /// An accepted host observation that system haptics are off suppresses
+    /// both tiers; an unobserved setting plays them (ADR-0212 §1).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn haptics(&self) -> flui_interaction::HapticsHandle {
+        self.presentations.primary().haptics().handle()
     }
 
     /// Apply a new device pixel ratio to presentation `id`'s render pipeline,
@@ -456,6 +460,10 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        // The logical regions are unchanged, but their device pixels are not; a scale
+        // change need not composite a frame, so the backend re-projects them now
+        // (ADR-0217 §5).
+        presentation.republish_input_regions();
         true
     }
 
@@ -477,7 +485,33 @@ impl UiRuntime {
                 || flui_interaction::__runtime::has_pending_deadlines_snapshot(
                     presentation.gestures(),
                 )
+                || presentation.haptics().has_pending_delivery()
+                || presentation
+                    .frame_rate_hold()
+                    .is_some_and(|due| presentation.clock().now() >= due)
         })
+    }
+
+    /// Fold what every presentation wants of its display's refresh rate at the
+    /// end of an owner work item and return the demand each now holds. The
+    /// demand is read live: the clock's animation bit is cleared by every
+    /// produced frame, so it cannot say whether an animation still runs. A
+    /// hidden or closing presentation is released at once.
+    pub(crate) fn frame_rate_demands(
+        &self,
+    ) -> Vec<(PresentationId, crate::frame_rate_demand::FrameRateDemand)> {
+        let frames_enabled = self.scheduler.frames_enabled();
+        self.presentations
+            .iter()
+            .map(|presentation| {
+                let wanted = !presentation.closing_requested.get()
+                    && presentation.wants_high_frame_rate(frames_enabled);
+                let mut governor = presentation.frame_rate.get();
+                governor.observe(wanted, presentation.is_shown(), presentation.clock().now());
+                presentation.frame_rate.set(governor);
+                (presentation.id(), governor.decided())
+            })
+            .collect()
     }
 
     /// The earliest wall-clock instant ANY presentation this UI runtime hosts
@@ -499,12 +533,38 @@ impl UiRuntime {
             .filter(|presentation| !presentation.closing_requested.get())
             .flat_map(|presentation| {
                 [
-                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures()),
+                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
+                        .and_then(|deadline| {
+                            flui_interaction::__runtime::wake_instant(
+                                presentation.gestures(),
+                                deadline,
+                            )
+                        }),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
+                    presentation.haptics().next_wake(),
+                    presentation.frame_rate_hold(),
                 ]
             })
             .flatten()
+            .chain(self.drag.next_deadline().map(|deadline| {
+                // A drag's spring-loading deadline is an event time; wakes are instants.
+                let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+                epoch
+                    .checked_add(std::time::Duration::from_nanos(deadline.as_nanos()))
+                    .unwrap_or(epoch)
+            }))
             .min()
+    }
+}
+
+#[cfg(test)]
+impl UiRuntime {
+    /// Read and clear presentation `id`'s redraw bit, for tests of addressed
+    /// redraw routing; `None` when this UI runtime does not host `id`.
+    pub(crate) fn take_redraw_pending_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations
+            .get(id)
+            .map(PresentationState::take_redraw_pending)
     }
 }

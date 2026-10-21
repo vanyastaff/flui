@@ -793,7 +793,7 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 97] = [
+    let cases: [(&str, fn()); 99] = [
         (
             "degenerate rounded path coverage",
             degenerate_rounded_paths_preserve_contour_coverage,
@@ -876,12 +876,20 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
             image_boundary::render_image_scaled_cover,
         ),
         (
+            "RenderImage subnormal-scale Cover crop",
+            image_boundary::render_image_subnormal_scale_cover,
+        ),
+        (
             "RenderImage natural-scale crop",
             image_boundary::render_image_natural_crop,
         ),
         (
             "decoration fitted repeat phase",
             image_boundary::decoration_repeat_phase,
+        ),
+        (
+            "nine-slice placement keeps logical corners",
+            image_boundary::sliced_placement_keeps_logical_corners,
         ),
         (
             "atlas affine and Paint",
@@ -3864,4 +3872,124 @@ fn painter_solid_shaders_use_effective_colors_for_compositing() {
         failures.is_empty(),
         "Solid shader rows failed: {failures:?}"
     );
+}
+
+/// A moderate trim evicts free pooled buffers down to half the pool's budget
+/// and a critical one evicts them all.
+#[test]
+fn trim_evicts_free_buffers_by_level() {
+    use flui_foundation::memory::MemoryPressureLevel;
+
+    const MIB: usize = 1024 * 1024;
+    const BUFFER_BYTES: usize = 16 * MIB;
+    let payload = vec![0_u8; BUFFER_BYTES];
+    for (level, kept) in [
+        (MemoryPressureLevel::Moderate, 32 * MIB),
+        (MemoryPressureLevel::Critical, 0),
+    ] {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (64, 64),
+        );
+        // Four buffers in use at once are four allocations, 64 MiB in all: at
+        // the budget, so the end-of-frame pass would keep them.
+        for _ in 0..4 {
+            painter
+                .resources
+                .buffer_pool_mut()
+                .get_vertex_buffer(&device, &queue, "trim", &payload);
+        }
+        painter.resources.buffer_pool_mut().reset();
+        assert_eq!(
+            painter.resources.buffer_pool_mut().total_capacity_bytes(),
+            4 * BUFFER_BYTES
+        );
+
+        painter.reclaim(level);
+
+        assert_eq!(
+            painter.resources.buffer_pool_mut().total_capacity_bytes(),
+            kept,
+            "{level:?}"
+        );
+    }
+}
+
+/// Between frames, a moderate trim evicts the image textures the last frame
+/// did not draw and keeps the atlas; a critical one evicts every texture and
+/// releases the atlas texture, freeing the pixels the cache pinned.
+#[test]
+fn trim_evicts_image_textures_by_level() {
+    use crate::texture_cache::TextureKey;
+    use flui_foundation::memory::MemoryPressureLevel;
+    use flui_painting::paint::Image;
+
+    // Above the atlas's largest dimension, so standalone textures.
+    const SIDE: u32 = 300;
+    let standalone =
+        |shade: u8| Image::from_rgba8(SIDE, SIDE, vec![shade; (SIDE * SIDE * 4) as usize]);
+    let icon = Image::from_rgba8(8, 8, vec![9; 8 * 8 * 4]);
+    for (level, kept_bytes) in [
+        (
+            MemoryPressureLevel::Moderate,
+            (SIDE * SIDE * 4 + 8 * 8 * 4) as usize,
+        ),
+        (MemoryPressureLevel::Critical, 0),
+    ] {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (64, 64),
+        );
+        let drawn = standalone(1);
+        let hidden = standalone(2);
+        let cache = painter.resources.texture_cache_mut();
+        for image in [&drawn, &hidden, &icon] {
+            cache
+                .load_from_rgba(
+                    TextureKey::from_image(image),
+                    image.width(),
+                    image.height(),
+                    image.data(),
+                )
+                .expect("texture uploads");
+        }
+        // The last frame drew `drawn` and the icon, not `hidden`.
+        cache.get(&TextureKey::from_image(&drawn));
+        cache.get(&TextureKey::from_image(&icon));
+        cache.end_frame_maintenance();
+
+        painter.reclaim(level);
+
+        let cache = painter.resources.texture_cache_mut();
+        assert_eq!(cache.memory_bytes(), kept_bytes, "{level:?}");
+        assert_eq!(
+            cache.get(&TextureKey::from_image(&drawn)).is_some(),
+            level == MemoryPressureLevel::Moderate,
+            "{level:?} keeps a texture on screen only under moderate pressure"
+        );
+        assert!(
+            cache.get(&TextureKey::from_image(&hidden)).is_none(),
+            "{level:?} evicts a texture the last frame did not draw"
+        );
+        assert_eq!(
+            cache.holds_atlas_texture(),
+            level == MemoryPressureLevel::Moderate,
+            "{level:?}: the atlas texture is released under critical pressure only"
+        );
+        if level == MemoryPressureLevel::Critical {
+            cache
+                .load_from_rgba(TextureKey::from_image(&icon), 8, 8, icon.data())
+                .expect("the icon uploads again");
+            assert!(
+                cache.holds_atlas_texture(),
+                "the next small image allocates a fresh atlas"
+            );
+        }
+    }
 }

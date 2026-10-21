@@ -9,6 +9,7 @@
 fn ui_tests() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui_pass/state_and_depth.rs");
+    t.compile_fail("tests/ui/apply_view_has_no_presentation_capabilities.rs");
     t.compile_fail("tests/ui/writer_source_minting_is_private.rs");
     t.compile_fail("tests/ui/state_cell_is_not_send.rs");
     t.compile_fail("tests/ui/state_cell_is_not_sync.rs");
@@ -30,6 +31,8 @@ fn ui_tests() {
     t.compile_fail("tests/ui/build_context_is_sealed.rs");
     // ADR-0085 §2: a read scope yields neither its graph nor its sink.
     t.compile_fail("tests/ui/scope_ref_exposes_no_graph.rs");
+    // The build context lends no lock handle on the element tree or owner.
+    t.compile_fail("tests/ui/element_build_context_lends_no_lock.rs");
     t.compile_fail("tests/ui/depend_on_inherited_fields_needs_token.rs");
     t.compile_fail("tests/ui/inherited_access_mutation_needs_token.rs");
     // ADR-0086: the typed signal write. The snapshots are the record of what

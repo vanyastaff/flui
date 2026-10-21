@@ -176,7 +176,14 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
 - **Curated facade modules.** Where the facade curates a module instead of re-exporting a crate
   (`interaction`, `painting`, `rendering`), the SDK has the same module at the same path, holding
   the subset of its items that packages use, as the same items. An item packages use that no
-  facade module exposes goes into an Evolving module.
+  facade module exposes goes into an Evolving module. The subset also carries the extension
+  surface a third-party author writes against (a custom recognizer, a drag source, the haptics
+  handle) when the facade module holds the same items, because the SDK is where an external
+  package author looks first; such an item is pinned in `crates/flui-sdk/tests/surface.rs` like
+  any other. An item that no package uses and that is not part of a documented extension surface
+  (the input regions of ADR-0217, for one) stays out until it has a user. A type has one path in
+  both crates: the haptics handle is `interaction::HapticsHandle`, not under `platform::haptics`,
+  and is present only under `unstable-input`.
 - **Surface ceiling.** When `flui-sdk` is created its Evolving surface is measured from rustdoc
   JSON. More than about 30 items beyond the hooks means the sdk is becoming a second facade, and
   this decision is revisited. At creation `pipeline` holds three items (`PathClipConfiguration`,
@@ -295,7 +302,7 @@ which exists.
   application adds `flui-material` (and development tools) as its own dependencies. The CHANGELOG
   carries the migration note.
 - **Breaks for this repository.** Material examples move to `packages/flui-material/examples`;
-  `cargo xtask facade-combos` and the AGENTS.md "Extending FLUI" row about
+  `cargo xtask facade-combos` and the `docs/extending.md` row about
   `[[example]] required-features` are rewritten; `tests/facade_smoke.rs`, README, the crate docs
   and the book are updated from the list
   `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces.

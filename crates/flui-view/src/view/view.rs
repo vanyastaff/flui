@@ -190,6 +190,27 @@ pub trait View: Downcast + DynClone + 'static {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }
+
+    /// Writes this view's configuration for inspection (ADR-0242): what the element tree's
+    /// snapshot keeps as the node's fields, apart from the element's own facts. Writes nothing by
+    /// default.
+    ///
+    /// It runs while the snapshot holds the element tree, as `build` runs inside the binding's
+    /// build scope, so it describes `self`. A reach back into the binding fails rather than
+    /// waits: a nested snapshot answers `SnapshotError::Busy`, `with_element_tree_mut` panics,
+    /// and a panic here is recorded on this node as
+    /// [`INSPECT_FAILED`](flui_foundation::inspect::INSPECT_FAILED) while the walk goes on.
+    ///
+    /// A view that derives [`Inspect`](flui_foundation::inspect::Inspect) forwards to it:
+    ///
+    /// ```ignore
+    /// fn inspect(&self, out: &mut Fields<'_>) {
+    ///     Inspect::inspect(self, out);
+    /// }
+    /// ```
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let _ = out;
+    }
 }
 
 impl_downcast!(View);
@@ -207,6 +228,23 @@ pub trait ElementBase: Downcast + 'static {
 
     /// Get the TypeId of the View that created this Element.
     fn view_type_id(&self) -> TypeId;
+
+    /// The [`core::any::type_name`] of the View that created this Element, which names the
+    /// element in inspection. The default names the element's own type.
+    fn view_type_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    /// The element's kind as inspection and logs name it: `StatelessElement`,
+    /// `RenderObjectElement`.
+    fn debug_kind(&self) -> &'static str {
+        "Element"
+    }
+
+    /// Writes the held view's [`View::inspect`] fields.
+    fn inspect_view(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let _ = out;
+    }
 
     /// Hash of the `Key` carried by the View this element currently
     /// holds, or `None` if that View is keyless.
@@ -279,6 +317,15 @@ pub trait ElementBase: Downcast + 'static {
         // overrides this; hand-rolled element impls (test fixtures,
         // future custom elements) opt in by overriding.
     }
+
+    /// Record the shared view this element was created from.
+    ///
+    /// [`BoxedView::create_element`](crate::BoxedView) calls it right after
+    /// `View::create_element`, so that the first update which offers the same
+    /// shared view again is already recognised as a no-op. Default: ignore;
+    /// the unified `Element<V, A, B>` keeps it, hand-rolled element impls opt
+    /// in by overriding.
+    fn note_source_view(&mut self, _source: std::rc::Weak<dyn View>) {}
 
     /// Get the slot position in parent's child list.
     fn slot(&self) -> usize {

@@ -51,6 +51,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
+        // The query fills layout caches and may poison (and unflag) nodes.
+        self.scheduler.forget_layout_walks();
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let text = self.text_handle();
@@ -105,6 +107,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         constraints: crate::constraints::BoxConstraints,
     ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
+        // The query fills layout caches and may poison (and unflag) nodes.
+        self.scheduler.forget_layout_walks();
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let text = self.text_handle();
@@ -154,6 +158,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         constraints: crate::constraints::BoxConstraints,
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f64>> {
+        // The query fills layout caches and may poison (and unflag) nodes.
+        self.scheduler.forget_layout_walks();
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let text = self.text_handle();

@@ -254,19 +254,27 @@ impl flui_rendering::delegates::FlowDelegate for TiltedPlaneFlow {
 
 pub(crate) fn perspective_flow_hits_its_actual_child_plane() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(std::sync::Arc::new(
+    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(std::rc::Rc::new(
         TiltedPlaneFlow,
     ))) as BoxedRenderObject);
     let child = owner
         .insert_child_render_object(parent, Box::new(RenderColoredBox::red(1.5, 10.0)))
         .expect("child insert");
-    let owner = laid_out(owner, parent);
+    // A flow hit-tests what it painted, so this runs a whole frame.
+    owner.set_root_id(Some(parent));
+    owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::new(
+        0.0, 200.0, 0.0, 200.0,
+    )));
+    let (owner, frame) = owner.run_frame();
+    frame.expect("the flow paints");
     assert!(
-        hits(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
+        inspect::hit_path(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
         "local (2,3) misses the narrow flow child"
     );
     assert_eq!(
-        hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(),
+        inspect::hit_path(&owner, 0.6 / 0.92, 2.0 / 0.92)
+            .first()
+            .copied(),
         Some(child)
     );
 }
@@ -396,9 +404,56 @@ impl flui_rendering::traits::RenderBox for RecoveringHitParent {
                 ctx.hit_test_child(0, position);
             }
         }));
-        assert!(failure.is_err(), "fixture must catch its failed hit scope");
+        // A panic in this parent's own scope is the parent's to catch; a
+        // child's panic is contained at the child, which is a miss here.
+        let child_scope = matches!(
+            self.0,
+            FailedHitScope::ChildOffset
+                | FailedHitScope::ChildLayoutOffset
+                | FailedHitScope::ChildOverride
+        );
+        assert_eq!(
+            failure.is_err(),
+            !child_scope,
+            "{:?}: only the parent's own scope unwinds into the parent",
+            self.0
+        );
         ctx.hit_test_child_at_layout_offset(1)
     }
+}
+
+/// The walk's leaf-first `(target, transform)` path and the panic it resumed
+/// once the path was complete, as text.
+fn contained_hit_path(
+    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    x: f64,
+    y: f64,
+) -> (
+    Vec<(
+        flui_foundation::RenderId,
+        Option<flui_foundation::geometry::Matrix4>,
+    )>,
+    Option<String>,
+) {
+    let mut result = flui_rendering::hit_testing::HitTestResult::new();
+    let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.hit_test(
+            Offset::new(x, y),
+            flui_interaction::events::PointerKind::Touch,
+            &mut result,
+        )
+    }));
+    let path = result
+        .path()
+        .iter()
+        .map(|entry| (entry.target, entry.transform))
+        .collect();
+    let panic = walk.err().map(|payload| {
+        flui_foundation::panic::payload_text(payload.as_ref())
+            .expect("fixture panics carry text")
+            .to_owned()
+    });
+    (path, panic)
 }
 
 #[derive(Debug)]
@@ -446,8 +501,19 @@ fn assert_recovered_hit_coordinates(scope: FailedHitScope) {
         .insert_child_render_object(root, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("healthy child insert");
     let owner = laid_out(owner, root);
+    let child_panics = matches!(
+        scope,
+        FailedHitScope::ChildOffset
+            | FailedHitScope::ChildLayoutOffset
+            | FailedHitScope::ChildOverride
+    );
     for _ in 0..2 {
-        let path = inspect::hit_path_with_transforms(&owner, 10.0, 10.0);
+        let (path, panic) = contained_hit_path(&owner, 10.0, 10.0);
+        assert_eq!(
+            panic.as_deref(),
+            child_panics.then_some("descendant hit test failed"),
+            "{scope:?}: a child's panic resumes once the path is complete"
+        );
         let (_, transform) = path
             .iter()
             .find(|(id, _)| *id == healthy)
@@ -481,6 +547,360 @@ pub(crate) fn caught_driver_node_scope_restores_hit_coordinates() {
 
 pub(crate) fn caught_zero_offset_driver_node_scope_restores_hit_coordinates() {
     assert_recovered_hit_coordinates(FailedHitScope::ChildOverride);
+}
+
+/// A parent that lays every child out at the origin and keeps the default
+/// `hit_test`.
+#[derive(Debug)]
+struct DefaultHitParent;
+impl flui_foundation::Diagnosticable for DefaultHitParent {}
+
+impl flui_rendering::traits::RenderBox for DefaultHitParent {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        let loose = flui_rendering::constraints::BoxConstraints::loose(ctx.constraints().biggest());
+        for index in 0..ctx.child_count() {
+            ctx.layout_child(index, loose)?;
+            ctx.position_child(index, Offset::ZERO);
+        }
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+}
+
+/// A 40x40 leaf whose hit test panics with its message.
+#[derive(Debug)]
+struct PanicOnHit(&'static str);
+impl flui_foundation::Diagnosticable for PanicOnHit {}
+
+impl flui_rendering::traits::RenderBox for PanicOnHit {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        panic!("{}", self.0);
+    }
+}
+
+/// Metadata whose destructor panics.
+#[derive(Debug)]
+struct PanicsWhenDropped;
+impl Drop for PanicsWhenDropped {
+    fn drop(&mut self) {
+        panic!("hit metadata destructor failed");
+    }
+}
+
+/// A 40x40 leaf hit inside its size, carrying fresh `PanicsWhenDropped`
+/// metadata on its entry, so the entry holds the payload's last reference.
+#[derive(Debug)]
+struct BombMetadataLeaf;
+impl flui_foundation::Diagnosticable for BombMetadataLeaf {}
+
+impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        Some(std::sync::Arc::new(PanicsWhenDropped))
+    }
+}
+
+/// A single-child box that hit-tests its child, then panics.
+#[derive(Debug)]
+struct PanicsAfterChild;
+impl flui_foundation::Diagnosticable for PanicsAfterChild {}
+
+impl flui_rendering::traits::RenderBox for PanicsAfterChild {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        ctx.layout_child(0, *ctx.constraints())
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test(
+        &self,
+        ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        ctx.hit_test_child_at_layout_offset(0);
+        panic!("parent hit test failed");
+    }
+}
+
+/// Containment discards what a failed node's subtree added without running
+/// its destructors: a child's entry whose metadata panics on drop is retained,
+/// so the ancestor's original panic is the one reported, and the walk still
+/// reaches the healthy sibling below.
+pub(crate) fn a_contained_hit_panic_retains_the_discarded_entries() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(Box::new(DefaultHitParent) as BoxedRenderObject);
+    let healthy = owner
+        .insert_child_render_object(root, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+    let failing = owner
+        .insert_child_render_object(root, Box::new(PanicsAfterChild))
+        .expect("child insert");
+    owner
+        .insert_child_render_object(failing, Box::new(BombMetadataLeaf))
+        .expect("grandchild insert");
+    let owner = laid_out(owner, root);
+
+    let (path, panic) = contained_hit_path(&owner, 10.0, 10.0);
+    assert_eq!(panic.as_deref(), Some("parent hit test failed"));
+    assert_eq!(
+        path.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![healthy, root]
+    );
+}
+
+/// A parent that places child `i` at `offsets[i]` and keeps the default
+/// `hit_test`.
+#[derive(Debug)]
+struct PlacedParent(Vec<Offset>);
+impl flui_foundation::Diagnosticable for PlacedParent {}
+
+impl flui_rendering::traits::RenderBox for PlacedParent {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        let loose = flui_rendering::constraints::BoxConstraints::loose(ctx.constraints().biggest());
+        for (index, offset) in self.0.iter().enumerate().take(ctx.child_count()) {
+            ctx.layout_child(index, loose)?;
+            ctx.position_child(index, *offset);
+        }
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+}
+
+/// A failed node gives up its say in expanded areas along with its entries:
+/// an absorbing child it hit before panicking is no barrier any more, so a
+/// neighbour's expanded area still takes a position only that subtree covered.
+/// A 20x20 leaf that never takes a hit.
+#[derive(Debug)]
+struct NeverHit;
+impl flui_foundation::Diagnosticable for NeverHit {}
+
+impl flui_rendering::traits::RenderBox for NeverHit {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(20.0, 20.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+/// An expanded-area re-walk that is rejected discards its path through the
+/// walk: an entry whose metadata panics on drop is retained once the walk
+/// already holds a failure, so the first render-object panic is the one
+/// reported rather than a destructor's.
+pub(crate) fn a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(Box::new(PlacedParent(vec![
+        Offset::ZERO,
+        Offset::new(45.0, 0.0),
+        Offset::ZERO,
+    ])) as BoxedRenderObject);
+    let bomb = owner
+        .insert_child_render_object(root, Box::new(BombMetadataLeaf))
+        .expect("bomb insert");
+    let slop = owner
+        .insert_child_render_object(
+            root,
+            Box::new(flui_objects::RenderHitSlop::new(
+                flui_foundation::geometry::EdgeInsets::all(10.0),
+                0.0,
+            )),
+        )
+        .expect("slop insert");
+    owner
+        .insert_child_render_object(slop, Box::new(NeverHit))
+        .expect("never-hit insert");
+    owner
+        .insert_child_render_object(root, Box::new(PanicOnHit("first hit test failed")))
+        .expect("panicking insert");
+    let owner = laid_out(owner, root);
+
+    // Over the bomb and the panicking leaf, inside the slop's area only.
+    let mut result = flui_rendering::hit_testing::HitTestResult::new();
+    let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.hit_test(
+            Offset::new(38.0, 10.0),
+            flui_interaction::events::PointerKind::Touch,
+            &mut result,
+        )
+    }));
+    let panic = walk.err().map(|payload| {
+        flui_foundation::panic::payload_text(payload.as_ref())
+            .expect("fixture panics carry text")
+            .to_owned()
+    });
+    let targets: Vec<_> = result.path().iter().map(|entry| entry.target).collect();
+    // The kept path's bomb metadata would panic on drop; it is the caller's.
+    std::mem::forget(result);
+    assert_eq!(panic.as_deref(), Some("first hit test failed"));
+    assert_eq!(targets, vec![bomb, root], "the visual path stands");
+}
+
+pub(crate) fn a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(
+        Box::new(PlacedParent(vec![Offset::new(50.0, 0.0), Offset::ZERO])) as BoxedRenderObject,
+    );
+    let slop = owner
+        .insert_child_render_object(
+            root,
+            Box::new(flui_objects::RenderHitSlop::new(
+                flui_foundation::geometry::EdgeInsets::all(10.0),
+                0.0,
+            )),
+        )
+        .expect("slop insert");
+    let target = owner
+        .insert_child_render_object(slop, Box::new(RenderColoredBox::red(20.0, 20.0)))
+        .expect("target insert");
+    let failing = owner
+        .insert_child_render_object(root, Box::new(PanicsAfterChild))
+        .expect("failing insert");
+    let absorb = owner
+        .insert_child_render_object(
+            failing,
+            Box::new(flui_objects::RenderAbsorbPointer::new(true)),
+        )
+        .expect("absorb insert");
+    owner
+        .insert_child_render_object(absorb, Box::new(RenderColoredBox::red(48.0, 40.0)))
+        .expect("absorbed box insert");
+    let owner = laid_out(owner, root);
+
+    // Over the absorbing box, inside the slop's area but outside its bounds.
+    let (path, panic) = contained_hit_path(&owner, 45.0, 10.0);
+    assert_eq!(panic.as_deref(), Some("parent hit test failed"));
+    assert_eq!(
+        path.first().map(|(id, _)| *id),
+        Some(target),
+        "the expanded area takes the position the failed subtree no longer covers"
+    );
+}
+
+/// A parent that keeps the default `hit_test` hands the position to its
+/// children, topmost first, and is hit only through one: it neither claims
+/// the empty space of its own box nor blocks the children it covers.
+pub(crate) fn default_parent_hit_test_reaches_its_children() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let parent = owner.insert(Box::new(DefaultHitParent) as BoxedRenderObject);
+    let below = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(60.0, 60.0)))
+        .expect("child insert");
+    let above = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+    let owner = laid_out(owner, parent);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![above, parent],
+        "topmost child first"
+    );
+    assert_eq!(
+        hits(&owner, 50.0, 50.0),
+        vec![below, parent],
+        "then the one below"
+    );
+    assert!(
+        hits(&owner, 80.0, 80.0).is_empty(),
+        "the parent's own empty space is not a hit"
+    );
+}
+
+/// A render object whose hit test panics is a miss that blocks nothing
+/// below: the walk goes on to its siblings, and once the path is complete
+/// the FIRST panic resumes — later ones are retained, not raised.
+pub(crate) fn a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let parent = owner.insert(Box::new(DefaultHitParent) as BoxedRenderObject);
+    let healthy = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+    let second = owner
+        .insert_child_render_object(parent, Box::new(PanicOnHit("second hit test failed")))
+        .expect("child insert");
+    let first = owner
+        .insert_child_render_object(parent, Box::new(PanicOnHit("first hit test failed")))
+        .expect("child insert");
+    let owner = laid_out(owner, parent);
+
+    for _ in 0..2 {
+        let (path, panic) = contained_hit_path(&owner, 10.0, 10.0);
+        let targets: Vec<_> = path.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            targets,
+            vec![healthy, parent],
+            "the panicking children are misses above the healthy one"
+        );
+        assert!(!targets.contains(&first) && !targets.contains(&second));
+        assert_eq!(panic.as_deref(), Some("first hit test failed"));
+    }
 }
 
 pub(crate) fn nested_tiny_transforms_emit_the_correct_local_hit_point() {

@@ -25,6 +25,23 @@ struct State {
     admission: TextSizingAdmission,
     deadline: Option<web_time::Instant>,
     parked: bool,
+    /// Native acquisition failures since the last usable capture, which set the
+    /// retry delay and keep the warning to once per streak.
+    failures: u32,
+}
+
+/// The first retry delay after a failed native acquisition.
+const RETRY_FLOOR: Duration = Duration::from_millis(500);
+/// The longest retry delay a streak of failed acquisitions backs off to.
+const RETRY_CEILING: Duration = Duration::from_secs(8);
+
+/// The delay before retrying after `failures` earlier failures in a row:
+/// [`RETRY_FLOOR`], doubled each time, up to [`RETRY_CEILING`].
+fn retry_delay(failures: u32) -> Duration {
+    // 500 ms << 4 is the 8 s ceiling; the clamp keeps the shift in range.
+    RETRY_FLOOR
+        .saturating_mul(1u32 << failures.min(4))
+        .min(RETRY_CEILING)
 }
 
 #[cfg(test)]
@@ -63,6 +80,7 @@ impl NativeTextSizing {
                 admission,
                 deadline: None,
                 parked: false,
+                failures: 0,
             }),
             #[cfg(test)]
             capture_sampler: RefCell::new(None),
@@ -159,6 +177,10 @@ impl NativeTextSizing {
                     let old = state.capsule.replace(capsule);
                     let had_deadline = state.deadline.take().is_some();
                     let was_parked = std::mem::replace(&mut state.parked, false);
+                    // Only a usable capture ends a streak: Android answers a
+                    // retry with `Pending` before the result of its capture,
+                    // so a reset there would erase the failure that preceded it.
+                    state.failures = 0;
                     (
                         state.admission.source(),
                         changed
@@ -204,9 +226,50 @@ impl NativeTextSizing {
                 }
             }
             Ok(TextSizingCaptureState::Ready(_)) => {}
+            Err(flui_platform::TextSizingCaptureError::Unavailable) => {
+                self.park_until_available(dispatcher, effects, &current);
+            }
             Err(error) => {
-                self.park_for_retry(dispatcher, effects, Duration::from_millis(500), &current);
-                tracing::warn!(%error, "native text sizing acquisition failed");
+                let failures = {
+                    let mut state = self.state.borrow_mut();
+                    let failures = state.failures;
+                    state.failures = failures.saturating_add(1);
+                    failures
+                };
+                self.park_for_retry(dispatcher, effects, retry_delay(failures), &current);
+                // One warning per streak: the retries behind it are debug.
+                if failures == 0 {
+                    tracing::warn!(%error, "native text sizing acquisition failed");
+                } else {
+                    tracing::debug!(%error, failures, "native text sizing acquisition failed again");
+                }
+            }
+        }
+    }
+
+    /// The native context is gone (a backgrounded Android or iOS app has no
+    /// window), which a timer cannot repair: park with no deadline, so nothing
+    /// wakes the owner for it. The owner turn that follows the window's return
+    /// (`PrimarySurfaceRestored`) refreshes again and captures.
+    fn park_until_available(
+        &self,
+        dispatcher: &PresentationDispatcher,
+        effects: &dyn OwnerEffects,
+        current: &impl Fn() -> bool,
+    ) {
+        let newly_parked = {
+            let mut state = self.state.borrow_mut();
+            let newly_parked = !state.parked;
+            state.parked = true;
+            state.deadline = None;
+            state.failures = 0;
+            newly_parked
+        };
+        if newly_parked {
+            tracing::debug!("native text sizing context is gone; parked until the window returns");
+            if self.live.get() && current() {
+                let source = self.state.borrow().admission.source();
+                let _ = dispatcher.service_text_sizing_source(&source, effects);
             }
         }
     }

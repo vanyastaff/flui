@@ -8,7 +8,6 @@
 //! [`cross_typecheck_plan`], ...) so the unit tests below pin them to the CI
 //! steps they mirror.
 
-mod check_changed;
 mod checks;
 mod deps;
 mod exec;
@@ -49,9 +48,6 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
-/// - `flui/persist`: the storage seam the runner hands UI runtimes, off by default
-///   because it links the file store; on here so its runner tests and the
-///   Notes example, which needs it, are covered.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
@@ -72,30 +68,38 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 
-/// The build that links the examples and benches: the workspace's
-/// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
-/// run built instead of resolving features a second time. Cargo skips a
-/// target whose `required-features` those features leave off (devtools'
+/// The build that links the examples and benches: `--all-targets` over the
+/// packages and features of the test run on `host` ([`scoped_nextest`]), so
+/// it reuses what that run built and compiles only the example and bench
+/// targets. Any other package set resolves features differently, and every
+/// workspace crate above the changed dependency is built a second time:
+/// selecting flui-platform turns on its dev-dependency serde_json's
+/// `float_roundtrip`, and leaving out the driver drops its proc-macro2
+/// `span-locations`. On Windows the test run leaves the driver out, since
+/// Windows cannot replace its running executable, and so does this build.
+/// flui-platform's examples link in its own suite on Linux and Windows,
+/// which builds them under `--all-features` ([`platform_suite`]). Cargo skips
+/// a target whose `required-features` the test features leave off (devtools'
 /// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
-/// The driver itself is already built by the cargo alias. Exclude it here:
-/// Windows cannot replace its running executable when workspace feature
-/// unification changes the driver's dependency artifacts. Its test binary
-/// remains covered by the test task (separately on Windows), and lint checks
-/// all its targets.
-fn build_all_targets() -> Cmd {
-    Cmd::cargo([
+fn build_all_targets(host: Host) -> Cmd {
+    let command = Cmd::cargo([
         "build",
         "--workspace",
         "--exclude",
-        "xtask",
+        "flui-platform",
         "--all-targets",
         "--locked",
         "--features",
         TEST_FEATURES,
-    ])
+    ]);
+    if host == Host::Windows {
+        command.args(["--exclude", "xtask"])
+    } else {
+        command
+    }
 }
 
 /// Options every task takes.
@@ -419,9 +423,9 @@ fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
 
 /// CI's `test-features` job: the suites behind features the default run never
 /// enables (flui-assets and flui-widgets default to `default = []`). The
-/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The last step names
-/// the `signals` features, which are now accepted and ignored (signals are
-/// always compiled, ADR-0085 §5); it mirrors the job until the job drops it.
+/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The
+/// `signals` features of flui-view, flui-testing, flui-widgets and flui-app
+/// are empty (signals are always compiled, ADR-0085 §5), so no run names them.
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
@@ -450,20 +454,6 @@ fn test_features_plan() -> Vec<Step> {
             "images",
             "--test",
             "image",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-view",
-            "-p",
-            "flui-testing",
-            "-p",
-            "flui-widgets",
-            "-p",
-            "flui-app",
-            "--features",
-            "flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals",
-            "--locked",
-            "--no-fail-fast",
         ]),
     ]
 }
@@ -575,11 +565,6 @@ fn miri_plan() -> Vec<Step> {
             .into()
     })
     .collect()
-}
-
-/// CI's `bench-compile` job: the criterion benches compiled and linked, not run.
-fn bench_compile_plan() -> Vec<Step> {
-    vec![Cmd::cargo(["bench", "-p", "flui-rendering", "--no-run", "--locked"]).into()]
 }
 
 /// The workflow linters CI's `checks` job runs: actionlint (workflow
@@ -814,7 +799,7 @@ pub(crate) struct BuildAllTargetsArgs {
 
 /// `cargo xtask build-all-targets`: link the examples and benches the test features reach (see [`build_all_targets`]).
 pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().run(&build_all_targets()))
+    done(args.run.runner().run(&build_all_targets(Host::current())))
 }
 
 /// Arguments for `cargo xtask ci`.
@@ -838,9 +823,9 @@ pub(crate) struct CiFullArgs {
 
 /// `cargo xtask ci-full`: `ci` plus every heavy CI job this host can run.
 ///
-/// Then: the all-targets build (the only step that links the examples),
-/// test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
-/// cross-typecheck, bench-compile, `deps` (each tool when installed), the
+/// Then: the all-targets build (the only step that links the examples and
+/// benches), test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
+/// cross-typecheck, `deps` (each tool when installed), the
 /// workflow linters (each when installed), miri, gpu-test, and on Linux
 /// live-smoke under X11 and Wayland. Slow on purpose:
 /// cargo-hack's per-feature matrix dominates; `cargo xtask doctor full` names
@@ -848,14 +833,13 @@ pub(crate) struct CiFullArgs {
 pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     let runner = args.run.runner();
     ci_stage(runner)?;
-    runner.run(&build_all_targets())?;
+    runner.run(&build_all_targets(Host::current()))?;
     runner.steps(&test_features_plan())?;
     feature_matrix_stage(runner, Slice::All)?;
     web::check(runner)?;
     web::link(runner)?;
     web::test(runner)?;
     runner.steps(&cross_typecheck_plan(Host::current())?)?;
-    runner.steps(&bench_compile_plan())?;
     deps::run(runner, None, false)?;
     runner.steps(&workflow_lint_plan(|program| {
         runner.dry_run || installed(program, &["--version"])
@@ -871,45 +855,6 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
         );
     }
     Ok(ExitCode::SUCCESS)
-}
-
-/// Arguments for `cargo xtask check-changed`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct CheckChangedArgs {
-    /// Diff against the merge base with this revision.
-    #[arg(long, default_value = "origin/main")]
-    base: String,
-    /// Run even when this tree, base, toolchain, environment and step list
-    /// already passed (the record is still written when it passes).
-    #[arg(long)]
-    no_cache: bool,
-    /// Local CI parity: also rustdoc, doctests, the engine-testing, cross and
-    /// per-feature clippies, the trybuild and nested-cargo tests, and the
-    /// dependents' tests after the changed crates' (CI runs all of them
-    /// either way). Slow, and it holds the host-wide lock throughout.
-    #[arg(long)]
-    full: bool,
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
-///
-/// The crates this branch changes against the base, uncommitted and untracked
-/// work included, and every workspace crate depending on them: all of them
-/// are linted, and the changed ones tested without the trybuild and
-/// nested-cargo groups; `--full` runs the rest of CI's lane for them too.
-/// Refuses (exit 2) a `CARGO_TARGET_DIR` outside the checkout: a target
-/// shared between worktrees links stale code (docs/testing.md). A run whose
-/// inputs already passed is skipped, and one superseded while it waited
-/// exits 3 (`crate::verified`).
-pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    let depth = if args.full {
-        check_changed::Depth::Full
-    } else {
-        check_changed::Depth::Fast
-    };
-    check_changed::run(args.run.runner(), &args.base, depth, !args.no_cache)
 }
 
 /// Arguments for `cargo xtask deps`.
@@ -942,7 +887,7 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
 /// its advisories, and `cargo shear --locked` (`--format github` under GitHub
 /// Actions). Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
-/// only in the `wide`, `full` and `extended` lanes.
+/// only in the `wide` and `full` lanes; advisories.yml runs it daily on main.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {
     done(deps::run(args.run.runner(), args.only, args.strict))
 }
@@ -1092,18 +1037,6 @@ pub(crate) fn miri(args: &MiriArgs) -> anyhow::Result<ExitCode> {
     done(args.run.runner().steps(&miri_plan()))
 }
 
-/// Arguments for `cargo xtask bench-compile`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct BenchCompileArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask bench-compile`: compile the benchmarks without running them.
-pub(crate) fn bench_compile(args: &BenchCompileArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().steps(&bench_compile_plan()))
-}
-
 /// Arguments for `cargo xtask demo-snapshots`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct DemoSnapshotsArgs {
@@ -1142,10 +1075,18 @@ pub(crate) struct CleanNestedArgs {
 /// `cargo xtask clean-nested`: remove the nested-cargo test caches under the target directory.
 ///
 /// `cli-template-check/`, `facade-consumer-check/` and `tests/trybuild/`; the
-/// next full `cargo xtask test` rebuilds them (~9 min cold). Run it only while
-/// no test run is using them.
+/// next full `cargo xtask test` rebuilds them (~9 min cold). A test run using
+/// them must not overlap it: run as `cargo heli xtask clean-nested`, which the
+/// repository's `.config/heli.toml` makes wait for every build and test heli
+/// runs in this checkout. Run directly, it says so before deleting anything.
 pub(crate) fn clean_nested(args: &CleanNestedArgs) -> anyhow::Result<ExitCode> {
     let target = target_dir()?;
+    if !args.run.dry_run && std::env::var_os("HELI_RUN").is_none_or(|run| run.is_empty()) {
+        println!(
+            "clean-nested: not run through heli, so nothing waits for a test using these caches; \
+             `cargo heli xtask clean-nested` waits for this checkout's builds first"
+        );
+    }
     let mut found = 0;
     for rel in NESTED_CACHES {
         let mut dir = target.clone();
@@ -1180,7 +1121,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(
@@ -1316,11 +1257,17 @@ mod tests {
             "{}",
             windows[5]
         );
-        // the example link reuses the test build: the same features
+        // the example link reuses the test build: the same packages and features
         assert_eq!(
-            lines(&[build_all_targets().into()]),
+            lines(&[build_all_targets(Host::Linux).into()]),
             [format!(
-                "$ cargo build --workspace --exclude xtask --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES}"
+            )]
+        );
+        assert_eq!(
+            lines(&[build_all_targets(Host::Windows).into()]),
+            [format!(
+                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));

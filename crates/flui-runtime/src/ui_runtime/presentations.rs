@@ -3,12 +3,12 @@
 use super::UiRuntime;
 use crate::presentation::{PresentationState, PresentationWindow};
 use flui_foundation::PresentationId;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_interaction::FocusManager;
 use flui_interaction::GestureBinding;
 use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::rc::Rc;
 #[cfg(test)]
 use std::sync::Arc;
@@ -93,7 +93,7 @@ impl UiRuntime {
     /// Number of presentations this UI runtime currently hosts — for the
     /// isolation test suite (production topology allows any number since
     /// this slice lifted `PresentationForest`'s former ratchet).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_count(&self) -> usize {
         self.presentations.len()
@@ -108,7 +108,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If `id` names no presentation of this UI runtime.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_widgets_for_test(&self, id: PresentationId) -> &flui_view::WidgetsBinding {
         self.presentations
@@ -125,7 +125,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If `id` names no presentation of this UI runtime.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_gestures_for_test(&self, id: PresentationId) -> &GestureBinding {
         self.presentations
@@ -201,8 +201,100 @@ impl UiRuntime {
             }
             self.focus_coordinator.note_focus_gained(presentation_id);
         }
+        self.drag.attach_presentation(
+            presentation_id,
+            presentation.window_id(),
+            presentation.hit_test_handle(),
+        );
         self.presentations.install(presentation);
         presentation_id
+    }
+
+    /// The handle widgets start drag sessions with (ADR-0211). Weak: it does
+    /// not keep the runtime's sessions alive. Widgets reach it through their
+    /// presentation; a test drives sessions with it directly.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn drag_handle(&self) -> flui_interaction::drag::DragHandle {
+        self.drag.handle()
+    }
+
+    /// Enter the OS drag sessions that drags decided on since the last call:
+    /// each is handed to its presentation's window, which may run a modal loop
+    /// inside. A window that cannot start one sends the drag back to its window.
+    ///
+    /// Call at the outermost quiescent point, with no dispatch, borrow or frame
+    /// in progress (ADR-0211 §7). A runtime published to an
+    /// [`OwnerHost`](crate::owner::OwnerHost) needs no call: the host enters them
+    /// when its outermost callback finishes. This is for a runtime driven
+    /// without one.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a start or of a refusal's observer, once every
+    /// session was started or sent back to its window.
+    pub fn enter_pending_os_drags(&self) {
+        let mut first = None;
+        let refused = start_os_drags(self.take_os_drag_starts(), &mut first);
+        let told = catch_unwind(AssertUnwindSafe(|| self.os_drags_refused(refused))).err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(&mut first, told, "OS drag refusal");
+        if let Some(payload) = first {
+            resume_unwind(payload);
+        }
+    }
+
+    /// Whether a drag decided on an OS session the host has not entered yet.
+    pub(crate) fn has_pending_os_drags(&self) -> bool {
+        self.drag.has_pending_os_drags()
+    }
+
+    /// The OS sessions to start, each with its window's drag source. Nothing is
+    /// started here: the caller starts them with the runtime released, so the
+    /// OS loop a start runs can deliver to this runtime.
+    pub(crate) fn take_os_drag_starts(&self) -> Vec<OsDragEntry> {
+        self.enter(|ui_runtime| {
+            ui_runtime
+                .drag
+                .take_pending_os_drags()
+                .into_iter()
+                .map(|pending| OsDragEntry {
+                    source: ui_runtime
+                        .presentations
+                        .get(pending.presentation)
+                        .and_then(|presentation| {
+                            presentation.with_window(|window| window.drag_source())
+                        })
+                        .flatten(),
+                    pending,
+                })
+                .collect()
+        })
+    }
+
+    /// Send the drags whose OS session could not start back to their windows.
+    pub(crate) fn os_drags_refused(&self, refused: Vec<OsDragRefusal>) {
+        if refused.is_empty() {
+            return;
+        }
+        // Each refusal tells its source's observer; one that panics leaves the
+        // rest told, and the first failure is the one that propagates.
+        self.enter(|ui_runtime| {
+            let mut first = None;
+            for (key, error) in refused {
+                let failure = catch_unwind(AssertUnwindSafe(|| {
+                    ui_runtime.drag.os_drag_refused(key, error);
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    failure,
+                    "drag escalation refusal",
+                );
+            }
+            if let Some(payload) = first {
+                resume_unwind(payload);
+            }
+        });
     }
 
     /// [`Self::install_presentation`], with a throwaway test window — for
@@ -225,7 +317,7 @@ impl UiRuntime {
     /// The presentation keyboard input currently routes to
     /// (`FocusCoordinator`) — for the isolation suite proving
     /// `WindowFocus` events move it.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn active_presentation_for_test(&self) -> PresentationId {
         self.focus_coordinator.active()
@@ -237,7 +329,7 @@ impl UiRuntime {
     /// gate exactly the presentation they were addressed to, never a
     /// sibling's. `None` if `id` is not resident (already closed, or a
     /// forged/mixed address).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_hidden_for_test(&self, id: PresentationId) -> Option<bool> {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
@@ -247,7 +339,7 @@ impl UiRuntime {
     /// semantics bounds at — for the dispatcher test proving a `Resized`
     /// event rescales exactly the presentation it was addressed to. `None`
     /// if `id` is not resident.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_device_pixel_ratio_for_test(&self, id: PresentationId) -> Option<f64> {
         self.presentations.get(id).map(|presentation| {
@@ -259,7 +351,7 @@ impl UiRuntime {
     /// Whether `id`'s pipeline holds a semantics tree: something (assistive
     /// technology, or an agent) asked for one and a frame has run since. `None`
     /// if `id` is not resident.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_collects_semantics_for_test(&self, id: PresentationId) -> Option<bool> {
         self.presentations.get(id).map(|presentation| {
@@ -273,7 +365,7 @@ impl UiRuntime {
     /// tests in a sibling module (`runner.rs`) that need to observe the
     /// clock's produce count without reaching into the private
     /// `presentations` field directly.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn primary_produced_count_for_test(&self) -> u64 {
         self.presentations.primary().clock().produced_count()
@@ -296,7 +388,7 @@ impl UiRuntime {
     /// that forgets it. A test that hand-assembles a frame drive passes it the
     /// same way — by parameter, the same reason [`Self::scheduler`] exists
     /// rather than a process-global lookup.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn owner_frame(&self) -> &flui_scheduler::OwnerFrame {
         &self.owner_frame
@@ -440,14 +532,23 @@ impl UiRuntime {
     // Test-only: production input dispatch reads the addressed
     // presentation's own `focus_manager()` (`handle_input_addressed`).
     #[must_use]
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn focus_manager(&self) -> Rc<FocusManager> {
         self.presentations.primary().focus_manager()
     }
 
+    /// Presentation `id`'s external-texture registry, which its raster lane
+    /// drains before each frame renders. `None` for an unknown presentation.
+    #[must_use]
+    pub fn texture_registry(&self, id: PresentationId) -> Option<flui_layer::TextureRegistry> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.texture_registry().clone())
+    }
+
     /// Weak text-input capability for this exact presentation.
     #[must_use]
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
         self.presentations.primary().text_input_handle()
     }
@@ -521,6 +622,7 @@ impl UiRuntime {
             return;
         };
         presentation.clock().set_hidden(hidden);
+        presentation.sync_haptics_visibility();
         if !hidden && !presentation.clock().demand_mask().is_empty() {
             self.wake_frame();
         }
@@ -632,6 +734,19 @@ impl UiRuntime {
                 {
                     ui_runtime.focus_coordinator.note_focus_gained(surviving);
                 }
+                // Its drags end and the offers it was shown are left while its
+                // tree still stands. A receiver that panics does not keep the
+                // presentation from stopping; an earlier failure stays first.
+                let mut failure = failure;
+                let detached = catch_unwind(AssertUnwindSafe(|| {
+                    ui_runtime.drag.detach_presentation(id);
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut failure,
+                    detached,
+                    "drag withdrawal",
+                );
                 ui_runtime.stop_presentation_after_failure(id, failure);
             });
         }))
@@ -683,4 +798,44 @@ impl UiRuntime {
         }
         true
     }
+}
+
+/// One OS drag session to start, with the drag source of the window it starts in.
+pub(crate) struct OsDragEntry {
+    source: Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
+    pending: flui_interaction::drag::PendingOsDrag,
+}
+
+/// A drag whose OS session could not start, to send back to its window.
+pub(crate) type OsDragRefusal = (
+    flui_platform_api::drag::DragSessionKey,
+    flui_platform_api::drag::DragError,
+);
+
+/// Start every one of `entries`, with the runtime released, so the OS loop a
+/// start runs can deliver to it. A window with no drag source, one that
+/// refuses, and one whose start panics each name the drag to send back to its
+/// window; the first panic is kept in `first`, and the starts after it still
+/// run.
+pub(crate) fn start_os_drags(
+    entries: Vec<OsDragEntry>,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+) -> Vec<OsDragRefusal> {
+    let mut refused = Vec::new();
+    for OsDragEntry { source, pending } in entries {
+        let key = pending.key();
+        match catch_unwind(AssertUnwindSafe(|| pending.start(source.as_deref()))) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => refused.push((key, error)),
+            Err(failure) => {
+                refused.push((key, flui_platform_api::drag::DragError::Unavailable));
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    first,
+                    Some(failure),
+                    "OS drag start",
+                );
+            }
+        }
+    }
+    refused
 }

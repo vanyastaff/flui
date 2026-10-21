@@ -10,6 +10,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform_api::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
+use crate::shared::os_version::android::{AndroidApi, TextWeight};
 use crate::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,
@@ -25,11 +26,12 @@ struct Reading {
     long_press: i32,
     text_weight: Option<TextWeightPreference>,
     motion: Option<MotionPreference>,
+    haptics: Option<bool>,
 }
 
 enum ReadScope {
     Geometry,
-    Preferences,
+    Preferences(AndroidApi),
 }
 
 #[expect(
@@ -140,15 +142,8 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             .i()?;
         let text_weight = match scope {
             ReadScope::Geometry => None,
-            ReadScope::Preferences => {
-                let sdk = env
-                    .get_static_field(
-                        jni_str!("android/os/Build$VERSION"),
-                        jni_str!("SDK_INT"),
-                        jni_sig!("I"),
-                    )?
-                    .i()?;
-                crate::shared::android_text_weight::observe(sdk, || {
+            ReadScope::Preferences(api) => {
+                crate::shared::android_text_weight::observe(api.since::<TextWeight>(), || {
                     let configuration = env
                         .call_method(
                             &resources,
@@ -166,9 +161,9 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 })?
             }
         };
-        let duration_scale = match scope {
+        let duration_scale_and_haptics = match scope {
             ReadScope::Geometry => None,
-            ReadScope::Preferences => {
+            ReadScope::Preferences(_) => {
                 let resolver = env
                     .call_method(
                         activity,
@@ -177,6 +172,29 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         &[],
                     )?
                     .l()?;
+                // `Settings.System.HAPTIC_FEEDBACK_ENABLED`: the user's
+                // "touch feedback" switch, 1 when on. Absent reads as on,
+                // the platform default.
+                let haptics_setting = env
+                    .get_static_field(
+                        jni_str!("android/provider/Settings$System"),
+                        jni_str!("HAPTIC_FEEDBACK_ENABLED"),
+                        jni_sig!("Ljava/lang/String;"),
+                    )?
+                    .l()?;
+                let haptics = env
+                    .call_static_method(
+                        jni_str!("android/provider/Settings$System"),
+                        jni_str!("getInt"),
+                        jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;I)I"),
+                        &[
+                            JValue::Object(&resolver),
+                            JValue::Object(&haptics_setting),
+                            JValue::Int(1),
+                        ],
+                    )?
+                    .i()?
+                    != 0;
                 let setting = env
                     .get_static_field(
                         jni_str!("android/provider/Settings$Global"),
@@ -184,7 +202,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         jni_sig!("Ljava/lang/String;"),
                     )?
                     .l()?;
-                Some(f64::from(
+                let duration_scale = f64::from(
                     env.call_static_method(
                         jni_str!("android/provider/Settings$Global"),
                         jni_str!("getFloat"),
@@ -196,7 +214,8 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         ],
                     )?
                     .f()?,
-                ))
+                );
+                Some((duration_scale, haptics))
             }
         };
         Ok((
@@ -208,7 +227,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
-            duration_scale,
+            duration_scale_and_haptics,
         ))
     })
     .and_then(
@@ -221,10 +240,11 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
-            duration_scale,
+            duration_scale_and_haptics,
         )| {
             let ratio =
                 DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
+            let (duration_scale, haptics) = duration_scale_and_haptics.unzip();
             Ok(Reading {
                 ratio,
                 touch_slop,
@@ -237,6 +257,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 motion: duration_scale
                     .map(MotionPreference::from_duration_scale)
                     .transpose()?,
+                haptics,
             })
         },
     )
@@ -271,6 +292,7 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
 /// through the same Activity resource metrics that produced the measurement.
 pub(super) fn scroll_factors(
     app: &AndroidApp,
+    api: AndroidApi,
 ) -> Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
     use crate::shared::android_scroll::{FactorApi, PixelFactors};
     let factors = with_activity(app, |env, activity| {
@@ -293,14 +315,7 @@ pub(super) fn scroll_factors(
         let density = env
             .get_field(&metrics, jni_str!("density"), jni_sig!("F"))?
             .f()?;
-        let sdk = env
-            .get_static_field(
-                jni_str!("android/os/Build$VERSION"),
-                jni_str!("SDK_INT"),
-                jni_sig!("I"),
-            )?
-            .i()?;
-        if FactorApi::for_sdk(sdk) == FactorApi::ThemeAttribute {
+        if FactorApi::for_api(api) == FactorApi::ThemeAttribute {
             let value =
                 env.new_object(jni_str!("android/util/TypedValue"), jni_sig!("()V"), &[])?;
             let theme = env
@@ -400,8 +415,11 @@ fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQ
     .map_err(Into::into)
 }
 
-pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQueryError> {
-    let reading = read(app, ReadScope::Preferences)?;
+pub(super) fn sample(
+    app: &AndroidApp,
+    api: AndroidApi,
+) -> Result<SystemPreferences, PreferenceQueryError> {
+    let reading = read(app, ReadScope::Preferences(api))?;
     let duration = |value: i32| {
         u64::try_from(value)
             .map(Duration::from_millis)
@@ -416,6 +434,9 @@ pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQu
     let mut preferences = SystemPreferences::default().with_gestures(gestures);
     if let Some(motion) = reading.motion {
         preferences = preferences.with_motion(motion);
+    }
+    if let Some(haptics) = reading.haptics {
+        preferences = preferences.with_haptics(haptics);
     }
     Ok(match reading.text_weight {
         Some(weight) => preferences.with_text_weight(weight),

@@ -616,11 +616,6 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    #[cfg(feature = "persist")]
-    application
-        .config
-        .validate()
-        .map_err(|error| AppRunError::Configuration(error.into()))?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
@@ -647,13 +642,13 @@ where
             let mut runtime = slot.borrow_mut();
             runtime.main_ingress = Some(Arc::clone(&ingress));
             runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-            runtime.install_host_storage(&config);
             if let Some(executors) = config.executors.clone() {
                 runtime.install_host_executors(executors);
             }
             runtime.reopen_lifecycles();
             runtime.ensure_execution();
         });
+        super::host::install_host_storage(&config);
         install_exit_policy_hook(config.exit_policy);
         install_platform_quit_hook();
         let reopen = Arc::downgrade(&ingress);
@@ -1272,9 +1267,7 @@ mod tests {
     /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
     /// which reaches `host::build_ui_runtime` as every runner site does,
     /// without a GPU.
-    #[cfg(feature = "persist")]
     #[test]
-    #[ignore = "contract: the host gives a configured storage directory to every ui_runtime it builds"]
     fn a_configured_storage_dir_reaches_lifecycle_context() {
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);

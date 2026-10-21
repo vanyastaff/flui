@@ -1,7 +1,7 @@
-error[E0432]: unresolved import `flui_interaction::arena::run_pointer_lifecycle`
+error[E0432]: unresolved import `flui_interaction::gesture::run_pointer_lifecycle`
  --> tests/compile_fail/after_route_lifecycle_kernel_is_unavailable.rs:1:5
   |
-1 | use flui_interaction::arena::run_pointer_lifecycle;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^---------------------
-  |                              |
-  |                              no `run_pointer_lifecycle` in `arena`
+1 | use flui_interaction::gesture::run_pointer_lifecycle;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------------
+  |                                |
+  |                                no `run_pointer_lifecycle` in `gesture`

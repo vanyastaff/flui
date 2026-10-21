@@ -5,7 +5,6 @@ use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
 use flui_scheduler::SchedulerPhase;
-use flui_semantics::SemanticsActionRequest;
 use flui_widgets::NavigatorCommand;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -45,7 +44,7 @@ pub enum CommandSendError {
 ///
 /// Three addressing classes, by design, not oversight:
 ///
-/// - **Presentation-scoped** commands ([`Self::SemanticsAction`]) carry an
+/// - **Presentation-scoped** commands ([`Self::Accessibility`]) carry an
 ///   explicit `presentation_id` stamp and are validated against the live
 ///   presentation at drain time, because the UI runtime's inbox outlives any one
 ///   presentation incarnation within it (the eventual element-forest case)
@@ -65,14 +64,16 @@ pub enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     #[cfg(feature = "hot-reload")]
     HotReload(crate::reload::ReloadTier),
-    /// Resolve and invoke an accessibility action on the owner thread,
-    /// addressed to the exact presentation that was live when the sender
-    /// stamped it.
-    SemanticsAction {
-        /// The presentation this action was stamped for.
+    /// [`HostInput::Accessibility`](crate::HostInput::Accessibility) from the
+    /// platform adapter's thread, or dispatched on the owner thread, addressed
+    /// to the exact presentation that was live when the sender stamped it and
+    /// unwrapped on the owner thread at the next Idle drain: every assistive
+    /// request takes this path (ADR-0207, amendment).
+    Accessibility {
+        /// The presentation this request was stamped for.
         presentation_id: PresentationId,
-        /// The stable node identity and action to resolve.
-        request: SemanticsActionRequest,
+        /// The request, decoded on the owner thread.
+        request: accesskit::ActionRequest,
     },
     /// Read the addressed presentation's semantics tree as wire nodes, for
     /// a [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
@@ -130,11 +131,11 @@ impl std::fmt::Debug for UiCommand {
             UiCommand::HotReload(tier) => {
                 f.debug_tuple("UiCommand::HotReload").field(tier).finish()
             }
-            UiCommand::SemanticsAction {
+            UiCommand::Accessibility {
                 presentation_id,
                 request,
             } => f
-                .debug_struct("UiCommand::SemanticsAction")
+                .debug_struct("UiCommand::Accessibility")
                 .field("presentation_id", presentation_id)
                 .field("request", request)
                 .finish(),
@@ -295,22 +296,23 @@ impl UiCommandSender {
         self.send(UiCommand::HotReload(tier))
     }
 
-    /// Enqueue an accessibility action for owner-local semantics resolution.
+    /// Enqueue an assistive-technology request as host input for owner-local
+    /// semantics resolution.
     ///
     /// The sender itself selects the target ui_runtime/presentation; the request
     /// carries only the stable node identity exported by that presentation's
     /// snapshot. Delivery is bounded, FIFO, and committed only at the next
-    /// Idle drain.
+    /// Idle drain, where it is decoded.
     ///
     /// # Errors
     ///
     /// [`CommandSendError::ChannelFull`] under backpressure,
     /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
-    pub(crate) fn send_semantics_action(
+    pub(crate) fn send_accessibility(
         &self,
-        request: SemanticsActionRequest,
+        request: accesskit::ActionRequest,
     ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::SemanticsAction {
+        self.send(UiCommand::Accessibility {
             presentation_id: self.presentation_id,
             request,
         })
@@ -375,7 +377,7 @@ impl UiCommandSender {
     /// and a request against a dropped runtime is a harmless no-op (the wake
     /// has no loop left to wake).
     // Test-only: the typed redraw capability is not yet vended externally.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn request_redraw(&self) {
         // `swap` (not store) so only the first request in a burst pays the
         // wake; a pending frame absorbs repeated wakes anyway, this just
@@ -563,41 +565,30 @@ impl UiRuntime {
                     }
                     report.invoked += 1;
                 }
-                UiCommand::SemanticsAction {
+                UiCommand::Accessibility {
                     presentation_id,
                     request,
                 } => {
-                    // Forest-membership check (issue #555's addressed-routing slice), not
-                    // primary-only equality: a presentation generation this
-                    // ui_runtime no longer hosts -- closed since the action was
-                    // stamped, or a genuinely different (non-primary)
-                    // presentation among several -- is a traced drop either
-                    // way, never delivered to a sibling.
-                    let Some(presentation) = self.presentations.get(presentation_id) else {
-                        tracing::trace!(
-                            stamped_presentation_id = presentation_id.as_u64(),
-                            "dropping semantics action stamped for a presentation this ui_runtime no \
-                             longer hosts"
+                    if self.presentations.get(presentation_id).is_none() {
+                        // Accepted earlier, but the presentation closed first:
+                        // the request was never applied.
+                        tracing::warn!(
+                            { flui_foundation::diagnostics::PRESENTATION_ID } =
+                                presentation_id.as_u64(),
+                            action = ?request.action,
+                            "dropping an accepted accessibility request: its presentation closed before the drain"
                         );
                         report.dropped_stale += 1;
                         continue;
-                    };
-                    match presentation.dispatch_semantics_action(request) {
-                        Ok(()) => {
-                            report.invoked += 1;
-                        }
-                        Err(error) => {
-                            // Actions for stale views/nodes are deliberately
-                            // ignored because screen readers may lag behind
-                            // the latest semantics update.
-                            tracing::trace!(
-                                { flui_foundation::diagnostics::PRESENTATION_ID } =
-                                    presentation_id.as_u64(),
-                                ?error,
-                                "dropping semantics action against a stale snapshot"
-                            );
-                            report.dropped_stale += 1;
-                        }
+                    }
+                    // A panicking handler keeps the accepted tail live, as a
+                    // failed reassemble does, before resuming.
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        self.dispatch_accessibility(presentation_id, &request)
+                    })) {
+                        Ok(true) => report.invoked += 1,
+                        Ok(false) => report.dropped_stale += 1,
+                        Err(payload) => self.rearm_after_command_panic(payload),
                     }
                 }
                 UiCommand::Motion {

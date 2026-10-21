@@ -1,8 +1,17 @@
 //! Headless platform implementation for testing
 
+mod display;
+mod drag;
 mod platform;
 
+mod window_policy;
+
+pub use drag::HeadlessDragAndDrop;
+
+pub use display::{DisplayChange, DisplayChangeError, DisplaySpec};
 pub use platform::{
-    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
+    HeadlessDisplayControls, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
+pub use window_policy::HeadlessWindowPolicy;

@@ -17,6 +17,8 @@
 //! tighter by design (no fill or outline to visually separate from
 //! surrounding content).
 
+use std::sync::Arc;
+
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 use flui_sdk::{
@@ -45,6 +47,7 @@ use crate::theme::Theme;
 pub struct TextButton {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
+    identifier: Option<Arc<str>>,
     child: BoxedView,
 }
 
@@ -64,7 +67,8 @@ impl TextButton {
         Self {
             on_pressed: None,
             style: None,
-            child: BoxedView(Box::new(child.into_view())),
+            identifier: None,
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -86,6 +90,14 @@ impl TextButton {
         self.style = Some(style);
         self
     }
+
+    /// Names the button's node for tests and automation (ADR-0240): exported as
+    /// UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
 }
 
 impl StatelessView for TextButton {
@@ -105,7 +117,7 @@ impl StatelessView for TextButton {
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }
-        core
+        core.identifier(self.identifier.clone())
     }
 }
 

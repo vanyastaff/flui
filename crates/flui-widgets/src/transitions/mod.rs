@@ -15,7 +15,8 @@ mod scale_transition;
 mod shimmer_mask_transition;
 mod size_transition;
 mod slide_transition;
-mod transform_view;
+mod sliver_fade_transition;
+pub(crate) mod transform_view;
 
 pub use align_transition::{AlignTransition, AlignTransitionState};
 pub use animated_builder::{AnimatedBuilder, AnimatedBuilderState};
@@ -27,3 +28,4 @@ pub use scale_transition::{ScaleTransition, ScaleTransitionState};
 pub(crate) use shimmer_mask_transition::ShimmerMaskTransition;
 pub use size_transition::{SizeTransition, SizeTransitionState};
 pub use slide_transition::{SlideTransition, SlideTransitionState};
+pub use sliver_fade_transition::{SliverFadeTransition, SliverFadeTransitionState};

@@ -1,23 +1,23 @@
 # flui-animation / catalog — design
 
-- **Статус:** утверждён (см. [requirements.md](requirements.md))
+- **Статус:** реализован; долговременные решения перенесены в ADR и `ARCHITECTURE.md` (таблица ниже), спек остаётся историей. См. [requirements.md](requirements.md)
 - **Дата:** 2026-10-13
 - **База:** `main` 4628368ff.
 
 ## Решения
 
-| # | Решение | Почему |
+| # | Решение | Где записано после слияния |
 |---|---|---|
-| C1 | Один спек на всё: маршруты, рябь, неявные и явные переходы, списки, эффекты, скелетоны, Material-переходы контейнеров | Каталог закрывает самые частые сценарии одним набором работ |
-| C2 | Общее движение — модули `flui-widgets`; Material — модуль `motion` в `flui-material`; новых крейтов нет | «Layers, not micro-crates» |
-| C3/Q8 | Тонкие публичные структуры, общий `MotionBuilder` и приватный помощник `ImplicitMotion<T>` для жизненного цикла одного значения | Rustdoc и ошибки показывают `AnimatedOpacity`, а не `Implicit<Opacity>`; так устроены `animate*AsState` в Compose |
-| C4/Q9 | Общий примитив `Effect`, две композиции: обратимый `Transition` (слоты) и `Effects` (шкала) | Появлению/исчезновению нужна обратимость, хореографии — `then`; одна алгебра не даёт обоих |
-| C5/Q11 | Хук переходов страниц в `flui-widgets`, карта по платформе в `flui-material` | Механизм ниже, политика выше; `flui-cupertino` подключает свой переход через тот же хук |
-| C6/Q14 | Рябь принадлежит `InkWell`, без реестра InkFeature | Модель `Indication` в Compose; сохраняет «нет утечки между виджетами» |
-| C7/Q15 | Контролы анимируются на ядре C3; `TabController::position()` выводится, без обратной записи | Одна истина вместо `offset`/`indexIsChanging` Flutter |
-| Q10 | `AnimatedList` только декларативный, призраки, FLIP | Императивный `insertItem` даёт класс ошибок рассинхронизации индексов |
-| Q12 | `OpenContainer` отдельно от `HeroFlight`; общий только `pub(crate)` помощник замера и места-заглушки | У морфа контейнера нет сопоставления тегов и divert |
-| Q13 | `Skeleton` красит свой градиент в координатах `Shimmer`; эффект поверх содержимого — `ShaderMask` | Одна полоса на все скелетоны без offscreen-группы; движок уже применяет `ShaderMask` |
+| C1 | Один спек на всё: маршруты, рябь, неявные и явные переходы, списки, эффекты, скелетоны, Material-переходы контейнеров | объём работ, не долговременное решение |
+| C2 | Общее движение — модули `flui-widgets`; Material — модули `flui-material`; новых крейтов нет | `crates/flui-widgets/ARCHITECTURE.md`, «Module layers» |
+| C3/Q8 | Тонкие публичные структуры, общий `MotionBuilder`, приватный `ImplicitMotion<T>` | `crates/flui-widgets/ARCHITECTURE.md`, «Implicit widgets are named types over one motion builder»; `crates/flui-animation/docs/ARCHITECTURE.md`, «Changing one half of a motion spec keeps the other» |
+| C4/Q9 | Общий примитив `Effect`, две композиции: `Transition` и `Effects` | `crates/flui-widgets/ARCHITECTURE.md`, «One effect primitive, two compositions» |
+| C5/Q11 | Хук переходов страниц в `flui-widgets`, карта по платформе в `flui-material` | ADR-0221; `packages/flui-material/ARCHITECTURE.md`, «Page transitions are a per-platform theme map…»; `packages/flui-cupertino/ARCHITECTURE.md`, «The page route plays the shared parallax slide» |
+| C6/Q14 | Рябь принадлежит `InkWell`, без реестра InkFeature | `packages/flui-material/ARCHITECTURE.md`, «`InkWell` owns its ripple» |
+| C7/Q15 | `TabController::position()` выводится, без обратной записи | `packages/flui-material/ARCHITECTURE.md`, «Tab position is derived from one source» |
+| Q10 | `AnimatedList` только декларативный, призраки, FLIP | `crates/flui-widgets/ARCHITECTURE.md`, «Animated lists diff by key…» |
+| Q12 | `OpenContainer` отдельно от `HeroFlight`; общий только помощник места | `packages/flui-material/ARCHITECTURE.md`, «`OpenContainer` morphs inside its page route…»; `crates/flui-widgets/ARCHITECTURE.md`, «A flight seat is shared; a flight is not» |
+| Q13 | `Skeleton` красит свою долю полосы `Shimmer`; эффект поверх содержимого — `ShaderMask` | `crates/flui-objects/ARCHITECTURE.md`, «Skeletons paint their own share…»; `crates/flui-widgets/ARCHITECTURE.md`, «A shimmer publishes its phase…» |
 
 Первичные источники каждого решения (Compose, SwiftUI, Flutter `animations`, flutter_animate,
 токены M3) перечислены в issue спека; значения длительностей и кривых ниже взяты

@@ -105,11 +105,11 @@ pub(crate) fn wrap_builder_in_repaint_boundaries(
 /// because a lazy sliver child must own a render node and a stateless keyed
 /// wrapper has none — see `RepaintBoundary::salted_child_key`.
 pub(crate) fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
-    BoxedView(Box::new(
+    BoxedView::new(
         crate::paint::RepaintBoundary::new()
             .child(child)
             .salting_child_key(),
-    ))
+    )
 }
 
 impl fmt::Debug for SliverChildBuilderDelegate {

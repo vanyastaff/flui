@@ -1,21 +1,23 @@
 //! Structural and diagnostic inspection of a [`LayerTree`] for tests.
 //!
-//! These free functions are the single source of truth for layer-tree
-//! introspection — `flui-rendering`'s render harness re-exports them rather
-//! than reimplementing the walk. Every walk is `LayerTree::descendants`
+//! The tree describes itself as an `InspectTree`, which a typed snapshot
+//! reads; these free functions are its shortcuts for tests, named by layer
+//! kind as the tree names it. `flui-rendering`'s render harness re-exports
+//! them rather than reimplementing the walk. Every walk is `LayerTree::descendants`
 //! (pre-order, siblings in paint order, explicit stack), so a deep chain
 //! costs no Rust stack.
 
 use flui_foundation::geometry::{Matrix4, RRect, Rect};
+use flui_foundation::inspect::Inspect;
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
 use flui_painting::paint::Path;
 
 use crate::{Layer, LayerTree};
 
-/// The variant name of `layer` — see [`Layer::kind_name`].
+/// The variant name of `layer`, its [`Inspect`] kind.
 #[must_use]
 pub fn layer_kind(layer: &Layer) -> &'static str {
-    layer.kind_name()
+    layer.kind()
 }
 
 /// Every layer in pre-order with its depth.
@@ -37,14 +39,14 @@ fn find_first<T>(tree: &LayerTree, mut pick: impl FnMut(&Layer) -> Option<T>) ->
 /// Variant names in pre-order: `["Offset", "ClipRect", "Picture", …]`.
 #[must_use]
 pub fn structure(tree: &LayerTree) -> Vec<&'static str> {
-    walk(tree).map(|(_, layer)| layer.kind_name()).collect()
+    walk(tree).map(|(_, layer)| layer.kind()).collect()
 }
 
 /// Variant names with their depth, in pre-order.
 #[must_use]
 pub fn structure_with_depth(tree: &LayerTree) -> Vec<(usize, &'static str)> {
     walk(tree)
-        .map(|(depth, layer)| (depth, layer.kind_name()))
+        .map(|(depth, layer)| (depth, layer.kind()))
         .collect()
 }
 

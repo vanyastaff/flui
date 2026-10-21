@@ -172,9 +172,9 @@ pub(crate) fn separators_are_not_members_of_the_set() {
 }
 
 /// An unknown set inside a known one: the consumer would pair an inner
-/// position with the nearest size above it, "item 12 of 2", so the inner rows
-/// declare none.
-pub(crate) fn an_unknown_set_inside_a_known_one_declares_no_positions() {
+/// position with the nearest size above it, "item 12 of 2", so the outer
+/// total is withheld and every row keeps its position ("item 12").
+pub(crate) fn an_unknown_set_inside_a_known_one_withholds_the_outer_size() {
     let outer = ListView::builder(2, 192.0, |outer| {
         (outer < 2).then(|| {
             Semantics::new()
@@ -199,15 +199,15 @@ pub(crate) fn an_unknown_set_inside_a_known_one_declares_no_positions() {
     let outer_rows: Vec<_> = rows.iter().filter(|r| r.0.starts_with("outer")).collect();
     assert_eq!(
         outer_rows.iter().map(|r| (r.1, r.2)).collect::<Vec<_>>(),
-        vec![(Some(0), Some(2)), (Some(1), Some(2))],
+        vec![(Some(0), None), (Some(1), None)],
         "{}",
         tree.describe()
     );
     let inner_rows: Vec<_> = rows.iter().filter(|r| r.0.starts_with("inner")).collect();
     assert!(!inner_rows.is_empty(), "the inner rows are built: {rows:?}");
     assert!(
-        inner_rows.iter().all(|r| r.1.is_none()),
-        "an inner row of unknown size announces no position under a known outer set: {inner_rows:?}"
+        inner_rows.iter().all(|r| r.1.is_some() && r.2.is_none()),
+        "an inner row of unknown size keeps its position and reads no size: {inner_rows:?}"
     );
 }
 
@@ -308,8 +308,8 @@ pub(crate) fn two_sets_in_one_scroll_view_do_not_share_a_container() {
 }
 
 /// A row a caller numbers itself keeps its number: the stamped position is a
-/// fallback for rows that declare none. The container's size is still the
-/// delegate's.
+/// fallback for rows that declare none. Its numbering is another set's than the
+/// delegate's, so the delegate's size is withheld rather than paired with it.
 pub(crate) fn an_explicitly_indexed_row_keeps_its_own_position() {
     let builder: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
         (index < 3).then(|| {
@@ -328,9 +328,9 @@ pub(crate) fn an_explicitly_indexed_row_keeps_its_own_position() {
     assert_eq!(
         announced(&tree),
         vec![
-            ("row0".to_owned(), Some(2), Some(3)),
-            ("row1".to_owned(), Some(1), Some(3)),
-            ("row2".to_owned(), Some(0), Some(3)),
+            ("row0".to_owned(), Some(2), None),
+            ("row1".to_owned(), Some(1), None),
+            ("row2".to_owned(), Some(0), None),
         ],
         "{}",
         tree.describe()
@@ -550,8 +550,9 @@ pub(crate) fn a_position_beyond_its_set_is_not_announced() {
 }
 
 /// A set a caller declares unknown inside one declared known is held to the
-/// same rule as a lazy one: the consumer walks past it to the outer size.
-pub(crate) fn a_declared_unknown_set_inside_a_known_one_announces_no_positions() {
+/// same rule as a lazy one: the consumer would walk past it to the outer size,
+/// so that size is withheld and the member keeps its position.
+pub(crate) fn a_declared_unknown_set_inside_a_known_one_withholds_the_outer_size() {
     let inner = Semantics::new()
         .container(true)
         .role(SemanticsRole::List)
@@ -573,9 +574,10 @@ pub(crate) fn a_declared_unknown_set_inside_a_known_one_announces_no_positions()
     laid.tick();
     let tree = tree(&laid);
 
+    let member = find(&tree, "unsized member");
     assert_eq!(
-        find(&tree, "unsized member").position_in_set(),
-        None,
+        (member.position_in_set(), member.size_of_containing_set()),
+        (Some(0), None),
         "{}",
         tree.describe()
     );
@@ -670,6 +672,72 @@ pub(crate) fn a_row_of_several_controls_is_one_member() {
     }
 }
 
+/// A list's only member is a node of its own below the container, not folded
+/// into it: the consumer reads the size from the member's ancestors, so a
+/// member merged into its container would read no "of 1".
+pub(crate) fn a_lone_member_sits_below_its_container() {
+    // A label and no boundary of its own, a plain `Text` say: only the
+    // container's directive keeps it from being absorbed by the list.
+    let only: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
+        (index < 1).then(|| {
+            Semantics::new()
+                .label("only0")
+                .child(SizedBox::new(200.0, 48.0))
+                .boxed()
+        })
+    });
+    let laid = laid_out(vec![SliverList::new(1, 48.0, only).boxed()]);
+    let tree = tree(&laid);
+
+    assert_eq!(
+        announced(&tree),
+        vec![("only0".to_owned(), Some(0), Some(1))],
+        "{}",
+        tree.describe()
+    );
+    let lists = tree.find_all(Role::List);
+    assert_eq!(lists.len(), 1, "{}", tree.describe());
+    assert_eq!(
+        lists[0].label(),
+        None,
+        "the member is not merged into its container"
+    );
+}
+
+/// An explicit position anywhere in an item is that item's member, a
+/// descendant that forms its own node included: the row above it is not
+/// stamped as a second member of the same item.
+pub(crate) fn an_explicit_position_in_a_descendant_suppresses_the_stamp() {
+    let builder: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
+        (index < 2).then(|| {
+            Semantics::new()
+                .container(true)
+                .label(format!("row{index}"))
+                .child(
+                    Semantics::new()
+                        .container(true)
+                        .label(format!("inner{index}"))
+                        .child(IndexedSemantics::new(5 + index).child(SizedBox::new(200.0, 48.0))),
+                )
+                .boxed()
+        })
+    });
+    let laid = laid_out(vec![SliverList::new(2, 48.0, builder).boxed()]);
+    let tree = tree(&laid);
+
+    assert_eq!(
+        announced(&tree),
+        vec![
+            ("row0".to_owned(), None, None),
+            ("inner0".to_owned(), Some(5), None),
+            ("row1".to_owned(), None, None),
+            ("inner1".to_owned(), Some(6), None),
+        ],
+        "{}",
+        tree.describe()
+    );
+}
+
 /// A cell, a span or a row outside the table it sits in would read "row 5 of
 /// 3": it is not published, and the cells inside keep theirs.
 pub(crate) fn a_cell_beyond_its_table_is_not_announced() {
@@ -717,8 +785,8 @@ pub(crate) fn a_cell_beyond_its_table_is_not_announced() {
 }
 
 /// A size the adapters cannot convert is not published, so the set it sizes
-/// is, to the consumer, one of no size: positions inside it must be held back
-/// like those of an unknown set, or they would read the outer total.
+/// is, to the consumer, one of no size: it is held to the rule of an unknown
+/// set, or its members would read the outer total.
 pub(crate) fn a_size_the_adapters_cannot_convert_counts_as_unknown() {
     let inner = Semantics::new()
         .container(true)
@@ -741,9 +809,10 @@ pub(crate) fn a_size_the_adapters_cannot_convert_counts_as_unknown() {
     laid.tick();
     let tree = tree(&laid);
 
+    let member = find(&tree, "huge member");
     assert_eq!(
-        find(&tree, "huge member").position_in_set(),
-        None,
+        (member.position_in_set(), member.size_of_containing_set()),
+        (Some(10), None),
         "{}",
         tree.describe()
     );

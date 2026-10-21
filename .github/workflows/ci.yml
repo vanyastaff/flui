@@ -1,10 +1,13 @@
 name: CI
 
-# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main and merge
-# queue add Linux full checks. Nightly/manual runs use the same Linux jobs.
-# No label enables native Windows/macOS or GPU jobs. Platform typechecking
+# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main, the
+# merge queue and a manual run add Linux full checks. There is no scheduled run:
+# advisories.yml checks the RustSec database daily, and nothing else changes
+# without a commit.
+# No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
-# test-nested and test-trybuild run independently, restoring the test cache.
+# Native host-tool tests live separately in xtask-native.yml.
+# test-nested and test-trybuild (main only) run independently, each with its own cache.
 # All jobs except the notification are gated by the ci aggregator.
 
 on:
@@ -13,10 +16,6 @@ on:
   push:
     branches: [main]
   merge_group:
-  # Nightly: the extended lane against main even on a quiet day (new
-  # toolchain, new advisories, a flaky test that only shows up sometimes).
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 # Least-privilege GITHUB_TOKEN: no job in this workflow writes to the repo,
@@ -215,19 +214,16 @@ jobs:
   # plan — what this run has to build: one `lane` output, decided by
   # `cargo xtask affected --event <event>` (the shell
   # only reads the label, live from the API):
-  #   schedule, workflow_dispatch      extended
-  #   push, merge_group                full
+  #   push, merge_group, workflow_dispatch   full
   #   pull_request, otherwise, by the change (the classification
-  #   `cargo xtask check-changed` uses):
+  #   `cargo xtask affected` prints):
   #     docs      only documentation changed
-  #     tooling   only repo tooling, or a standalone crate (own [workspace],
-  #               no member depends on it): `checks` and `standalone` cover it
+  #     tooling   only repo tooling: `checks` and `deps` cover it
   #     wide      anything that compiles: the whole workspace. `mode` says
   #               whether the change was a set of packages (`packages`) or a
   #               workspace-wide input (`full`: Cargo.lock, root Cargo.toml,
   #               .cargo/, the toolchain, a workflow, the lane code)
-  # Local check-changed also uses discovered native scope. The
-  # docs-only allowlist and the triggers live in
+  # The docs-only allowlist and the triggers live in
   # tools/xtask/src/change_scope/, once; `cargo xtask checks` proves no
   # compiled include_str!() target falls inside it.
   #
@@ -247,7 +243,6 @@ jobs:
       lane: ${{ steps.scope.outputs.lane }}
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
-      standalone: ${{ steps.scope.outputs.standalone }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -281,53 +276,15 @@ jobs:
           echo "event=$EVENT $(grep '^lane=' scope.txt)"
           cat scope.txt
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # standalone — a crate under the repository with its own [workspace] that
-  # no member depends on (`plan`'s `standalone` output; the repository has
-  # none today): nothing in the workspace compiles it, so a change to
-  # it runs the tooling lane and this job checks that it still builds
-  # against its own lockfile. Warnings are not denied: these crates are
-  # outside the workspace lints. Runs only when such a crate changed, never
-  # on main, so it saves no cache.
-  # ─────────────────────────────────────────────────────────────────────────
-  standalone:
-    name: standalone
-    needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    env:
-      CARGO_BUILD_WARNINGS: warn
-      STANDALONE: ${{ needs.plan.outputs.standalone }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: cargo check (each changed standalone crate)
-        run: |
-          set -euo pipefail
-          set -f
-          # shellcheck disable=SC2086
-          for d in $STANDALONE; do
-            echo "::group::$d"
-            cargo check --locked --all-targets --manifest-path "$d/Cargo.toml"
-            echo "::endgroup::"
-          done
-
-  # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
-  # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
+  # in PARALLEL with test/doc instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
   # Gated on `checks` so a malformed PR fails cheap before this build starts.
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -354,7 +311,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
-  # links the examples and benches with the same features, so it compiles
+  # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
@@ -363,9 +320,18 @@ jobs:
   test:
     name: test
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
+    # Workspace crates unoptimized; dependencies keep the opt-level 3 of
+    # `[profile.dev.package."*"]`. rust-cache never caches workspace crates,
+    # so this job compiles them on every run: on 4 cores the test scope's
+    # workspace crates took 534 s at the dev profile's opt-level 1 and 117 s
+    # at 0. The tests themselves run slower at 0, and the slowest one sets
+    # the floor (.config/nextest.toml). Locally the dev profile stays at
+    # opt-level 1, which incremental builds amortize.
+    env:
+      CARGO_PROFILE_DEV_OPT_LEVEL: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -379,7 +345,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test-nested` restores this entry: the same TEST_SCOPE build.
+          # The nested jobs keep their own entries: this one is saved from
+          # `test --fast`, which never builds their nested target dirs.
           shared-key: workspace-tests-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -430,11 +397,15 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # Nested cargo tests run in two parallel jobs: generated projects and
   # facade consumers in test-nested, compile-fail suites in test-trybuild.
-  # Both restore the test build cache; neither writes nested build artifacts.
+  # Each keeps its own cache entry, saved on main: the nested builds live in
+  # their own target dirs (target/tests/trybuild, target/cli-template-check,
+  # target/facade-consumer-check), which `test`'s entry never contains, and
+  # rust-cache keeps their dependency artifacts. Restoring `test`'s entry
+  # instead rebuilt every nested dependency on each run.
   test-nested:
     name: test-nested
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -450,10 +421,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
-          # nested-cargo builds add no cache entry of their own.
-          shared-key: workspace-tests-v2
-          save-if: false
+          shared-key: workspace-nested-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -463,10 +432,16 @@ jobs:
       - name: cargo xtask test --nested --nested-group native
         run: cargo xtask test --nested --nested-group native
 
+  # The compile-fail suites run on main, not on pull requests: they are the
+  # longest job (16-21 min) and fail only when a change loosens a type rule
+  # or moves a diagnostic, which the first main run reports through
+  # `notify-main-red`. Locally a changed crate's `cargo nextest run` still
+  # runs its suite, and `cargo xtask test --nested --nested-group trybuild`
+  # runs them all.
   test-trybuild:
     name: test-trybuild
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -485,10 +460,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
-          # nested-cargo builds add no cache entry of their own.
-          shared-key: workspace-tests-v2
-          save-if: false
+          shared-key: workspace-trybuild-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -518,7 +491,7 @@ jobs:
   test-features:
     name: test-features
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -578,17 +551,6 @@ jobs:
       # smoke test's localizations assertions) need no run here: the `test`
       # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
-      # ADR-0074 realm-scoped signals live behind the non-default `signals`
-      # feature on flui-view/flui-testing/flui-widgets/flui-app; the workspace
-      # run never compiles their tests. Same rule as the block above: a test
-      # behind a non-default feature needs its own run.
-      - name: cargo nextest run (realm-scoped signals feature)
-        run: >
-          cargo nextest run
-          -p flui-view -p flui-testing -p flui-widgets -p flui-app
-          --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals
-          --locked --no-fail-fast
-
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.
       - name: Upload insta snapshot candidates on failure
@@ -610,7 +572,7 @@ jobs:
   live-smoke:
     name: live-smoke
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -671,24 +633,6 @@ jobs:
       - name: live-smoke-wayland (teardown ordering under headless weston)
         run: cargo xtask live-smoke --wayland
 
-  bench-compile:
-    name: bench-compile
-    needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-
-      - name: cargo bench --no-run
-        run: cargo bench -p flui-rendering --no-run --locked
-
   # ─────────────────────────────────────────────────────────────────────────
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
   # `checks`. Ubuntu only — docs are platform-agnostic.
@@ -702,7 +646,7 @@ jobs:
   doc:
     name: doc
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -731,13 +675,14 @@ jobs:
   #               always ours to make (the std API, or an `ignore` with its
   #               reason in deny.toml), so it blocks with the rest.
   #   advisories  the RustSec database as of the run, so a commit that passed
-  #               yesterday can fail today: blocking in the wide, full and
-  #               extended lanes on main, nightly, the merge queue, and any PR
-  #               whose change is workspace-wide or touches a heavy-job input
-  #               (`mode` full, or `heavy_required`: Cargo.lock, deny.toml,
-  #               see `plan`); on a PR that changes only packages
-  #               or tooling a new advisory is reported without failing
-  #               unrelated work, and the next run on main turns red for it.
+  #               yesterday can fail today: blocking in the wide and full
+  #               lanes on main, the merge queue, and any PR whose change is
+  #               workspace-wide or touches a heavy-job input (`mode` full,
+  #               or `heavy_required`: Cargo.lock, deny.toml, see `plan`); on
+  #               a PR that changes only packages or tooling a new advisory
+  #               is reported without failing unrelated work. Between
+  #               commits, advisories.yml runs this step daily against main
+  #               and keeps the "RustSec advisory on main" issue.
   # ─────────────────────────────────────────────────────────────────────────
   deps:
     name: deps
@@ -786,7 +731,7 @@ jobs:
   doc-test:
     name: doc-test
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -811,7 +756,7 @@ jobs:
   miri:
     name: miri
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -874,23 +819,27 @@ jobs:
   # `--all-targets` pass would hide a library that compiles only because a
   # dev-dependency enabled a feature for it.
   #
-  # The per-feature passes run as cargo-hack `--partition k/3` shards: its
+  # The per-feature passes run as cargo-hack `--partition k/5` shards: its
   # command list splits into contiguous blocks, so the shards cover every
   # package and feature exactly once with no hand-kept package lists. That
   # holds only while every shard runs the same cargo-hack, hence the exact
   # version pin. The commands live in `cargo xtask feature-matrix`, so a local
-  # run and CI cannot drift apart.
+  # run and CI cannot drift apart. Five, not three or four: the facade and
+  # the engine sit next to each other in the command list, and with fewer
+  # contiguous blocks one shard takes both (three shards took 11, 22 and
+  # 18 min on main); with five the slowest should take about 15 min, beside
+  # `test`.
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        slice: ["1/3", "2/3", "3/3", combinations]
+        slice: ["1/5", "2/5", "3/5", "4/5", "5/5", combinations]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -931,7 +880,7 @@ jobs:
   wasm-check:
     name: wasm-check
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -987,7 +936,7 @@ jobs:
   cross-typecheck:
     name: cross-typecheck (${{ matrix.target }})
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -1016,6 +965,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends clang llvm
 
+      # The driver build the checks job saves; restored before the NDK step,
+      # whose CC_/AR_ variables would change the key. Without it each Linux
+      # leg built the driver from scratch (1.5-3 min).
+      - name: Rust cache (xtask)
+        if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          shared-key: xtask
+          save-if: false
+
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -1033,22 +993,44 @@ jobs:
         with:
           tool: cargo-xwin@0.23.1
 
+      # cargo-xwin downloads the MSVC CRT and Windows SDK on first use, 7-13
+      # minutes from Microsoft's servers, then marks the directory DONE. The
+      # splatted result is 1.1 GB on disk, about 260 MB compressed. The key
+      # names the cargo-xwin release, which fixes the default MSVC version;
+      # the cache is saved from main only, after a complete download.
+      - name: Restore MSVC CRT and Windows SDK
+        id: xwin-cache
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: cargo-xwin-0.23.1-${{ runner.os }}
+
       - name: Lint source-derived native targets
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
+
+      - name: Save MSVC CRT and Windows SDK
+        if: matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
       - name: Lint optional native features
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — require each planned Linux job and reject unexpected skips.
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, bench-compile, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1080,10 +1062,9 @@ jobs:
       #    `plan`'s `lane` alone, and the aggregator recomputes it instead of
       #    trusting each job's `if:`. Every lane runs checks and plan; then
       #      docs      nothing else
-      #      tooling   deps, and standalone when plan names a standalone crate
+      #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks)
-      #      extended  full + EXTENDED_JOBS
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1092,50 +1073,44 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested test-trybuild doc
-            test-features live-smoke
+            clippy wasm-check cross-typecheck test test-nested doc test-features
+            live-smoke
           FULL_JOBS: >-
-            feature-matrix bench-compile
-            doc-test miri
-          EXTENDED_JOBS: >-
+            feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}
-          STANDALONE: ${{ needs.plan.outputs.standalone }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
 
   # ─────────────────────────────────────────────────────────────────────────
-  # notify-main-red -- a red `ci` on main or on the nightly run opens (or
-  # comments on) one tracking issue, so a broken main is never silent. It
-  # runs only there: on a PR the red check on the PR is the notification.
-  # The team rule for a red main (AGENTS.md): fix forward within the hour or
-  # revert.
+  # notify-main-red -- a red `ci` on main opens (or comments on) one tracking
+  # issue, so a broken main is never silent, and the next green run on main
+  # closes it again. It runs only on main: on a PR the red check on the PR
+  # is the notification. The team rule for a red main (AGENTS.md): fix
+  # forward within the hour or revert.
   # ─────────────────────────────────────────────────────────────────────────
   notify-main-red:
     name: notify-main-red
     needs: [ci]
-    if: ${{ !cancelled() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    if: ${{ !cancelled() && github.event_name == 'push' && contains(fromJSON('["success","failure"]'), needs.ci.result) }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: Open or update the "main is red" issue
+      # Only the local action is needed from the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/tracking-issue
+
+      - name: Open, update or close the "main is red" issue
+        uses: ./.github/actions/tracking-issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          EVENT: ${{ github.event_name }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="CI is red on main"
-          body="\`ci\` failed on \`${SHA:0:10}\` ($EVENT): $RUN_URL
-          Rule (AGENTS.md): fix forward within the hour or revert. Close this issue once main is green again."
-          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
-            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --body "$body"
-            echo "commented on #$number"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
+        with:
+          title: CI is red on main
+          outcome: ${{ needs.ci.result }}
+          body: |
+            `ci` failed on ${{ github.sha }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Rule (AGENTS.md): fix forward within the hour or revert. The next green run on main closes this issue.

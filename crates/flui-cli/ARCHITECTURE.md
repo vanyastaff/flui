@@ -127,6 +127,36 @@ minimal local dependency identities. They verify admission and execution without
 opening a window; they do not substitute for the generated application's own
 interaction regression or live platform verification.
 
+### `flui run --agent` and `flui mcp` share a session file, not a library
+
+The CLI links no FLUI crate, so the two commands meet at the development
+endpoint (ADR-0095 §3) through its documented framing and a small credentials
+file, `target/flui-agent.json` (`CARGO_TARGET_DIR` honoured).
+
+- **Launch.** `flui run --agent` is admitted only on this desktop, in a debug
+  profile, for an application whose package declares the `dev-agent` feature
+  (read from the same Cargo metadata that admits the project). It creates a
+  `Session`: a `0700` temp directory holding the socket (a pipe name on
+  Windows), 32 random bytes as the token, and the session file written `0600`
+  and removed with the session unless a newer run replaced it. The same
+  `--features dev-agent` goes to `cargo build` and `cargo run`, or cargo would
+  build twice. The token is in the app's environment and the file, never in
+  the `--json` stream.
+- **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: four
+  tools, no SDK, so the CLI's graph does not grow) and forwards each call.
+  It connects on the first call and reconnects once per call, because the app
+  restarts under `flui run`; a reply is awaited on the connection's own
+  thread for a bounded time, so a peer that is not an agent server cannot
+  hang the MCP client. Element handles are scoped to a window, so a call
+  without `window` is resolved only when the app has exactly one.
+- **Tests.** `agent::mcp::tests` pin the tool-to-wire mapping;
+  `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` runs
+  `flui run --agent`, `flui mcp` and a fixture app end to end (Unix; the
+  Windows pipe is covered by `flui-devtools`' `agent_endpoint` tests and not
+  yet by a CLI run). The wire shapes mirrored here are `flui-devtools`'
+  `agent` module docs; a change there needs the same change in
+  `agent/client.rs` and `agent/mcp.rs`.
+
 ### Native iOS selection and launch
 
 `build ios` means a native executable application; `--lib` opts into static-library

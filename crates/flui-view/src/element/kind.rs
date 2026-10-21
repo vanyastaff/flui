@@ -562,6 +562,18 @@ impl ElementBase for ElementKind {
         self.element().view_type_id()
     }
 
+    fn view_type_name(&self) -> &'static str {
+        self.element().view_type_name()
+    }
+
+    fn debug_kind(&self) -> &'static str {
+        self.element().debug_kind()
+    }
+
+    fn inspect_view(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        self.element().inspect_view(out);
+    }
+
     fn current_key_hash(&self) -> Option<u64> {
         self.element().current_key_hash()
     }

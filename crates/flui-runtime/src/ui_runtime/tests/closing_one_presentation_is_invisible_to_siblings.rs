@@ -41,7 +41,7 @@ fn close_painted_scene(
             }
         });
         match UiRuntime::draw_frame_for_presentation(presentation, constraints, &ui_runtime.text) {
-            Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
+            Ok(FramePaintOutcome::Painted(scene)) => layer_content(&scene),
             Ok(FramePaintOutcome::Idle) => panic!("{id:?} must produce a Painted scene"),
             Ok(FramePaintOutcome::Errored { .. }) => panic!("{id:?} producer returned Errored"),
             Err(error) => panic!("{id:?} producer failed: {error}"),
@@ -370,10 +370,10 @@ fn run_custom_key_child(fail: bool) {
 }
 
 impl flui_interaction::GestureArenaMember for CloseArenaMember {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {
@@ -524,6 +524,18 @@ impl flui_platform_api::PlatformWindow for OwnershipWindow {
             assert!(!self.fail_callback, "window cursor failure");
         }
         self.delegate.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.delegate.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.delegate.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.delegate.apply(command)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -1108,7 +1120,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     let scenes = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let submitted = Arc::clone(&scenes);
     let mut sink = ScriptedSink::new(move |_, scene| {
-        submitted.lock().push(format!("{:?}", scene.tree()));
+        submitted.lock().push(layer_content(scene));
         crate::sink::SubmitVerdict::Presented
     });
     let mut clock = flui_foundation::ManualClock::new();
@@ -1675,7 +1687,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
     let b_layer_tree_before = ui_runtime.enter(|ui_runtime| {
         let b = ui_runtime.presentations.get(b_id).expect("B installed");
         match UiRuntime::draw_frame_for_presentation(b, constraints, &ui_runtime.text) {
-            Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
+            Ok(FramePaintOutcome::Painted(scene)) => layer_content(&scene),
             Ok(FramePaintOutcome::Idle) => panic!("B's first frame must paint, got Idle"),
             Ok(FramePaintOutcome::Errored { .. }) => {
                 panic!("draw_frame_for_presentation never returns Ok(Errored)")
@@ -1709,7 +1721,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
             }
         });
         match UiRuntime::draw_frame_for_presentation(b, constraints, &ui_runtime.text) {
-            Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
+            Ok(FramePaintOutcome::Painted(scene)) => layer_content(&scene),
             Ok(FramePaintOutcome::Idle) => {
                 panic!("B's post-A-close frame must still paint, got Idle")
             }
@@ -1726,4 +1738,10 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
          after A closes -- nothing about B's content changed, so \
          nothing about its render output may either"
     );
+}
+
+/// A painted scene's layers, without its scene number: that counts paints, so two paints of the
+/// same content differ only in it.
+fn layer_content(scene: &flui_layer::Scene) -> String {
+    format!("{:?}", scene.tree().iter().collect::<Vec<_>>())
 }

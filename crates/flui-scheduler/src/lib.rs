@@ -127,7 +127,7 @@
 //! use flui_scheduler::prelude::*;
 //!
 //! let scheduler = UpdateScheduler::new();
-//! let budget = FrameBudget::new(60); // 60 FPS target
+//! let budget = FrameBudget::new(std::num::NonZeroU32::new(60).expect("60 is non-zero"));
 //! ```
 //!
 //! [`web_time`]: https://docs.rs/web-time
@@ -163,14 +163,16 @@ pub use config::TimingsCallback;
 /// `flui-foundation` just to construct/match one of this crate's own public
 /// field types.
 pub use flui_foundation::PresentationId;
-pub use frame_clock::{ClockSource, DemandKind, DemandMask, FrameClock, PollDecision, SkipReason};
+pub use frame_clock::{
+    ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PollDecision, SkipReason,
+};
 pub use frame_histogram::{
-    LatencyHistogram, frame_interval_histogram, input_to_present_histogram,
-    produce_to_present_histogram,
+    FRAME_RUN_GAP, FramePace, LatencyHistogram, frame_interval_histogram, frame_pace,
+    input_to_present_histogram, produce_to_present_histogram,
 };
 pub use frame_telemetry::{
-    FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
-    MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
+    FRAME_HISTORY_CAPACITY, FramePhaseDurations, FrameSnapshot, InputEpoch, InputEpochId,
+    InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{
     OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError, PresentationFrameError,
@@ -192,9 +194,8 @@ pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};
 pub use frame::{
-    AppLifecycleState, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
-    LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
-    SchedulerPhase,
+    AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback,
+    OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
 };
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};

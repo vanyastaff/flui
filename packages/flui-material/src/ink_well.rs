@@ -89,6 +89,7 @@ use std::time::Duration;
 
 use flui_sdk::animation::prelude::*;
 use flui_sdk::animation::{MotionPolicy, Vsync};
+use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
 use flui_sdk::view::RebuildHandle;
@@ -131,7 +132,7 @@ impl InkWell {
     /// rectangle shape.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             on_tap: None,
             overlay_color: WidgetStateProperty::all(None),
             shape: MaterialShape::default(),
@@ -451,14 +452,32 @@ impl ViewState<InkWell> for InkWellState {
         });
         if let Some(activate) = &activate {
             let activate = Rc::clone(activate);
-            let indication = Rc::clone(&self.indication);
+            let (down, up, cancel) = (
+                Rc::clone(&self.indication),
+                Rc::clone(&self.indication),
+                Rc::clone(&self.indication),
+            );
+            // The wave follows the press the tap recognizer shows: it starts
+            // at the down (at once when no rival holds the contact, else after
+            // the press timeout or at the win) and ends with that contact's up
+            // or cancel. A contact that was never shown as pressed started no
+            // wave and ends none.
             gesture_detector = gesture_detector
+                .on_tap_down(move |_cx, details| {
+                    down.press(
+                        Some(Point::new(
+                            details.local_position.dx,
+                            details.local_position.dy,
+                        )),
+                        Some(details.pointer.get()),
+                    );
+                })
+                .on_tap_up(move |_cx, details| {
+                    up.release(Some(details.pointer.get()));
+                })
                 .on_tap(move |cx| activate(cx))
-                // A contact that stops being a tap (past the slop, or lost the
-                // arena to a scrolling ancestor or a long press) gets no Up
-                // of its own to this well: its wave fades at once.
                 .on_tap_cancel(move |_cx, details| {
-                    indication.cancel(Some(details.pointer.get()));
+                    cancel.cancel(Some(details.pointer.get()));
                 });
         }
 
@@ -564,24 +583,15 @@ impl ViewState<InkWell> for InkWellState {
     }
 }
 
-/// Starts a wave on each primary-button contact and ends it with that
-/// contact's up or cancel.
+/// Ends a wave with the raw end of its contact: the last button's up, the
+/// primary button's release under another held button, or the pointer's
+/// cancel. The wave itself starts with the tap recognizer's down, which also
+/// ends it when the contact is lost to a rival.
 fn contact_listener(indication: &Rc<Indication>) -> Listener {
-    let on_down = Rc::clone(indication);
     let on_up = Rc::clone(indication);
     let on_button_up = Rc::clone(indication);
     let on_cancel = Rc::clone(indication);
     Listener::new()
-        .on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
-            if let PointerEvent::Down(press) = dispatch.local
-                && press.button().number().get() == 1
-            {
-                on_down.press(
-                    Some(press.sample.position.get()),
-                    Some(press.pointer.id.get()),
-                );
-            }
-        })
         // An `Up` is the last held button coming up, so it always ends the
         // press. A button released while another is still held arrives as a
         // `ButtonChange` (through `on_pointer_move`): only the primary's ends

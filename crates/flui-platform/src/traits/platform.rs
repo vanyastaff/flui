@@ -10,11 +10,11 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, PlatformDisplay, WindowAppearance, WindowEvent, WindowId,
-    WindowOptions,
+    Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    WindowEvent, WindowId, WindowOptions,
 };
 
-use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
+use super::{HostWindow, OpenWindowError, OwnerPlatform};
 use crate::{
     data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
@@ -46,38 +46,6 @@ use crate::{
 /// boxed `std::error::Error` rather than committing the signature to any
 /// one error library.
 pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
-
-/// A phase of the user's session ending, as the platform reports it to
-/// [`Platform::on_session_end`].
-///
-/// On Windows a session end is a query to every top-level window
-/// (`WM_QUERYENDSESSION`), then its outcome (`WM_ENDSESSION`): either the
-/// session ends, and the process is terminated soon after the callback
-/// returns, or it was cancelled, by the user or by another application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndPhase {
-    /// The session is about to end; the answer says whether the application
-    /// asks the user to wait.
-    Query,
-    /// The session end was cancelled; the session goes on.
-    Cancelled,
-    /// The session is ending now; the process will not outlive it for long.
-    Ending,
-}
-
-/// The application's answer to a [`SessionEndPhase`]. Only an answer to
-/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndAnswer {
-    /// Let the session end.
-    Proceed,
-    /// Ask the user to wait: work that cannot be written without a decision
-    /// would be lost. The operating system shows the application as blocking
-    /// and lets the user end the session anyway.
-    Block,
-}
 
 /// Core platform abstraction trait
 ///
@@ -295,11 +263,25 @@ pub trait Platform: Send + Sync + 'static {
 
     // ==================== Display Management ====================
 
-    /// Get all available displays (monitors)
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>>;
-
-    /// Get the primary display
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>>;
+    /// Sample every display (monitor) the platform knows right now.
+    ///
+    /// Call on the platform owner thread. The value is immutable: identity,
+    /// name, bounds, usable bounds, scale factor and the refresh period of each
+    /// display's current mode (`None` when the OS does not report one — never a
+    /// guessed 60 Hz). A source that learns of a change from the OS invalidates
+    /// this by waking the owner; the host then samples again, so a change
+    /// between registering the source and the first sample is not lost. A
+    /// failed read is an error, not an empty snapshot: the host keeps the last
+    /// snapshot it accepted.
+    ///
+    /// Display ids come from the platform's own
+    /// [`DisplayRegistry`](flui_platform_api::DisplayRegistry) and are
+    /// comparable only with ids from this platform instance (ADR-0236).
+    ///
+    /// # Errors
+    /// Reports a failed native read or a platform with no display source
+    /// compiled in.
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // ==================== Input & Clipboard ====================
 
@@ -326,13 +308,6 @@ pub trait Platform: Send + Sync + 'static {
     /// On macOS: activates the app via NSApp.
     fn activate(&self, ignoring_other_apps: bool) {
         let _ = ignoring_other_apps;
-    }
-
-    // ==================== Appearance (US3) ====================
-
-    /// Get the system window appearance (light/dark theme)
-    fn window_appearance(&self) -> WindowAppearance {
-        WindowAppearance::default()
     }
 
     // ==================== Clipboard (US3 Enhanced) ====================
@@ -424,6 +399,52 @@ pub trait Platform: Send + Sync + 'static {
         let _ = callback;
     }
 
+    /// Register the callback the platform calls with every system notice other
+    /// than a session end's phases (sleep, wake, session lock, memory
+    /// pressure), replacing any earlier one. It runs on the owner thread.
+    ///
+    /// A backend that observes none of them never calls it, and the default
+    /// implementation drops it unused.
+    ///
+    /// A backend that delivers [`SystemNotice::Wake`] marks its display
+    /// snapshot and every window's state stale first, in the shared dispatch
+    /// (`shared::system_notice`), so the first read after the machine woke asks
+    /// the operating system again.
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        let _ = callback;
+    }
+
+    /// Tell the platform the application is done holding a session end it
+    /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
+    /// last [`SessionEndBlock`](flui_platform_api::SessionEndBlock) was
+    /// released. A backend that holds the session open (Windows'
+    /// `ShutdownBlockReason`) lets go here; one that answered synchronously has
+    /// nothing to undo, and the default does nothing.
+    fn release_session_end(&self) {}
+
+    /// Which window commands and observations this platform's windows have,
+    /// known before any window exists.
+    ///
+    /// It is the same set every window the platform opens reports through
+    /// [`PlatformWindow::capabilities`](flui_platform_api::PlatformWindow::capabilities),
+    /// so a caller can fit a remembered placement to what the window will be
+    /// able to do (`WindowCapabilities::places_at_open`) before it opens one.
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities;
+
+    /// How much larger a decorated window's outer size is than its content
+    /// size on a display of scale `scale_factor`, in logical pixels: the title
+    /// bar and borders. Known before any window exists, so a remembered
+    /// placement can be fitted by its outer size.
+    ///
+    /// The default is zero, which is exact for a platform whose windows have no
+    /// non-client area (headless, mobile, web) and an under-estimate where the
+    /// frame is not measured yet (winit, AppKit: applied with their placement
+    /// support).
+    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        let _ = scale_factor;
+        flui_foundation::geometry::Size::new(0.0, 0.0)
+    }
+
     /// Register the macOS application's reopen signal callback.
     ///
     /// AppKit delivers this signal for both visible-window and no-window reopen
@@ -448,9 +469,6 @@ pub trait Platform: Send + Sync + 'static {
 
     // ==================== Platform Info ====================
 
-    /// Get the platform's capabilities descriptor
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
-
     /// Get the platform's name for debugging/logging
     fn name(&self) -> &'static str;
 
@@ -464,6 +482,16 @@ pub trait Platform: Send + Sync + 'static {
     /// # Errors
     /// [`PlatformError::AppPath`] when the backend's own lookup fails.
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
+
+    /// Where the application `app` keeps its data on this platform, or `None`
+    /// when it has nowhere to keep it.
+    ///
+    /// The default is the current user's data directories
+    /// ([`crate::storage::data_dirs`]); a backend whose process has no such
+    /// directories (Android) answers with its own.
+    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+        crate::storage::data_dirs(app)
+    }
 }
 
 /// Platform executor trait for async task execution

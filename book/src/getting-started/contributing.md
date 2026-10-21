@@ -23,12 +23,14 @@ cd flui
 cargo build --workspace
 ```
 
-Work happens in a dedicated `git worktree` per task, never the shared checkout — see AGENTS.md's
-"Working here" section for the exact command and the commit/PR conventions that go with it. The
-local pre-PR check is:
+Work happens in a dedicated `git worktree` per task (`cargo xtask worktree new <area>/<slug>`),
+never the shared checkout; AGENTS.md's "Working here" has the commit conventions. The
+local pre-PR checks run one at a time on the crates you changed (AGENTS.md, "Checking a change"):
 
 ```bash
-cargo xtask check-changed
+cargo fmt --all
+cargo clippy -p <crate> --all-targets -- -D warnings
+cargo nextest run -p <crate>
 ```
 
 ## This book

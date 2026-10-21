@@ -81,6 +81,7 @@
 // integration tests still reach (ADR-0083 §4); nothing here is public.
 pub(crate) mod back_gesture;
 pub(crate) mod binding;
+pub(crate) mod flight_seat;
 pub(crate) mod hero;
 pub(crate) mod hero_controller;
 mod hero_controller_scope;
@@ -101,6 +102,7 @@ mod parallax_transition;
 mod pop_scope;
 mod result;
 mod route;
+mod route_keys;
 pub(crate) mod subtree;
 pub(crate) mod transition_route;
 

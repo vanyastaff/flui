@@ -57,7 +57,7 @@ tracing.workspace = true
 downcast-rs = { workspace = true }
 dyn-clone = { workspace = true }
 
-# `ReconcileEventCollector` (gated to `test-utils` feature
+# `ReconcileEventCollector` (gated to `testing` feature
 # or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
 # extension trait. Optional + gated so production builds don't pull
 # it in.
@@ -81,7 +81,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # `AsyncDriver::is_unlocked`. Dev-only; stays out of release builds.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
-# tests under `#[cfg(test)]` (without the `test-utils` feature flag
+# tests under `#[cfg(test)]` (without the `testing` feature flag
 # enabled at the integration boundary) still see it. Cargo merges
 # both declarations; no duplication in the lockfile.
 tracing-subscriber = { workspace = true }
@@ -112,7 +112,7 @@ default = []
 # `ReconcileEventCollector` Layer fixture. Downstream
 # test crates flip this to install the collector. Pulls in the
 # optional `tracing-subscriber` dep at build time.
-test-utils = ["dep:tracing-subscriber"]
+testing = ["dep:tracing-subscriber"]
 # Accepted and ignored: UI runtime-scoped signals are always compiled (ADR-0085 §5).
 # It stays only because CI's `test-features` job still passes
 # `--features flui-view/signals`; it goes with that step.
@@ -157,7 +157,7 @@ harness = false
 [[bench]]
 name = "scoped_build_drain"
 harness = false
-required-features = ["test-utils"]
+required-features = ["testing"]
 
 [lints]
 workspace = true
@@ -171,6 +171,7 @@ order = 1
 globals = [
     { item = "key::global_key::GlobalKey::new::COUNTER", grant = "ADR-0097", class = "counter", reason = "GlobalKey identities, advanced by try_update with a sticky exhaustion sentinel" },
     { item = "owner::global_key_scope::OwnerTag::fresh::NEXT", grant = "ADR-0097", class = "counter", reason = "Owner claim identities, advanced by try_update with a permanent exhaustion sentinel" },
+    { item = "reactive::NEXT_GRAPH_ID", grant = "ADR-0097", class = "counter", reason = "Reactive graph identities, advanced by try_update with permanent exhaustion" },
     { item = "key::registry::REGISTRY_STACK", exit = "ADR-0094", reason = "the owner thread's GlobalKey registry stack, `ManuallyDrop` for a hot-reload cdylib" },
     { item = "key::registry::TEST_REGISTRY", exit = "ADR-0094", reason = "the fixture registry lane beside the stack, `ManuallyDrop` for a hot-reload cdylib" },
     { item = "view::error::ERROR_VIEW_BUILDER", exit = "ADR-0097", reason = "the process-wide error view builder; it becomes UI runtime configuration" },

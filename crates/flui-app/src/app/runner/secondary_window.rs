@@ -230,6 +230,7 @@ struct SecondaryWindowInstallConfig {
     frame_failure_detail: FrameFailureDetail,
     pointer_resampling: flui_runtime::presentation::PointerResampling,
     motion_override: flui_runtime::MotionOverride,
+    input_tap: Option<flui_runtime::InputTapFactory>,
 }
 
 /// A resolved `Pending`-arm window waiting for installation.
@@ -821,9 +822,8 @@ pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    #[cfg(feature = "persist")]
-    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
+    warn_window_storage_dir(&config);
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
         return Err(AppWindowError::AdmissionClosed);
@@ -864,6 +864,7 @@ pub(super) fn open_secondary_window_impl(
         frame_failure_detail: config.frame_failure_detail,
         pointer_resampling: config.pointer_resampling,
         motion_override: config.motion_override,
+        input_tap: config.input_tap,
     };
 
     match open {
@@ -899,9 +900,8 @@ pub(super) fn open_window_with_content_impl<V>(
 where
     V: View + Clone + 'static,
 {
-    #[cfg(feature = "persist")]
-    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
+    warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
         return Err(AppWindowError::UnsupportedPolicy {
@@ -940,6 +940,7 @@ where
                 frame_failure_detail: config.frame_failure_detail,
                 pointer_resampling: config.pointer_resampling,
                 motion_override: config.motion_override,
+                input_tap: config.input_tap.clone(),
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
@@ -1096,6 +1097,11 @@ fn finish_open_secondary_window(
                 )
                 .map_err(mount_error)?;
                 ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+                if let Some(factory) = &config.input_tap {
+                    factory
+                        .install_on(&ui_runtime)
+                        .expect("BUG: a fresh runtime issues its first tap registration");
+                }
                 ui_runtime.set_motion_override(config.motion_override);
                 // No frame-failure handler is installed here. Under
                 // `open_secondary_window`'s current contract this ui_runtime has no
@@ -1125,10 +1131,10 @@ fn finish_open_secondary_window(
 
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let _ = dispatch_platform_ui_runtime(
             owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
         );
     }));
 
@@ -1171,6 +1177,9 @@ fn finish_open_secondary_window(
             RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
         );
     }));
+    installation.observe_appearance();
+    installation.observe_display();
+    installation.observe_window_state();
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();
@@ -1198,6 +1207,22 @@ fn finish_open_secondary_window(
     }
     uninstalled.0 = None;
     Ok(Some((owner_dispatch, window)))
+}
+
+/// The host has one storage, from the run's configuration; a window's own
+/// `storage_dir` cannot change it, so say so rather than ignore it silently.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn warn_window_storage_dir(config: &AppConfig) {
+    if let Some(name) = config.storage_dir {
+        tracing::warn!(
+            storage_dir = name.as_str(),
+            "a window's storage_dir is ignored: storage comes from the run's configuration"
+        );
+    }
 }
 
 #[cfg(all(
@@ -1288,6 +1313,7 @@ mod tests {
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
                     motion_override: AppConfig::new().motion_override,
+                    input_tap: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {
@@ -1322,7 +1348,7 @@ mod tests {
                                             flui_runtime::sink::SubmitVerdict::Presented
                                         }),
                                         prelude: None,
-                                        resize: Some(Box::new(move |_, _| {
+                                        resize: Some(Box::new(move |_| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
                                             if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
                                                 closing_window.close();
@@ -1335,10 +1361,13 @@ mod tests {
                                     },
                                 ))
                                 .expect("driver");
-                            prepared.observe(WindowObservation::Metrics {
-                                size: flui_foundation::geometry::Size::new(20.0, 30.0),
-                                scale_factor: 1.0,
-                            });
+                            prepared.observe(WindowObservation::Metrics(
+                                flui_foundation::geometry::WindowMetrics::from_logical(
+                                    flui_foundation::geometry::Size::new(20.0, 30.0),
+                                    1.0,
+                                )
+                                .expect("valid metrics"),
+                            ));
                             let receipt = prepared.submit();
                             assert!(
                                 receipt.outcome().is_none(),
@@ -1521,6 +1550,7 @@ mod tests {
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
                         motion_override: AppConfig::new().motion_override,
+                        input_tap: None,
                     };
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                         queue.borrow_mut().push(PendingCompletion {
@@ -1607,6 +1637,7 @@ mod tests {
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
                         motion_override: AppConfig::new().motion_override,
+                        input_tap: None,
                     };
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1696,6 +1727,7 @@ mod tests {
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
                     motion_override: AppConfig::new().motion_override,
+                    input_tap: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(
                     PendingCompletion {

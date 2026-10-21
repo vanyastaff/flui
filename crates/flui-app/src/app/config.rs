@@ -1,9 +1,11 @@
 //! Application configuration.
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
+
+use flui_platform::WindowMode;
 
 use super::close_request::CloseRequestHandler;
 use super::dev_agent::DevAgent;
@@ -11,6 +13,7 @@ use super::hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
+use flui_runtime::InputTapFactory;
 use flui_runtime::execution::HostExecutors;
 use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 
@@ -93,6 +96,14 @@ pub struct AppConfig {
     /// Maximum window size.
     pub max_size: Option<Size>,
 
+    /// Initial outer position in global logical pixels; `None` lets the system
+    /// place the window. A platform that cannot place a window ignores it.
+    pub position: Option<Point<f64>>,
+
+    /// The mode the window opens in. A platform that cannot enter it opens the
+    /// window in [`WindowMode::Normal`].
+    pub mode: WindowMode,
+
     /// Whether the window is resizable.
     pub resizable: bool,
 
@@ -138,14 +149,14 @@ pub struct AppConfig {
     /// [`Self::with_dev_agent`] (ADR-0095 §3).
     ///
     /// `None` (the default): no agent is served, and no devtools crate is in
-    /// the application's graph. `Some`: the desktop and iOS runners attach
+    /// the application's graph. `Some`: the desktop, iOS and Android runners attach
     /// the hook once per event loop and hand it each window that mounts a
     /// root view once the window is installed; a window with no content, and
     /// a presentation opened into another window's UI runtime, are not handed
     /// over. Every window opened with a clone of this configuration shares
     /// the one hook, so a secondary window is served only when opened with
-    /// the application's configuration. The Android and web runners drive no
-    /// hook, and log so at start.
+    /// the application's configuration. The web runner does the same for the
+    /// page's one window and never detaches the hook.
     pub dev_agent: Option<DevAgent>,
 
     /// Governs when the platform loop exits once every hosted window has
@@ -173,6 +184,13 @@ pub struct AppConfig {
     /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
     /// delivery timing and owner-admission contract.
     pub frame_failure_handler: Option<FrameFailureHandler>,
+
+    /// Optional recording hook: each runtime the app builds installs a fresh
+    /// tap from this factory before its first input, and the tap observes
+    /// every input, arena verdict and preference revision the runtime applies
+    /// (ADR-0215 §1). `None` (the default): nothing is recorded or cloned.
+    /// The serialiser for these records lives in test and tool builds only.
+    pub input_tap: Option<InputTapFactory>,
 
     /// Controls whether typed panic reports retain string payloads, and whether
     /// FLUI-owned pipeline tracing materializes error text. Debug builds default
@@ -229,8 +247,27 @@ pub struct AppConfig {
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
-    #[cfg(feature = "persist")]
     pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
+
+    /// The storage name a window's placement is kept under, set with
+    /// [`Self::restore_placement`].
+    pub(crate) placement: Option<flui_platform_api::StorageName>,
+
+    /// The receivers registered with [`Self::with_memory_reclaim`].
+    pub(crate) memory_reclaimers: MemoryReceivers,
+}
+
+/// The memory receivers an application registered, cloned with the
+/// configuration.
+#[derive(Clone, Default)]
+pub(crate) struct MemoryReceivers(pub(crate) Vec<super::host_memory::SharedReceiver>);
+
+impl std::fmt::Debug for MemoryReceivers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MemoryReceivers")
+            .field(&self.0.len())
+            .finish()
+    }
 }
 
 impl Default for AppConfig {
@@ -244,6 +281,8 @@ impl Default for AppConfig {
             size: Size::new(800.0, 600.0),
             min_size: None,
             max_size: None,
+            position: None,
+            mode: WindowMode::Normal,
             resizable: true,
             decorations: true,
             show_performance_overlay: false,
@@ -252,23 +291,17 @@ impl Default for AppConfig {
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
+            input_tap: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
-            #[cfg(feature = "persist")]
             storage_dir: None,
+            placement: None,
+            memory_reclaimers: MemoryReceivers::default(),
         }
     }
-}
-
-/// A setting the current host integration cannot honor on any platform.
-#[cfg(feature = "persist")]
-#[derive(Debug, thiserror::Error)]
-#[error("unsupported application setting: {setting}")]
-pub(crate) struct UnsupportedSetting {
-    pub(crate) setting: &'static str,
 }
 
 impl AppConfig {
@@ -278,14 +311,15 @@ impl AppConfig {
         self.motion_override = preference;
         self
     }
-    #[cfg(feature = "persist")]
-    pub(crate) fn validate(&self) -> Result<(), UnsupportedSetting> {
-        if self.storage_dir.is_some() {
-            return Err(UnsupportedSetting {
-                setting: "storage_dir",
-            });
+
+    /// Install a tap from [`Self::input_tap`] on a runtime just built, before
+    /// its first input.
+    pub(crate) fn install_input_tap(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
+        if let Some(factory) = &self.input_tap {
+            factory
+                .install_on(runtime)
+                .expect("BUG: a fresh runtime issues its first tap registration");
         }
-        Ok(())
     }
 
     /// Opt this window's presentation into frame-aligned pointer interpolation.
@@ -321,7 +355,8 @@ impl AppConfig {
         self
     }
 
-    /// Set the initial window size.
+    /// Set the initial window size: the content area, in logical pixels, which
+    /// is what the window reports as its content size once it is open.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
@@ -339,6 +374,30 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some(Size::new(width as f64, height as f64));
+        self
+    }
+
+    /// Set the initial outer position, in global logical pixels.
+    ///
+    /// Applied where the backend places a window at open
+    /// ([`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)):
+    /// Win32 today. The winit and AppKit backends do not yet read it and leave
+    /// the place to the system.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_position(mut self, at: Point<f64>) -> Self {
+        self.position = Some(at);
+        self
+    }
+
+    /// Set the mode the window opens in.
+    ///
+    /// Applied where the backend opens a window in a mode: Win32 today. The
+    /// winit and AppKit backends do not yet read it, so there a window opens in
+    /// [`WindowMode::Normal`] and the application sets the mode through its
+    /// `WindowHandle` once it is up.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_mode(mut self, mode: WindowMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -408,6 +467,14 @@ impl AppConfig {
         self
     }
 
+    /// Record every runtime's input stream through taps `factory` makes. See
+    /// [`Self::input_tap`]'s doc.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_input_tap(mut self, factory: InputTapFactory) -> Self {
+        self.input_tap = Some(factory);
+        self
+    }
+
     /// Select how much unstructured text frame-failure diagnostics retain.
     ///
     /// # Examples
@@ -443,40 +510,160 @@ impl AppConfig {
         self
     }
 
-    /// Select a directory name for the planned file-backed storage integration.
+    /// Keep the application's data under `name`, which every widget reaches
+    /// through `LifecycleContext::storage`.
     ///
-    /// The integration is not implemented yet, so a configured value is refused
-    /// before platform startup or window admission. Desktop entry points return
-    /// `AppWindowError::UnsupportedConfiguration` (inside `anyhow::Error` for
-    /// direct rendering). Managed Android, iOS and web entry points log the
-    /// refusal and return without starting the application.
-    #[cfg(feature = "persist")]
+    /// The directory is `name` under the platform's data roots: the current
+    /// user's data directories on desktop and iOS, the app's private `files`
+    /// and `no_backup` directories on Android, and the page's IndexedDB on
+    /// the Web. Without it, or where the platform has no data root,
+    /// widgets get no storage.
+    ///
+    /// The host has one storage, read from the configuration the run starts
+    /// with: every window shares it, and a `storage_dir` in a configuration
+    /// passed to `open_window` is ignored with a warning.
+    ///
+    /// Outside an app sandbox the desktop roots are shared by every
+    /// application of the user, so pick a name only this application uses
+    /// (`acme-notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
         self.storage_dir = Some(name);
+        self
+    }
+
+    /// Remember where this window was and open the next run there.
+    ///
+    /// The window's position, size and mode are kept in the host storage
+    /// ([`Self::with_storage_dir`]) under `name`, and the next run reads them
+    /// before the window is first shown. They are fitted to the displays of that
+    /// run first: a window whose display is gone opens on the primary one, and a
+    /// window that would lie off the screen is moved back onto it
+    /// ([`WindowPlacement::resolve`]). What it restores replaces the
+    /// configuration's [`with_size`](Self::with_size),
+    /// [`with_position`](Self::with_position) and [`with_mode`](Self::with_mode);
+    /// they apply the first time, when nothing is stored yet, and whenever the
+    /// stored value cannot be read.
+    ///
+    /// The placement is written at most once every two seconds while the window
+    /// moves (a change inside the interval is written when it is over), and at
+    /// once when the window closes and when the session ends. Windows that share
+    /// one `name` overwrite each other's placement, so give each window it should
+    /// remember a name of its own. Desktop only: Android, iOS and the Web size
+    /// the window themselves.
+    ///
+    /// Where it is applied: Win32 opens the window at the remembered position,
+    /// size and mode, and matches the display it was on. The winit and AppKit
+    /// backends do not yet place a window at open (they report so through
+    /// [`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)),
+    /// so there only the size is restored and the position is left to the
+    /// system; see `docs/platform-parity.md`.
+    ///
+    /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn restore_placement(mut self, name: flui_platform_api::StorageName) -> Self {
+        self.placement = Some(name);
+        self
+    }
+
+    /// Give `receiver` memory back when the system reports memory pressure.
+    ///
+    /// The framework reclaims its own caches (text, GPU buffers, the glyph
+    /// atlas and image textures) itself; register what the application owns
+    /// beside them, above all the `flui_assets::AssetRegistry` its images load
+    /// through, which keeps their decoded pixels (an `Arc` of a receiver is a
+    /// receiver). Receivers are reclaimed once per notice, in the
+    /// order registered, before any subscriber of
+    /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
+    /// hears the notice. The host has one set of receivers, read from the
+    /// configuration the run starts with.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_memory_reclaim(
+        mut self,
+        receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
+    ) -> Self {
+        self.memory_reclaimers.0.push(std::sync::Arc::new(receiver));
         self
     }
 }
 
 impl From<&AppConfig> for flui_platform::WindowOptions {
     fn from(config: &AppConfig) -> Self {
-        flui_platform::WindowOptions {
-            title: config.title.clone(),
-            size: config.size,
-            resizable: config.resizable,
-            visible: true,
-            // `AtOpen`, the conservative default: `AfterFirstFrame` is a
-            // PROMISE to call `reveal_after_first_frame`, and this
-            // conversion is shared by callers that keep it (the desktop
-            // runner, through `FirstReveal`) and callers that do not
-            // (`run_direct`, the bare `open_secondary_window`). The one
-            // path that keeps it opts in at its own open site —
-            // `runner::desktop::rendered_window_options` — so nothing can
-            // open a window at alpha 0 that no one will ever reveal.
-            reveal: flui_platform::WindowReveal::AtOpen,
-            decorated: config.decorations,
-            min_size: config.min_size,
-            max_size: config.max_size,
+        // `visible` and `reveal` are not the configuration's to set, so they
+        // keep the options' own defaults: on screen when the window opens
+        // (`AtOpen`). `AfterFirstFrame` is a PROMISE to call
+        // `reveal_after_first_frame`, and this conversion is shared by callers
+        // that keep it (the desktop runner, through `FirstReveal`) and callers
+        // that do not (`run_direct`, the bare `open_secondary_window`). The
+        // paths that keep it opt in at their own open site
+        // (`runner::desktop::rendered_window_options`), so nothing can open a
+        // window at alpha 0 that no one will ever reveal.
+        Self::default()
+            .with_title(config.title.clone())
+            .with_size(config.size)
+            .with_resizable(config.resizable)
+            .with_decorated(config.decorations)
+            .with_min_size(config.min_size)
+            .with_max_size(config.max_size)
+            .with_position(config.position)
+            .with_mode(config.mode)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use flui_interaction::events::Code;
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::PlatformInput;
+    use flui_runtime::ui_runtime::UiRuntime;
+    use flui_runtime::{HostInput, InputRecord, InputTapFactory};
+
+    use super::AppConfig;
+
+    /// Each runtime the app builds records through a fresh tap from the
+    /// configured factory, and only its own input.
+    #[test]
+    fn a_configured_input_tap_records_each_runtime_it_is_installed_on() {
+        let seen: Arc<Mutex<Vec<(usize, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let made = Arc::new(Mutex::new(0_usize));
+        let config = AppConfig::new().with_input_tap(InputTapFactory::new({
+            let seen = Arc::clone(&seen);
+            let made = Arc::clone(&made);
+            move |_start: &crate::RecordingStart| {
+                let index = {
+                    let mut made = made.lock().expect("factory count");
+                    *made += 1;
+                    *made
+                };
+                let seen = Arc::clone(&seen);
+                Box::new(move |record: &InputRecord| {
+                    if let InputRecord::Input(row) = record
+                        && let HostInput::Platform(PlatformInput::Keyboard(key)) = &row.input
+                    {
+                        seen.lock()
+                            .expect("records")
+                            .push((index, format!("{:?}", key.code)));
+                    }
+                })
+            }
+        }));
+        let runtimes = [UiRuntime::for_test(), UiRuntime::for_test()];
+        for runtime in &runtimes {
+            config.install_input_tap(runtime);
         }
+        for (runtime, code) in runtimes.iter().zip([Code::F1, Code::F2]) {
+            runtime.enter(|runtime| {
+                runtime.handle_input_addressed(
+                    runtime.presentation_id(),
+                    PlatformInput::Keyboard(KeyEventBuilder::new(code).build()),
+                );
+            });
+        }
+        assert_eq!(
+            *seen.lock().expect("records"),
+            [(1, "F1".to_owned()), (2, "F2".to_owned())]
+        );
     }
 }

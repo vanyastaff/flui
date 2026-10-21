@@ -1,5 +1,5 @@
 //! Clipping render-object family — `RenderClipRect`, `RenderClipRRect`,
-//! `RenderClipOval`, `RenderClipPath`.
+//! `RenderClipRSuperellipse`, `RenderClipOval`, `RenderClipPath`.
 //!
 //! # Shape
 //!
@@ -9,11 +9,12 @@
 //! hit test, and which canvas clip call is used:
 //!
 //! ```text
-//!  trait ClipGeometry        (sealed; impls for Rect, RRect, Oval, Path)
+//!  trait ClipGeometry        (sealed; Rect, RRect, RSuperellipse, Oval, Path)
 //!  struct RenderClip<S: ClipGeometry>      ← single, generic, monomorphised
 //!  ──────────────────────────────────────
 //!  type RenderClipRect   = RenderClip<Rect>;
 //!  type RenderClipRRect  = RenderClip<RRect>;
+//!  type RenderClipRSuperellipse = RenderClip<RSuperellipse>;
 //!  type RenderClipOval   = RenderClip<Oval>;
 //!  type RenderClipPath   = RenderClip<Path>;
 //! ```
@@ -33,7 +34,7 @@
 use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
 
 use flui_foundation::Single;
-use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
+use flui_foundation::geometry::{Offset, Point, RRect, RSuperellipse, Rect, Size};
 use flui_painting::{
     paint::{Clip, Path},
     styling::BorderRadius,
@@ -197,13 +198,14 @@ mod sealed {
     pub trait Sealed {}
     impl Sealed for super::Rect<f64> {}
     impl Sealed for super::RRect {}
+    impl Sealed for super::RSuperellipse {}
     impl Sealed for super::Oval {}
     impl Sealed for super::Path {}
 }
 
-/// Trait abstracting the four clip shapes used by `RenderClip<S>`.
+/// Trait abstracting the clip shapes used by `RenderClip<S>`.
 ///
-/// **Sealed.** Only the four canonical shapes implement this trait.
+/// **Sealed.** Only the canonical shapes implement this trait.
 /// Downstream crates cannot add new variants — this preserves engine-level
 /// dispatch invariants and lets the compiler monomorphise the clip-emission
 /// path per shape.
@@ -266,12 +268,12 @@ pub trait ClipGeometry:
         None
     }
 
-    /// Resolves a data-only rounded-rect border-radius source for this
-    /// geometry, when the shape supports it.
+    /// Resolves a data-only border-radius source for this geometry, when the
+    /// shape has corners to round.
     ///
-    /// Only [`RRect`] implements this; other clip geometries remain pure
-    /// defaults or owner-lane path targets.
-    fn resolve_rrect_border_radius(_border_radius: BorderRadius, _size: Size) -> Option<Self> {
+    /// [`RRect`] and [`RSuperellipse`] implement this; other clip geometries
+    /// remain pure defaults or owner-lane path targets.
+    fn resolve_border_radius(_border_radius: BorderRadius, _size: Size) -> Option<Self> {
         None
     }
 
@@ -343,7 +345,7 @@ impl ClipGeometry for RRect {
         RRect::contains(self, position)
     }
 
-    fn resolve_rrect_border_radius(border_radius: BorderRadius, size: Size) -> Option<Self> {
+    fn resolve_border_radius(border_radius: BorderRadius, size: Size) -> Option<Self> {
         let bounds = Rect::from_origin_size(Point::ZERO, size);
         Some(RRect::from_rect_and_corners(
             bounds,
@@ -357,6 +359,45 @@ impl ClipGeometry for RRect {
     fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
         PaintClip::RRect {
             rrect: stored,
+            behavior,
+        }
+    }
+}
+
+// ---- RSuperellipse ---------------------------------------------------------
+
+impl ClipGeometry for RSuperellipse {
+    type Stored = Self;
+
+    const DIAGNOSTIC_NAME: &'static str = "RenderClipRSuperellipse";
+
+    fn approximate_bounds(&self, _size: Size) -> Rect<f64> {
+        // The corners curve inward, so the outer rect is a superset.
+        self.outer_rect()
+    }
+
+    fn default_for_size(size: Size) -> Self {
+        RSuperellipse::from(Rect::from_origin_size(Point::ZERO, size))
+    }
+
+    fn contains(&self, position: Point<f64>) -> bool {
+        // The same normalized corner curve the engine's clip mask evaluates.
+        RSuperellipse::contains(self, position)
+    }
+
+    fn resolve_border_radius(border_radius: BorderRadius, size: Size) -> Option<Self> {
+        Some(RSuperellipse::from_rect_and_corners(
+            Rect::from_origin_size(Point::ZERO, size),
+            border_radius.top_left,
+            border_radius.top_right,
+            border_radius.bottom_right,
+            border_radius.bottom_left,
+        ))
+    }
+
+    fn to_paint_clip(stored: Self::Stored, behavior: Clip) -> PaintClip {
+        PaintClip::RSuperellipse {
+            rsuperellipse: stored,
             behavior,
         }
     }
@@ -462,12 +503,13 @@ impl ClipGeometry for Path {
 
 /// A render object that clips its child to the geometry produced by `S`.
 ///
-/// The shape parameter `S` is one of [`Rect`], [`RRect`], [`Oval`],
+/// The shape parameter `S` is one of [`Rect`], [`RRect`], [`RSuperellipse`], [`Oval`],
 /// or [`Path`] via the sealed [`ClipGeometry`] trait. Pick the right type
 /// alias for ergonomic construction:
 ///
 /// * [`RenderClipRect`] — axis-aligned rectangular clip.
 /// * [`RenderClipRRect`] — rounded rectangle clip.
+/// * [`RenderClipRSuperellipse`] — rounded superellipse clip.
 /// * [`RenderClipOval`] — inscribed-ellipse clip.
 /// * [`RenderClipPath`] — arbitrary path clip.
 ///
@@ -481,7 +523,7 @@ pub struct RenderClip<S: ClipGeometry> {
     clip_behavior: Clip,
     /// Optional rounded-rect border radius. Only meaningful for
     /// `RenderClipRRect`; other `RenderClip<S>` instantiations ignore it.
-    rrect_border_radius: Option<BorderRadius>,
+    border_radius_source: Option<BorderRadius>,
     /// Optional owner-local path clip target. Only meaningful for
     /// `RenderClipPath`; other `RenderClip<S>` instantiations ignore it.
     path_clip_target: Option<PathClipTarget>,
@@ -505,7 +547,7 @@ impl<S: ClipGeometry> RenderClip<S> {
     pub fn new(clip_behavior: Clip) -> Self {
         Self {
             clip_behavior,
-            rrect_border_radius: None,
+            border_radius_source: None,
             path_clip_target: None,
             path_clip_source_token: None,
             clip_shape: None,
@@ -557,7 +599,7 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// Returns whether a custom clipper has been installed.
     #[inline]
     pub fn has_custom_clipper(&self) -> bool {
-        self.rrect_border_radius.is_some() || self.path_clip_target.is_some()
+        self.border_radius_source.is_some() || self.path_clip_target.is_some()
     }
 
     /// Returns the caller-supplied clip shape, if one replaces the default
@@ -626,8 +668,8 @@ impl<S: ClipGeometry> RenderClip<S> {
         if let Some(shape) = &self.clip_shape {
             return shape.clone();
         }
-        self.rrect_border_radius
-            .and_then(|border_radius| S::resolve_rrect_border_radius(border_radius, size))
+        self.border_radius_source
+            .and_then(|border_radius| S::resolve_border_radius(border_radius, size))
             .or_else(|| {
                 self.path_clip_target
                     .and_then(|target| S::resolve_path_clip_target(target, size))
@@ -638,7 +680,7 @@ impl<S: ClipGeometry> RenderClip<S> {
 
     /// Produces the node-local [`PaintClip`] descriptor for the laid-out
     /// `size`, following exactly [`Self::resolve_clip`]'s source precedence:
-    /// a fixed `clip_shape`, then a data-only `rrect_border_radius`, then an
+    /// a fixed `clip_shape`, then a data-only `border_radius_source`, then an
     /// owner-lane `path_clip_target`, then the shape's whole-box default.
     ///
     /// Unlike `resolve_clip`, an owner-lane path target here does NOT run
@@ -655,8 +697,8 @@ impl<S: ClipGeometry> RenderClip<S> {
             return S::to_paint_clip(shape.clone(), self.clip_behavior);
         }
         if let Some(shape) = self
-            .rrect_border_radius
-            .and_then(|border_radius| S::resolve_rrect_border_radius(border_radius, size))
+            .border_radius_source
+            .and_then(|border_radius| S::resolve_border_radius(border_radius, size))
         {
             return S::to_paint_clip(shape.into(), self.clip_behavior);
         }
@@ -670,36 +712,45 @@ impl<S: ClipGeometry> RenderClip<S> {
     }
 }
 
-impl RenderClip<RRect> {
-    /// Returns the data-only border radius used to compute the rounded-rect
+/// Clip shapes with corners a [`BorderRadius`] can round: the rounded
+/// rectangle and the rounded superellipse.
+///
+/// Sealed with [`ClipGeometry`], so only those shapes get the border-radius
+/// setters on [`RenderClip`].
+pub trait RoundedClipGeometry: ClipGeometry {}
+
+impl RoundedClipGeometry for RRect {}
+impl RoundedClipGeometry for RSuperellipse {}
+
+impl<S: RoundedClipGeometry> RenderClip<S> {
+    /// Returns the data-only border radius used to compute the rounded
     /// clip, if one is installed.
     #[must_use]
     pub const fn border_radius(&self) -> Option<BorderRadius> {
-        self.rrect_border_radius
+        self.border_radius_source
     }
 
-    /// Builder: sets the data-only rounded-rect border radius.
+    /// Builder: sets the data-only border radius.
     #[must_use]
     pub fn with_border_radius(mut self, border_radius: BorderRadius) -> Self {
-        self.rrect_border_radius = Some(border_radius);
+        self.border_radius_source = Some(border_radius);
         self
     }
 
-    /// Replaces the rounded-rect source and reports a composited-layer
+    /// Replaces the border-radius source and reports a composited-layer
     /// update plus semantics when changed.
     ///
     /// The radius is a layer property read from [`Self::paint_effects`]: a
-    /// changed radius patches the retained `ClipRRectLayer` in the
-    /// enclosing repaint boundary's capture rather than repainting the
-    /// subtree.
+    /// changed radius patches the retained clip layer in the enclosing
+    /// repaint boundary's capture rather than repainting the subtree.
     pub fn set_border_radius(
         &mut self,
         border_radius: Option<BorderRadius>,
     ) -> flui_rendering::RenderUpdateImpact {
-        if self.rrect_border_radius == border_radius {
+        if self.border_radius_source == border_radius {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        self.rrect_border_radius = border_radius;
+        self.border_radius_source = border_radius;
         flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
             | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
@@ -757,7 +808,7 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
     fn clone(&self) -> Self {
         Self {
             clip_behavior: self.clip_behavior,
-            rrect_border_radius: self.rrect_border_radius,
+            border_radius_source: self.border_radius_source,
             path_clip_target: self.path_clip_target,
             path_clip_source_token: self.path_clip_source_token.clone(),
             clip_shape: self.clip_shape.clone(),
@@ -773,12 +824,9 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
             .field("clip_behavior", &self.clip_behavior)
             .field(
                 "has_custom_clipper",
-                &(self.rrect_border_radius.is_some() || self.path_clip_target.is_some()),
+                &(self.border_radius_source.is_some() || self.path_clip_target.is_some()),
             )
-            .field(
-                "has_rrect_border_radius",
-                &self.rrect_border_radius.is_some(),
-            )
+            .field("has_border_radius", &self.border_radius_source.is_some())
             .field("has_path_clip_target", &self.path_clip_target.is_some())
             .field("path_clip_source_token", &self.path_clip_source_token)
             .field("has_clip_shape", &self.clip_shape.is_some())
@@ -806,7 +854,7 @@ impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
         builder.add_enum("clip_behavior", self.clip_behavior);
         builder.add_flag(
             "custom_clipper",
-            self.rrect_border_radius.is_some()
+            self.border_radius_source.is_some()
                 || self.path_clip_target.is_some()
                 || self.clip_shape.is_some(),
             "has custom clipper",
@@ -871,11 +919,14 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
             return false;
         }
         // Honour the clip: a hit outside the clip shape doesn't reach
-        // the child.
-        let position = Point::new(ctx.x(), ctx.y());
-        let stored = self.resolve_clip(ctx.own_size());
-        if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
-            return false;
+        // the child. At `Clip::None` nothing is clipped — paint pushes no
+        // clip and semantics reports none — so hits are not clipped either.
+        if self.clip_behavior != Clip::None {
+            let position = Point::new(ctx.x(), ctx.y());
+            let stored = self.resolve_clip(ctx.own_size());
+            if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
+                return false;
+            }
         }
         if self.has_child {
             ctx.hit_test_child_at_offset(0, Offset::ZERO)
@@ -894,6 +945,9 @@ pub type RenderClipRect = RenderClip<Rect<f64>>;
 
 /// Rounded-rectangle clip.
 pub type RenderClipRRect = RenderClip<RRect>;
+
+/// Rounded-superellipse clip: corners blend continuously into the edges.
+pub type RenderClipRSuperellipse = RenderClip<RSuperellipse>;
 
 /// Oval (inscribed-ellipse) clip.
 pub type RenderClipOval = RenderClip<Oval>;

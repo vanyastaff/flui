@@ -38,10 +38,10 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
-    RenderSemanticsAnnotations, SemanticsActionRoute,
+    RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,
 };
 use flui_rendering::{
-    protocol::BoxProtocol,
+    protocol::{BoxProtocol, SliverProtocol},
     semantics::{
         ActionCall, Assertiveness, CellPosition, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
         SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
@@ -286,11 +286,42 @@ impl Semantics {
         self
     }
 
+    /// Hide preceding siblings in presentation order up to the nearest semantics
+    /// boundary. This subtree and later siblings keep their labels and actions.
+    #[must_use]
+    pub fn block_previous_siblings(mut self, blocking: bool) -> Self {
+        self.configuration.set_blocks_previous_siblings(blocking);
+        self
+    }
+
     /// Set the accessible label.
     #[must_use]
     pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
         self.configuration.set_label(label);
         self
+    }
+
+    /// Set the stable identifier tests and automation select this node by
+    /// (ADR-0240), exported as UI Automation's `AutomationId`, macOS
+    /// `AXIdentifier` and AT-SPI's accessible id. It is never announced, and
+    /// it does not make a node: it names this widget's node only when the
+    /// widget forms one ([`container`](Self::container), or under a parent
+    /// that requires explicit child nodes). Absorbed into an ancestor or
+    /// merged by `MergeSemantics`, it is dropped, not carried up.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.configuration.set_identifier(identifier);
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`: how a
+    /// control forwards the one its author gave it.
+    #[must_use]
+    pub(crate) fn identifier_if(self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        match identifier {
+            Some(identifier) => self.identifier(std::sync::Arc::clone(identifier)),
+            None => self,
+        }
     }
 
     /// Set the accessible value.
@@ -1071,9 +1102,95 @@ impl RenderView for Semantics {
 
 impl_render_view!(Semantics);
 
+/// Annotates an entire sliver subtree while retaining the sliver protocol.
+/// Use [`Semantics`] for individual box children. A supplied configuration may
+/// carry ordinary typed actions, collection metadata, relations or sort keys.
+#[derive(Clone, Debug, Default)]
+pub struct SliverSemantics {
+    configuration: SemanticsConfiguration,
+    exclude_descendants: bool,
+    child: Child,
+}
+
+impl SliverSemantics {
+    /// Creates an empty sliver annotation.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates an annotation from a complete configuration.
+    pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
+        Self {
+            configuration,
+            ..Self::default()
+        }
+    }
+
+    /// Supplies the accessible label.
+    #[must_use]
+    pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+        self.configuration.set_label(label);
+        self
+    }
+
+    /// Whether this sliver forms a semantics boundary.
+    #[must_use]
+    pub fn container(mut self, container: bool) -> Self {
+        self.configuration.set_semantics_boundary(container);
+        self
+    }
+
+    /// Keeps descendant contributions in explicit accessible nodes.
+    #[must_use]
+    pub fn explicit_child_nodes(mut self, explicit: bool) -> Self {
+        self.configuration.set_explicit_child_nodes(explicit);
+        self
+    }
+
+    /// Drops descendant accessibility without changing layout or painting.
+    #[must_use]
+    pub fn exclude_semantics(mut self, exclude: bool) -> Self {
+        self.exclude_descendants = exclude;
+        self
+    }
+
+    /// Supplies the sliver child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+}
+
+impl RenderView for SliverSemantics {
+    type Protocol = SliverProtocol;
+    type RenderObject = RenderSliverSemanticsAnnotations;
+
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        let mut object =
+            RenderSliverSemanticsAnnotations::from_configuration(self.configuration.clone());
+        let _ = object.set_exclude_descendants(self.exclude_descendants);
+        object
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &RenderObjectContext<'_>,
+        object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        object.set_configuration(self.configuration.clone())
+            | object.set_exclude_descendants(self.exclude_descendants)
+    }
+
+    flui_view::single_child_view_children!();
+}
+
+impl_render_view!(SliverSemantics);
+
 /// Merges the semantics of all descendants into a single node.
 #[derive(Clone, Debug, Default)]
 pub struct MergeSemantics {
+    identifier: Option<std::sync::Arc<str>>,
     child: Child,
 }
 
@@ -1081,6 +1198,23 @@ impl MergeSemantics {
     /// Creates a merge-semantics widget.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the merged node's stable identifier for tests and automation
+    /// (ADR-0240). The merge forms the node, so this, not a descendant's
+    /// [`Semantics::identifier`], names it: a descendant's identifier is
+    /// dropped by the merge.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`.
+    #[must_use]
+    pub(crate) fn identifier_if(mut self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        self.identifier = identifier.cloned();
+        self
     }
 
     /// Set the child.
@@ -1099,15 +1233,17 @@ impl RenderView for MergeSemantics {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderMergeSemantics::default()
+        let mut object = RenderMergeSemantics::default();
+        let _ = object.set_identifier(self.identifier.clone());
+        object
     }
 
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
+        render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+        render_object.set_identifier(self.identifier.clone())
     }
 
     flui_view::single_child_view_children!();

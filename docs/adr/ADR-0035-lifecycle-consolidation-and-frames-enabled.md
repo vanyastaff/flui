@@ -63,7 +63,8 @@ state. A UI runtime derives the scheduler state from its live presentations: any
 
 - Local steps follow `lifecycle_ladder(old, new)`, a port of Flutter's
   `ServicesBinding._generateStateTransitions` walking `dart:ui`'s declaration order (`detached,
-  resumed, inactive, hidden, paused`) — `Detached` is first, so leaving it is one forward step.
+  resumed, inactive, hidden, paused`). Leaving `Detached` enters from the `Paused` side instead
+  (**Amended by** [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md)).
   An unobserved presentation is `None`, and its first notification goes straight to the target,
   as in Flutter's nullable-previous-state branch.
 - Scheduler listeners see the UI runtime aggregate, not the local ladder. A paused or hidden host
@@ -75,8 +76,9 @@ state. A UI runtime derives the scheduler state from its live presentations: any
 - Observed `Detached` is reversible and only rejects input. Explicit stopping is a separate
   terminal intent. Closing a presentation removes it from the aggregate, delivers `Detached`
   while its tree is alive, then disposes it; an observer panic cannot skip removal.
-- Android maps its single active-status signal to the ladder: `false` walks to `Paused`, `true`
-  back to `Resumed`.
+- Android feeds the same three signals as every other backend: `onStart`/`onStop` give visibility,
+  `onResume`/`onPause` the execution state and `onWindowFocusChanged` focus, and the ladder comes
+  from `derive_lifecycle_state`. Focus alone never walks to `Paused` (ADR-0237).
 
 ### 5. Platform quit reaches every UI runtime
 
@@ -110,8 +112,8 @@ subscriptions rather than Flutter's `AppLifecycleListener.dispose`.
 ## Not implemented
 
 A native-Windows visibility signal (only the winit backend reports occlusion); Windows minimize
-mapped through `(visible, focused)`; a web `visibilitychange` signal; an Android transport that
-separates pause/resume from focus; negotiated exit (`onExitRequested`). Wayland occlusion
+mapped through `(visible, focused)`; a web `visibilitychange` signal; negotiated exit
+(`onExitRequested`). Wayland occlusion
 depends on the compositor sending xdg-shell `suspended`; where it does not, a window counts as
 always visible.
 

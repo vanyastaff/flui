@@ -14,6 +14,7 @@ use flui_runtime::ui_runtime::UiRuntime;
 
 use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
 
+use super::display_host::DisplayHost;
 use super::host::APP_RUNTIME;
 use super::native_bindings::{NativeBindings, NativeInstallError, PreparedNativeWindow};
 use super::window_install::InstallationWindow;
@@ -104,6 +105,7 @@ pub(in crate::app) struct InstalledHost(Rc<HostState>);
 struct HostState {
     logical: OwnerHost,
     native: NativeBindings,
+    displays: DisplayHost,
     pending: RefCell<Vec<PendingInstall>>,
     initializing: RefCell<Vec<InitializingInstall>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -115,6 +117,7 @@ impl InstalledHost {
         Self(Rc::new(HostState {
             logical: OwnerHost::new(),
             native: NativeBindings::new(),
+            displays: DisplayHost::default(),
             pending: RefCell::new(Vec::new()),
             initializing: RefCell::new(Vec::new()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -124,6 +127,11 @@ impl InstalledHost {
 
     pub(in crate::app) fn logical(&self) -> &OwnerHost {
         &self.0.logical
+    }
+
+    /// The accepted display snapshot and the windows that follow it.
+    pub(super) fn displays(&self) -> &DisplayHost {
+        &self.0.displays
     }
 
     pub(super) fn same_host(&self, other: &Self) -> bool {
@@ -337,7 +345,6 @@ impl OwnerEffects for HostState {
             // Native activation can close the window or tear down its host.
             // The development hook sees only a still-live installation and
             // may itself close it before the readiness receipt is settled.
-            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             if first.is_none() && self.installation_is_live(&entry) {
                 contain(&mut first, || entry.window.notify_opened());
             }
@@ -377,10 +384,9 @@ impl OwnerEffects for HostState {
     fn resize_surface(
         &self,
         address: PresentationAddress,
-        size: flui_foundation::geometry::Size<f64>,
-        scale_factor: f64,
+        metrics: flui_foundation::geometry::WindowMetrics,
     ) {
-        self.native.resize(address, size, scale_factor);
+        self.native.resize(address, metrics);
     }
 
     fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
@@ -388,12 +394,27 @@ impl OwnerEffects for HostState {
     }
 
     fn retire_presentation(&self, address: PresentationAddress, _: Option<PresentationAddress>) {
+        self.displays.unfollow(address);
         self.native.retire_presentation(address);
         #[cfg(not(target_arch = "wasm32"))]
         self.closed_presentations.borrow_mut().push(address);
         let mut first = None;
         self.complete_native(&mut first);
         finish(first);
+    }
+
+    /// Only Android has a refresh-rate request to make (`ANativeWindow_setFrameRate`);
+    /// elsewhere the 250 ms hold would add a wake for nothing.
+    fn tracks_frame_rate_demand(&self) -> bool {
+        cfg!(target_os = "android")
+    }
+
+    fn frame_rate_demand_changed(
+        &self,
+        address: PresentationAddress,
+        demand: flui_runtime::frame_rate_demand::FrameRateDemand,
+    ) {
+        self.displays.set_frame_rate_demand(address, demand);
     }
 
     fn after_turn(&self, turn_recovery: RecoveryState) {
@@ -404,6 +425,16 @@ impl OwnerEffects for HostState {
             contain(&mut first, || {
                 self.native.refresh_text_sizing(&self.logical, self, false);
             });
+        }
+        // A held window placement is written on the wake its deadline brought,
+        // not on a frame: a minimized window has none.
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if self.is_current() {
+            contain(&mut first, super::placement::tick);
         }
         self.complete_native(&mut first);
         #[cfg(not(target_arch = "wasm32"))]

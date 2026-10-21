@@ -21,6 +21,186 @@ recorded so far.
 
 ## Mapping decisions
 
+### Cross-axis sliver tracks preserve the scrolling protocol
+
+Content and positively weighted flexible tracks use a dedicated parent-data
+type; committed offsets stay in the render tree. Limits refuse nonfinite and
+negative values before mutation. Layout stages physical positions, propagates
+scroll corrections and withholds dimensions when those positions cannot be
+represented. [ADR-0228](../../docs/adr/ADR-0228-cross-axis-sliver-tracks.md)
+records allocation, composition and recovery. Its public render and mounted
+widget rows cover both axes, reversed placement, weight updates and accessible
+child bounds.
+
+### Sliver annotations keep their original layout protocol
+
+`RenderSliverSemanticsAnnotations` forwards its child's committed sliver geometry
+and hit coordinates. It contributes the same `SemanticsConfiguration` as box
+annotations and can exclude descendant accessibility independently of paint or
+layout. The public consumer is `SliverSemantics`; no Box adapter or extra
+viewport is introduced. Harness row
+`harness_sliver_semantics_annotations_preserves_geometry_paint_and_hits` and
+widget row `sliver_annotations_update_and_exclude_without_adapting_geometry`
+check geometry, publication, exclusion and retained identity.
+
+### Spoken span labels preserve rendered text and child content
+
+`RenderParagraph` uses each span's semantics label in place of that span's own
+spoken text, retaining its children in declarative order. An empty override
+silences only the owning span. Label-only replacement invalidates semantics even
+when the painter keeps its existing glyph layout. The mounted widget row
+`rich_text_accessible_labels_follow_span_overrides_and_replacement` checks
+published labels, nested overrides, empty labels, replacement identity and
+unchanged text geometry.
+
+### Stack intrinsic sizing uses only non-positioned content
+
+Positioned overlays do not contribute to Stack's allocated size, so they do not
+contribute to its intrinsic dimensions either. Querying their size would let an
+IntrinsicWidth/IntrinsicHeight wrapper enlarge the container from overlay content
+that ordinary layout excludes. The existing child parent-data query identifies
+these children without a second positioning cache. IndexedStack installs ordinary
+BoxParentData and continues to size from all children.
+`harness_stack_intrinsic_sizing_ignores_positioned_overlays` observes real intrinsic
+wrapper layout plus all four queries for edge-positioned, explicitly sized and
+ordinary children at finite and unbounded cross-axis inputs.
+
+### Fill-viewport geometry does not own a separate reveal policy
+
+FillViewport eagerly lays out its attached children at viewport-fraction extents.
+Its former implicit-scrolling flag had no behavioral consumer and is removed.
+Registered semantics ancestry controls descendant reveal under ADR-0168/ADR-0225,
+including materialized children beyond a cache window. The widget cases
+`show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` and
+`show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry` observe
+that contract through real scroll owners.
+
+### Animation and viewport subscriptions end with their render owner
+
+Animation samplers, opacity, transforms, animated size, placement tracks and
+floating headers own cancellation independently of the widget's animation run.
+Detaching or dropping a render object removes its listener without stopping or
+disposing that run. Callback-capable owned registrations preserve each sampler's
+generation checks and pending delivery; they do not replace sampling with a
+plain invalidation callback. Opacity must cancel even when its own callback holds
+the proxy strongly. `harness_animated_opacity_owner_release_releases_its_animation_parent`
+observes both box and sliver parent lifetime through a mounted public tree.
+The private sampler test
+`owner_release_retires_samples_even_while_the_proxy_survives` observes cached-value
+retirement with an independently retained proxy, a seam unavailable through the
+concrete catalog's closed value types.
+
+Viewport offsets cancel by callback identity rather than `ListenerId`. Their
+private registration stores a cancellation function selected for the offset type;
+owner destruction can therefore cancel without adding a public generic bound or
+another shared owner of the offset. Callback activity is revoked before invoking
+user cancellation. A replacement commits its offset first, then independently
+cancels, subscribes and retires outgoing ownership through `PanicRecovery`.
+Since callback identity is available before registration, even an unacknowledged
+registration can attempt cancellation. Failed opaque retirement follows ADR-0127.
+`harness_viewport_owner_release_cancels_offset_callbacks` and
+`harness_viewport_replacement_finishes_subscription_migration_after_failure`
+cover both viewport types, competing failures, stale callbacks and recovery.
+
+### Delegate subscriptions own cancellation and revoke callbacks before callouts
+
+CustomPaint and Flow retain the actual listenable and registration ID. Cleanup
+does not call the delegate's source getter again. Each registration revokes its
+relay before invoking cancellation, so a source that panics before removing the
+callback cannot wake the current presentation through an outgoing registration.
+RAII also cancels registrations on owner release. CustomPaint moves both
+subscriptions and both painter owners out before exceptional destruction, so
+an earlier cancellation or capture failure cannot strand the healthy tail.
+
+Comparisons run before replacement admission. A failed comparison preserves the
+old presentation and retires rejected ownership through `PanicRecovery`. Once
+replacement commits, cancellation, new registration and outgoing retirement
+are separate contained operations. If one fails, the committed update is
+admitted through the invalidation handle before the first failure resumes:
+an unwinding setter cannot return its impact to the normal caller.
+
+Healthy ownership is destroyed normally. Failed opaque ownership follows
+[ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md). A source that
+registers then panics without returning an ID supplies no cancellation
+capability; its relay is revoked and ownership retained. An upstream
+cancellation that panics likewise cannot prove removal, although the relay is
+already inert. These boundaries cannot rescue a user-owned aggregate that
+double-panics internally before returning to the framework.
+
+Public harness rows
+`harness_custom_paint_detach_finishes_both_subscriptions_after_failure`,
+`harness_custom_paint_owner_release_removes_external_subscriptions`,
+`harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_relay`,
+`harness_custom_paint_comparison_failure_keeps_the_old_presentation`,
+`harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced`,
+`harness_custom_paint_owner_release_preserves_first_retirement_failure`,
+`harness_custom_paint_old_painter_retirement_cannot_erase_the_replacement` and
+`harness_flow_subscription_migration_and_owner_release_finish_after_failure`
+pin initial, single-failure, competing-failure and subsequent-operation paths.
+
+### Flow accessibility follows presentation without owning another geometry cache
+
+Flow's pure replay selects presented children and supplies their transforms;
+hit testing reads the record of the last paint instead (ADR-0224's amendment,
+`harness_flow_hits_where_it_painted_until_it_repaints`).
+`FlowPaintingContext::paint_child_with_opacity` records continuous group opacity
+through the ordinary fragment recorder. Its zero-opacity call occupies the slot
+but omits presentation, input and accessibility; partial opacity keeps child
+geometry and actions. `harness_flow_child_opacity_reaches_compositing_and_input`
+checks inline and repaint-boundary children. The mounted widget row
+`flow_repaint_and_delegate_replacement_update_accessible_children` also pins
+notifier-driven transparent/partial/opaque transitions.
+The pipeline passes committed size to the semantics child-selection hook.
+Its clip bounds accessible geometry, and repaint notifications admit both paint
+and semantics work together. Logical reading order stays declarative even when
+the delegate reverses paint order. [ADR-0224](../../docs/adr/ADR-0224-geometry-aware-semantics-child-selection.md)
+records the protocol and alternatives. The public rows
+`harness_flow_accessible_bounds_follow_clip_without_layout` and
+`harness_flow_only_announces_presented_children_after_repaint_and_replacement`
+pin bounds, visibility, actions, replacement and reading order.
+
+### Flex resolves both physical axes before positioning
+
+Text direction controls the horizontal axis, and `VerticalDirection` controls
+the vertical axis, independently of which is the main axis. Reversing direction
+preserves declarative child identity and baseline selection. Live and dry
+baseline use the same positioned-child calculation.
+`harness_flex_vertical_direction_positions_and_reports_baselines` covers both
+axes and RTL, while `vertical_direction_updates_mounted_flex_children` covers
+the widget configuration path and updates without remounting.
+
+### Custom-painted accessibility follows paint traversal order
+
+`RenderCustomPaint` supplies background regions, real child semantics, then
+foreground regions. The two painter lists have independent key namespaces;
+their regions use the normal ancestor merge, exclusion, blocking and geometry
+rules rather than a single host annotation. [ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md)
+records identity ownership and failure behavior.
+Painter repaint notifications refresh regions as well as recorded paint;
+`harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions`
+checks both painter roles, retained identities, current actions and removal.
+`harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions`
+and `harness_custom_paint_regions_obey_merge_exclude_and_action_blocking`
+observe the actual assembly and action-resolution paths.
+
+### Baseline selection follows the object's layout policy
+
+Sizing and positioning wrappers forward through the pipeline's committed
+child edges. Stack selects the highest natural line across both aligned and
+positioned children using the same child-offset helper for live and dry
+queries; `harness_stack_baselines_include_positioned_and_aligned_children`
+checks both paths and subsequent loss of every natural line.
+Wrap selects the highest positioned child baseline, sharing
+`visit_offsets` between committed positioning and dry-baseline queries;
+Theater considers only onstage children and clears its recorded lines when
+none remain. LayoutBuilder's live forwarding does not enable speculative dry
+layout. [ADR-0234](../../docs/adr/ADR-0234-layout-baseline-composition.md) records
+the shared contract and FLUI's explicit authored-line policy for Baseline.
+`harness_wrap_reports_its_highest_positioned_baseline`,
+`harness_theater_baselines_follow_only_onstage_children` and
+`harness_offstage_and_layout_builder_forward_live_baselines` observe these
+rules through a real baseline-positioning parent.
+
 ### Floating-header snap subscriptions follow the attached controller
 
 Both floating-header modes retain their current invalidation handle while
@@ -35,6 +215,15 @@ distinguishes callbacks from an outgoing controller from the new controller.
 
 ### Hidden layout retention does not imply accessibility retention
 
+Static box and sliver opacity omit child semantics at exactly zero opacity,
+including when a layer is forced. Nonzero opacity retains accessibility even
+when raster alpha rounds toward zero. Box opacity retains its independent
+pointer hit-testing contract. `RenderSliverOffstage` excludes the whole
+hidden subtree while retaining child layout. The assembled-tree and stale
+action contracts are pinned by
+`harness_static_opacity_visibility_controls_semantics_and_actions` and
+`harness_sliver_offstage_removes_hidden_semantics_and_stale_actions`.
+
 `RenderVisibility` lays its child out even when hidden. Its child participates
 in semantics only when visible or explicitly retained with `maintain_semantics`.
 This uses `RenderBox::visits_child_for_semantics`, independently of paint and
@@ -47,6 +236,16 @@ and `harness_visibility_reports_effective_semantics_changes` pins public update
 impacts. The widgets' `retained_visibility_hides_child_semantics_by_default` and
 `retained_visibility_updates_semantics_without_changing_layout` assert the
 assembled accessibility output and mounted configuration changes.
+
+### Physical surfaces share their clip with accessible bounds
+
+Physical surfaces derive the conservative accessibility clip from the same
+local shape used to clip the child. Shadow elevation does not expand that
+clip. `Clip::None` imposes no accessible clip; changing clip behavior updates
+semantics without requiring layout. Bounds are conservative for curved and
+nonrectangular paths, as with ordinary path clips.
+`harness_physical_shape_clips_accessible_bounds_and_updates_without_layout`
+checks initial clipping and transitions through the mounted pipeline.
 
 ### An animated translation keeps its transform layer
 
@@ -78,7 +277,8 @@ delivered value. Exhaustion preserves the last sample permanently. The
 private recovery cases `failed_mark_retries`,
 `newer_generation_wins_in_either_commit_order` and
 `restoring_a_delivered_value_while_a_newer_one_is_in_flight_still_marks` pin
-these obligations. A hit visit retains its selected sample independently.
+these obligations. A hit visit reads the sample once, in `hit_test_transform`:
+the walk maps both the position and the entries through that one matrix.
 
 The facade's `a_slide_tick_moves_pixels_without_rebuilding` also drives a
 mounted `SlideTransition` through identity-to-layer and retained-layer ticks.
@@ -335,6 +535,28 @@ empty text, decorated fields and override removal.
 The widgets text-editing contract table checks actual editing and pointer
 selection through the viewport, including RTL and obscured text.
 
+### A content shape is the hit area, not a filter over the child
+
+`RenderContentShape` takes the hit anywhere inside its `HitShape`, even where
+its child paints nothing, and rejects everything outside it without testing the
+child. A shape that only filtered the child's own hits would leave a circular
+button with a transparent icon padding unhittable between the glyph and the
+rim. It clips nothing and opens no layer, unlike `RenderClipOval`, which also
+hit-tests by shape. `harness_content_shape_rounded_rect_is_the_hit_area` pins
+the hit through a child that ignores pointers;
+`harness_content_shape_oval_rejects_the_corners_of_its_box` pins the corners.
+
+`RenderHitSlop` does not hit-test its area itself; it reports the area and the
+pipeline resolves it (flui-rendering ARCHITECTURE.md, "Expanded hit areas are
+resolved after the visual walk"). Its area is the box grown by the insets, then
+grown symmetrically to the minimum target per axis; a negative or non-finite
+input counts as zero so the area never shrinks below the box. The minimum is a
+`MinTarget`: an authored length, or the scope's `GestureSettingsProvider`,
+read on every hit test so a live host update needs no rebuild (the provider is
+owner-local data, not a callback). An absorbing `RenderAbsorbPointer` reports
+`blocks_hit_slop`, so no area takes a point that landed on a barrier.
+`harness_hit_slop_min_target_centres_on_the_child` pins the growth.
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI runtime's layout/paint thread
@@ -351,11 +573,53 @@ through `PipelineOwner`; they hold no shared mutable state of their own.
 
 ### RenderImage source fitting
 
-RenderImage uses painting's BoxFit::apply for both the cropped source and the
-fitted destination (ADR-0115). Alignment positions both rectangles. Its logical
-intrinsic/scale source converts back to decoded texel coordinates before Canvas
-records an ImageRegion, so Cover paints inside the allocated box and high-DPI
-source cropping uses the decoded image's coordinates. The actual object/tree
-consumer is `render_image_scaled_cover`, a row of the engine's existing
-`painter_images_and_offscreen_results_read_back_as_specified` GPU family; the
-objects catalog still owns its layout/paint-presence harness rows.
+RenderImage paints through painting's `ImagePlacement` (ADR-0229), the same
+contract decoration images use: any `BoxFit` at a fractional alignment with
+optional repetition, or a nine-slice whose corners keep their logical size.
+Fitting works on the natural size (intrinsic size over scale); the cropped
+source converts back to decoded texels axis by axis before Canvas records an
+ImageRegion (ADR-0115), so Cover paints inside the allocated box and high-DPI
+cropping uses the decoded image's coordinates. A natural extent that
+overflows `f64` (a tiny scale) is bounded with its ratio preserved, both in
+layout and in placement. The placement is paint-only; layout never reads it.
+The GPU consumers are `render_image_scaled_cover` and
+`sliced_placement_keeps_logical_corners`, rows of the engine's
+`painter_images_and_offscreen_results_read_back_as_specified` family.
+`harness_image_extreme_scale_preserves_constrained_aspect_and_paint` pins the
+bounded layout and recorded paint for every fit at tiny scales, and
+`harness_image_placement_slices_and_repeats_in_logical_units` pins a mounted
+2x slice and logical-size repetition.
+
+### Rounded clips hit the shape they paint
+
+`RenderClipRRect` hit-tests with `RRect::contains`, which fits oversized radii
+by `RRect::normalized` — the CSS/Skia factor the engine's clip mask applies — so
+a `BorderRadius::circular(100)` pill on a 200x20 box takes hits along its whole
+straight run (`harness_clip_rrect_pill_hit_tests_the_painted_radius`; the
+engine row `rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii`
+reads oversized and elliptical corners back from the GPU against the same
+`contains`). At `Clip::None` a clip paints nothing and reports no accessible
+clip, so it clips no hits either. A directly drawn rounded rect (a decoration) is
+fitted the same way at the engine's draw entry: `harness_decorated_box_pill_hits_the_painted_radius`
+and the readback row `a_drawn_rrect_matches_hit_testing_with_oversized_radii`.
+
+### Superellipse clips and backdrop groups
+
+`RenderClipRSuperellipse` hit-tests with `RSuperellipse::contains`, the same
+normalized exponent-4 corner curve the engine's clip mask draws (ADR-0231);
+`harness_clip_rsuperellipse_hit_tests_the_drawn_curve` pins a corner hit a
+circular corner would reject. `RenderBackdropFilter` carries an optional
+`BackdropGroupKey` onto its layer; grouped filters on one surface sample one
+capture (ADR-0230), pinned by
+`harness_backdrop_filter_carries_its_group_to_the_layer` and the engine row
+`grouped_backdrops_share_one_capture`.
+
+### Annotated regions and external textures
+
+`RenderAnnotatedRegion` annotates its own box through a paint scope that becomes an
+`AnnotatedRegionLayer`; readers use `LayerTree::find_annotations` (ADR-0232), pinned by
+`harness_annotated_region_is_found_in_the_scene_over_its_box`. `RenderTexture` fills
+the largest box its constraints allow and draws its texture there; a new frame
+revision repaints it, which is how a frame fed through the presentation's
+`TextureRegistry` reaches the screen without other changes (ADR-0233), pinned by
+`harness_texture_fills_its_box_and_repaints_per_frame`.

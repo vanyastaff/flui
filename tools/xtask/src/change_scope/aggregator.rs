@@ -11,22 +11,20 @@
 //!    `lane` alone, and the aggregator recomputes it instead of trusting each
 //!    job's `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
-//!    - `tooling`: `deps`, and `standalone` when plan names a standalone crate;
+//!    - `tooling`: `deps`;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
 //!      no native host jobs;
-//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks);
-//!    - `extended`: `full` plus `EXTENDED_JOBS`.
+//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks).
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a
 //!    cancellation) or a job that ran where it should have skipped fails the
 //!    aggregator; so does a job no lane runs, because it can only skip.
 //!
-//! 3. THE EVENT'S FLOOR -- a run on `main` (`push`, `merge_group`) must take
-//!    `full` or `extended`, a nightly or manual run (`schedule`,
-//!    `workflow_dispatch`) must take `extended`. Rule 2 trusts `plan`'s lane;
-//!    this rule checks it against the event outside `Lane::decide`, so a
-//!    regression that maps `push` to a narrow lane cannot skip every heavy
-//!    job with a green `ci` on `main`.
+//! 3. THE EVENT'S FLOOR -- a run on `main` (`push`, `merge_group`) and a
+//!    manual run (`workflow_dispatch`) must take `full`. Rule 2 trusts
+//!    `plan`'s lane; this rule checks it against the event outside
+//!    `Lane::decide`, so a regression that maps `push` to a narrow lane
+//!    cannot skip every heavy job with a green `ci` on `main`.
 //!
 //! A regression here either lets a job silently skip (red main that looks
 //! green) or fails every PR.
@@ -39,18 +37,13 @@ use anyhow::{Context, bail};
 /// Jobs the aggregator does not gate: itself, and the job that runs after it.
 const UNGATED: [&str; 2] = ["ci", "notify-main-red"];
 
-/// The `if:` of the jobs the `wide`, `full` and `extended` lanes run (`HEAVY_JOBS`).
+/// The `if:` of the jobs the `wide` and `full` lanes run (`HEAVY_JOBS`).
 pub(super) const WIDE_CONDITION: &str =
-    r#"contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)"#;
-/// The `if:` of the jobs only `full` and `extended` add (`FULL_JOBS`). Only
-/// the tests read it: they pin `FULL_JOBS` to the jobs it gates.
+    r#"contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)"#;
+/// The `if:` of the jobs only `full` adds (`FULL_JOBS`). Only the tests read
+/// it: they pin `FULL_JOBS` to the jobs it gates.
 #[cfg(test)]
-pub(super) const FULL_CONDITION: &str =
-    r#"contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)"#;
-/// The `if:` of the jobs only `extended` adds (`EXTENDED_JOBS`); read by the
-/// tests, like [`FULL_CONDITION`].
-#[cfg(test)]
-pub(super) const EXTENDED_CONDITION: &str = "needs.plan.outputs.lane == 'extended'";
+pub(super) const FULL_CONDITION: &str = "needs.plan.outputs.lane == 'full'";
 
 /// One job of ci.yml, as far as the aggregator reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,12 +165,10 @@ pub(super) fn parse_jobs(ci_yml: &str) -> anyhow::Result<Vec<Job>> {
 /// The jobs each lane adds, as the `ci` job lists them.
 #[derive(Debug, Clone, Default)]
 pub(super) struct LaneJobs {
-    /// `HEAVY_JOBS`: what `wide` (and so `full` and `extended`) runs.
+    /// `HEAVY_JOBS`: what `wide` (and so `full`) runs.
     pub(super) wide: BTreeSet<String>,
-    /// `FULL_JOBS`: what `full` (and so `extended`) adds.
+    /// `FULL_JOBS`: what only `full` adds.
     pub(super) full: BTreeSet<String>,
-    /// `EXTENDED_JOBS`: what only `extended` adds.
-    pub(super) extended: BTreeSet<String>,
 }
 
 /// What `plan` decided, as the aggregator receives it.
@@ -185,10 +176,8 @@ pub(super) struct LaneJobs {
 pub(super) struct Plan<'a> {
     /// `plan`'s own result (`success`, `failure`, ...).
     pub(super) result: Option<&'a str>,
-    /// `docs`, `tooling`, `wide`, `full` or `extended`.
+    /// `docs`, `tooling`, `wide` or `full`.
     pub(super) lane: &'a str,
-    /// Whether plan names a standalone crate for the `standalone` job.
-    pub(super) standalone: bool,
 }
 
 /// Python-style repr of a string, as the aggregator's messages print it:
@@ -207,8 +196,7 @@ fn repr(s: &str) -> String {
 /// `plan` before it reaches this rule).
 fn lanes_allowed(event: &str) -> Option<&'static [&'static str]> {
     match event {
-        "push" | "merge_group" => Some(&["full", "extended"]),
-        "schedule" | "workflow_dispatch" => Some(&["extended"]),
+        "push" | "merge_group" | "workflow_dispatch" => Some(&["full"]),
         _ => None,
     }
 }
@@ -222,16 +210,12 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
     let mut add = |names: &[&str]| runs.extend(names.iter().map(|&n| n.to_owned()));
     match plan.lane {
         "docs" => {}
-        "tooling" if plan.standalone => add(&["deps", "standalone"]),
         "tooling" => add(&["deps"]),
-        "wide" | "full" | "extended" => {
+        "wide" | "full" => {
             add(&["deps"]);
             runs.extend(lanes.wide.iter().cloned());
-            if plan.lane != "wide" {
+            if plan.lane == "full" {
                 runs.extend(lanes.full.iter().cloned());
-            }
-            if plan.lane == "extended" {
-                runs.extend(lanes.extended.iter().cloned());
             }
         }
         _ => return None,
@@ -375,7 +359,6 @@ mod tests {
         let lanes = LaneJobs {
             wide: list("HEAVY_JOBS"),
             full: list("FULL_JOBS"),
-            extended: list("EXTENDED_JOBS"),
         };
         let gated = gated_jobs(&jobs);
         Workflow { jobs, gated, lanes }
@@ -384,21 +367,16 @@ mod tests {
     /// Job -> result, for the jobs not at `success`.
     type Results = BTreeMap<String, &'static str>;
 
-    /// What a run looks like: its lane, plan's two flags, and the results.
+    /// What a run looks like: its lane and the event that started it.
     struct Run<'a> {
         lane: &'a str,
-        standalone: bool,
         event: &'a str,
     }
 
     const PR: &str = "pull_request";
 
     fn run(lane: &str) -> Run<'_> {
-        Run {
-            lane,
-            standalone: false,
-            event: PR,
-        }
+        Run { lane, event: PR }
     }
 
     /// Runs the rule with every gated job at `success` unless `results` says otherwise.
@@ -413,7 +391,6 @@ mod tests {
         let plan = Plan {
             result: Some(result_of("plan")),
             lane: r.lane,
-            standalone: r.standalone,
         };
         verify(&w.gated, &needs, &w.lanes, &plan, r.event)
     }
@@ -457,12 +434,6 @@ mod tests {
             .collect()
     }
 
-    /// `standalone`, which no
-    /// whole-workspace lane runs.
-    fn not_whole_workspace() -> Vec<String> {
-        names(&["standalone"])
-    }
-
     fn heavy_jobs_list_matches_the_jobs_gated_on_heavy() {
         let w = workflow();
         assert_eq!(gated_on(&w, WIDE_CONDITION), w.lanes.wide);
@@ -471,10 +442,7 @@ mod tests {
     fn lane_lists_match_the_job_conditions() {
         let w = workflow();
         assert_eq!(gated_on(&w, FULL_CONDITION), w.lanes.full);
-        assert_eq!(gated_on(&w, EXTENDED_CONDITION), w.lanes.extended);
         assert!(w.lanes.wide.is_disjoint(&w.lanes.full));
-        assert!(w.lanes.wide.is_disjoint(&w.lanes.extended));
-        assert!(w.lanes.full.is_disjoint(&w.lanes.extended));
         assert!(!w.lanes.wide.is_empty() && !w.lanes.full.is_empty());
     }
 
@@ -482,24 +450,13 @@ mod tests {
     /// condition [`planned_runs`] runs it under, not just some known one.
     fn jobs_outside_the_lane_lists_have_their_own_condition() {
         let w = workflow();
-        let expected: BTreeMap<&str, &str> = [
-            ("deps", "needs.plan.outputs.lane != 'docs'"),
-            (
-                "standalone",
-                "needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''",
-            ),
-        ]
-        .into();
+        let expected: BTreeMap<&str, &str> = [("deps", "needs.plan.outputs.lane != 'docs'")].into();
         let actual: BTreeMap<&str, &str> = w
             .jobs
             .iter()
             .filter(|j| w.gated.contains(&j.name))
             .filter(|j| !["checks", "plan"].contains(&j.name.as_str()))
-            .filter(|j| {
-                !w.lanes.wide.contains(&j.name)
-                    && !w.lanes.full.contains(&j.name)
-                    && !w.lanes.extended.contains(&j.name)
-            })
+            .filter(|j| !w.lanes.wide.contains(&j.name) && !w.lanes.full.contains(&j.name))
             .map(|j| (j.name.as_str(), j.condition.as_deref().unwrap_or("")))
             .collect();
         assert_eq!(actual, expected);
@@ -513,12 +470,7 @@ mod tests {
 
     fn wide_lane_skips_platform_jobs() {
         let w = workflow();
-        let skipped: Vec<String> = not_whole_workspace()
-            .into_iter()
-            .chain(w.lanes.full.iter().cloned())
-            .chain(w.lanes.extended.iter().cloned())
-            .collect();
-        let wide = skipping(&skipped);
+        let wide = skipping(&w.lanes.full);
         green(&run("wide"), &wide);
         red(
             &run("wide"),
@@ -528,32 +480,15 @@ mod tests {
     }
 
     fn full_lane() {
-        let w = workflow();
-        let skipped: Vec<String> = not_whole_workspace()
-            .into_iter()
-            .chain(w.lanes.extended.iter().cloned())
-            .collect();
+        // nothing skips: every gated job runs on main
         let main = Run {
             event: "push",
             ..run("full")
         };
-        let full = skipping(&skipped);
+        let full = Results::new();
         green(&main, &full);
         red(&main, &with(full.clone(), "miri", "skipped"), "miri");
         red(&main, &with(full.clone(), "test", "failure"), "test");
-    }
-
-    fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
-        let nightly = Run {
-            event: "schedule",
-            ..run("extended")
-        };
-        green(&nightly, &skipping(&not_whole_workspace()));
-        red(
-            &nightly,
-            &with(skipping(&not_whole_workspace()), "test", "skipped"),
-            "test",
-        );
     }
 
     fn red_main_notifications_have_auth_and_repository_context() {
@@ -573,7 +508,6 @@ mod tests {
         use clap::Parser;
 
         let w = workflow();
-        assert!(w.lanes.extended.is_empty());
         assert!(
             crate::Cli::try_parse_from(["xtask", "affected", "--full-ci-label", "true"]).is_err()
         );
@@ -602,35 +536,16 @@ mod tests {
 
     fn tooling_and_docs_lanes() {
         let w = workflow();
-        let compiling: Vec<String> = w
-            .lanes
-            .wide
-            .iter()
-            .chain(&w.lanes.full)
-            .chain(&w.lanes.extended)
-            .cloned()
-            .collect();
-        let tooling = skipping(compiling.iter().chain(&names(&["standalone"])));
+        let compiling: Vec<String> = w.lanes.wide.iter().chain(&w.lanes.full).cloned().collect();
+        let tooling = skipping(&compiling);
         green(&run("tooling"), &tooling);
         red(
             &run("tooling"),
             &with(tooling.clone(), "deps", "skipped"),
             "deps",
         );
-        // a standalone crate changed: its job must run
-        let standalone = Run {
-            standalone: true,
-            ..run("tooling")
-        };
-        red(&standalone, &tooling, "standalone");
-        green(&standalone, &without(tooling.clone(), "standalone"));
-        red(
-            &run("tooling"),
-            &without(tooling, "standalone"),
-            "standalone",
-        );
 
-        let docs = skipping(compiling.iter().chain(&names(&["standalone", "deps"])));
+        let docs = skipping(compiling.iter().chain(&names(&["deps"])));
         green(&run("docs"), &docs);
         red(&run("docs"), &without(docs, "deps"), "deps");
     }
@@ -685,7 +600,6 @@ mod tests {
         let plan = Plan {
             result: Some("success"),
             lane: "full",
-            standalone: false,
         };
         let (ok, log) = verify(&w.gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok);
@@ -707,47 +621,30 @@ mod tests {
             .collect();
         let plan = Plan {
             result: Some("success"),
-            lane: "extended",
-            standalone: false,
+            lane: "full",
         };
-        let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "schedule");
+        let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "push");
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
     }
 
-    fn a_narrow_lane_on_main_or_nightly_is_red() {
+    fn a_narrow_lane_on_main_or_dispatch_is_red() {
         // every job the narrow lane skips did skip, so rule 2 alone is green:
         // only the event's floor catches a plan that under-ran main
         let w = workflow();
-        let whole: Vec<String> = w
-            .lanes
-            .wide
-            .iter()
-            .chain(&w.lanes.full)
-            .chain(&w.lanes.extended)
-            .cloned()
-            .chain(names(&["standalone"]))
-            .collect();
+        let whole: Vec<String> = w.lanes.wide.iter().chain(&w.lanes.full).cloned().collect();
         let tooling = skipping(&whole);
         green(&run("tooling"), &tooling);
-        for event in ["push", "merge_group"] {
+        for event in ["push", "merge_group", "workflow_dispatch"] {
             red(
                 &Run {
                     event,
                     ..run("tooling")
                 },
                 &tooling,
-                &format!(
-                    "event={event} must take lane full or extended, but plan chose lane='tooling'"
-                ),
+                &format!("event={event} must take lane full, but plan chose lane='tooling'"),
             );
         }
-        let wide = skipping(
-            &not_whole_workspace()
-                .into_iter()
-                .chain(w.lanes.full.iter().cloned())
-                .chain(w.lanes.extended.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
+        let wide = skipping(&w.lanes.full);
         red(
             &Run {
                 event: "push",
@@ -756,27 +653,13 @@ mod tests {
             &wide,
             "lane='wide'",
         );
-        let full = skipping(
-            &not_whole_workspace()
-                .into_iter()
-                .chain(w.lanes.extended.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
-        green(
-            &Run {
-                event: "merge_group",
-                ..run("full")
-            },
-            &full,
-        );
-        for event in ["schedule", "workflow_dispatch"] {
-            red(
+        for event in ["merge_group", "workflow_dispatch"] {
+            green(
                 &Run {
                     event,
                     ..run("full")
                 },
-                &full,
-                &format!("event={event} must take lane extended, but plan chose lane='full'"),
+                &Results::new(),
             );
         }
     }
@@ -835,10 +718,6 @@ mod tests {
                 ),
                 ("full_lane", full_lane as fn()),
                 (
-                    "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
-                    extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
-                ),
-                (
                     "red_main_notifications_have_auth_and_repository_context",
                     red_main_notifications_have_auth_and_repository_context as fn(),
                 ),
@@ -858,8 +737,8 @@ mod tests {
                     a_job_no_lane_runs_is_red as fn(),
                 ),
                 (
-                    "a_narrow_lane_on_main_or_nightly_is_red",
-                    a_narrow_lane_on_main_or_nightly_is_red as fn(),
+                    "a_narrow_lane_on_main_or_dispatch_is_red",
+                    a_narrow_lane_on_main_or_dispatch_is_red as fn(),
                 ),
                 (
                     "the_reader_handles_quoted_keys_comments_and_refuses_block_needs",

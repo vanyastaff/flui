@@ -35,7 +35,6 @@ pub(super) struct InstallationWindow {
     window: Option<Arc<dyn PlatformWindow>>,
     closed: Arc<AtomicBool>,
     published: bool,
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     agent: Option<(
         crate::app::dev_agent::DevAgent,
         flui_view::dev_agent::AgentWindow,
@@ -48,7 +47,6 @@ impl InstallationWindow {
             window: Some(window),
             closed: Arc::new(AtomicBool::new(false)),
             published: false,
-            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             agent: None,
         }
     }
@@ -69,7 +67,6 @@ impl InstallationWindow {
         self.published = true;
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn notify_opened(&mut self) {
         if let Some((agent, window)) = self.agent.take() {
             agent.window_opened(window);
@@ -93,7 +90,6 @@ impl Drop for InstallationWindow {
             failure,
             "installation window retirement",
         );
-        #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
         {
             let agent = self.agent.take();
             let failure =
@@ -174,7 +170,6 @@ impl WindowInstall {
         self.native.text_sizing = Some(sizing);
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn dev_agent(
         &mut self,
         agent: Option<(
@@ -231,6 +226,70 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
+    /// Follow the window's system light/dark appearance into
+    /// `MediaQueryData::platform_brightness`.
+    ///
+    /// The observer is registered before the seed is sampled, so a theme change
+    /// between the two is delivered rather than lost, and a user on a dark
+    /// desktop never starts light.
+    pub(super) fn observe_appearance(&mut self) {
+        use super::owner_dispatch::RuntimeEvent;
+
+        let window = Arc::clone(self.window.native());
+        let dispatcher = self.dispatcher();
+        // Weak: the callback lives in the window's own handler table, and a
+        // strong capture would keep the window alive past close.
+        let observed = Arc::downgrade(&window);
+        window.on_appearance_changed(Box::new(move || {
+            if let Some(window) = observed.upgrade() {
+                let _ = dispatch_platform_ui_runtime(
+                    dispatcher,
+                    RuntimeTask::Event(RuntimeEvent::AppearanceChanged(window.appearance().into())),
+                );
+            }
+        }));
+        self.observe(WindowObservation::Brightness(window.appearance().into()));
+    }
+
+    /// Follow the display this window is on into the presentation's refresh
+    /// period (ADR-0236).
+    ///
+    /// The window's hint is registered before the seed is derived, so a move
+    /// between the two is delivered rather than lost, and the presentation
+    /// starts on its real display and period before its first frame. The hint
+    /// carries nothing: it wakes the owner, whose next turn samples the
+    /// platform's snapshot and re-derives every window. Without an installed
+    /// owner platform there is nothing to wake and the hint does nothing.
+    pub(super) fn observe_display(&mut self) {
+        let window = Arc::clone(self.window.native());
+        let dispatcher = self.dispatcher();
+        // Bound to this host's owner now, so a late hint after a replacement wakes the
+        // retired owner only (a cheap defence; nothing pins it).
+        let proxy = super::host::with_owner_platform(flui_platform::OwnerPlatform::proxy);
+        window.on_display_changed(Box::new(move || {
+            if let Some(proxy) = &proxy {
+                // A failed wake leaves the owner's retry debt; nothing to do.
+                let _ = proxy.wake();
+            }
+        }));
+        self.host.displays().follow(dispatcher, &window);
+        let seed = self.host.displays().derive(window.as_ref());
+        self.observe(WindowObservation::Display(seed));
+    }
+
+    /// Follow the window's published state into the subscribers of its
+    /// `WindowHandle`. The notification carries nothing: it wakes the owner,
+    /// which reads the state and delivers it only when its revision is new.
+    pub(super) fn observe_window_state(&self) {
+        let dispatcher = self.dispatcher();
+        self.window.native().on_state_changed(Box::new(move || {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(super::owner_dispatch::RuntimeEvent::WindowStateChanged),
+            );
+        }));
+    }
+
     /// Complete Web bootstrap wiring before sampling and publishing native state.
     #[cfg(any(
         target_arch = "wasm32",
@@ -252,10 +311,10 @@ impl WindowInstall {
                 let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding));
             });
         }));
-        window.on_resize(Box::new(move |size, scale_factor| {
+        window.on_resize(Box::new(move |metrics| {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
-                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
             );
         }));
         self.terminal_callbacks(platform);
@@ -263,6 +322,12 @@ impl WindowInstall {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
                 RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
+            );
+        }));
+        window.on_execution_state_change(Box::new(move |state| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
             );
         }));
         window.on_visibility_status_change(Box::new(move |visible| {
@@ -277,19 +342,21 @@ impl WindowInstall {
                 RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
             );
         }));
+        self.observe_appearance();
+        self.observe_display();
+        self.observe_window_state();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
-        let metrics = WindowObservation::Metrics {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
-        };
+        let metrics = window.metrics().ok().map(WindowObservation::Metrics);
         let snapshot = WindowObservation::Snapshot {
             execution: window.execution_state(),
             focused: window.is_focused(),
             visible: window.is_visible(),
         };
         self.observe(snapshot);
-        self.observe(metrics);
+        if let Some(metrics) = metrics {
+            self.observe(metrics);
+        }
         super::host::APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
         self.submit()
             .outcome()

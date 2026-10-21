@@ -5,19 +5,20 @@
 //!
 //! Run with `cargo run -p flui-interaction --example custom_recognizer`.
 
+use flui_interaction::gesture::GestureContest;
 use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
 use flui_foundation::geometry::Point;
 use flui_platform_api::EventTime;
 
 use flui_interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaMember, GestureBinding, GestureRecognizer,
-    GestureSettings, HitTestEntry, HitTestResult, InteractionLane, LongPressGestureRecognizer,
-    ManualClock, PointerButton, PointerButtons, PointerDispatch, PointerEventExt, PointerId,
-    PointerInfo, PointerPosition, PointerPress, PointerRelease, PointerSample, PrimaryContact,
-    RecognizerSet, RenderId,
-    arena::GestureArena,
+    ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureBinding,
+    GestureRecognizer, GestureSettings, HitTestEntry, HitTestResult, InteractionLane,
+    LongPressGestureRecognizer, ManualClock, PointerButton, PointerButtons, PointerDispatch,
+    PointerEventExt, PointerId, PointerInfo, PointerPosition, PointerPress, PointerRelease,
+    PointerSample, PrimaryContact, RecognizerSet, RenderId,
     events::{PointerEvent, PointerKind},
+    gesture::GestureArena,
 };
 
 struct LoggingRecognizer {
@@ -39,14 +40,24 @@ impl LoggingRecognizer {
 }
 
 impl GestureArenaMember for LoggingRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
+    fn accept_gesture(&self, contest: GestureContest) {
         self.won.set(true);
-        println!("[{}] accepted for pointer {pointer:?}", self.name);
+        println!(
+            "[{}] accepted for pointer {:?}",
+            self.name,
+            contest.pointer()
+        );
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        self.contact.withdraw();
-        println!("[{}] rejected for pointer {pointer:?}", self.name);
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) {
+            self.contact.withdraw();
+        }
+        println!(
+            "[{}] rejected for pointer {:?}",
+            self.name,
+            contest.pointer()
+        );
     }
 }
 
@@ -66,7 +77,7 @@ impl GestureRecognizer for LoggingRecognizer {
         match dispatch.local {
             PointerEvent::Up(_) if self.claims_release => {
                 self.contact.accept();
-                self.contact.finish();
+                self.contact.finish(ContactEnd::Contending);
             }
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
                 self.contact.withdraw();

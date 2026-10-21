@@ -1,5 +1,5 @@
 use super::{
-    Arc, DrawRun, DrawSegment, GpuResources, GradientKind, PipelineSet, ScissorRect,
+    Arc, DrawRun, DrawSegment, GpuResources, GradientKind, GradientMesh, PipelineSet, ScissorRect,
     clamp_scissor_to_attachment,
 };
 
@@ -11,6 +11,8 @@ struct QuadReplayState {
     secondary: Option<u8>,
     gradient_pipeline: Option<(GradientKind, flui_painting::BlendMode)>,
     vertex_slot: Option<usize>,
+    /// Slot 0 and the index buffer hold a gradient mesh, not the unit quad.
+    mesh_bound: bool,
 }
 
 impl QuadReplayState {
@@ -168,6 +170,7 @@ impl super::GpuReplay {
         }
         let tess =
             Self::prepare_tessellated_geometry(segment, device, queue, pipelines, resources)?;
+        let gradient_mesh = GradientMesh::prepare(segment, device, queue, resources);
         // Resolve each distinct snapshot once for this attachment before opening a content pass.
         // Bound hash-table capacity rounding and load-factor slack, including
         // control bytes and bucket alignment, before either collection grows.
@@ -298,6 +301,7 @@ impl super::GpuReplay {
                     run,
                     tess.as_ref(),
                     &buffers,
+                    gradient_mesh.as_ref(),
                     stop_binding.as_ref(),
                     viewport_size,
                     device,
@@ -404,24 +408,25 @@ impl super::GpuReplay {
                         };
                         if let Some(buffer) = &buffers[slot] {
                             if state.vertex_slot != Some(slot) {
-                                if state.vertex_slot.is_none() {
+                                if state.vertex_slot.is_none() || state.mesh_bound {
                                     pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
                                     pass.set_index_buffer(
                                         self.unit_quad_index_buffer.slice(..),
                                         wgpu::IndexFormat::Uint16,
                                     );
+                                    state.mesh_bound = false;
                                 }
                                 pass.set_vertex_buffer(1, buffer.slice(..));
                                 state.vertex_slot = Some(slot);
                             }
                             if let Some(kind) = kind {
-                                Self::replay_gradient_run(
+                                self.replay_gradient_run(
                                     segment,
                                     kind,
                                     run,
+                                    gradient_mesh.as_ref(),
                                     stop_binding.as_ref(),
                                     viewport_size,
-                                    self.attachment_origin,
                                     pipelines,
                                     &mut pass,
                                     &mut state,
@@ -512,16 +517,18 @@ impl super::GpuReplay {
 
     #[expect(clippy::too_many_arguments)]
     fn replay_gradient_run(
+        &self,
         segment: &DrawSegment,
         kind: GradientKind,
         draw: &DrawRun,
+        mesh: Option<&GradientMesh>,
         stops: Option<&wgpu::BindGroup>,
         viewport_size: (u32, u32),
-        origin: (i64, i64),
         pipelines: &PipelineSet,
         pass: &mut wgpu::RenderPass<'_>,
         state: &mut QuadReplayState,
     ) {
+        let origin = self.attachment_origin;
         let (range, runs) = match draw {
             DrawRun::LinearGradient(range) => (range, &segment.linear_gradient_runs),
             DrawRun::RadialGradient(range) => (range, &segment.radial_gradient_runs),
@@ -549,8 +556,28 @@ impl super::GpuReplay {
                 pass.set_bind_group(1, stops, &[]);
                 state.secondary = Some(2);
             }
+            // A mesh run draws its one instance over its own triangles; a quad
+            // run draws over the unit quad, rebinding it after a mesh.
+            let indices = if let Some(range) = &run.mesh {
+                if !state.mesh_bound {
+                    mesh.expect("BUG: a segment with a mesh run uploads its gradient mesh")
+                        .bind(pass);
+                    state.mesh_bound = true;
+                }
+                range.clone()
+            } else {
+                if state.mesh_bound {
+                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.unit_quad_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    state.mesh_bound = false;
+                }
+                0..6
+            };
             if state.scissor(pass, run.scissor, w, h, origin) {
-                pass.draw_indexed(0..6, 0, start as u32..end as u32);
+                pass.draw_indexed(indices, 0, start as u32..end as u32);
             }
         }
     }

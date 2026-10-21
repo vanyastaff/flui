@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Size;
-use flui_objects::{ImageAlignment, ImageFit, RenderImage};
+use flui_foundation::geometry::{Rect, Size};
+use flui_objects::RenderImage;
 use flui_painting::paint::Image as PixelImage;
+use flui_painting::paint::ImageRepeat;
+use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_rendering::protocol::BoxProtocol;
 #[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
@@ -14,6 +16,10 @@ use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
 use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
+
+/// The widget's placement before any builder call.
+const DEFAULT_PLACEMENT: ImagePlacement =
+    ImagePlacement::fitted(BoxFit::Contain, Alignment::CENTER);
 
 /// Displays a bitmap image.
 ///
@@ -39,7 +45,7 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// `asset`/`network` require the `asset-images`/`network-images` features
 /// respectively (hence the plain, non-linked names above — they do not exist
 /// in this doc build); both are off by default so stable builds do not pull
-/// in `flui-assets`/`futures-util`/`lru` unless asked for.
+/// in `flui-assets` unless asked for.
 ///
 /// For static or frequently-rebuilt sync images, pre-decode once and use
 /// [`from_image`] to avoid per-rebuild cost.
@@ -47,14 +53,15 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// # Async dispatch
 ///
 /// When [`ImageProvider::cache_key`] returns `Some(key)`, `Image` subscribes
-/// to that key for as long as it stays mounted. Subscribing first probes the
-/// decode cache synchronously — a hit (e.g. after unmount+remount, or a
-/// second widget mounted with the same key) renders immediately with **no
-/// placeholder frame**. A miss shows the same empty-box placeholder a sync
-/// failure would, and the render updates in place once
-/// [`ImageProvider::resolve_async`] completes. Two widgets mounted with the
-/// same key while a load is in flight share ONE load
-/// (`image::decode_cache`'s in-flight coalescing) rather than starting two.
+/// to that key for as long as it stays mounted. Subscribing first probes
+/// [`ImageProvider::cached`] synchronously — a hit (e.g. after
+/// unmount+remount, or a second widget mounted with the same key) renders
+/// immediately with **no placeholder frame**. A miss shows the same empty-box
+/// placeholder a sync failure would, and the render updates in place once
+/// [`ImageProvider::resolve_async`] completes. For `asset`/`network`, the
+/// asset registry keeps the decoded images, and two widgets mounted with the
+/// same source while a load is in flight share ONE load rather than starting
+/// two; unmounting the last of them cancels it.
 ///
 /// The subscription is keyed on [`cache_key`](ImageProvider::cache_key), not
 /// on provider instance identity: rebuilding with a freshly constructed
@@ -86,8 +93,8 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 ///
 /// Deferred (tracked, not silently missing): frame, loading and error
 /// builders (an error renders the same empty box as no data, with a
-/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, a cache
-/// eviction API, and font unification.
+/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, and font
+/// unification.
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
@@ -98,14 +105,13 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 #[derive(Clone, Debug)]
 // Async resolution is a subscription with lifecycle (start, cancel, retire),
 // so `Image` is stateful exactly where that subscription exists: without `asset-images`
-// there is no decode cache to subscribe to and every provider resolves inline
+// there is no async provider to subscribe to and every provider resolves inline
 // in `build`.
 #[cfg_attr(feature = "asset-images", derive(StatefulView))]
 #[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
 pub struct Image {
     provider: Arc<dyn ImageProvider + Send + Sync>,
-    fit: ImageFit,
-    alignment: ImageAlignment,
+    placement: ImagePlacement,
     width: Option<f64>,
     height: Option<f64>,
     gapless_playback: bool,
@@ -114,8 +120,8 @@ pub struct Image {
 impl Image {
     /// Creates an `Image` widget backed by the given provider.
     ///
-    /// Defaults: [`ImageFit::Contain`], [`ImageAlignment::Center`], no forced
-    /// width or height.
+    /// Defaults: [`BoxFit::Contain`] at [`Alignment::CENTER`], not repeated,
+    /// no forced width or height.
     ///
     /// `provider` must be `'static` because the widget is stored in the
     /// element tree; it must be `Send + Sync` (implied by [`ImageProvider`]'s
@@ -123,8 +129,7 @@ impl Image {
     pub fn new(provider: impl ImageProvider + 'static) -> Self {
         Self {
             provider: Arc::new(provider),
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
+            placement: DEFAULT_PLACEMENT,
             width: None,
             height: None,
             gapless_playback: false,
@@ -184,21 +189,63 @@ impl Image {
         Self::new(super::NetworkImage::new(registry, url))
     }
 
-    /// Sets how the image is scaled to fit the laid-out box.
+    /// Sets how the image is scaled into the laid-out box.
     ///
-    /// Defaults to [`ImageFit::Contain`].
+    /// Defaults to [`BoxFit::Contain`]. Replaces a centre slice, which always
+    /// fills the box.
     #[must_use]
-    pub fn fit(mut self, fit: ImageFit) -> Self {
-        self.fit = fit;
+    pub fn fit(self, fit: BoxFit) -> Self {
+        self.fitted(|placed, _, _| *placed = fit)
+    }
+
+    /// Sets where the fitted image sits in the box; on a cropping fit, also
+    /// which part of the image stays visible.
+    ///
+    /// Defaults to [`Alignment::CENTER`]. Replaces a centre slice.
+    #[must_use]
+    pub fn alignment(self, alignment: Alignment) -> Self {
+        self.fitted(|_, aligned, _| *aligned = alignment)
+    }
+
+    /// Repeats the fitted image to cover the rest of the box.
+    ///
+    /// Defaults to [`ImageRepeat::NoRepeat`]. Replaces a centre slice.
+    #[must_use]
+    pub fn repeat(self, repeat: ImageRepeat) -> Self {
+        self.fitted(|_, _, repeated| *repeated = repeat)
+    }
+
+    /// Paints the image as a nine-slice that fills the box: `center`, in
+    /// decoded image pixels, stretches; the corners keep their size.
+    ///
+    /// Replaces any fit, alignment or repetition.
+    #[must_use]
+    pub fn center_slice(mut self, center: Rect) -> Self {
+        self.placement = ImagePlacement::sliced(center);
         self
     }
 
-    /// Sets how the image is aligned within the box.
-    ///
-    /// Defaults to [`ImageAlignment::Center`].
+    /// Sets the complete placement at once.
     #[must_use]
-    pub fn alignment(mut self, alignment: ImageAlignment) -> Self {
-        self.alignment = alignment;
+    pub fn placement(mut self, placement: ImagePlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// Edits the fitted placement, starting from the default when the image
+    /// was sliced.
+    fn fitted(mut self, edit: impl FnOnce(&mut BoxFit, &mut Alignment, &mut ImageRepeat)) -> Self {
+        if !matches!(self.placement, ImagePlacement::Fitted { .. }) {
+            self.placement = DEFAULT_PLACEMENT;
+        }
+        if let ImagePlacement::Fitted {
+            fit,
+            alignment,
+            repeat,
+        } = &mut self.placement
+        {
+            edit(fit, alignment, repeat);
+        }
         self
     }
 
@@ -265,8 +312,7 @@ impl Image {
     fn raw(&self, image: Option<PixelImage>) -> BoxedView {
         RawImage {
             image,
-            fit: self.fit,
-            alignment: self.alignment,
+            placement: self.placement,
             width: self.width,
             height: self.height,
         }
@@ -274,9 +320,8 @@ impl Image {
     }
 }
 
-/// Async dispatch — only compiled under `asset-images`, since the
-/// subscription needs `image::decode_cache`'s `lru`/`futures-util`-backed
-/// engine. Without this feature `Image` always takes the `build_sync` path,
+/// Async dispatch — only compiled under `asset-images`, the feature that
+/// brings in the asynchronous providers. Without this feature `Image` always takes the `build_sync` path,
 /// even for a custom provider that overrides [`ImageProvider::cache_key`] —
 /// see that method's doc for the honest fallback contract.
 #[cfg(feature = "asset-images")]
@@ -354,8 +399,7 @@ impl StatelessView for Image {
 #[derive(Clone, Debug)]
 struct RawImage {
     image: Option<PixelImage>,
-    fit: ImageFit,
-    alignment: ImageAlignment,
+    placement: ImagePlacement,
     width: Option<f64>,
     height: Option<f64>,
 }
@@ -369,8 +413,8 @@ impl RenderView for RawImage {
         // loose layout, so an absent image occupies no space and does not
         // panic.
         let mut render = match &self.image {
-            Some(decoded) => RenderImage::from_image(decoded.clone(), self.fit, self.alignment),
-            None => RenderImage::new(Size::ZERO, self.fit, self.alignment),
+            Some(decoded) => RenderImage::from_image(decoded.clone(), self.placement),
+            None => RenderImage::new(Size::ZERO, self.placement),
         };
         let initial_impact = render.set_width(self.width) | render.set_height(self.height);
         debug_assert_eq!(
@@ -389,8 +433,7 @@ impl RenderView for RawImage {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render: &mut RenderImage,
     ) -> flui_rendering::RenderUpdateImpact {
-        let mut impact = render.set_fit(self.fit)
-            | render.set_alignment(self.alignment)
+        let mut impact = render.set_placement(self.placement)
             | render.set_width(self.width)
             | render.set_height(self.height);
 

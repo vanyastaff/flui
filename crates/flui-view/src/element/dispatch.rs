@@ -8,7 +8,7 @@
 //! — no reference downcast smuggles a view type through this path.
 //! The `tracing::warn!` fall-through of the Phase 1 identity-shim
 //! is removed: after unwrapping any `BoxedView` (below), a genuine
-//! concrete-type mismatch returns `false`, the caller (`Phase 2
+//! concrete-type mismatch is [`ViewUpdate::Mismatch`], the caller (`Phase 2
 //! reconciler`) replaces the element, and no silent stale state
 //! remains in the tree.
 //!
@@ -34,7 +34,7 @@
 //! from the vtable) against `TypeId::of::<V>()`. On match the inner
 //! is cloned and `Box::downcast::<V>` succeeds (so the element
 //! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
-//! `false` and the reconciler replaces the element. Without the
+//! [`ViewUpdate::Mismatch`] and the reconciler replaces the element. Without the
 //! unwrap a boxed rebuild was neither updated (TypeId saw
 //! `BoxedView`) nor replaced (`can_update` saw `Inner`) — a
 //! silently stale render object after every `setState`.
@@ -44,6 +44,7 @@
 //! [`ElementCore::update_view`] inside [`super::generic`]).
 
 use std::any::TypeId;
+use std::rc::Rc;
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::view::{BoxedView, View};
@@ -59,7 +60,7 @@ use crate::view::{BoxedView, View};
 /// `downcast_ref::<V>()` view-type smuggling this path avoids.
 /// On mismatch — and on the defense-in-depth case
 /// where the downcast still fails despite the TypeId check —
-/// the function returns `false`; the reconciler replaces the
+/// the function returns [`ViewUpdate::Mismatch`]; the reconciler replaces the
 /// element via the type-mismatch path the keyed reconciler's
 /// "different concrete type" branch already exercises.
 ///
@@ -71,7 +72,10 @@ use crate::view::{BoxedView, View};
 /// `ElementKind`-discriminated dispatch (Phase 4+) can replace
 /// this module's body in one place rather than touch every
 /// behavior implementation.
-pub(crate) fn dispatch_view_update<V, A>(core: &mut ElementCore<V, A>, new_view: &dyn View) -> bool
+pub(crate) fn dispatch_view_update<V, A>(
+    core: &mut ElementCore<V, A>,
+    new_view: &dyn View,
+) -> ViewUpdate<V>
 where
     V: View + Clone + 'static,
     A: ElementArity,
@@ -98,12 +102,16 @@ where
     // than the old bail-to-`false`: the `Box::downcast::<V>` below now runs on
     // the inner concrete value and cannot panic.
     let mut effective: &dyn View = new_view;
+    let mut shared: Option<&Rc<dyn View>> = None;
     loop {
         // Each hop strips one BoxedView layer: this downcasts to the
         // `BoxedView` *wrapper* to unwrap it, not to the concrete view type.
         let wrapper = effective.as_any().downcast_ref::<BoxedView>(); // unwrap BoxedView wrapper, not V-type smuggling
         match wrapper {
-            Some(boxed) => effective = &*boxed.0,
+            Some(boxed) => {
+                shared = Some(boxed.shared());
+                effective = boxed.as_view();
+            }
             None => break,
         }
     }
@@ -111,7 +119,19 @@ where
         // Genuinely different concrete type → caller (`Phase 2 reconciler`)
         // replaces the element. No tracing::warn — "different type → new
         // element" is the normal reconciliation outcome.
-        return false;
+        return ViewUpdate::Mismatch;
+    }
+
+    // The very view the element was last given, offered again: a parent that
+    // rebuilt handed its child back untouched. Nothing about the element's
+    // configuration changed, so it is neither cloned, replaced nor marked
+    // dirty; what changed for it (a state change, an inherited value) reaches
+    // it by its own schedule. Checked ahead of `should_skip_rebuild`, which
+    // compares contents and so costs a comparison this does not.
+    if let Some(shared) = shared
+        && core.is_taken_from(shared)
+    {
+        return ViewUpdate::Unchanged;
     }
 
     // Memoization equality-bail (Wave 3 `should_skip_rebuild`).
@@ -128,7 +148,7 @@ where
             view_type = ?TypeId::of::<V>(),
             "dispatch_view_update: skip rebuild (configs equal)",
         );
-        return true; // reuse element; skip clone + replace + rebuild
+        return ViewUpdate::Equal;
     }
 
     // TypeId equality should guarantee the dynamic value is V.
@@ -144,21 +164,41 @@ where
     let cloned: Box<dyn View> = dyn_clone::clone_box(effective);
     match cloned.into_any().downcast::<V>() {
         Ok(typed) => {
-            core.replace_view_for_dispatch(*typed);
+            let previous = core.replace_view_for_dispatch(*typed);
+            core.note_source_view(shared.map(Rc::downgrade));
             core.mark_dirty_for_dispatch();
             tracing::debug!(
                 "dispatch_view_update succeeded for view_type={:?}",
                 TypeId::of::<V>()
             );
-            true
+            ViewUpdate::Replaced { previous }
         }
         Err(_) => {
             // Should be unreachable post-guard but reachable in
             // principle (see invariant note above). Treat as
             // type-mismatch — caller replaces the element.
-            false
+            ViewUpdate::Mismatch
         }
     }
+}
+
+/// What offering a view to an element did.
+pub(crate) enum ViewUpdate<V> {
+    /// The view is of another type: the caller replaces the element.
+    Mismatch,
+    /// The element already holds this very view: nothing was touched.
+    Unchanged,
+    /// The view compares equal to the one held, under
+    /// [`View::should_skip_rebuild`]: the element keeps the view it has and is
+    /// not marked dirty, and its behavior still hears of the update, with the
+    /// held view as the previous one.
+    Equal,
+    /// The element took the view and its behavior reacts to the update, given
+    /// the view it held before.
+    Replaced {
+        /// The configuration the element held before the update.
+        previous: V,
+    },
 }
 
 // The dirty store is owned by `ElementCore::mark_dirty_for_dispatch`

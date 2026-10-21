@@ -10,7 +10,9 @@ use std::{
     time::Duration,
 };
 
+use flui_platform::traits::{DispatchEventResult, PlatformInput};
 use flui_platform::{WindowCallbacks, executor::BackgroundExecutor};
+use flui_platform_api::ImeEvent;
 
 fn frame_callback_is_restored_after_real_dispatch_panics() {
     let callbacks = Arc::new(WindowCallbacks::new());
@@ -105,7 +107,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
             panics: capture_panics,
             reenter,
         };
-        *callbacks.on_moved.lock() = Some(Box::new(move || {
+        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
             let _ = (&capture, &hostile);
             move_observation.fetch_add(1, Ordering::SeqCst);
         }));
@@ -113,7 +115,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         let notice = Arc::clone(&retired);
         *callbacks.on_request_frame.lock() = Some(Box::new(move || {
             let callbacks = nested.upgrade().expect("owner");
-            callbacks.dispatch_moved();
+            callbacks.dispatch_state_changed();
             callbacks.dispatch_close();
             let notice = Arc::clone(&notice);
             callbacks.clear_then(move || {
@@ -211,6 +213,135 @@ fn panics_in_callbacks_and_tasks_leave_the_dispatcher_usable() {
     nested_should_close_is_conservative_veto_without_recursion();
     terminal_retirement_survives_an_admitted_callback_failure();
     test_background_executor_panic_handling();
+}
+
+/// Records whether the capture it sits in was dropped.
+struct Witness(Arc<AtomicBool>);
+
+impl Drop for Witness {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// An input callback that, on the input `fails_on` picks, registers a
+/// replacement and then panics; whether its captures were dropped, and how
+/// many inputs the replacement received.
+fn replaced_then_failing(
+    callbacks: &Arc<WindowCallbacks>,
+    fails_on: fn(&PlatformInput) -> bool,
+) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let witness = Witness(Arc::clone(&dropped));
+    let owner = Arc::downgrade(callbacks);
+    let calls = Arc::clone(&replacement_calls);
+    callbacks.set_input_callback(Box::new(move |input| {
+        let _ = &witness;
+        if fails_on(&input) {
+            let calls = Arc::clone(&calls);
+            owner
+                .upgrade()
+                .expect("owner")
+                .set_input_callback(Box::new(move |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    DispatchEventResult::default()
+                }));
+            panic!("input callback failure");
+        }
+        DispatchEventResult::default()
+    }));
+    (dropped, replacement_calls)
+}
+
+/// A callback replaced during a call that fails is retained, not dropped:
+/// its captures stay out of the failed operation, contained or unwinding.
+fn a_callback_replaced_during_its_failing_call_is_retained() {
+    let contained = Arc::new(WindowCallbacks::new());
+    let (dropped, replacement) = replaced_then_failing(&contained, |input| {
+        matches!(input, PlatformInput::Capabilities(_))
+    });
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "a snapshot failure is contained and retains the outgoing callback"
+    );
+    contained.resume_input_delivery();
+    assert_eq!(
+        replacement.load(Ordering::SeqCst),
+        1,
+        "the replacement receives its snapshot"
+    );
+
+    let unwinding = Arc::new(WindowCallbacks::new());
+    let (dropped, _) =
+        replaced_then_failing(&unwinding, |input| matches!(input, PlatformInput::Ime(_)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unwinding.dispatch_input(PlatformInput::Ime(ImeEvent::Enabled));
+    }))
+    .expect_err("the dispatched input's failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("input callback failure")
+    );
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "an unwinding dispatch retains the outgoing callback"
+    );
+}
+
+/// A window's callbacks destroyed by an unwind retain the input callback.
+fn an_input_callback_destroyed_by_an_unwind_is_retained() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let callbacks = WindowCallbacks::new();
+    let witness = Witness(Arc::clone(&dropped));
+    callbacks.set_input_callback(Box::new(move |_| {
+        let _ = &witness;
+        DispatchEventResult::default()
+    }));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _owned = callbacks;
+        panic!("unrelated failure");
+    }))
+    .expect_err("the failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("unrelated failure")
+    );
+    assert!(!dropped.load(Ordering::SeqCst));
+}
+
+/// Healthy retirement still drops the input callback.
+fn a_cleared_input_callback_is_dropped() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let callbacks = WindowCallbacks::new();
+    let witness = Witness(Arc::clone(&dropped));
+    callbacks.set_input_callback(Box::new(move |_| {
+        let _ = &witness;
+        DispatchEventResult::default()
+    }));
+    drop(callbacks);
+    assert!(dropped.load(Ordering::SeqCst));
+}
+
+#[test]
+fn input_callbacks_are_retained_on_exceptional_paths() {
+    crate::run_table(
+        "input_callbacks_are_retained_on_exceptional_paths",
+        &[
+            (
+                "a_callback_replaced_during_its_failing_call_is_retained",
+                a_callback_replaced_during_its_failing_call_is_retained,
+            ),
+            (
+                "an_input_callback_destroyed_by_an_unwind_is_retained",
+                an_input_callback_destroyed_by_an_unwind_is_retained,
+            ),
+            (
+                "a_cleared_input_callback_is_dropped",
+                a_cleared_input_callback_is_dropped,
+            ),
+        ],
+    );
 }
 
 fn ready_task_returns_owner_local_data() {

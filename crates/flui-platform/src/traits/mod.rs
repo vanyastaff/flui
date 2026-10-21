@@ -15,7 +15,6 @@
 //! };
 //! ```
 
-mod capabilities;
 mod host_window;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
@@ -28,21 +27,23 @@ mod platform;
 // The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
 // here as the same owned vocabulary the public platform boundary carries.
 pub use flui_platform_api::{
-    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DragDropEvent, Key,
-    KeyEvent, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput, PlatformTextInput,
-    PlatformWindow, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
-    PointerMove, ScrollDelta, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError, delta_offset_from_coords, device_to_logical, logical_to_device,
+    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent,
+    HostNotice, Key, KeyEvent, MemoryPressureLevel, Modifiers, PlacementError, PlatformHaptics,
+    PlatformInput, PlatformTextInput, PlatformWindow, PointerButton, PointerButtons, PointerEvent,
+    PointerId, PointerKind, PointerMove, RefreshPeriod, ResolvedPlacement, ScrollDelta,
+    SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest,
+    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
+    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowPlacement, WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError,
+    WindowState, delta_offset_from_coords, device_to_logical, logical_to_device,
     offset_from_coords,
 };
 
 // The accessibility capability lives with the semantics tree it publishes
 // (ADR-0082 §2); re-exported here at its old path for the backends and the
 // composition root.
-pub use capabilities::{
-    DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
-};
 pub use flui_platform_api::keyboard::NamedKey;
 pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -53,7 +54,4 @@ pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };
-pub use platform::{
-    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEndAnswer,
-    SessionEndPhase,
-};
+pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};

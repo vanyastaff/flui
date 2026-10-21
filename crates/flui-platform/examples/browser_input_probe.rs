@@ -205,7 +205,7 @@ mod browser {
                     }
                     append_result("close-prefix", "returned");
                 })),
-                "resize" => self.window.on_resize(Box::new(move |_, _| {
+                "resize" => self.window.on_resize(Box::new(move |_| {
                     append_result("close-prefix", "resize");
                     if let Some(window) = window.upgrade() {
                         window.close();
@@ -495,13 +495,13 @@ mod browser {
     #[wasm_bindgen]
     pub fn display_probe() -> Result<String, JsValue> {
         let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let display = platform.primary_display().expect("browser screen");
-        let bounds = display.bounds();
+        let snapshot = platform
+            .display_snapshot()
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let display = snapshot.primary().expect("browser screen");
         Ok(format!(
             r#"{{"width":{},"height":{},"scale":{}}}"#,
-            bounds.size.width,
-            bounds.size.height,
-            display.scale_factor()
+            display.bounds.size.width, display.bounds.size.height, display.scale_factor
         ))
     }
 

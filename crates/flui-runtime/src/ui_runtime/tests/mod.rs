@@ -315,6 +315,8 @@ mod pump_transaction;
 // End-to-end against a headless `FakeTextInput`, including ui_runtime-routed
 // IME dispatch through `handle_input_entered`.
 // ========================================================================
+mod external_textures;
+mod overlay_style;
 mod presentation_text_input;
 
 // ========================================================================
@@ -399,6 +401,10 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake as fn()),
             ("redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker", redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker as fn()),
+            ("redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame", redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame as fn()),
+            ("redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame", redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame as fn()),
+            ("redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once", redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once as fn()),
+            ("redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size", redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),
@@ -427,7 +433,16 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays", addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays as fn()),
             ("addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays", addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays as fn()),
             ("addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay", addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay as fn()),
+            ("addressed_input_routing::a_held_embedded_hover_replays_to_its_surface", addressed_input_routing::a_held_embedded_hover_replays_to_its_surface as fn()),
             ("addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel", addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel as fn()),
+            ("addressed_input_routing::the_back_button_is_a_back_key", addressed_input_routing::the_back_button_is_a_back_key as fn()),
+            ("addressed_input_routing::the_back_button_is_held_apart_from_the_back_key", addressed_input_routing::the_back_button_is_held_apart_from_the_back_key as fn()),
+            ("addressed_input_routing::a_pointer_press_hides_keyboard_focus", addressed_input_routing::a_pointer_press_hides_keyboard_focus as fn()),
+            ("addressed_input_routing::deactivation_forgets_held_keys", addressed_input_routing::deactivation_forgets_held_keys as fn()),
+            ("addressed_input_routing::an_unfocused_snapshot_forgets_held_keys", addressed_input_routing::an_unfocused_snapshot_forgets_held_keys as fn()),
+            ("addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys", addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys as fn()),
+            ("addressed_input_routing::a_sibling_snapshot_forgets_held_keys", addressed_input_routing::a_sibling_snapshot_forgets_held_keys as fn()),
+            ("addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus", addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),
@@ -450,6 +465,8 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible", frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible as fn()),
             ("checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission", super::preferences::checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission as fn()),
             ("newer_geometry_publication_survives_query_and_diagnostic_reentry", super::preferences::tests::newer_geometry_publication_survives_query_and_diagnostic_reentry as fn()),
+            ("haptics_preference_suppresses_both_tiers", super::preferences::tests::haptics_preference_suppresses_both_tiers as fn()),
+            ("frame_aligned_haptics_play_only_with_a_presented_frame", super::preferences::tests::frame_aligned_haptics_play_only_with_a_presented_frame as fn()),
             ("frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table", frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table as fn()),
             ("frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm", frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm as fn()),
             ("frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once", frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once as fn()),
@@ -464,6 +481,12 @@ fn frame_pacing_and_pump_matrix() {
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
             ("super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time", super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time as fn()),
             ("presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it", presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it as fn()),
+            ("overlay_style::each_style_change_is_delivered_once", overlay_style::each_style_change_is_delivered_once as fn()),
+            ("external_textures::a_fed_frame_repaints_and_reaches_the_raster_side", external_textures::a_fed_frame_repaints_and_reaches_the_raster_side as fn()),
+            ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
+            ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
+            ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),
+            ("overlay_style::a_panicking_chrome_is_retried_on_the_next_frame", overlay_style::a_panicking_chrome_is_retried_on_the_next_frame as fn()),
         ],
     );
 }

@@ -13,9 +13,20 @@ path.
   `accesskit` and `tokio`. `flui-platform`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
+- **A display id cannot be built from a number, and a period cannot be invalid.**
+  `DisplayId` is an opaque `NonZeroU64` with no constructor outside a
+  `DisplayRegistry`, which issues it from the OS's own output identity, never wraps and
+  keeps resolving known keys after exhaustion (`exhausted_counter_refuses_without_wrapping`;
+  the compile-fail fixture `display_id_cannot_be_built_from_a_number`). `RefreshPeriod`
+  is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
+  rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
+  never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except four whose many vocabulary types keep their module
-  path: `data_transfer` (`flui_platform::data_transfer` re-exports it whole),
+  modules are private except five whose many vocabulary types keep their module
+  path: `haptics`, the second haptic tier with its requests and outcomes, which
+  the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
+  while `PlatformHaptics` and `HapticFeedback` stay at the root;
+  `data_transfer` (`flui_platform::data_transfer` re-exports it whole),
   `text_store`, whose four traits (`TextStore`, `TextStoreRead`,
   `TextStoreEdit`, `TextStoreObserver`) are also at the root, and `pointer` and
   `keyboard`, the input vocabulary, whose names (`PointerEvent`, `Key`,
@@ -227,3 +238,16 @@ executor clone, clone failure with a previous registration, displaced executor
 retirement, wake/capture failure competition, cancellation and producer loss
 during an existing unwind, ready results and next-request progress. Each row
 runs in a bounded subprocess so a deadlock or abort cannot hide later rows.
+
+### A haptic pattern is validated once and frozen
+
+`HapticPattern` is built only through its consuming builder, which keeps the
+first broken rule (order, finiteness, the unit range, a closed envelope, the
+ten-second cap) and freezes the events as an `Arc<[HapticEvent]>` (ADR-0210 §2).
+`Intensity` and `Sharpness` admit a finite `f32` in `0.0..=1.0` and read negative
+zero as zero. A backend therefore never sees an invalid pattern, and a play can
+only degrade, never fail. `PlatformHaptics` gained `perform_with`, `play` and
+`capabilities` with default bodies, so an implementor of the Stable `perform`
+keeps compiling; `FakeHaptics` records each request with the actuator that
+played it and the outcome it returned.
+**Tests:** `haptic_pattern_builder_rejects_invalid_patterns`.

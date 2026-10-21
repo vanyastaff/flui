@@ -169,16 +169,14 @@ fn main() {
     let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("Platform: {}", platform.name());
 
-    let options = WindowOptions {
-        title: "FLUI Platform + wgpu".to_string(),
-        size: Size::new(800.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: None,
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("FLUI Platform + wgpu".to_string())
+        .with_size(Size::new(800.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(None)
+        .with_max_size(None);
 
     // Create window before running the event loop (run() takes ownership)
     let window: Arc<dyn PlatformWindow> = platform
@@ -206,12 +204,12 @@ fn main() {
 
     // Register resize callback
     let gpu_for_resize = Arc::downgrade(&gpu);
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let Some(gpu) = gpu_for_resize.upgrade() else {
             return;
         };
-        let width = (size.width * scale_factor) as u32;
-        let height = (size.height * scale_factor) as u32;
+        let width = metrics.physical().width.unsigned_abs();
+        let height = metrics.physical().height.unsigned_abs();
         gpu.lock().unwrap().resize(width, height);
     }));
 

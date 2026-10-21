@@ -14,7 +14,8 @@ use flui_foundation::RenderId;
 /// different value.
 ///
 /// The all-zero value is unrepresentable. No process-global allocator is used;
-/// the render tree remains the sole identity authority.
+/// render boundaries use the render tree's authority, while authored regions
+/// use the presentation-local [`crate::SemanticsIdentitySource`].
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AccessibilityNodeId(NonZeroU64);

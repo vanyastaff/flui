@@ -28,7 +28,9 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 parking_lot = { workspace = true }
 
 [features]
@@ -44,6 +46,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 flui-objects = { path = ".", features = ["testing"] }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 insta = { workspace = true }
+static_assertions = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 
 [[test]]

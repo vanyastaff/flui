@@ -29,7 +29,10 @@
 //! # Rectangles
 //!
 //! A node's bounds are its published AccessKit bounds, with every ancestor's
-//! transform applied, scaled to physical pixels and covered by whole pixels.
+//! transform applied. The published root already scales by the owner's
+//! device pixel ratio, so the bounds are taken back to logical pixels by that
+//! ratio, scaled to physical pixels by the placement's and covered by whole
+//! pixels: the ratio is applied once.
 //! They are measured from the window's drawing surface, so they are reported
 //! as [`Node::surface_rect`] and `rect`, which is screen pixels, is left out:
 //! the UI runtime knows no window position.
@@ -422,6 +425,9 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
 struct Walk<'q> {
     query: &'q ReadQuery,
     placement: Placement,
+    /// The ratio the owner scales its published root by, which every
+    /// AccessKit bounding box already carries.
+    published_ratio: f64,
     remaining: usize,
     truncated: bool,
     /// Whether the node AccessKit is told is focused really claims focus:
@@ -431,8 +437,17 @@ struct Walk<'q> {
 
 impl Walk<'_> {
     fn rect(&self, node: &NodeRef<'_>) -> Option<Rect> {
+        // The published root's transform scales by the owner's ratio, so the
+        // box is in its physical pixels: back to logical, then covered at the
+        // placement's ratio, so the ratio is applied once.
         let bounds = node.bounding_box()?;
-        let logical = LogicalRect::from_ltrb(bounds.x0, bounds.y0, bounds.x1, bounds.y1);
+        let unscale = self.published_ratio.recip();
+        let logical = LogicalRect::from_ltrb(
+            bounds.x0 * unscale,
+            bounds.y0 * unscale,
+            bounds.x1 * unscale,
+            bounds.y1 * unscale,
+        );
         let device = device_rect_covering(logical, self.placement.device_pixel_ratio);
         Some(Rect {
             x: device.left(),
@@ -499,6 +514,9 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     // UI Automation's `FullDescription`: a role ARIA forbids a name carries
     // its text here.
     out.description = node.description().filter(|text| !text.is_empty());
+    // The author's identifier (ADR-0240), as published in `author_id`. It is
+    // not `automation_id`, which only an OS backend fills (ADR-0080).
+    out.identifier = node.author_id().map(str::to_owned);
     // The `Value` pattern's value: not for a static text, whose value is its
     // name, and never a password field's. A numeric node without text reads
     // its `RangeValue` number, spelled as the desktop backend spells it.
@@ -587,6 +605,7 @@ impl SemanticsOwner {
             let mut walk = Walk {
                 query,
                 placement,
+                published_ratio: self.device_pixel_ratio(),
                 remaining: query.max_nodes.unwrap_or(usize::MAX),
                 truncated: false,
                 root_claims_focus,
@@ -635,7 +654,15 @@ impl SemanticsOwner {
                 .filter(|node| common_filter(node) == FilterResult::Include)
                 .ok_or(WireActionError::NotFound { element })?;
             let wire = wire_node(&node, element, root_claims_focus);
-            if wire.disabled {
+            // Focus and reveal move the cursor or the viewport, not the
+            // control, so they stay available on a disabled element, as the
+            // owner's rule has it.
+            if wire.disabled
+                && !matches!(
+                    request.action,
+                    ActionName::Focus | ActionName::ScrollIntoView
+                )
+            {
                 return Err(WireActionError::Disabled { element });
             }
             if !wire.actions.contains(&request.action) {

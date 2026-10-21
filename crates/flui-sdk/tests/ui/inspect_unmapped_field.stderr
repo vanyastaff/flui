@@ -1,0 +1,31 @@
+error[E0277]: `Handle` has no inspect value
+ --> tests/ui/inspect_unmapped_field.rs:5:10
+  |
+5 | #[derive(Inspect)]
+  |          ^^^^^^^ no `ToValue` mapping for this field's type
+...
+8 |     handle: Handle,
+  |             ------ required by a bound introduced by this call
+  |
+help: the trait `ToValue` is not implemented for `Handle`
+ --> tests/ui/inspect_unmapped_field.rs:3:1
+  |
+3 | struct Handle;
+  | ^^^^^^^^^^^^^
+  = note: mark the field `#[inspect(skip)]`, map it with `#[inspect(with = path)]`, describe it by `Debug` with `#[inspect(debug)]`, or implement `ToValue` for the type
+  = help: the following other types implement trait `ToValue`:
+            &T
+            Axis
+            Box<T>
+            Cow<'_, str>
+            Edges
+            ElementId
+            GenId<flui_sdk::flui_foundation::markers::Render>
+            Lifecycle
+          and $N others
+  = note: required for `Handle` to implement `FieldValue`
+note: required by a bound in `Fields::<'s>::field`
+ --> $WORKSPACE/crates/flui-foundation/src/inspect/fields.rs
+  |
+  |     pub fn field<'f, 'v, T: FieldValue + ?Sized>(
+  |                             ^^^^^^^^^^ required by this bound in `Fields::<'s>::field`

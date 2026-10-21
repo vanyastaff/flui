@@ -21,9 +21,12 @@
 //!    and the dialog fade for popups, which routes given no transitions of
 //!    their own adopt when the navigator installs them (ADR-0221). Material
 //!    page pushes therefore animate.
-//! 3. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
+//! 3. [`RefreshIndicatorStyle`] — so every `RefreshIndicator` below shows a
+//!    [`CircularProgressIndicator`]: determinate with the pull's progress while
+//!    pulling, indeterminate while refreshing (ADR-0235).
+//! 4. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
-//! 4. The caller's [`builder`](MaterialApp::builder) hook, run from its own
+//! 5. The caller's [`builder`](MaterialApp::builder) hook, run from its own
 //!    child element so its context resolves the `Theme` published in step 1
 //!    (a builder nested inside a `Builder`).
 //!
@@ -62,10 +65,11 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     AppBuilder, BoxedLocalizationsDelegate, MediaQuery, NavigatorHandle, NavigatorObserver,
-    PageTransitions, SizedBox, WidgetsApp,
+    PageTransitions, RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
 };
 
 use crate::page_transitions::dialog_transition;
+use crate::progress_indicator::CircularProgressIndicator;
 use crate::scaffold_messenger::ScaffoldMessenger;
 use crate::theme::AnimatedTheme;
 use crate::theme_data::ThemeData;
@@ -390,6 +394,8 @@ impl StatelessView for MaterialApp {
             let routes = PageTransitions::new(ScaffoldMessenger::new(inner))
                 .page(page)
                 .popup(dialog_transition());
+            // Every `RefreshIndicator` below shows the Material circular indicator.
+            let routes = RefreshIndicatorStyle::new(material_refresh_indicator, routes);
             AnimatedTheme::new(resolved, routes).boxed()
         };
 
@@ -435,5 +441,19 @@ impl fmt::Debug for MaterialBuilderScope {
 impl StatelessView for MaterialBuilderScope {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         (self.builder)(ctx, self.child.clone())
+    }
+}
+
+/// The indicator a [`RefreshIndicatorStyle`] under [`MaterialApp`] shows: a
+/// [`CircularProgressIndicator`] that fills with the pull, then spins while refreshing.
+fn material_refresh_indicator(phase: RefreshIndicatorPhase) -> Option<BoxedView> {
+    match phase {
+        RefreshIndicatorPhase::Pulling { progress } => Some(
+            CircularProgressIndicator::new()
+                .value(Some(progress))
+                .boxed(),
+        ),
+        RefreshIndicatorPhase::Refreshing => Some(CircularProgressIndicator::new().boxed()),
+        _ => None,
     }
 }

@@ -11,8 +11,8 @@ use super::device_recovery::{
 };
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
-    DEFAULT_DISPLAY_PERIOD, FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook,
-    keeps_frame_gate_open, wake_action,
+    FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook, keeps_frame_gate_open,
+    wake_action,
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
@@ -54,10 +54,11 @@ impl Drop for InstallRollback {
 /// bare `open_secondary_window` convert `AppConfig` directly and reveal at
 /// open, because nothing in them would ever perform the reveal.
 pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
-    flui_platform::WindowOptions {
-        reveal: flui_platform::WindowReveal::AfterFirstFrame,
-        ..config.into()
-    }
+    let mut options = flui_platform::WindowOptions::from(config)
+        .with_reveal(flui_platform::WindowReveal::AfterFirstFrame);
+    // Read before the window opens, so its first reveal is already in place.
+    super::placement::restore(&mut options, config);
+    options
 }
 
 pub(super) fn install_desktop_window<V>(
@@ -135,6 +136,7 @@ where
     // delivery.
     ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+    config.install_input_tap(&ui_runtime);
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
     let logical = window.logical_size();
@@ -166,6 +168,7 @@ where
         inbox_capacity = ui_runtime.command_sender().capacity(),
         "UiRuntime constructed"
     );
+    let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
@@ -183,17 +186,11 @@ where
     // `thread::sleep` on this very thread — which was the only pacer on
     // any stack whose present does not block at vsync, and which
     // quantized every animation to ~60 Hz and blocked input for its
-    // duration. The period is re-read on resize (a window can change
-    // monitors); `DEFAULT_DISPLAY_PERIOD` covers a backend that cannot
-    // report one.
-    let fallback = Arc::new(FallbackWake::new(
-        window.refresh_period().unwrap_or(DEFAULT_DISPLAY_PERIOD),
-    ));
-    tracing::info!(
-        period_us = fallback.period().as_micros() as u64,
-        reported = window.refresh_period().is_some(),
-        "frame-pacing fallback period"
-    );
+    // duration. It keeps no period of its own: every arm reads the
+    // presentation's current refresh interval, which follows the display the
+    // window is on (a mode switch, a move to another monitor, a display that
+    // reports nothing) with or without a resize.
+    let fallback = Arc::new(FallbackWake::new());
 
     // 3d. Wire the wall-clock-wake hook, now that `owner_dispatch`
     // exists — the winit backend's `about_to_wait` consults this every
@@ -226,12 +223,17 @@ where
     // skipped upstream by the empty-slot drain protection — degrades to
     // a skipped frame at the `try_lock` below instead of a same-thread
     // lock deadlock.
-    let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-        renderer,
-        owner_dispatch.address,
-        phys_size.width as u32,
-        phys_size.height as u32,
-    )));
+    let lane = Arc::new(Mutex::new(
+        crate::app::raster_lane::RasterLane::new(
+            renderer,
+            owner_dispatch.address,
+            phys_size.width as u32,
+            phys_size.height as u32,
+        )
+        .with_textures(textures),
+    ));
+
+    super::host::track_raster_lane(lane.lock().reclaim_handle());
 
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -257,18 +259,10 @@ where
 
     // 7. Register resize callback -> typed Resized event; the applier
     // installed above (not this closure) actually touches the renderer.
-    let resize_window: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::clone(&window);
-    let resize_fallback = Arc::clone(&fallback);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        // A resize can also be a move to another monitor; re-read the
-        // period so the pacing fallback follows the display the window
-        // is actually on (ADR-0058).
-        if let Some(period) = resize_window.refresh_period() {
-            resize_fallback.set_period(period);
-        }
+    window.on_resize(Box::new(move |metrics| {
         let _ = dispatch_platform_ui_runtime(
             owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
         );
     }));
 
@@ -304,8 +298,10 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
+    super::placement::keep(config, owner_dispatch.address);
     installation.on_close(move || {
         tracing::info!("Window closed");
+        super::placement::finish(owner_dispatch.address);
         super::main_window::main_window_closing(owner_dispatch.address);
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_this_window(owner_dispatch);
@@ -374,37 +370,16 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
         );
     }));
-    // The platform callback carries no payload; query the window's
-    // current appearance at dispatch time. Weak: the callback lives
-    // inside the window's own handler table, and a strong capture
-    // would cycle it alive past close.
-    let appearance_window = Arc::downgrade(&window);
-    window.on_appearance_changed(Box::new(move || {
-        if let Some(win) = appearance_window.upgrade() {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::AppearanceChanged(win.appearance())),
-            );
-        }
-    }));
-    // Seed the initial brightness — a user on a dark desktop must not
-    // start light until the first live theme flip.
-    installation.observe(flui_runtime::owner::WindowObservation::Brightness(
-        match window.appearance() {
-            flui_platform::WindowAppearance::Dark
-            | flui_platform::WindowAppearance::VibrantDark => flui_platform_api::Brightness::Dark,
-            flui_platform::WindowAppearance::Light
-            | flui_platform::WindowAppearance::VibrantLight => flui_platform_api::Brightness::Light,
-        },
-    ));
+    installation.observe_appearance();
+    installation.observe_display();
+    installation.observe_window_state();
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default
     // would be permanent there.
-    installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-        size: window.logical_size(),
-        scale_factor: window.scale_factor(),
-    });
+    if let Ok(metrics) = window.metrics() {
+        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
+    }
 
     // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
     // marking the lifecycle Resumed or requesting the initial redraw.
@@ -463,14 +438,36 @@ pub(super) struct DesktopWakeDeadlines {
 }
 
 impl DesktopWakeDeadlines {
-    pub(super) fn next_wake(&self, frames_enabled: bool) -> Option<web_time::Instant> {
+    /// Defer the next ticker-only wake of `presentation` after a pump that
+    /// presented nothing, to a fraction of the refresh interval it is paced by
+    /// right now: read from the presentation here, at the arm, so a display
+    /// that changed mode, or a window that moved to another display, is
+    /// followed without waiting for a resize. Returns the armed instant.
+    pub(super) fn defer_after_no_present(
+        &self,
+        ui_runtime: &crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+        now: web_time::Instant,
+    ) -> web_time::Instant {
+        self.fallback
+            .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
+    }
+
+    /// The earliest armed deadline. `period` is the presentation's current
+    /// refresh interval, which the pacing fallback needs to tell a late wake
+    /// from one that is never coming.
+    pub(super) fn next_wake(
+        &self,
+        frames_enabled: bool,
+        period: std::time::Duration,
+    ) -> Option<web_time::Instant> {
         if !frames_enabled {
             return None;
         }
         let deadline = merge_wake_deadlines(
             merge_wake_deadlines(
                 self.device_recovery_backoff.next_attempt_at(),
-                self.fallback.next_wake(web_time::Instant::now()),
+                self.fallback.next_wake(web_time::Instant::now(), period),
             ),
             self.first_reveal.next_deadline(),
         );
@@ -483,14 +480,19 @@ impl DesktopFrameDriver {
         super::host::with_owner_platform(|owner| owner.activate(false));
         tracing::info!("Desktop platform initialized with callbacks");
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         let resize = self.lane.lock().resize_hook();
+        let physical = metrics.physical();
         resize.apply(
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         );
     }
-    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.deadlines.device_recovery_backoff;
@@ -585,25 +587,6 @@ impl DesktopFrameDriver {
                 // frame. `pump_background` clears the frame latch before
                 // polling so accepted work can request another owner wake.
                 ui_runtime.pump_background();
-                // A backgrounded wake with dirty/pending work
-                // re-requesting another wake every loop tick has the
-                // identical busy-spin risk an un-presented frame with an
-                // open gate has, and nothing else paces it while frames
-                // are disabled — so it takes the same bound (ADR-0058),
-                // as a deferral rather than a sleep. The wake-deadline
-                // hook gates this source on `frames_enabled`, so the
-                // deadline is not reported while backgrounded; what
-                // bounds this arm is the deferral being consulted by the
-                // dirty gate above on the next wake, which is where a
-                // backgrounded self-re-arming task would otherwise spin.
-                let keeps_gate_open = keeps_frame_gate_open(
-                    ui_runtime.needs_redraw(),
-                    ui_runtime.scheduler().is_frame_scheduled(),
-                    ui_runtime.has_pending_work(),
-                );
-                if keeps_gate_open {
-                    fallback.arm_after_no_present(web_time::Instant::now());
-                }
                 return;
             }
             WakeAction::Render => {}
@@ -663,7 +646,9 @@ impl DesktopFrameDriver {
         if outcome.presented {
             fallback.record_present(pace_now);
         } else if keeps_gate_open {
-            let deadline = fallback.arm_after_no_present(pace_now);
+            let deadline =
+                self.deadlines
+                    .defer_after_no_present(ui_runtime, presentation, pace_now);
             tracing::trace!(
                 target: "flui.pace",
                 event = "fallback_armed",

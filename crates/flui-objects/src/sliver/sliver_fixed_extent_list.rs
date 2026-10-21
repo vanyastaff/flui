@@ -81,6 +81,7 @@ pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 pub struct RenderSliverFixedExtentList {
     item_extent: f64,
     item_count: usize,
+    collection: Option<flui_rendering::semantics::SemanticsCollection>,
     /// Logical index → dense slot of every attached child, rebuilt each pass
     /// from the children's parent data.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -92,6 +93,20 @@ pub struct RenderSliverFixedExtentList {
 }
 
 impl RenderSliverFixedExtentList {
+    /// Overrides the accessible set size rather than deriving it from logical
+    /// slots. `None` declares an unknown total.
+    pub fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
+        if self.collection == Some(collection) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
     /// Creates a list of `item_count` children, each `item_extent` pixels along
     /// the main axis.
     ///
@@ -108,6 +123,7 @@ impl RenderSliverFixedExtentList {
         Self {
             item_extent,
             item_count,
+            collection: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
@@ -154,7 +170,7 @@ impl RenderSliverFixedExtentList {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.item_count = item_count;
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// The first child index whose extent reaches `scroll_offset`.
@@ -358,6 +374,16 @@ impl Diagnosticable for RenderSliverFixedExtentList {
 impl RenderSliver for RenderSliverFixedExtentList {
     type Arity = Variable;
     type ParentData = SliverMultiBoxAdaptorParentData;
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+    ) {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        config.set_lazy_collection(self.collection.unwrap_or_else(|| {
+            SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
+        }));
+    }
 
     fn perform_layout(
         &mut self,

@@ -60,8 +60,8 @@ use flui_painting::text_boundaries::graphemes;
 use flui_platform_api::text_store::{
     CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
     LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
-    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
+    TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
+    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -195,6 +195,11 @@ pub(super) struct EditableTextStore {
     /// A layout or status change the observer has not heard of yet, because
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
+    /// The store answered `NoLayout` to a read and the observer has not been
+    /// told that layout now exists (TSF's `OnLayoutChange` owes one).
+    layout_owed: Cell<bool>,
+    /// The controller and revision the app-side diff last ran against.
+    diffed: RefCell<Option<(TextEditingController, u64)>>,
     status_dirty: Cell<bool>,
     /// What sessions that wrote the controller back owe its listeners and
     /// `on_changed`, in commit order: delivered in [`Self::settle`], once
@@ -208,6 +213,7 @@ pub(super) struct EditableTextStore {
     pipeline: Option<PipelineCell>,
     inner_anchor: SubtreeAnchor,
     obscure: Rc<Cell<bool>>,
+    input_purpose: Rc<Cell<TextInputPurpose>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
 }
@@ -243,6 +249,7 @@ pub(super) struct FieldParts {
     pub(super) pipeline: Option<PipelineCell>,
     pub(super) inner_anchor: SubtreeAnchor,
     pub(super) obscure: Rc<Cell<bool>>,
+    pub(super) input_purpose: Rc<Cell<TextInputPurpose>>,
     pub(super) obscuring_character: Rc<Cell<char>>,
     pub(super) edits: EditObserver,
 }
@@ -256,12 +263,15 @@ impl EditableTextStore {
             reported: RefCell::new((String::new(), Selection::collapsed(Utf16Offset::ZERO))),
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
+            layout_owed: Cell::new(false),
+            diffed: RefCell::new(None),
             status_dirty: Cell::new(false),
             owed: RefCell::new(Vec::new()),
             handle: parts.handle,
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
             obscure: parts.obscure,
+            input_purpose: parts.input_purpose,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
         };
@@ -280,10 +290,36 @@ impl EditableTextStore {
     /// made from elsewhere (`set_text`, a paste) is reported at the next of
     /// those points.
     pub(super) fn controller_changed(&self) {
-        if self.may_notify() {
-            let mut calls = OwnerCalls::new();
-            self.report_app_changes(&mut calls);
-            calls.resume();
+        let controller = self.controller.borrow().clone();
+        let revision = controller.revision();
+        let unchanged = self
+            .diffed
+            .borrow()
+            .as_ref()
+            .is_some_and(|(seen, at)| seen.is_same_controller(&controller) && *at == revision);
+        // A change that could not be reported now (a lock is held) leaves
+        // the revision unseen, so the next call tries again.
+        if unchanged || !self.may_notify() {
+            return;
+        }
+        *self.diffed.borrow_mut() = Some((controller, revision));
+        let mut calls = OwnerCalls::new();
+        self.report_app_changes(&mut calls);
+        calls.resume();
+    }
+
+    /// Tell the observer that layout exists, if a read answered `NoLayout`
+    /// and the layout has since caught up with the document, whether or not
+    /// the caret rect moved: an input method that was refused a rect asks
+    /// again only when told.
+    pub(super) fn settle_owed_layout(&self) {
+        if !self.layout_owed.get() {
+            return;
+        }
+        let doc = self.read_doc();
+        if self.viewport().is_ok() && self.with_layout(&doc, |_, _| Ok(())).is_ok() {
+            self.layout_owed.set(false);
+            self.layout_changed();
         }
     }
 
@@ -589,25 +625,36 @@ impl EditableTextStore {
     ) -> Result<R, TextStoreError> {
         let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
         let rendered = self.rendered(&doc.text);
-        with_editable_global(pipeline, &self.inner_anchor, |editable, to_root| {
+        let answer = with_editable_global(pipeline, &self.inner_anchor, |editable, to_root| {
             (editable.plain_text() == rendered).then(|| f(editable, to_root))
         })
-        .unwrap_or(Err(TextStoreError::NoLayout))
+        .unwrap_or(Err(TextStoreError::NoLayout));
+        if matches!(answer, Err(TextStoreError::NoLayout)) {
+            self.layout_owed.set(true);
+        }
+        answer
     }
 
     /// The allocated field box, independently of the shaped line's extent.
     fn viewport(&self) -> Result<Rect, TextStoreError> {
-        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
-        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
-        pipeline
-            .try_with_layout(|owner| {
-                let tree = owner.render_tree();
-                let editable = *tree.children(anchor).first()?;
-                let size = tree.get(editable)?.size()?;
-                Some(Rect::from_origin_size(Point::ZERO, size))
-            })
-            .flatten()
-            .ok_or(TextStoreError::NoLayout)
+        let measured = self
+            .pipeline
+            .as_ref()
+            .zip(self.inner_anchor.get())
+            .and_then(|(pipeline, anchor)| {
+                pipeline
+                    .try_with_layout(|owner| {
+                        let tree = owner.render_tree();
+                        let editable = *tree.children(anchor).first()?;
+                        let size = tree.get(editable)?.size()?;
+                        Some(Rect::from_origin_size(Point::ZERO, size))
+                    })
+                    .flatten()
+            });
+        measured.ok_or_else(|| {
+            self.layout_owed.set(true);
+            TextStoreError::NoLayout
+        })
     }
 }
 
@@ -655,7 +702,9 @@ fn text_change(old: &str, new: &str) -> TextChange {
 
 impl TextStore for EditableTextStore {
     fn status(&self) -> TextStoreStatus {
-        TextStoreStatus::EDITABLE_SINGLE_LINE.with_protected(self.obscure.get())
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+            .with_protected(self.obscure.get())
+            .with_purpose(self.input_purpose.get())
     }
 
     fn request_lock(
@@ -730,6 +779,10 @@ impl TextStore for EditableTextStore {
         let mut calls = OwnerCalls::new();
         calls.retire(previous);
         calls.resume();
+    }
+
+    fn screen_moved(&self) {
+        self.layout_changed();
     }
 }
 

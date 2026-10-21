@@ -1,10 +1,11 @@
 //! Drag notifications belong to the contact that produced them.
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::gesture::GestureContest;
+use flui_interaction::gesture::{GestureArena, GestureArenaMember};
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureEndReason, GestureRecognizer, PointerId,
 };
@@ -15,8 +16,8 @@ use std::{
 
 struct Rival;
 impl GestureArenaMember for Rival {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
@@ -32,10 +33,10 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         .build();
     struct Competitor(Rc<Cell<usize>>);
     impl GestureArenaMember for Competitor {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     let rival = Rc::new(Competitor(won.clone()));
     let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
@@ -72,7 +73,7 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
         completed.clone(),
     );
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-        .drag_start_behavior(flui_interaction::recognizers::drag::DragStartBehavior::Down)
+        .drag_start_behavior(flui_interaction::gesture::DragStartBehavior::Down)
         .on_start(move |_| {
             s.set(s.get() + 1);
             if cancel_once.replace(false) {
@@ -166,6 +167,14 @@ fn drag_lifecycle_contracts() {
             "cancelling_drag_from_start_drops_the_stale_update_and_recovers",
             cancelling_drag_from_start_drops_the_stale_update_and_recovers,
         ),
+        (
+            "a_successor_starts_the_drag_only_past_its_own_slop",
+            a_successor_starts_the_drag_only_past_its_own_slop,
+        ),
+        (
+            "axial_fling_limits_read_the_drag_axis",
+            axial_fling_limits_read_the_drag_axis,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
             eprintln!("drag contract {name} failed");
@@ -174,8 +183,240 @@ fn drag_lifecycle_contracts() {
     }
 }
 
+/// Two still fingers on a lone drag win their contacts by default; lifting
+/// the first hands the drag to the second, which starts it only once it
+/// crosses its own slop, never from the lift.
+fn a_successor_starts_the_drag_only_past_its_own_slop() {
+    use flui_interaction::gesture::DragPointerStrategy;
+    let arena =
+        GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+    let starts = Rc::new(Cell::new(0));
+    let s = starts.clone();
+    let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .pointer_strategy(DragPointerStrategy::ContinueWithRemaining)
+        .on_start(move |_| s.set(s.get() + 1))
+        .build();
+    let contact = |id: u64| PointerId::try_from(id).expect("nonzero contact");
+    for id in [2_u64, 3] {
+        let down = make_down_event_for_id(contact(id), Offset::new(0.0, 0.0), PointerKind::Touch)
+            .expect("finite touch");
+        drag.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(contact(id));
+        arena.drain_deferred_resolutions();
+    }
+    let lift =
+        make_up_event_for_id(contact(2), Offset::ZERO, PointerKind::Touch).expect("finite release");
+    drag.handle_event(PointerDispatch::at_root(&lift));
+    arena.sweep(contact(2));
+    arena.drain_deferred_resolutions();
+    assert_eq!(starts.get(), 0, "a still successor starts nothing");
+    let crossing = make_move_event_for_id(contact(3), Offset::new(40.0, 0.0), PointerKind::Touch)
+        .expect("finite move");
+    drag.handle_event(PointerDispatch::at_root(&crossing));
+    assert_eq!(starts.get(), 1, "the successor's own crossing starts it");
+    let up = make_up_event_for_id(contact(3), Offset::new(40.0, 0.0), PointerKind::Touch)
+        .expect("finite release");
+    drag.handle_event(PointerDispatch::at_root(&up));
+    arena.sweep(contact(3));
+    arena.drain_deferred_resolutions();
+    assert!(arena.is_empty());
+}
+
+/// The fling threshold and cap read an axial drag's own component: a
+/// horizontal drag released mostly vertically does not fling, a fast
+/// diagonal release is capped on its axis, not by its 2D speed, and the
+/// root-space fling is that admitted fling carried through the node's
+/// transform, with no perpendicular component the axis dropped.
+fn axial_fling_limits_read_the_drag_axis() {
+    type Transform = fn(f64, f64) -> (f64, f64);
+    let identity: Transform = |x, y| (x, y);
+    // A quarter turn at twice the scale: local x runs along root y.
+    let turned: Transform = |x, y| (-2.0 * y, 2.0 * x);
+    // An eighth turn at half the scale. Both are similarities, which the root
+    // fling maps exactly; a non-uniform scale or a skew it only approximates.
+    const EIGHTH: f64 = 0.5 * std::f64::consts::FRAC_1_SQRT_2;
+    let eighth: Transform = |x, y| (EIGHTH * (x - y), EIGHTH * (x + y));
+    // A horizontal drag, or a free drag the rails lock onto its horizontal
+    // start.
+    let horizontal =
+        |arena: GestureArena| DragGestureRecognizer::builder(arena, DragAxis::Horizontal);
+    let railed = |arena: GestureArena| {
+        DragGestureRecognizer::builder(arena, DragAxis::Free)
+            .axis_lock(flui_interaction::AxisLock::Rails)
+    };
+    type Builder = fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder;
+    // The drag, its local release velocity in px/s, the node's local-to-root
+    // transform, and the local and root flings the drag reports for it.
+    type Row = (
+        &'static str,
+        Builder,
+        (f64, f64),
+        Transform,
+        Option<((f64, f64), (f64, f64))>,
+    );
+    let rows: [Row; 6] = [
+        (
+            "off-axis release",
+            horizontal,
+            (40.0, 600.0),
+            identity,
+            None,
+        ),
+        (
+            "diagonal capped on its axis",
+            horizontal,
+            (7000.0, 7000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            "perpendicular dropped in the root",
+            horizontal,
+            (7000.0, 100_000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            "carried through a turned, scaled node",
+            horizontal,
+            (3000.0, 500.0),
+            turned,
+            Some(((3000.0, 0.0), (0.0, 6000.0))),
+        ),
+        (
+            "carried through a node turned 45 degrees at half scale",
+            horizontal,
+            (3000.0, 500.0),
+            eighth,
+            Some(((3000.0, 0.0), (EIGHTH * 3000.0, EIGHTH * 3000.0))),
+        ),
+        (
+            "railed free drag",
+            railed,
+            (7000.0, 100_000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+    ];
+    // Each row reports on its own, so one failing row cannot hide another.
+    let mut failed = Vec::new();
+    for (name, builder, velocity, to_root, fling) in rows {
+        let row = std::panic::catch_unwind(|| fling_row(builder, velocity, to_root, fling));
+        if row.is_err() {
+            failed.push(name);
+        }
+    }
+    assert!(failed.is_empty(), "fling rows failed: {failed:?}");
+}
+
+/// One row of [`axial_fling_limits_read_the_drag_axis`].
+fn fling_row(
+    builder: fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder,
+    (vx, vy): (f64, f64),
+    to_root: fn(f64, f64) -> (f64, f64),
+    fling: Option<((f64, f64), (f64, f64))>,
+) {
+    use flui_foundation::geometry::Point;
+    use flui_interaction::Velocity;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
+            PointerRelease, PointerSample,
+        },
+    };
+    {
+        let arena =
+            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        let ends = Rc::new(RefCell::new(Vec::new()));
+        let e = ends.clone();
+        let drag = builder(arena.clone())
+            .on_end(move |details| {
+                e.borrow_mut()
+                    .push((details.fling_velocity(), details.global_fling_velocity()));
+            })
+            .build();
+        let info = PointerInfo::new(
+            PointerId::try_from(2).expect("nonzero contact"),
+            PointerKind::Touch,
+        );
+        let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let sample = |millis: u64, x: f64, y: f64| {
+            PointerSample::new(
+                EventTime::from_nanos(millis * 1_000_000),
+                PointerPosition::try_new(Point::new(x, y)).expect("finite sample"),
+            )
+        };
+        // The event in the node's space and in the root's.
+        let both = |make: &dyn Fn(PointerSample) -> PointerEvent, millis: u64, x: f64, y: f64| {
+            let (rx, ry) = to_root(x, y);
+            (make(sample(millis, x, y)), make(sample(millis, rx, ry)))
+        };
+        let (down, root_down) = both(
+            &|at| PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, buttons, at)),
+            0,
+            0.0,
+            0.0,
+        );
+        drag.add_pointer(PointerDispatch::new(&down, &root_down));
+        arena.close(info.id);
+        arena.drain_deferred_resolutions();
+        let send = |millis: u64, x: f64, y: f64| {
+            let (event, root) = both(
+                &|at| PointerEvent::Move(PointerMove::new(info, buttons, at)),
+                millis,
+                x,
+                y,
+            );
+            drag.handle_event(PointerDispatch::new(&event, &root));
+        };
+        // Cross the slop, rest past the stationary gap, then move at the
+        // release velocity: only those last samples measure it.
+        send(10, 40.0, 0.0);
+        let (mut x, mut y) = (40.0, 0.0);
+        for step in 0..=5_u64 {
+            x = 40.0 + vx * (step as f64) * 0.01;
+            y = vy * (step as f64) * 0.01;
+            send(60 + step * 10, x, y);
+        }
+        let (up, root_up) = both(
+            &|at| {
+                PointerEvent::Up(PointerRelease::new(
+                    info,
+                    PointerButton::PRIMARY,
+                    PointerButtons::NONE,
+                    at,
+                ))
+            },
+            110,
+            x,
+            y,
+        );
+        drag.handle_event(PointerDispatch::new(&up, &root_up));
+        arena.sweep(info.id);
+        arena.drain_deferred_resolutions();
+        let (local, root) = ends.borrow().first().copied().expect("the drag completes");
+        let close = |reported: Velocity, (ex, ey): (f64, f64)| {
+            let pps = reported.pixels_per_second;
+            (pps.dx - ex).abs() < 1.0 && (pps.dy - ey).abs() < 1.0
+        };
+        match fling {
+            None => assert_eq!(
+                (local, root),
+                (Velocity::ZERO, Velocity::ZERO),
+                "({vx}, {vy}) px/s"
+            ),
+            Some((along, in_root)) => assert!(
+                close(local, along) && close(root, in_root),
+                "({vx}, {vy}) px/s flings {local:?} locally, {root:?} in the root"
+            ),
+        }
+        assert!(arena.is_empty());
+    }
+}
+
 fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     for callback_panics in [false, true] {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
@@ -218,6 +459,15 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        // The drag holds its contacts until one crosses the slop.
+        assert_eq!(starts.get(), 0);
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         assert_eq!(starts.get(), 1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag.cancel()));
         if callback_panics {
@@ -231,9 +481,17 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
         }
         assert_eq!(
             (starts.get(), ends.get()),
-            (2, 1),
+            (1, 1),
             "cancel callback can admit an exact same-pointer replacement"
         );
+        let replacement_moves = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(140.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&replacement_moves));
+        assert_eq!(starts.get(), 2, "the replacement starts on its own slop");
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
             Offset::new(110.0, 0.0),
@@ -253,7 +511,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
 }
 
 fn continuation_does_not_take_a_rejected_or_other_device_contact() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::pointer::DeviceId;
     for secondary_device in [Some(1_u64), Some(2), None] {
         let arena =
@@ -282,9 +540,16 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
-            Offset::ZERO,
+            Offset::new(40.0, 0.0),
             PointerKind::Touch,
         )
         .expect("finite release");
@@ -319,6 +584,13 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         arena.drain_deferred_resolutions();
     };
     send_down(2);
+    let crossing = make_move_event_for_id(
+        PointerId::try_from(2).expect("nonzero contact"),
+        Offset::new(40.0, 0.0),
+        PointerKind::Touch,
+    )
+    .expect("finite move");
+    drag.handle_event(PointerDispatch::at_root(&crossing));
     let pointer = PointerId::try_from(3).expect("nonzero contact");
     let rival = Rc::new(Rival);
     arena.add(pointer, &rival);
@@ -350,7 +622,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
 
 fn remaining_touches_continue_in_admission_order_without_a_jump() {
     use flui_foundation::geometry::Point;
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::{
         EventTime,
         pointer::{

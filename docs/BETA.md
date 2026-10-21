@@ -922,6 +922,11 @@ number; and the probe cannot read the display period through the facade
 (`PlatformWindow::refresh_period` is not exposed to application code), so
 the script supplies it.
 
+*Note, 2026-10-17:* `PlatformWindow::refresh_period`, named above, has since been
+removed; each display's refresh period is now carried by the platform's display
+snapshot (ADR-0236) and still not exposed to application code. The text above
+describes the measurement as it was run.
+
 ## Native iOS application delivery
 
 `flui build ios` now selects a Rust executable and stages an unsigned native UIKit

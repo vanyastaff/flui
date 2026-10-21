@@ -77,7 +77,7 @@ impl TickerMode {
     /// so a bare `TickerMode` changes nothing.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             enabled: true,
         }
     }

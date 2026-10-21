@@ -64,11 +64,12 @@ pub trait StatefulView: Clone + 'static + Sized {
 ///
 /// 1. `init_state()` - Called once after creation
 /// 2. `did_change_dependencies()` - Called when inherited data changes
-/// 3. `build()` - Called to create child Views (may be called many times)
-/// 4. `did_update_view()` - Called when parent provides new View config
-/// 5. `deactivate()` - Called when temporarily removed
-/// 6. `activate()` - Called when re-inserted
-/// 7. `dispose()` - Called before permanent removal
+/// 3. `apply_view()` - Called before a build that follows a new View config or a dependency change
+/// 4. `build()` - Called to create child Views (may be called many times)
+/// 5. `did_update_view()` - Called when parent provides new View config
+/// 6. `deactivate()` - Called when temporarily removed
+/// 7. `activate()` - Called when re-inserted
+/// 8. `dispose()` - Called before permanent removal
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not the state type of the view `{V}`",
     label = "missing `impl ViewState<{V}> for {Self}`",
@@ -94,6 +95,22 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// reason) — relying on this hook alone for the initial value silently
     /// never fires.
     fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {}
+
+    /// Applies the current view configuration and the ambient dependencies to
+    /// the state, right before a build.
+    ///
+    /// `build` takes `&self`, so a state that has to derive something from
+    /// its view (a controller serving it, a slot the child reads) cannot do
+    /// it there. `apply_view` is the place: it receives the view and a
+    /// [`BuildContext`] (not a [`LifecycleContext`]: the presentation
+    /// capabilities stay in `init_state` and `did_change_dependencies`, ADR-0078), and runs before the first build, and before
+    /// every build that follows a [`did_update_view`](Self::did_update_view)
+    /// or a [`did_change_dependencies`](Self::did_change_dependencies). A
+    /// rebuild that changed neither (a `set_state`) does not call it.
+    ///
+    /// Keep it idempotent: the same view and dependencies may reach it again
+    /// after a rebuild another path requested.
+    fn apply_view(&mut self, _view: &V, _ctx: &dyn BuildContext) {}
 
     /// Build the child View tree.
     ///

@@ -41,15 +41,31 @@
 //! `assert!`, so a mismatch surfaces as a framework `ErrorView` (via the
 //! build-error boundary) in every profile — same public-widget invariant
 //! class as [`TabController`] index bounds (#1101).
+//!
+//! ## Alternatives to a swipe
+//!
+//! A swipe is a path, so the pager is a behavioural widget (ADR-0216): the
+//! view offers "Previous tab" and "Next tab" to assistive technology and, as
+//! Ctrl+[ and Ctrl+], to the keyboard, each selecting the adjacent tab through
+//! the controller as tapping it does (a step past either end is disabled). The
+//! view draws no control for them: their single-pointer path is the
+//! [`crate::TabBar`] on the same controller, which registers on the
+//! controller's companion link while mounted and publishes the adjacent tab's
+//! node for each command. A view with no [`crate::TabBar`] mounted leaves the
+//! commands without that path, and says so with a `flui::a11y` warning once
+//! the frame it mounted in has run. The labels are English until Material has
+//! a localizations table.
 
 use std::cell::RefCell;
 
 use flui_sdk::animation::MotionPolicy;
-use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{MediaQuery, PageController, PageView};
+use flui_sdk::view::{BoxedView, EventCx};
+use flui_sdk::widgets::{Action, ActionOutcome, Actions, MediaQuery, PageController, PageView};
 
-use crate::tab_controller::{DefaultTabController, PagerAttachment, PagerSuspender, TabController};
+use crate::tab_controller::{
+    DefaultTabController, PagerAttachment, PagerSuspender, TabController, TabStep,
+};
 
 /// A [`TabController`]-synced pager: one page per tab, swiped or switched
 /// by the controller (see the module docs).
@@ -261,6 +277,33 @@ impl ViewState<TabBarView> for TabBarViewState {
             .into_view()
             .boxed();
         }
-        PageView::new(pages).controller(pager)
+        Actions::new(PageView::new(pages, controller.step_alternatives()).controller(pager))
+            .action(TabStepAction { controller })
+    }
+}
+
+/// Selects the tab a [`TabStep`] names through the controller, as tapping it
+/// does; at either end the step is disabled.
+struct TabStepAction {
+    controller: TabController,
+}
+
+impl Action<TabStep> for TabStepAction {
+    fn is_enabled(&self, step: &TabStep) -> bool {
+        self.target(*step).is_some()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, step: &TabStep) -> ActionOutcome {
+        let Some(target) = self.target(*step) else {
+            return ActionOutcome::NotPerformed;
+        };
+        self.controller.animate_to(target);
+        ActionOutcome::Performed
+    }
+}
+
+impl TabStepAction {
+    fn target(&self, step: TabStep) -> Option<usize> {
+        step.target(self.controller.index(), self.controller.length())
     }
 }

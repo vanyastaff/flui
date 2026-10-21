@@ -4,22 +4,22 @@ use flui_interaction::{
     LongPressDetails, LongPressDownDetails, LongPressStartDetails, TapDetails,
     LongPressMoveUpdateDetails, PointerKind, TapDownDetails, TapGestureRecognizer, TapUpDetails,
     Velocity,
-    recognizers::{
+    gesture::{
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
-        MultiTapGestureRecognizer,
-        multi_tap::MultiTapDetails,
+        MultiTapDetails, MultiTapGestureRecognizer,
     },
 };
 
 fn main() {
     let global = Offset::new(40.0, 60.0);
     let local = Offset::new(10.0, 20.0);
-    let _down = TapDownDetails::new(global, local).with_kind(PointerKind::Mouse);
-    let _up = TapUpDetails::new(global, local).with_kind(PointerKind::Mouse);
+    let pointer = flui_interaction::PointerId::try_from(1_u64).expect("authored contact");
+    let _down = TapDownDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
+    let _up = TapUpDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
     let _move = LongPressMoveUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO);
     let _end = LongPressEndDetails::new(global, local, Velocity::ZERO);
     let _pressure = ForcePressDetails::new(global, local, 0.5, 1.0);
-    let _drag = DragUpdateDetails::new(global, local, Offset::ZERO, 0.0, PointerKind::Mouse);
+    let _drag = DragUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO, 0.0, PointerKind::Mouse);
 
     let arena = GestureArena::new();
     let _tap = TapGestureRecognizer::builder(arena.clone())
@@ -46,7 +46,7 @@ fn main() {
         .on_long_press_end(|LongPressEndDetails { velocity, .. }| { let _ = velocity; })
         .on_long_press_cancel(|LongPressDetails { kind, .. }| { let _ = kind; })
         .build();
-    let _multi = MultiTapGestureRecognizer::builder(arena, 2)
+    let _multi = MultiTapGestureRecognizer::builder(arena, flui_interaction::MultiTapCount::TWO)
         .on_multi_tap(|MultiTapDetails { positions, .. }| { let _ = positions; })
         .build();
 }

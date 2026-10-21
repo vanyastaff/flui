@@ -10,6 +10,8 @@
 //! variant sets a default `side` or `fixed_size`, so neither field is
 //! populated here.
 
+use std::sync::Arc;
+
 use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
@@ -48,6 +50,7 @@ enum FilledButtonVariant {
 pub struct FilledButton {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
+    identifier: Option<Arc<str>>,
     variant: FilledButtonVariant,
     child: BoxedView,
 }
@@ -69,8 +72,9 @@ impl FilledButton {
         Self {
             on_pressed: None,
             style: None,
+            identifier: None,
             variant: FilledButtonVariant::Filled,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -101,6 +105,14 @@ impl FilledButton {
         self.style = Some(style);
         self
     }
+
+    /// Names the button's node for tests and automation (ADR-0240): exported as
+    /// UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
 }
 
 impl StatelessView for FilledButton {
@@ -124,7 +136,7 @@ impl StatelessView for FilledButton {
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }
-        core
+        core.identifier(self.identifier.clone())
     }
 }
 

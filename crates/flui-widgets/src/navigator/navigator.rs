@@ -243,6 +243,16 @@ struct NavigatorShared {
     /// on, so a disposed navigator's heroes are never visited again.
     nested_hero_registration: Mutex<Option<(HeroRegistry, NestedHeroSource)>>,
 
+    /// The nearest navigator enclosing this one, re-resolved by every `build`
+    /// (a `GlobalKey` reparent moves a navigator without re-running
+    /// `init_state`) and cleared in `dispose`. A pop request this navigator
+    /// bubbles goes there.
+    ///
+    /// A `Weak`: the enclosing navigator's routes own this navigator's view,
+    /// which owns a handle to this state, so a strong reference would be a
+    /// cycle.
+    enclosing: Mutex<Option<(Weak<NavigatorShared>, NavigatorCommandTarget)>>,
+
     /// How many overlapping user gestures (e.g. edge swipe-backs) are
     /// currently manipulating this navigator. Only
     /// the 0→1 and 1→0 transitions notify observers, so nested gestures on
@@ -384,7 +394,7 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
                     .expect("physical alias retains entry")
                     .opaque()
             );
-            assert!(callback_queue.lock().is_empty());
+            assert!(callback_queue.borrow().is_empty());
             callback_observed.set(true);
         }),
     });
@@ -402,14 +412,14 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
             .opaque()
     );
     assert!(
-        queue.lock().is_empty(),
+        queue.borrow().is_empty(),
         "closed authority cannot enqueue orphan commands"
     );
 }
 
 impl NavigatorShared {
     fn rebind_clock(&self, current: Option<flui_animation::Vsync>) {
-        let unchanged = match (&*self.vsync.lock(), &current) {
+        let unchanged = match (&*self.vsync.borrow(), &current) {
             (Some(old), Some(new)) => old.is_same(new),
             (None, None) => true,
             _ => false,
@@ -417,7 +427,7 @@ impl NavigatorShared {
         if unchanged {
             return;
         }
-        let outgoing = std::mem::replace(&mut *self.vsync.lock(), current);
+        let outgoing = std::mem::replace(&mut *self.vsync.borrow_mut(), current);
         let mut peers: Vec<_> = self
             .registries
             .peers
@@ -428,7 +438,7 @@ impl NavigatorShared {
         peers.sort_unstable_by_key(|(id, _)| *id);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         for (_, rebind) in peers {
-            let current = self.vsync.lock().clone();
+            let current = self.vsync.borrow().clone();
             recovery.run(|| rebind(current.as_ref()));
         }
         recovery.retire(outgoing);
@@ -441,7 +451,11 @@ impl NavigatorShared {
     /// 2. rearrange the overlay to match the route stack, but **only** when the
     ///    flush asked for it. `pop` and `remove_route` do not ask, precisely
     ///    because step 1 already updated the overlay's list.
+    ///
+    /// Every step runs though user code in an earlier one panicked; the first
+    /// panic propagates once all of them have run.
     fn apply(&self, mut outcome: FlushOutcome) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
         // 0. Everything the flush owed to user code, **in the order it was
         //    produced** — a multi-pass flush must not deliver a later pass's
         //    refusal ahead of an earlier pass's pop — and before the observers
@@ -467,14 +481,14 @@ impl NavigatorShared {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.lock().clone());
                         if let Some(modal) = modals.get(&route) {
-                            modal.notify_pop_invoked(did_pop);
+                            recovery.run(|| modal.notify_pop_invoked(did_pop));
                         }
                     }
                     DeferredEffect::LocalHistoryPopped(route) => {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.lock().clone());
                         if let Some(modal) = modals.get(&route) {
-                            modal.drain_local_history();
+                            recovery.run(|| modal.drain_local_history());
                         }
                     }
                     // **Load-bearing placement (ADR-0064).** Registered here,
@@ -488,6 +502,7 @@ impl NavigatorShared {
                     DeferredEffect::AwaitPush(route, future) => self.await_push(route, future),
                 }
             }
+            recovery.retire(modals);
         }
 
         // 0b. The new top route takes the keyboard: its scope becomes active and
@@ -495,53 +510,64 @@ impl NavigatorShared {
         //     Also outside the lock — moving the focus fires user focus-change
         //     listeners, and one that calls back into this navigator would
         //     deadlock the same thread if this ran inside the flush.
-        if let Some(top) =
+        if let Some((top, replaces_a_route)) =
             outcome
                 .notifications
                 .iter()
                 .find_map(|notification| match notification {
-                    Notification::TopChanged { top, .. } => Some(*top),
+                    Notification::TopChanged { top, previous_top } => {
+                        Some((*top, previous_top.is_some()))
+                    }
                     Notification::Observed(_) => None,
                 })
         {
-            let modal = self.registries.modals.lock().get(&top).cloned();
-            if let Some(modal) = modal {
-                modal.activate_focus_scope();
+            // The new top becomes focusable and takes the focus first, then
+            // every other route stops being focusable: there is never a frame
+            // where the leaving route is the only one that can hold a key.
+            let modals = self.registries.modals.lock().clone();
+            if let Some(modal) = modals.get(&top) {
+                if replaces_a_route {
+                    recovery.run(|| modal.supersede_inner_first_focus());
+                }
+                recovery.run(|| modal.set_focusable(true));
+                // The first route of a navigator takes no focus: the first Tab
+                // enters it.
+                recovery.run(|| modal.activate_focus_scope(replaces_a_route));
             }
+            for (route, modal) in &modals {
+                if *route != top {
+                    recovery.run(|| modal.set_focusable(false));
+                }
+            }
+            recovery.retire(modals);
         }
 
         // 1. Observers, with **no lock held** — this is the whole reason the flush
         //    returns data instead of calling them. An observer may read the stack
         //    through its `NavigatorHandle`, and may mutate it (which runs a fresh
         //    flush whose notifications land after this loop drains).
-        deliver(&outcome.notifications, &self.observers());
+        let observers = self.observers();
+        deliver(&outcome.notifications, &observers, &mut recovery);
+        recovery.retire(observers);
 
         // 2. Each disposed route's overlay entries, then the route itself.
-        {
-            let mut entries = self.registries.entries.lock();
-            for id in &outcome.disposed {
-                if let Some(entry) = entries.remove(id)
-                    && entry.is_attached()
-                {
-                    entry.remove();
-                }
-            }
-        }
-        outcome.dispose_routes();
+        self.registries
+            .retire_entries(&outcome.disposed, &mut recovery);
+        outcome.dispose_routes(&mut recovery);
 
-        if !outcome.rearrange_overlay {
-            return;
+        if outcome.rearrange_overlay {
+            // The entries of every route in history order, bottom → top.
+            let ordered: Vec<OverlayEntry> = {
+                let ids = self.history.lock().ids();
+                let entries = self.registries.entries.lock();
+                ids.iter()
+                    .filter_map(|id| entries.get(id).cloned())
+                    .collect()
+            };
+            recovery.run(|| self.overlay.rearrange(&ordered));
         }
-
-        // The entries of every route in history order, bottom → top.
-        let ordered: Vec<OverlayEntry> = {
-            let ids = self.history.lock().ids();
-            let entries = self.registries.entries.lock();
-            ids.iter()
-                .filter_map(|id| entries.get(id).cloned())
-                .collect()
-        };
-        self.overlay.rearrange(&ordered);
+        recovery.retire(outcome);
+        recovery.finish();
     }
 
     /// Register the continuation a
@@ -565,7 +591,9 @@ impl NavigatorShared {
             // "Pushing" and "Idle" (or whatever the entry has since moved to
             // — the `state == Pushing` guard in `apply_pending_commands`
             // handles a stale command, e.g. a pop that raced this future).
-            queue.lock().push_back(RouteCommand::PushCompleted(route));
+            queue
+                .borrow_mut()
+                .push_back(RouteCommand::PushCompleted(route));
             // Read now, not at registration: a route pushed before this
             // navigator mounted registers this closure while the slot is
             // still `None`, and only a later mount fills it. Cloned out and
@@ -1082,7 +1110,7 @@ impl NavigatorHandle {
         let shared = Arc::new(NavigatorShared {
             history: super::lifecycle::Terminal::new(Mutex::new(RouteHistory::new())),
             overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
-            vsync: super::lifecycle::Terminal::new(Rc::new(Mutex::new(None))),
+            vsync: super::lifecycle::Terminal::new(Rc::new(RefCell::new(None))),
             registries: super::lifecycle::Terminal::new(Rc::new(RouteRegistries::new())),
             named_routes: super::lifecycle::Terminal::new(RouteRegistry::default()),
             post_frame: Mutex::new(None),
@@ -1091,6 +1119,7 @@ impl NavigatorHandle {
             auto_hero_observer: Mutex::new(None),
             observers_attached: AtomicBool::new(false),
             nested_hero_registration: Mutex::new(None),
+            enclosing: Mutex::new(None),
             user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
             user_gesture_in_progress_notifier: super::lifecycle::Terminal::new(
                 ChangeNotifier::new(),
@@ -1375,6 +1404,17 @@ impl NavigatorHandle {
             return self.refuse("push", refusal, route);
         }
         self.push_reporting_id(route, RouteReservation::reserve).1
+    }
+
+    /// [`push`](Self::push) for a caller that later removes the route it
+    /// pushed by its id; `None`, with the route refused as `push` refuses it,
+    /// when the navigator does not take it.
+    pub(crate) fn push_identified<R: NavigatorRoute>(&self, route: R) -> Option<RouteId> {
+        if let Some(refusal) = self.push_refusal(&route) {
+            drop(self.refuse("push", refusal, route));
+            return None;
+        }
+        Some(self.push_reporting_id(route, RouteReservation::reserve).0)
     }
 
     /// [`push`](Self::push), also handing back the [`RouteId`] it minted.
@@ -1785,6 +1825,19 @@ impl NavigatorHandle {
     /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
     pub fn maybe_pop_with<T: Send + 'static>(&self, result: T) -> bool {
         self.maybe_pop_erased(Some(AnyResult::new(result)))
+    }
+
+    /// This navigator, then each mounted navigator enclosing it, nearest
+    /// first: where a pop request this one bubbles goes next.
+    pub(super) fn self_and_enclosing(&self) -> impl Iterator<Item = Self> {
+        std::iter::successors(Some(self.clone()), |navigator| {
+            let (shared, command_target) = navigator.shared.enclosing.lock().clone()?;
+            Some(Self {
+                shared: shared.upgrade()?,
+                command_target,
+                _owner_affine: PhantomData,
+            })
+        })
     }
 
     /// The topmost present route.
@@ -2890,10 +2943,6 @@ impl ViewState<Navigator> for NavigatorState {
     /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
-        // Before the mount flush installs the seeded routes (ADR-0221 D2).
-        self.shared
-            .registries
-            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
@@ -2930,6 +2979,14 @@ impl ViewState<Navigator> for NavigatorState {
         // already one it can act on.
         self.shared.attach_observers(&self.handle());
 
+        // Reading the durations runs user code that may push. With the
+        // observers attached and the hooks still unresolved, such a push
+        // installs its route as waiting, and it adopts what resolves here
+        // (ADR-0221 D2).
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
+
         debug_assert!(
             self.shared.history.lock().len() > 0,
             "BUG: a Navigator was mounted with no routes — seed one before mounting \
@@ -2957,6 +3014,10 @@ impl ViewState<Navigator> for NavigatorState {
         // Re-resolved every build, not just once at mount — see
         // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
         self.sync_nested_hero_registration(ctx);
+        let enclosing = ctx.find_state::<NavigatorState, _>(|enclosing| {
+            (Arc::downgrade(&enclosing.shared), enclosing.command_target)
+        });
+        *self.shared.enclosing.lock() = enclosing;
 
         // `HeroControllerScope::none`: a nested navigator under this one must not pick up this navigator's controller. It resolves the
         // `.none` in its own `init_state` and attaches nothing.
@@ -2966,10 +3027,12 @@ impl ViewState<Navigator> for NavigatorState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
         // Reaches routes installed from now on; a route already installed
-        // keeps the transition it adopted (ADR-0221 D2).
-        self.shared
-            .registries
-            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
+        // keeps the transition it adopted (ADR-0221 D2). The outgoing hooks
+        // retire first, so a route pushed while a builder's durations are read
+        // waits for the new hooks instead of adopting the old.
+        let hooks = PageTransitions::hooks_of(ctx);
+        self.shared.registries.suspend_transition_hooks();
+        self.shared.registries.set_transition_hooks(hooks.adopt());
     }
 
     /// Detach the observers.
@@ -2999,6 +3062,7 @@ impl ViewState<Navigator> for NavigatorState {
         *self.shared.post_frame.lock() = None;
         let _prev = self.shared.render_tree.lock().take();
         let _prev = self.shared.settle_wake.lock().take();
+        *self.shared.enclosing.lock() = None;
         // The mirror of `sync_nested_hero_registration`'s publish: a disposed
         // navigator's heroes must never be visited by an outer flight again.
         let nested_hero_registration = self.shared.nested_hero_registration.lock().take();
