@@ -26,7 +26,7 @@ mod linux_lifecycle_models;
 
 // Mobile platforms
 #[cfg(target_os = "android")]
-pub mod android;
+pub(crate) mod android;
 
 #[cfg(target_os = "ios")]
 pub mod ios;
@@ -45,8 +45,6 @@ pub mod web;
 pub mod winit;
 
 // Re-exports
-#[cfg(target_os = "android")]
-pub use android::AndroidPlatform;
 pub use headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,

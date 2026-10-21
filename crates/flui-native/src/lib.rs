@@ -204,7 +204,7 @@ pub use hosts::MacOSPlatform;
 pub use platform::HostPlatform;
 // Mobile platforms
 #[cfg(target_os = "android")]
-pub use platforms::AndroidPlatform;
+pub use hosts::AndroidPlatform;
 // Re-export platform implementations
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,

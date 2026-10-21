@@ -8,6 +8,8 @@
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
+#[cfg(target_os = "android")]
+pub(crate) mod android;
 pub(crate) mod headless;
 #[cfg(windows)]
 pub(crate) mod windows;
@@ -16,6 +18,8 @@ pub(crate) mod windows;
 pub use apple::IOSPlatform;
 #[cfg(target_os = "macos")]
 pub use apple::MacOSPlatform;
+#[cfg(target_os = "android")]
+pub use android::AndroidPlatform;
 pub use headless::HeadlessPlatform;
 #[cfg(windows)]
 pub use windows::WindowsPlatform;

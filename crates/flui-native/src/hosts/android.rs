@@ -1,0 +1,61 @@
+//! The Android host: NativeActivity through `android-activity`, and the
+//! `FluiView` it installs (ADR-0247).
+
+use android_activity::AndroidApp;
+
+use crate::host::{Absent, Host, position};
+use crate::platform::HostPlatform;
+use crate::platforms::android::{
+    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidLoop, AndroidSystemChrome,
+    AndroidTextInput, AndroidTransfer, AndroidWindow, MockClipboard,
+};
+
+/// The Android host's table.
+#[derive(Debug)]
+pub struct Android;
+
+impl Host for Android {
+    const NAME: &'static str = "Android";
+
+    type Loop = AndroidLoop;
+    type Window = AndroidWindow;
+    type Displays = AndroidDisplays;
+    type Input = AndroidInputState;
+    type Text = AndroidTextInput;
+    type Accessibility = Absent<position::Accessibility>;
+    type Clipboard = MockClipboard;
+    type Drag = AndroidTransfer;
+    type Haptics = AndroidHaptics;
+    type Preferences = AndroidLoop;
+    type Lifecycle = AndroidLoop;
+    type Chrome = AndroidSystemChrome;
+    type Storage = AndroidLoop;
+}
+
+/// Android platform implementation using `android-activity`
+///
+/// Wraps the `AndroidApp` provided by `android_main()` and implements the
+/// `Platform` trait for integration with the FLUI framework.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// #[no_mangle]
+/// fn android_main(app: AndroidApp) {
+///     let platform = AndroidPlatform::new(app);
+///     let _ = platform.run(Box::new(|owner| {
+///         // Platform ready (first Resume) — create window and renderer
+///         let _ = owner;
+///         Ok(())
+///     }));
+/// }
+/// ```
+pub type AndroidPlatform = HostPlatform<Android>;
+
+impl HostPlatform<Android> {
+    /// Create a new Android platform from the `AndroidApp` provided by
+    /// `android_main()`
+    pub fn new(app: AndroidApp) -> Self {
+        Self::from_loop(AndroidLoop::new(app))
+    }
+}

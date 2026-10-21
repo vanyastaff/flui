@@ -60,6 +60,13 @@ mod text_input;
 pub(crate) mod text_sizing;
 pub mod window;
 
+pub(crate) use display::AndroidDisplays;
+pub(crate) use drag::AndroidTransfer;
+pub(crate) use haptics::AndroidHaptics;
+pub(crate) use input::AndroidInputState;
+pub(crate) use system_chrome::AndroidSystemChrome;
+pub(crate) use text_input::AndroidTextInput;
+
 use std::{
     path::PathBuf,
     sync::{
@@ -76,6 +83,8 @@ use parking_lot::Mutex;
 use window::ActivityFlags;
 pub use window::AndroidWindow;
 
+use crate::host::{self, Host};
+use crate::platform::HostPlatform;
 use crate::{
     error::BootstrapError, error::PlatformError, redraw_poll::RedrawPoll, shared::PlatformHandlers,
     shared::android_display::LoopTurn, shared::android_display::poll_timeout,
@@ -83,14 +92,11 @@ use crate::{
     shared::android_lifecycle::ActivityTarget, shared::android_lifecycle::Reaction,
     shared::android_ndk::LoadedLibraries, shared::android_ndk::SymbolSource,
     shared::os_version::android::AndroidApi, shared::os_version::android::StylusHandwriting,
-    shared::owner_signal::OwnerSignal, traits::OpenWindowError, traits::OwnerPlatform,
-    traits::Platform, traits::PlatformExecutor, traits::PlatformReadyCallback,
-    traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+    shared::owner_signal::OwnerSignal, traits::OwnerPlatform, traits::Platform,
+    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
+    traits::owner::OwnerHooks,
 };
-use flui_platform::{
-    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    data_transfer::DataTransferSource,
-};
+use flui_platform::{Clipboard, PlatformWindow, data_transfer::DataTransferSource};
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -121,25 +127,12 @@ fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) 
     deadline.is_some_and(|deadline| now >= deadline)
 }
 
-/// Android platform implementation using `android-activity`
+/// The Android host's loop, over `android-activity`: the state every
+/// position of its table reads.
 ///
-/// Wraps the `AndroidApp` provided by `android_main()` and implements the
-/// `Platform` trait for integration with the FLUI framework.
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// #[no_mangle]
-/// fn android_main(app: AndroidApp) {
-///     let platform = AndroidPlatform::new(app);
-///     let _ = platform.run(Box::new(|owner| {
-///         // Platform ready (first Resume) — create window and renderer
-///         let _ = owner;
-///         Ok(())
-///     }));
-/// }
-/// ```
-pub struct AndroidPlatform {
+/// Wraps the `AndroidApp` provided by `android_main()`.
+/// [`AndroidPlatform`](crate::AndroidPlatform) is its platform.
+pub struct AndroidLoop {
     app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
@@ -159,22 +152,20 @@ pub struct AndroidPlatform {
     api: AndroidApi,
 }
 
-// Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
+// Opaque on purpose, matching `HeadlessLoop` and `WinitPlatform`. A
 // derived `Debug` here traverses `Arc<MockClipboard>`'s
 // `Mutex<Option<String>>` and prints the user's entire clipboard contents
 // into whatever sink formatted the platform — a log line, a panic message,
 // a bug report. None of the remaining fields are useful to a reader either:
 // handles, an executor, and a capability set.
-impl std::fmt::Debug for AndroidPlatform {
+impl std::fmt::Debug for AndroidLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AndroidPlatform").finish_non_exhaustive()
+        f.debug_struct("AndroidLoop").finish_non_exhaustive()
     }
 }
 
-impl AndroidPlatform {
-    /// Create a new Android platform from the `AndroidApp` provided by
-    /// `android_main()`
-    pub fn new(app: AndroidApp) -> Self {
+impl AndroidLoop {
+    pub(crate) fn new(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -210,11 +201,6 @@ impl AndroidPlatform {
             displays: Arc::new(display::AndroidDisplays::new(api, library, owner)),
             api,
         }
-    }
-
-    /// Get the underlying `AndroidApp`
-    pub fn app(&self) -> &AndroidApp {
-        &self.app
     }
 
     /// Record one fact of the Activity's lifecycle and tell the window: its
@@ -528,7 +514,14 @@ impl AndroidPlatform {
     }
 }
 
-impl ActivityTarget for AndroidPlatform {
+impl<H: Host<Loop = AndroidLoop>> HostPlatform<H> {
+    /// Get the underlying `AndroidApp`
+    pub fn app(&self) -> &AndroidApp {
+        &self.owner().app
+    }
+}
+
+impl ActivityTarget for AndroidLoop {
     fn visibility_changed(&self, visible: bool) {
         self.publish_activity_fact(
             |flags| flags.visible.store(visible, Ordering::SeqCst),
@@ -574,42 +567,16 @@ impl ActivityTarget for AndroidPlatform {
     }
 }
 
-impl Platform for AndroidPlatform {
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        self.refresh_preferences()
-    }
-
-    fn on_session_end(
-        &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform::SessionEndAnswer + Send>,
-    ) {
-        let replaced = self.handlers.lock().session_end.replace(callback);
-        drop(replaced);
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.notices.set_hook(callback);
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.background_executor.clone()
-    }
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for AndroidLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Starting Android platform event loop");
 
-        // Converted once, up front: `on_ready` needs an `Arc<dyn Platform>`
-        // to mint `OwnerPlatform` from (ADR-0039 §1), and the rest of
-        // this loop reads through the same `Arc` for its whole lifetime
-        // instead of the original `Box`.
-        let platform = Arc::new(*self);
-        platform.owner_signal.bind_owner();
-        platform
-            .owner_signal
+        self.owner_signal.bind_owner();
+        self.owner_signal
             .start()
             .map_err(|error| PlatformError::Preferences {
                 message: error.to_string(),
@@ -619,10 +586,10 @@ impl Platform for AndroidPlatform {
         let mut next_preference_sample = Some(web_time::Instant::now());
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
-        platform.displays.watch_refresh_rate();
+        self.displays.watch_refresh_rate();
 
         let mut on_ready = Some(on_ready);
-        platform.activity.resumed.store(false, Ordering::SeqCst);
+        self.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
         // other return path back to `run`'s caller. Stopping `running` and
@@ -634,10 +601,10 @@ impl Platform for AndroidPlatform {
         // data published through it. The loop re-reads it every iteration,
         // the Destroy store happens on the loop thread itself, and a
         // cross-thread `quit()` only needs eventual visibility.
-        platform.running.store(true, Ordering::Relaxed);
+        self.running.store(true, Ordering::Relaxed);
 
         loop {
-            if !platform.running.load(Ordering::Relaxed) {
+            if !self.running.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -648,28 +615,28 @@ impl Platform for AndroidPlatform {
             // there, a 500ms cadence while resumed stands in, so no change is
             // lost; a paused Activity reads them again on `Resume`.
             let now = web_time::Instant::now();
-            let window = platform.window.lock().clone();
+            let window = self.window.lock().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_safe_area();
             }
-            if platform.activity.resumed.load(Ordering::SeqCst)
-                && platform.sample_due(next_preference_sample, now)
+            if self.activity.resumed.load(Ordering::SeqCst)
+                && self.sample_due(next_preference_sample, now)
             {
                 // Taken before the read: a view that becomes ready during it
                 // reports once it observes, and only a view that was ready
                 // already ends the cadence.
-                let observed = platform.java_view.is_ready();
+                let observed = self.java_view.is_ready();
                 if let Some(window) = window.as_ref() {
                     window.request_safe_area();
                 }
-                platform.refresh_scroll_factors();
-                if let Err(error) = platform.refresh_preferences() {
+                self.refresh_scroll_factors();
+                if let Err(error) = self.refresh_preferences() {
                     tracing::warn!(%error, "Android preference query failed");
                 }
                 next_preference_sample = (!observed).then(|| now + Duration::from_millis(500));
             }
-            if platform.owner_signal.drive() {
-                platform.running.store(false, Ordering::Relaxed);
+            if self.owner_signal.drive() {
+                self.running.store(false, Ordering::Relaxed);
                 continue;
             }
 
@@ -681,15 +648,15 @@ impl Platform for AndroidPlatform {
             // discipline (ADR-0038 §5, the same rule winit's own
             // `about_to_wait` follows): the hook itself re-enters
             // `flui-app` -- clone the `Arc` out, drop the lock, THEN call
-            // it, never while `platform.handlers` is still held.
-            let wake_deadline_hook = platform.handlers.lock().wake_deadline.clone();
+            // it, never while `self.handlers` is still held.
+            let wake_deadline_hook = self.handlers.lock().wake_deadline.clone();
             let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
             if deadline_due {
                 // Owner services remain deliverable while execution gates frames.
-                let _ = platform.owner_signal.wake();
-                if platform.owner_signal.drive() {
-                    platform.running.store(false, Ordering::Relaxed);
+                let _ = self.owner_signal.wake();
+                if self.owner_signal.drive() {
+                    self.running.store(false, Ordering::Relaxed);
                     continue;
                 }
             }
@@ -700,12 +667,12 @@ impl Platform for AndroidPlatform {
             // either would turn the poll into a 0ms busy loop. The redraw is
             // observed without consumption because `poll_events` may suspend
             // execution before the callback can be delivered.
-            let redraw_requested = platform
+            let redraw_requested = self
                 .window
                 .lock()
                 .as_ref()
                 .is_some_and(|w| w.has_redraw_request());
-            let resumed = platform.activity.resumed.load(Ordering::SeqCst);
+            let resumed = self.activity.resumed.load(Ordering::SeqCst);
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
@@ -714,12 +681,11 @@ impl Platform for AndroidPlatform {
                             should_render,
                             resumed,
                             wake_deadline,
-                            next_preference_sample: platform
-                                .next_sample(next_preference_sample),
+                            next_preference_sample: self.next_sample(next_preference_sample),
                         },
                         web_time::Instant::now(),
                     );
-                    platform.app.poll_events(timeout, |event| {
+                    self.app.poll_events(timeout, |event| {
                 if let PollEvent::Main(main_event) = event {
                     // What the Activity callback means (`shared::android_lifecycle`).
                     // An arm that must act around its signal takes and delivers it
@@ -728,8 +694,8 @@ impl Platform for AndroidPlatform {
                     let mut reaction = ActivityEvent::from_main_event(&main_event).map_or_else(
                         Reaction::default,
                         |event| {
-                            platform.lifecycle.lock().react(event, || {
-                                memory::last_trim_level(&platform.app)
+                            self.lifecycle.lock().react(event, || {
+                                memory::last_trim_level(&self.app)
                             })
                         },
                     );
@@ -747,7 +713,7 @@ impl Platform for AndroidPlatform {
                                 "Android: Resumed — lifecycle transition, native window untouched"
                             );
                             // The Activity may have come back on another display.
-                            platform.displays.invalidate();
+                            self.displays.invalidate();
                             // Nothing was sampled while paused: read the
                             // preferences and insets again on the next turn.
                             next_preference_sample = Some(web_time::Instant::now());
@@ -761,12 +727,12 @@ impl Platform for AndroidPlatform {
                             // replaces it — see
                             // `PlatformWindow::on_surface_status_change`.
                             if let Some(signal) = reaction.signal.take() {
-                                signal.deliver(&*platform);
+                                signal.deliver(&*self);
                             }
                             // The window is cloned out of its lock: the surface
                             // observer runs embedder code that may call back
-                            // into the platform.
-                            let window = platform.window.lock().clone();
+                            // into the self.
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(true);
                                 w.request_redraw();
@@ -780,19 +746,19 @@ impl Platform for AndroidPlatform {
                             // Publish suspension before invoking embedder callbacks: a nested
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
-                            platform.activity.resumed.store(false, Ordering::SeqCst);
-                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.activity.resumed.store(false, Ordering::SeqCst);
+                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
 
                             // Release BEFORE suspending: the drop is the one
                             // step here with a validity window behind it, and
                             // the execution observer runs arbitrary embedder
                             // code.
-                            let window = platform.window.lock().clone();
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(false);
                             }
                             if let Some(signal) = reaction.signal.take() {
-                                signal.deliver(&*platform);
+                                signal.deliver(&*self);
                             }
                         }
                         MainEvent::InitWindow { .. } => {
@@ -812,7 +778,7 @@ impl Platform for AndroidPlatform {
                                 should_call_ready = true;
                             }
 
-                            let window = platform.window.lock().clone();
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
                                 // The new native window may have a size the
@@ -835,7 +801,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
-                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
+                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
                             tracing::debug!(
                                 "Android: TerminateWindow — the native window is going away, \
                                  releasing the surface"
@@ -845,16 +811,16 @@ impl Platform for AndroidPlatform {
                             // still valid: `AppCmd::TermWindow` is applied
                             // after this callback returns, so a surface that
                             // outlives it does too.
-                            let window = platform.window.lock().clone();
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
                                 w.callbacks().dispatch_surface_status_change(false);
                             }
                         }
                         MainEvent::Destroy => {
-                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
                             tracing::info!("Android: Destroy — shutting down");
-                            platform.activity.resumed.store(false, Ordering::SeqCst);
+                            self.activity.resumed.store(false, Ordering::SeqCst);
 
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
@@ -869,19 +835,19 @@ impl Platform for AndroidPlatform {
                             }
 
                             // Dispatch close before stopping
-                            let window = platform.window.lock().clone();
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.revoke_geometry();
                                 w.callbacks().dispatch_close();
                             }
 
-                            platform.running.store(false, Ordering::Relaxed);
+                            self.running.store(false, Ordering::Relaxed);
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
                             // Cloned out of its lock: the resize observer runs
-                            // embedder code that may call back into the platform.
-                            let window = platform.window.lock().clone();
+                            // embedder code that may call back into the self.
+                            let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.publish_state();
                                 w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
@@ -891,27 +857,27 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::LostFocus => {
-                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
                             tracing::debug!("Android: Lost focus");
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
-                            platform.displays.invalidate();
-                            let window = platform.window.lock().clone();
+                            self.displays.invalidate();
+                            let window = self.window.lock().clone();
                             if let Some(window) = window {
                                 window.invalidate_text_sizing();
                                 window.settle_appearance();
                             }
-                            platform.refresh_scroll_factors();
-                            if let Err(error) = platform.refresh_preferences() {
+                            self.refresh_scroll_factors();
+                            if let Err(error) = self.refresh_preferences() {
                                 tracing::warn!(%error, "Android configuration query failed");
                             }
-                            if !platform.java_view.is_ready() {
+                            if !self.java_view.is_ready() {
                                 next_preference_sample = Some(
                                     web_time::Instant::now() + Duration::from_millis(500),
                                 );
                             }
-                            let window = platform.window.lock().clone();
+                            let window = self.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();
                                 window.callbacks().dispatch_logical_resize(window.logical_size(), window.scale_factor());
@@ -923,7 +889,7 @@ impl Platform for AndroidPlatform {
                         }
                         _ => {}
                     }
-                    reaction.deliver(&*platform);
+                    reaction.deliver(&*self);
                 }
                     });
                 });
@@ -940,15 +906,15 @@ impl Platform for AndroidPlatform {
             // `OwnerPlatform::open_window` call creates directly and is
             // always `Ready`.
             if should_call_ready && let Some(ready) = on_ready.take() {
-                let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
+                let owner_platform = Arc::clone(&platform);
                 let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
                     Arc::clone(&owner_platform),
-                    Arc::clone(&platform.owner_signal),
+                    Arc::clone(&self.owner_signal),
                 ));
                 if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);
-                    platform.running.store(false, Ordering::Relaxed);
+                    self.running.store(false, Ordering::Relaxed);
                     // Skip input/frame dispatch below for this iteration --
                     // the top-of-loop check exits on the next pass.
                     continue;
@@ -958,26 +924,26 @@ impl Platform for AndroidPlatform {
             // Process input events (touch, key) and dispatch through callbacks
             // Install accepted preference/configuration changes before the
             // first input packet translated in the new context.
-            if platform.owner_signal.drive() {
-                platform.running.store(false, Ordering::Relaxed);
+            if self.owner_signal.drive() {
+                self.running.store(false, Ordering::Relaxed);
                 continue;
             }
-            let window = platform.window.lock().clone();
+            let window = self.window.lock().clone();
             if let Some(window) = window {
-                platform.java_view.set_scale(window.scale_factor());
+                self.java_view.set_scale(window.scale_factor());
             }
-            platform.deliver_view_events();
-            let resumed = platform.activity.resumed.load(Ordering::SeqCst);
+            self.deliver_view_events();
+            let resumed = self.activity.resumed.load(Ordering::SeqCst);
             if resumed {
-                platform.process_input_events();
+                self.process_input_events();
             }
 
             // Consume the redraw only after polling confirms this turn can
             // deliver it. A queued Pause therefore preserves the request for
             // Resume rather than stranding an acknowledged continuation. The
             // window is cloned out of its lock: the frame runs embedder code
-            // that may call back into the platform.
-            let window = platform.window.lock().clone();
+            // that may call back into the self.
+            let window = self.window.lock().clone();
             if let Some(ref w) = window
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
@@ -986,11 +952,11 @@ impl Platform for AndroidPlatform {
             }
         }
 
-        platform.activity.resumed.store(false, Ordering::SeqCst);
+        self.activity.resumed.store(false, Ordering::SeqCst);
         // Unregister the choreographer callback on the thread it was registered
-        // on, before its data can be freed with the platform.
-        platform.displays.stop_watching();
-        platform.owner_signal.close();
+        // on, before its data can be freed with the self.
+        self.displays.stop_watching();
+        self.owner_signal.close();
 
         // The loop's one exit, reached by its three returning routes: a
         // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
@@ -1037,8 +1003,8 @@ impl Platform for AndroidPlatform {
         // recreated activity gets a new `android_main`, a new `AndroidApp`,
         // a new platform and a new window (`ANativeActivity_onCreate`
         // spawns one thread per activity).
-        platform.retire_java_view();
-        let window = platform.window.lock().take();
+        self.retire_java_view();
+        let window = self.window.lock().take();
         if let Some(window) = window {
             window.revoke_geometry();
             window.callbacks().clear();
@@ -1046,7 +1012,7 @@ impl Platform for AndroidPlatform {
         }
 
         // Invoke quit handlers
-        platform.handlers.lock().invoke_quit();
+        self.handlers.lock().invoke_quit();
         tracing::info!("Android platform event loop finished");
 
         if let Some(source) = bootstrap_error {
@@ -1068,77 +1034,18 @@ impl Platform for AndroidPlatform {
         let _ = self.owner_signal.request_quit();
     }
 
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        if options.input_latency == flui_platform::InputLatency::Low {
-            // NativeActivity takes touch from the native input queue, which
-            // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
-            tracing::warn!(
-                "InputLatency::Low is not supported on Android yet; input stays batched"
-            );
-        }
-        let cancelled = self
-            .input_state
-            .lock()
-            .cancel_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
-        let window = Arc::new(AndroidWindow::new(
-            self.app.clone(),
-            Arc::clone(&self.activity),
-            Arc::downgrade(&self.owner_signal),
-            Arc::clone(&self.java_view),
-            Arc::clone(&self.displays),
-            self.api,
-        ));
-        let previous = self.window.lock().replace(Arc::clone(&window));
-        if let Some(previous) = previous {
-            previous.retire_java_view();
-            previous.revoke_geometry();
-            for event in cancelled {
-                previous.callbacks().dispatch_input(event);
-            }
-        }
-        tracing::info!("Android window created (wrapping ANativeWindow)");
-        Ok(window)
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        self.window.lock().as_ref().map(|_| WindowId(0))
-    }
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let snapshot = self.displays.snapshot(&self.app)?;
-        if self.displays.take_max_rate_change() {
-            // A `High` hint skipped while the display's highest rate was
-            // unknown (or sent with an older one) is asked again.
-            let window = self.window.lock().clone();
-            if let Some(window) = window {
-                window.apply_frame_rate_hint();
-            }
-        }
-        Ok(snapshot)
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.clipboard.clone()
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // FluiView's drag and drop (ADR-0211, ADR-0247).
-        Arc::clone(self.java_view.transfer()) as Arc<dyn DataTransferSource>
-    }
-
-    fn name(&self) -> &'static str {
-        "Android"
-    }
-
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.handlers.lock().quit = Some(callback);
     }
 
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.handlers.lock().window_event = Some(callback);
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        // The Activity lifecycle decides when the loop ends; there is no exit
+        // policy to consult.
+        drop(hook);
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        // No exit policy is consulted, so there is nothing to re-evaluate.
     }
 
     /// Unlike `winit`'s override (the trait's one other live implementor),
@@ -1154,16 +1061,63 @@ impl Platform for AndroidPlatform {
     ) {
         self.handlers.lock().wake_deadline = Some(Arc::from(hook));
     }
+}
+
+impl host::Services for AndroidLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.background_executor.clone()
+    }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
+}
 
+impl host::Preferences<AndroidLoop> for AndroidLoop {
+    fn sample(owner: &AndroidLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        owner.refresh_preferences()
+    }
+}
+
+impl host::Lifecycle<AndroidLoop> for AndroidLoop {
+    fn on_session_end(
+        owner: &AndroidLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform::SessionEndAnswer + Send>,
+    ) {
+        let replaced = owner.handlers.lock().session_end.replace(callback);
+        drop(replaced);
+    }
+
+    fn on_host_notice(owner: &AndroidLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        owner.notices.set_hook(callback);
+    }
+
+    fn release_session_end(_: &AndroidLoop) {
+        // The system does not wait for an answer to a session end, so no end
+        // is held open.
+    }
+
+    fn on_reopen(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
+        // Android has no reopen signal: the system starts or recreates the
+        // Activity.
+        drop(callback);
+    }
+
+    fn activate(_: &AndroidLoop, _: bool) {
+        // The system decides which app is in front; an Activity cannot bring
+        // itself there.
+    }
+}
+
+impl host::Storage<AndroidLoop> for AndroidLoop {
     /// The app's private `files` directory, which Auto Backup copies, for
     /// data that follows the user; its sibling `no_backup`, which Android
     /// never backs up, for state that belongs to this device.
-    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
-        let files = self.app.internal_data_path()?;
+    fn data_dirs(
+        owner: &AndroidLoop,
+        app: &flui_platform::StorageName,
+    ) -> Option<crate::storage::DataDirs> {
+        let files = owner.app.internal_data_path()?;
         let no_backup = files.parent()?.join("no_backup");
         Some(crate::storage::DataDirs {
             roaming: files.join(app.as_str()),
@@ -1185,11 +1139,11 @@ impl PlatformExecutor for SimpleExecutor {
 }
 
 /// Mock clipboard for Android MVP
-struct MockClipboard {
+pub struct MockClipboard {
     content: Mutex<Option<String>>,
 }
 
-// Redacted at the source, not just at `AndroidPlatform`'s boundary, so a
+// Redacted at the source, not just at `AndroidLoop`'s boundary, so a
 // future holder of this type cannot reintroduce the leak by deriving its
 // own `Debug`. Whether the clipboard is set is safe to show; what it holds
 // is the user's data.
@@ -1216,5 +1170,11 @@ impl Clipboard for MockClipboard {
 
     fn write_text(&self, text: String) {
         *self.content.lock() = Some(text);
+    }
+}
+
+impl host::Clipboard<AndroidLoop> for MockClipboard {
+    fn clipboard(owner: &AndroidLoop) -> Arc<dyn Clipboard> {
+        owner.clipboard.clone()
     }
 }

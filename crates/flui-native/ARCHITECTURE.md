@@ -3078,7 +3078,7 @@ Remote Desktop Services at logon), lock and unlock stay unreported for the proce
 
 **Rule:** an Activity callback is mapped by one pure rule
 (`shared/android_lifecycle.rs`) and delivered through `ActivityTarget`, which
-`AndroidPlatform` implements; nothing in the event loop decides what a callback
+`AndroidLoop` implements; nothing in the event loop decides what a callback
 means. The window's published state is refreshed before its observer is told.
 
 **Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution

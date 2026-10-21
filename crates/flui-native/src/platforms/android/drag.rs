@@ -70,9 +70,15 @@ struct Offers {
 }
 
 /// The platform's drag-and-drop transport (see the module doc).
-pub(crate) struct AndroidTransfer {
+pub struct AndroidTransfer {
     view: Weak<JavaView>,
     offers: Mutex<Offers>,
+}
+
+impl std::fmt::Debug for AndroidTransfer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidTransfer").finish_non_exhaustive()
+    }
 }
 
 impl AndroidTransfer {
@@ -335,6 +341,13 @@ impl DataTransferSource for AndroidTransfer {
                 .map(drop)
             });
         }
+    }
+}
+
+impl crate::host::Drag<super::AndroidLoop> for AndroidTransfer {
+    fn data_transfer(owner: &super::AndroidLoop) -> Arc<dyn DataTransferSource> {
+        // FluiView's drag and drop (ADR-0211, ADR-0247).
+        Arc::clone(owner.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
 }
 

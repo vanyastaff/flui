@@ -856,7 +856,7 @@ impl WindowCallbacks {
     /// `WM_DESTROY` arm (`platforms/windows/platform.rs`), AppKit's
     /// `handle_close` (`platforms/macos/window.rs`, reached from the
     /// `windowWillClose:` delegate), and the Android backend's loop exit
-    /// (`platforms/android/mod.rs`, `AndroidPlatform::run` after its `loop`,
+    /// (`platforms/android/mod.rs`, `AndroidLoop::run` after its `loop`,
     /// reached by `Destroy`, `quit()` and a failed bootstrap; a panic out of
     /// `run` skips it, by decision) — so that destruction order is pinned
     /// deterministically instead of left to struct field order.

@@ -20,9 +20,17 @@ const APPEARANCE_LIGHT_STATUS_BARS: i32 = 0x8;
 const SYSTEM_UI_FLAG_LIGHT_STATUS_BAR: i32 = 0x2000;
 
 /// `PlatformSystemChrome` for the activity's window.
-pub(super) struct AndroidSystemChrome {
+pub struct AndroidSystemChrome {
     app: AndroidApp,
     api: AndroidApi,
+}
+
+impl std::fmt::Debug for AndroidSystemChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidSystemChrome")
+            .field("api", &self.api)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AndroidSystemChrome {
