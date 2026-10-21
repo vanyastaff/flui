@@ -12,6 +12,6 @@ pub use display::{DisplayChange, DisplayChangeError, DisplaySpec};
 pub use platform::{
     FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
     HeadlessDisplayControls, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences, MockWindow,
 };
 pub use window_policy::HeadlessWindowPolicy;

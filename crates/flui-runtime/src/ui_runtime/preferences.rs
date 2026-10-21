@@ -566,9 +566,14 @@ impl UiRuntime {
                 origin: current
                     .as_ref()
                     .map_or_else(|| Rc::new(()), |current| Rc::clone(&current.origin)),
-                revision: current
-                    .as_ref()
-                    .map_or(1, |current| current.revision.saturating_add(1)),
+                // A saturated revision would equal the current one and be
+                // dropped as stale; running out is a broken test, not a value.
+                revision: current.as_ref().map_or(1, |current| {
+                    current
+                        .revision
+                        .checked_add(1)
+                        .expect("BUG: test preference revisions exhausted")
+                }),
                 values: Arc::new(values),
             }
         };

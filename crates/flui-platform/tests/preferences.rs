@@ -281,6 +281,44 @@ fn invalid_text_observations_cannot_enter_a_snapshot() {
     }
 }
 
+fn wheel_observations_keep_lines_pages_and_characters_apart() {
+    use flui_platform::{WheelPreferences, WheelStep};
+
+    let unknown = WheelPreferences::default();
+    assert_eq!(unknown.vertical(), None, "an unread axis stays unknown");
+    assert_eq!(unknown.horizontal_characters(), None);
+    let disabled = WheelPreferences::default()
+        .with_vertical(WheelStep::Lines(0))
+        .with_horizontal_characters(0);
+    assert_eq!(
+        disabled.vertical(),
+        Some(WheelStep::Lines(0)),
+        "zero lines is the system disabling the axis, not an unknown value"
+    );
+    assert_eq!(disabled.horizontal_characters(), Some(0));
+    let paged = WheelPreferences::default()
+        .with_vertical(WheelStep::Page)
+        .with_horizontal_characters(3);
+    assert_eq!(paged.vertical(), Some(WheelStep::Page));
+    assert_eq!(
+        paged.horizontal_characters(),
+        Some(3),
+        "a page setting on one axis leaves the other axis's characters"
+    );
+    assert_ne!(
+        WheelPreferences::default().with_vertical(WheelStep::Lines(3)),
+        WheelPreferences::default().with_horizontal_characters(3),
+        "three lines and three characters are different observations"
+    );
+    assert_eq!(
+        SystemPreferences::default()
+            .with_wheel(paged.clone())
+            .wheel(),
+        &paged,
+        "a snapshot carries the wheel observation unchanged"
+    );
+}
+
 #[test]
 fn preferences_contract() {
     crate::run_table(
@@ -321,6 +359,10 @@ fn preferences_contract() {
             (
                 "invalid_text_observations_cannot_enter_a_snapshot",
                 invalid_text_observations_cannot_enter_a_snapshot as fn(),
+            ),
+            (
+                "wheel_observations_keep_lines_pages_and_characters_apart",
+                wheel_observations_keep_lines_pages_and_characters_apart as fn(),
             ),
         ],
     );
