@@ -8,6 +8,8 @@
   `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
   framework finalization but deliberately leaked after callback panic, because aggregate drop glue
   cannot be made safe by an outer unwind boundary.
+- **Revised:** 2026-10-21 — §5.2: the build-time refusal holds across the presentations of one UI
+  runtime, through a shared `BuildInProgress` cell.
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
@@ -165,6 +167,15 @@ impl<T> Signal<T> {
   (`SignalError::WrittenDuringBuild` / `CreatedDuringBuild`): a write during build is the
   unbounded-rebuild-loop hazard. The run-time guard is authoritative (ADR-0078). `peek` is allowed
   anywhere.
+- **The guard spans the presentations of a UI runtime.** Every presentation has its own graph, so
+  a graph's own `building` cannot see another window's build. The UI runtime owns one
+  `BuildInProgress` cell, hands it to each `BuildOwner` at assembly
+  (`BuildOwner::set_build_in_progress`), and every graph publishes its builds there and consults it
+  before a write or a slot creation. A write that reaches window A's graph (through §5.8's routing,
+  or a handle passed to B's view) while window B builds is refused with the same
+  `WrittenDuringBuild`. Closing a presentation clears a build it left published. A read of a slot
+  minted by another graph is `ForeignGraph`, so it is refused, not left untracked; state shared
+  by several windows has to be a runtime-scoped signal, not another window's.
 - Reads outside build subscribe nothing — there is no building element — and go through `peek`.
 
 ### 5.3 Write → dirty exactly the readers

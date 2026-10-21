@@ -235,9 +235,9 @@ pub use owner::{
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{
-    EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph, ReadScope,
-    ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt, SlotInfo,
-    WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+    BuildInProgress, EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph,
+    ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt,
+    SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
 };
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};

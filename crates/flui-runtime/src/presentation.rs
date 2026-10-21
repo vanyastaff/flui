@@ -34,7 +34,7 @@ use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
-    GlobalKeyScope, WidgetsBinding,
+    BuildInProgress, GlobalKeyScope, WidgetsBinding,
 };
 use web_time::{Duration, Instant};
 
@@ -59,6 +59,8 @@ fn format_millis(duration: Duration) -> String {
 pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
     pub(crate) global_key_scope: GlobalKeyScope,
+    /// Which build is running across this UI runtime's presentations (ADR-0074).
+    pub(crate) build_in_progress: BuildInProgress,
     /// A `Weak` handle to the UI runtime's shared async tasks (UI runtime-level; see
     /// the presentation-teardown contract for the consequence of that when
     /// this presentation closes).
@@ -787,6 +789,7 @@ impl PresentationState {
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
+            owner.set_build_in_progress(capabilities.build_in_progress);
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());

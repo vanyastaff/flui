@@ -61,7 +61,7 @@ use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
 use flui_scheduler::SchedulerPhase;
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
-use flui_view::GlobalKeyScope;
+use flui_view::{BuildInProgress, GlobalKeyScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 
@@ -177,6 +177,10 @@ pub struct UiRuntime {
     /// counterpart (the isolation test suite) read it back to assemble a
     /// second presentation sharing this exact scope.
     global_key_scope: GlobalKeyScope,
+    /// Which presentation's build is running, shared with every presentation's
+    /// `BuildOwner` so a signal write is refused while any window of this
+    /// runtime builds (ADR-0074).
+    build_in_progress: BuildInProgress,
     /// The insertion-ordered set of UI-owner presentation domains this UI runtime
     /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology
     /// allows any number of presentations per UI runtime since issue #555's addressed-routing slice

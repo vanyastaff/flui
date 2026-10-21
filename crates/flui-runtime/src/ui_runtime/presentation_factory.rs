@@ -5,7 +5,7 @@ use std::sync::Arc;
 use flui_interaction::InteractionDispatchHandle;
 use flui_platform_api::{Clipboard, Storage};
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
-use flui_view::GlobalKeyScope;
+use flui_view::{BuildInProgress, GlobalKeyScope};
 
 use super::{UiCommandSender, UiRuntime};
 use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabilities};
@@ -15,6 +15,7 @@ use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabili
 /// exact authorizing presentation after platform callbacks have returned.
 pub struct PresentationFactory {
     global_key_scope: GlobalKeyScope,
+    build_in_progress: BuildInProgress,
     async_driver: AsyncDriver,
     completion_factory: PresentationScopeFactory,
     interaction_dispatch_handle: InteractionDispatchHandle,
@@ -41,6 +42,7 @@ impl UiRuntime {
     pub fn presentation_factory(&self) -> PresentationFactory {
         PresentationFactory {
             global_key_scope: self.global_key_scope.clone(),
+            build_in_progress: self.build_in_progress.clone(),
             async_driver: self.owner_frame.async_driver(),
             completion_factory: self.owner_frame.presentation_scope_factory(),
             interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
@@ -92,6 +94,7 @@ impl PresentationFactory {
             window,
             RuntimeCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
+                build_in_progress: self.build_in_progress.clone(),
                 async_driver: self.async_driver.clone(),
                 completion_scope,
                 interaction_dispatch_handle: self.interaction_dispatch_handle.clone(),
