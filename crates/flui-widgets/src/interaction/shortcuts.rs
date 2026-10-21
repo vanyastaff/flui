@@ -27,7 +27,7 @@ use std::rc::Rc;
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{
-    ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -201,13 +201,40 @@ impl SingleActivator {
         };
         phase
             && event.composition != ImeComposition::Active
-            && trigger_matches(&self.trigger, &event.key)
+            && (trigger_matches(&self.trigger, &event.key) || self.matches_latin_position(event))
             && modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
                 .is_none_or(|required| modifiers.contains(Modifiers::SHIFT) == required)
             && modifiers.contains(Modifiers::ALT) == self.alt
             && modifiers.contains(Modifiers::META) == self.meta
+    }
+
+    /// Whether a command chord typed on a layout without Latin letters is the
+    /// chord's Latin letter or digit by its physical key: Ctrl+С on a Russian
+    /// layout is Ctrl+C. Only a Control or Meta activator qualifies, and only
+    /// when the layout produced a non-ASCII character, so a layout that has
+    /// the letter (AZERTY, Dvorak) keeps matching by what the key produced.
+    ///
+    /// [`overlaps`](Self::overlaps) cannot see this branch: which character a
+    /// layout puts on a physical key is not known from the activators alone,
+    /// so Ctrl+C beside Ctrl+с is not reported as a duplicate, and the first
+    /// match wins. The Latin chord already covers that layout.
+    fn matches_latin_position(&self, event: &KeyEvent) -> bool {
+        let Key::Character(produced) = &event.key else {
+            return false;
+        };
+        let Key::Character(trigger) = &self.trigger else {
+            return false;
+        };
+        (self.control || self.meta)
+            && !produced.as_str().is_ascii()
+            && latin_of_code(event.code).is_some_and(|latin| {
+                let shifted = event.modifiers.contains(Modifiers::SHIFT);
+                let wanted = trigger.as_str();
+                wanted.eq_ignore_ascii_case(latin)
+                    || (shifted && shifted_latin(latin).is_some_and(|symbol| wanted == symbol))
+            })
     }
 
     /// Whether one key event can trigger both `self` and `other`, by the
@@ -227,6 +254,60 @@ impl SingleActivator {
             && (trigger_matches(&self.trigger, &other.trigger)
                 || trigger_matches(&other.trigger, &self.trigger))
     }
+}
+
+/// The letter, digit or punctuation mark a US layout puts on the physical key
+/// `code`.
+fn latin_of_code(code: Code) -> Option<&'static str> {
+    let name = code.as_str();
+    if let Some(tail) = name
+        .strip_prefix("Key")
+        .or_else(|| name.strip_prefix("Digit"))
+    {
+        return (tail.len() == 1).then_some(tail);
+    }
+    Some(match name {
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Minus" => "-",
+        "Equal" => "=",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Backquote" => "`",
+        "Backslash" => "\\",
+        _ => return None,
+    })
+}
+
+/// The symbol a US layout puts on the same key as `plain` under Shift.
+fn shifted_latin(plain: &str) -> Option<&'static str> {
+    Some(match plain {
+        "1" => "!",
+        "2" => "@",
+        "3" => "#",
+        "4" => "$",
+        "5" => "%",
+        "6" => "^",
+        "7" => "&",
+        "8" => "*",
+        "9" => "(",
+        "0" => ")",
+        "[" => "{",
+        "]" => "}",
+        "-" => "_",
+        "=" => "+",
+        "," => "<",
+        "." => ">",
+        "/" => "?",
+        ";" => ":",
+        "'" => "\"",
+        "`" => "~",
+        "\\" => "|",
+        _ => return None,
+    })
 }
 
 /// `pressed` is `trigger`, an ASCII letter compared without case.

@@ -755,4 +755,73 @@ pub(crate) mod activator_tests {
             "the exact rule is unchanged for activators that do not opt out"
         );
     }
+
+    /// Ctrl+С on a Russian layout produces `с` on the physical C key: the
+    /// copy shortcut must still fire. A layout that has the Latin letter
+    /// (AZERTY puts A where QWERTY has Q) keeps matching by what the key
+    /// produced, and a plain Cyrillic letter is not the command chord.
+    ///
+    /// Red-check: drop `matches_latin_position` from `SingleActivator::matches`
+    /// and the first row fails.
+    pub(crate) fn a_command_chord_on_a_non_latin_layout_matches_by_its_physical_key() {
+        let on = |produced: &str, code: Code, modifiers: Modifiers| {
+            KeyEvent::new(
+                KeyState::Down,
+                Key::character(produced),
+                code,
+                EventTime::from_nanos(0),
+            )
+            .with_modifiers(modifiers)
+        };
+        let copy = SingleActivator::character("c").control();
+        let copy_on_mac = SingleActivator::character("c").meta();
+        assert!(
+            copy.matches(&on("с", Code::KeyC, Modifiers::CONTROL)),
+            "Russian layout, Ctrl+С on the C key"
+        );
+        assert!(
+            copy_on_mac.matches(&on("с", Code::KeyC, Modifiers::META)),
+            "Russian layout, Cmd+С on the C key"
+        );
+        assert!(
+            SingleActivator::character("5").control().matches(&on(
+                "٥",
+                Code::Digit5,
+                Modifiers::CONTROL
+            )),
+            "Arabic-Indic digit on the 5 key"
+        );
+        assert!(
+            SingleActivator::character("[").meta().matches(&on(
+                "х",
+                Code::BracketLeft,
+                Modifiers::META
+            )),
+            "Russian layout, Cmd+Х on the bracket key (the macOS back chord)"
+        );
+        assert!(
+            SingleActivator::character("{").meta().shift().matches(&on(
+                "Х",
+                Code::BracketLeft,
+                Modifiers::META | Modifiers::SHIFT
+            )),
+            "Russian layout, Cmd+Shift+Х names the shifted US symbol of the bracket key"
+        );
+        assert!(
+            !copy.matches(&on("с", Code::KeyC, Modifiers::NONE)),
+            "typing с is not the chord"
+        );
+        assert!(
+            !SingleActivator::character("c").matches(&on("с", Code::KeyC, Modifiers::NONE)),
+            "a chordless activator is never matched by a foreign letter"
+        );
+        assert!(
+            !copy.matches(&on("м", Code::KeyV, Modifiers::CONTROL)),
+            "the physical key decides, not the Cyrillic letter"
+        );
+        assert!(
+            !copy.matches(&on("q", Code::KeyA, Modifiers::CONTROL)),
+            "an ASCII layout keeps matching by what the key produced"
+        );
+    }
 }
