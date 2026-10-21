@@ -1273,14 +1273,34 @@ fn preferences_wake_each_isolated_window() {
     teardown_platform_ui_runtime();
 }
 
-fn the_platform_preference_source_reaches_installed_consumers() {
+/// What a mounted reader of the system text sizing built with, one entry per build.
+type SizingLog = Rc<RefCell<Vec<TextSizing>>>;
+
+fn text_scale_preferences(scale: f64) -> flui_platform::SystemPreferences {
+    flui_platform::SystemPreferences::default()
+        .with_text_scale(scale)
+        .expect("valid scale")
+}
+
+fn linear_sizing(scale: f64) -> TextSizing {
+    TextSizing::linear(scale).expect("valid scale")
+}
+
+/// Mounts a reader of the system text sizing over `runtime` and installs it as the
+/// primary presentation, returning what a frame turn needs.
+fn install_sizing_reader(
+    runtime: crate::app::ui_runtime::UiRuntime,
+    window: Arc<dyn PlatformWindow>,
+    log: &SizingLog,
+) -> (
+    PresentationDispatcher,
+    super::super::frame_driver::FrameBinding,
+) {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_native::{HeadlessPlatform, Platform};
-    use flui_platform::SystemPreferences;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
-    struct Reader(Rc<RefCell<Vec<TextSizing>>>);
+    struct Reader(SizingLog);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
             let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
@@ -1288,73 +1308,356 @@ fn the_platform_preference_source_reaches_installed_consumers() {
             flui_widgets::Text::new("Preference")
         }
     }
-    let scaled = |scale: f64| {
-        SystemPreferences::default()
-            .with_text_scale(scale)
-            .expect("valid scale")
-    };
-    let _clear = OwnerHostClearGuard::arm();
-    let platform = HeadlessPlatform::new().with_preferences(scaled(2.0));
-    let source = platform.preference_source();
-    let turns = platform.owner_turns();
-    let observed = Rc::new(RefCell::new(Vec::new()));
-    let reader = Rc::clone(&observed);
-    let frame = Rc::new(RefCell::new(None));
-    let output = Rc::clone(&frame);
-    Box::new(platform)
-        .run(Box::new(move |owner| {
-            install_owner_platform(owner)?;
-            let runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
-            runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
-            let mut installation = prepare_platform_ui_runtime(runtime, test_window());
-            let dispatcher = installation.dispatcher();
-            let frame = installation
-                .frame_driver(FrameDriver::Test(TestFrameDriver {
-                    installed: None,
-                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
-                    prelude: None,
-                    resize: None,
-                }))
-                .expect("prepare driver");
-            installation
-                .submit()
-                .outcome()
-                .expect("idle publication")
-                .expect("installed");
-            output.replace(Some((dispatcher, frame.binding)));
-            Ok(())
+    runtime
+        .attach_root_widget_with_size(&Reader(Rc::clone(log)), 800.0, 600.0)
+        .expect("mount the reader");
+    let mut installation = prepare_platform_ui_runtime(runtime, window);
+    let dispatcher = installation.dispatcher();
+    let frame = installation
+        .frame_driver(FrameDriver::Test(TestFrameDriver {
+            installed: None,
+            sink: flui_runtime::testing::ScriptedSink::always_presents(),
+            prelude: None,
+            resize: None,
         }))
-        .expect("headless bootstrap");
-    let (dispatcher, frame) = frame.borrow().expect("installed frame");
-    let linear = |scale: f64| TextSizing::linear(scale).expect("valid scale");
-    let next_frame = || {
-        turns.drive();
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
-    };
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
+        .expect("prepare driver");
+    installation
+        .submit()
+        .outcome()
+        .expect("idle publication")
+        .expect("installed");
+    (dispatcher, frame.binding)
+}
+
+/// [`install_sizing_reader`] over the runtime the runner builds, seeded from the
+/// preferences the installed host has accepted so far.
+fn mount_sizing_reader(
+    log: &SizingLog,
+) -> Result<
+    (
+        PresentationDispatcher,
+        super::super::frame_driver::FrameBinding,
+    ),
+    super::super::host::HostServicesError,
+> {
+    let window = test_window();
+    let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+    Ok(install_sizing_reader(runtime, window, log))
+}
+
+/// A headless owner whose preference source feeds a mounted text-sizing reader. The
+/// owner turns the source asks for run only when a row drives them.
+struct SourceDrivenReader {
+    source: flui_native::HeadlessPreferences,
+    turns: flui_native::HeadlessOwnerTurns,
+    dispatcher: PresentationDispatcher,
+    frame: super::super::frame_driver::FrameBinding,
+    log: SizingLog,
+}
+
+impl SourceDrivenReader {
+    /// Runs `platform`; `bootstrap` receives the loop's owner, the platform's
+    /// preference source and the log, and installs the owner and mounts the reader.
+    fn boot(
+        platform: flui_native::HeadlessPlatform,
+        bootstrap: impl FnOnce(
+            flui_native::OwnerPlatform,
+            &flui_native::HeadlessPreferences,
+            &SizingLog,
+        ) -> Result<
+            (
+                PresentationDispatcher,
+                super::super::frame_driver::FrameBinding,
+            ),
+            flui_native::BootstrapError,
+        > + 'static,
+    ) -> Self {
+        use flui_native::Platform;
+
+        let source = platform.preference_source();
+        let turns = platform.owner_turns();
+        let log = SizingLog::default();
+        let mounted = Rc::new(RefCell::new(None));
+        let (output, mounted_log, bootstrap_source) =
+            (Rc::clone(&mounted), Rc::clone(&log), source.clone());
+        Box::new(platform)
+            .run(Box::new(move |owner| {
+                output.replace(Some(bootstrap(owner, &bootstrap_source, &mounted_log)?));
+                Ok(())
+            }))
+            .expect("headless bootstrap");
+        let (dispatcher, frame) = mounted.take().expect("mounted frame");
+        Self {
+            source,
+            turns,
+            dispatcher,
+            frame,
+            log,
+        }
+    }
+
+    fn frame(&self) {
+        dispatch_platform_ui_runtime(self.dispatcher, RuntimeTask::Frame(self.frame))
+            .expect("frame");
+    }
+
+    /// The owner turn the source's wake asked for, then the frame it requested.
+    fn next_frame(&self) {
+        self.turns.drive();
+        self.frame();
+    }
+
+    fn sizings(&self) -> Vec<TextSizing> {
+        self.log.borrow().clone()
+    }
+}
+
+fn the_platform_preference_source_reaches_installed_consumers() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, _, log| {
+            install_owner_platform(owner)?;
+            Ok(mount_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
     assert_eq!(
-        &*observed.borrow(),
-        &[linear(2.0)],
+        reader.sizings(),
+        [linear_sizing(2.0)],
         "the first build did not read the value the source reported before any window"
     );
-    source.set(scaled(3.0));
-    next_frame();
-    assert_eq!(&*observed.borrow(), &[linear(2.0), linear(3.0)]);
-    source.fail_next_read("the settings service went away");
-    next_frame();
+    reader.source.set(text_scale_preferences(3.0));
+    reader.next_frame();
+    assert_eq!(reader.sizings(), [linear_sizing(2.0), linear_sizing(3.0)]);
+    reader
+        .source
+        .fail_next_read("the settings service went away");
+    reader.next_frame();
     assert_eq!(
-        &*observed.borrow(),
-        &[linear(2.0), linear(3.0)],
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
         "a failed read replaced the accepted value"
     );
-    source.set(SystemPreferences::default());
-    next_frame();
+    reader
+        .source
+        .set(flui_platform::SystemPreferences::default());
+    reader.next_frame();
     assert_eq!(
-        &*observed.borrow(),
-        &[linear(2.0), linear(3.0), linear(1.0)],
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0), linear_sizing(1.0)],
         "an unknown text scale did not restore the consumer's baseline"
     );
     teardown_platform_ui_runtime();
+}
+
+fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, source, log| {
+            install_owner_platform(owner)?;
+            // The hook is installed and the first value accepted, but the loop has
+            // not started: this change is owed to a turn that has not run.
+            source.set(text_scale_preferences(3.0));
+            Ok(mount_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0)],
+        "the first build read a value no turn had delivered"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "the change reported before the first owner turn was lost"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "the change was delivered again by a later turn"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn a_change_before_the_wake_hook_exists_reaches_consumers_once() {
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new(),
+        |owner, source, log| {
+            // Both wakes are raised with no hook to receive them. The failed read is
+            // the installation's own sample, so only the debt they leave can bring
+            // the value.
+            source.fail_next_read("the settings service was not up yet");
+            source.set(text_scale_preferences(3.0));
+            install_owner_platform(owner)?;
+            Ok(mount_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0)],
+        "a failed first read must leave the consumer at its baseline"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0), linear_sizing(3.0)],
+        "the change reported before any hook was installed was lost"
+    );
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(1.0), linear_sizing(3.0)],
+        "the change was delivered again by a later turn"
+    );
+    teardown_platform_ui_runtime();
+}
+
+fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _clear = OwnerHostClearGuard::arm();
+    let reader = SourceDrivenReader::boot(
+        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        |owner, _, log| {
+            install_owner_platform(owner)?;
+            Ok(mount_sizing_reader(log)?)
+        },
+    );
+    reader.frame();
+    reader.source.set(text_scale_preferences(3.0));
+    reader.next_frame();
+    assert_eq!(
+        reader.sizings(),
+        [linear_sizing(2.0), linear_sizing(3.0)],
+        "the installed hook did not deliver"
+    );
+
+    // The replacement only counts its turns: if the installed hook still ran,
+    // the change would reach the consumers.
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    with_owner_platform(|owner| {
+        owner.on_wake(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }))
+    })
+    .expect("owner installed")
+    .expect("the loop accepts a replacement hook");
+    for (turn, scale) in [4.0, 5.0].into_iter().enumerate() {
+        reader.source.set(text_scale_preferences(scale));
+        reader.next_frame();
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            turn + 1,
+            "the replacement runs once per change"
+        );
+        assert_eq!(
+            reader.sizings(),
+            [linear_sizing(2.0), linear_sizing(3.0)],
+            "the replaced hook ran again"
+        );
+    }
+    teardown_platform_ui_runtime();
+}
+
+fn a_panicking_preference_delivery_does_not_stop_later_changes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Failure {
+        /// The mounted presentation's wake panics while the host publishes the change.
+        Consumer,
+        /// The owner's wake hook panics before it reads the change.
+        WakeHook,
+    }
+    for (failure, delivered) in [
+        (Failure::Consumer, [2.0, 3.0, 4.0].as_slice()),
+        (Failure::WakeHook, [2.0, 4.0].as_slice()),
+    ] {
+        let _clear = OwnerHostClearGuard::arm();
+        let armed = Arc::new(AtomicBool::new(false));
+        let consumer_armed = Arc::clone(&armed);
+        let reader = SourceDrivenReader::boot(
+            flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+            move |owner, _, log| {
+                install_owner_platform(owner)?;
+                if matches!(failure, Failure::WakeHook) {
+                    return Ok(mount_sizing_reader(log)?);
+                }
+                let window = test_window();
+                let redraw = Arc::new(AtomicBool::new(false));
+                let pending = Arc::clone(&redraw);
+                let fonts = super::super::host::runtime_font_collection();
+                let mut services = crate::app::ui_runtime::RuntimeHostServices::new(
+                    Arc::new(move || {
+                        pending.store(true, Ordering::Release);
+                        assert!(
+                            !consumer_armed.swap(false, Ordering::SeqCst),
+                            "injected consumer failure"
+                        );
+                    }),
+                    redraw,
+                    super::super::host::runtime_clipboard(),
+                    &fonts,
+                    flui_scheduler::ClockSource::Platform,
+                );
+                if let Some(accepted) =
+                    APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?
+                {
+                    services = services.with_preferences(accepted);
+                }
+                let runtime =
+                    crate::app::ui_runtime::UiRuntime::new(Arc::clone(&window), 1.0, services)?;
+                Ok(install_sizing_reader(runtime, window, log))
+            },
+        );
+        if matches!(failure, Failure::WakeHook) {
+            let hook_armed = Arc::clone(&armed);
+            with_owner_platform(|owner| {
+                owner.on_wake(Box::new(move || {
+                    assert!(
+                        !hook_armed.swap(false, Ordering::SeqCst),
+                        "injected wake hook failure"
+                    );
+                    super::super::host::refresh_preferences_with(
+                        flui_native::OwnerPlatform::preferences,
+                    )
+                    .expect("a healthy hook reads the source");
+                }))
+            })
+            .expect("owner installed")
+            .expect("the loop accepts a replacement hook");
+        }
+        reader.frame();
+        assert_eq!(reader.sizings(), [linear_sizing(2.0)]);
+        armed.store(true, Ordering::SeqCst);
+        reader.source.set(text_scale_preferences(3.0));
+        reader.next_frame();
+        // Disarmed even when it never ran, so a failing row leaves no later wake to panic.
+        assert!(
+            !armed.swap(false, Ordering::SeqCst),
+            "{failure:?}: the injected failure never ran, so nothing was contained"
+        );
+        reader.source.set(text_scale_preferences(4.0));
+        reader.next_frame();
+        assert_eq!(
+            reader.sizings(),
+            delivered
+                .iter()
+                .copied()
+                .map(linear_sizing)
+                .collect::<Vec<_>>(),
+            "{failure:?}: a change after the contained panic did not reach the consumer once"
+        );
+        teardown_platform_ui_runtime();
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2632,6 +2935,22 @@ fn owner_dispatch_matrix() {
             (
                 "the_platform_preference_source_reaches_installed_consumers",
                 the_platform_preference_source_reaches_installed_consumers as fn(),
+            ),
+            (
+                "a_change_before_the_first_owner_turn_reaches_consumers_once",
+                a_change_before_the_first_owner_turn_reaches_consumers_once as fn(),
+            ),
+            (
+                "a_change_before_the_wake_hook_exists_reaches_consumers_once",
+                a_change_before_the_wake_hook_exists_reaches_consumers_once as fn(),
+            ),
+            (
+                "a_replaced_wake_hook_is_the_only_one_later_changes_reach",
+                a_replaced_wake_hook_is_the_only_one_later_changes_reach as fn(),
+            ),
+            (
+                "a_panicking_preference_delivery_does_not_stop_later_changes",
+                a_panicking_preference_delivery_does_not_stop_later_changes as fn(),
             ),
             (
                 "platform_brightness_follows_the_window_appearance",
