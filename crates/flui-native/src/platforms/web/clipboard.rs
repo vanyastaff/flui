@@ -10,15 +10,27 @@
 //! application within the current session. External clipboard content (e.g.,
 //! copied from another tab) is not accessible synchronously.
 
+use std::sync::Arc;
+
 use parking_lot::Mutex;
 
 use flui_platform::Clipboard;
+
+use super::platform::WebLoop;
+use crate::host;
 
 pub struct WebClipboard {
     /// In-memory fallback: caches the last written text for synchronous reads.
     /// Also serves as the clipboard when the Navigator Clipboard API is
     /// unavailable (e.g., insecure context, older browsers).
     fallback: Mutex<Option<String>>,
+}
+
+impl std::fmt::Debug for WebClipboard {
+    // Hand-written: the cached text may be private to the user.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebClipboard").finish_non_exhaustive()
+    }
 }
 
 // SAFETY: the page has one thread (the module refuses `+atomics`), so the value
@@ -31,6 +43,12 @@ impl WebClipboard {
         Self {
             fallback: Mutex::new(None),
         }
+    }
+}
+
+impl host::Clipboard<WebLoop> for WebClipboard {
+    fn clipboard(owner: &WebLoop) -> Arc<dyn Clipboard> {
+        owner.with_state(|s| s.clipboard.clone())
     }
 }
 

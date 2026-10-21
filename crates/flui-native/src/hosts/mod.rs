@@ -13,6 +13,8 @@ pub(crate) mod android;
 pub(crate) mod headless;
 #[cfg(windows)]
 pub(crate) mod windows;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web;
 
 #[cfg(target_os = "ios")]
 pub use apple::IOSPlatform;
@@ -23,3 +25,5 @@ pub use android::AndroidPlatform;
 pub use headless::HeadlessPlatform;
 #[cfg(windows)]
 pub use windows::WindowsPlatform;
+#[cfg(target_arch = "wasm32")]
+pub use web::WebPlatform;

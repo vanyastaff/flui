@@ -214,7 +214,7 @@ pub use platforms::{
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
-pub use platforms::WebPlatform;
+pub use hosts::WebPlatform;
 // Desktop platforms
 #[cfg(windows)]
 pub use hosts::WindowsPlatform;

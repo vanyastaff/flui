@@ -39,6 +39,7 @@ use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, Plat
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
+use crate::host;
 use crate::shared::WindowCallbacks;
 use crate::shared::html_drag_drop::{
     DomSource, FILES_TYPE, action_of, allowed_of, drop_effect, effect_allowed_of, offered,
@@ -48,6 +49,7 @@ use crate::shared::panic_boundary::contain_owner_callback;
 use flui_platform::PlatformInput;
 
 use super::events::{answer, pointer_position};
+use super::platform::WebLoop;
 use super::registration::Registration;
 
 /// One announced representation, before and after the drop.
@@ -74,8 +76,14 @@ struct Offers {
 
 /// The platform's HTML drag-and-drop transport (see the module doc).
 #[derive(Default)]
-pub(super) struct WebTransfer {
+pub struct WebTransfer {
     offers: Mutex<Offers>,
+}
+
+impl std::fmt::Debug for WebTransfer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebTransfer").finish_non_exhaustive()
+    }
 }
 
 // SAFETY: the page has one thread (the module refuses `+atomics`), so the JS
@@ -169,6 +177,14 @@ impl WebTransfer {
             offers.held.remove(&id)
         };
         drop(removed);
+    }
+}
+
+impl host::Drag<WebLoop> for WebTransfer {
+    fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
+        // HTML drag and drop; `clipboard_offer` stays `None`, since the
+        // clipboard reads only its own writes.
+        owner.with_state(|s| Arc::clone(&s.transfer)) as Arc<dyn DataTransferSource>
     }
 }
 

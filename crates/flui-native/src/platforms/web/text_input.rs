@@ -131,7 +131,7 @@ enum HostOp {
 }
 
 /// The window's text input (see the module doc).
-pub(super) struct WebTextInput {
+pub struct WebTextInput {
     canvas: web_sys::HtmlCanvasElement,
     editor: EditorSlot,
     accepting: Rc<Cell<bool>>,
@@ -989,6 +989,14 @@ impl WebTextInput {
         CompositionEnd::Abandoned
     }
 }
+
+impl std::fmt::Debug for WebTextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebTextInput").finish_non_exhaustive()
+    }
+}
+
+impl crate::host::Text for WebTextInput {}
 
 impl TextStoreHost for WebTextInput {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {

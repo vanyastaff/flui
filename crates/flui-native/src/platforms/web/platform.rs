@@ -1,4 +1,4 @@
-//! Web platform core implementation
+//! The web host's loop: the state every position of its table reads.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -9,22 +9,20 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::SessionEndPhase;
 
+use crate::host::{self, Loop as _};
 use crate::{
     error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
-    shared::owner_signal::OwnerSignal, traits::HostWindow, traits::OpenWindowError,
-    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
-    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+    shared::owner_signal::OwnerSignal, traits::OwnerPlatform, traits::Platform,
+    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
+    traits::owner::OwnerHooks,
 };
-use flui_platform::{
-    Clipboard, DisplaySnapshot, WindowEvent, WindowId, WindowOptions,
-    data_transfer::DataTransferSource,
-};
+use flui_platform::{WindowEvent, WindowId};
 
 use super::{
     clipboard::WebClipboard, display::WebDisplays, display_events::DisplayObservers,
-    executor::WebExecutor, page_events::PageObservers, window::WebWindow,
+    executor::WebExecutor, page_events::PageObservers, preferences::WebPreferences,
 };
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
@@ -32,12 +30,16 @@ use super::{
 /// once the closure exists.
 type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 
-/// Web/WASM platform implementation
-pub struct WebPlatform {
-    state: Arc<Mutex<WebState>>,
-    signal: Arc<OwnerSignal>,
-    preferences: RefCell<Option<super::preferences::Preferences>>,
-    displays: Arc<WebDisplays>,
+/// The web host's loop: the browser state every position of its table reads.
+///
+/// The page has one thread and one canvas window; the browser's own event loop
+/// is the loop, and this holds what the positions reach through it.
+/// [`WebPlatform`](crate::WebPlatform) is its platform.
+pub struct WebLoop {
+    pub(super) state: Arc<Mutex<WebState>>,
+    pub(super) signal: Arc<OwnerSignal>,
+    pub(super) preferences: RefCell<Option<WebPreferences>>,
+    pub(super) displays: Arc<WebDisplays>,
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
     display_observers: RefCell<Option<DisplayObservers>>,
@@ -46,35 +48,34 @@ pub struct WebPlatform {
     page_observers: RefCell<Option<PageObservers>>,
 }
 
-struct WebState {
-    handlers: PlatformHandlers,
+pub(super) struct WebState {
+    pub(super) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
-    clipboard: Arc<WebClipboard>,
+    pub(super) clipboard: Arc<WebClipboard>,
     /// The one HTML drag-and-drop transport every canvas shares.
-    transfer: Arc<super::drag::WebTransfer>,
+    pub(super) transfer: Arc<super::drag::WebTransfer>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
-    window_callbacks: Option<Arc<WindowCallbacks>>,
-    owner: Weak<WebPlatform>,
+    pub(super) window_callbacks: Option<Arc<WindowCallbacks>>,
+    owner: Weak<WebLoop>,
 }
 
 // SAFETY: the page has one thread (the module refuses `+atomics`), so the value
 // is never reached from another.
-unsafe impl Send for WebPlatform {}
-unsafe impl Sync for WebPlatform {}
+unsafe impl Send for WebLoop {}
+unsafe impl Sync for WebLoop {}
 
-impl std::fmt::Debug for WebPlatform {
+impl std::fmt::Debug for WebLoop {
     // Hand-written: the state holds JS-backed handles (executors, clipboard,
     // callbacks) that carry no meaningful Debug representation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WebPlatform").finish_non_exhaustive()
+        f.debug_struct("WebLoop").finish_non_exhaustive()
     }
 }
 
-impl WebPlatform {
-    /// Create a new Web platform instance
-    pub fn new() -> Result<Self, PlatformError> {
+impl WebLoop {
+    pub(crate) fn new() -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
 
         let state = WebState {
@@ -104,7 +105,7 @@ impl WebPlatform {
             });
             Ok(())
         }));
-        let preferences = super::preferences::Preferences::new(&signal)?;
+        let preferences = WebPreferences::new(&signal)?;
         Ok(Self {
             state,
             signal,
@@ -115,7 +116,7 @@ impl WebPlatform {
         })
     }
 
-    fn with_state<F, R>(&self, f: F) -> R
+    pub(super) fn with_state<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut WebState) -> R,
     {
@@ -124,7 +125,7 @@ impl WebPlatform {
 
     /// Lease the callback outside state; a replacement registered during the
     /// call wins. Keep its owning envelope outside the caught invocation.
-    fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
+    pub(super) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
         let Some(callback) = state.lock().handlers.window_event.take() else {
             return;
         };
@@ -253,67 +254,30 @@ impl WebPlatform {
     }
 }
 
-impl Platform for WebPlatform {
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        super::window::window_capabilities()
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        if !self.signal.accepting() {
-            return Err(PlatformError::Preferences {
-                message: "browser preference owner has stopped".into(),
-            });
-        }
-        // Sample outside the borrow: the browser's answers must not observe
-        // the host's own state held.
-        let Some(sampler) = self
-            .preferences
-            .borrow()
-            .as_ref()
-            .map(super::preferences::Preferences::sampler)
-        else {
-            return Err(PlatformError::Preferences {
-                message: "browser preference source is closed".into(),
-            });
-        };
-        let preferences = sampler.sample()?;
-        if !self.signal.accepting() {
-            return Err(PlatformError::Preferences {
-                message: "browser preference owner stopped during sampling".into(),
-            });
-        }
-        Ok(preferences)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|s| s.background_executor.clone())
-    }
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for WebLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
 
-        let platform = Arc::new(*self);
-        platform.with_state(|state| state.owner = Arc::downgrade(&platform));
-        platform
-            .signal
-            .start()
-            .map_err(|error| PlatformError::Init {
-                message: error.to_string(),
-            })?;
+        self.with_state(|state| state.owner = Arc::downgrade(&self));
+        self.signal.start().map_err(|error| PlatformError::Init {
+            message: error.to_string(),
+        })?;
 
         // Display events wake the owner through the same signal; they are
         // observed from here on so the first snapshot already follows them.
-        *platform.display_observers.borrow_mut() = Some(DisplayObservers::start(
-            &platform.displays,
-            &platform.signal,
-        ));
+        *self.display_observers.borrow_mut() =
+            Some(DisplayObservers::start(&self.displays, &self.signal));
 
         // The page being hidden is the end of the session: the browser may
         // discard it without another event.
-        let state = Arc::downgrade(&platform.state);
-        *platform.page_observers.borrow_mut() = Some(PageObservers::start(move |phase| {
+        let state = Arc::downgrade(&self.state);
+        *self.page_observers.borrow_mut() = Some(PageObservers::start(move |phase| {
             if let Some(state) = state.upgrade() {
                 Self::report_session_phase(&state, phase);
             }
@@ -322,22 +286,19 @@ impl Platform for WebPlatform {
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
-            Arc::clone(&platform) as Arc<dyn Platform>,
-            Arc::clone(&platform.signal),
+            Arc::clone(&platform),
+            Arc::clone(&self.signal),
         ));
 
         // Call on_ready synchronously — browser event loop is already
         // running. On `Err`, do NOT install the RAF loop over a half-built
         // page — return the failure instead.
-        on_ready(OwnerPlatform::new(
-            Arc::clone(&platform) as Arc<dyn Platform>,
-            hooks,
-        ))
-        .inspect_err(|_| platform.quit())
-        .map_err(PlatformError::bootstrap)?;
+        on_ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
+            .inspect_err(|_| self.quit())
+            .map_err(PlatformError::bootstrap)?;
 
         // Start the RAF loop
-        platform.start_raf_loop();
+        self.start_raf_loop();
 
         tracing::info!("Web platform ready");
         Ok(())
@@ -367,104 +328,34 @@ impl Platform for WebPlatform {
         }
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(title = %options.title, "Creating web window (canvas)");
-
-        let window = WebWindow::new(
-            WindowId(0), // Single window in browser
-            &options.title,
-            options.size.width,
-            options.size.height,
-            Arc::clone(&self.displays),
-        )?;
-
-        // Store window callbacks in state so the RAF loop can dispatch frames
-        let callbacks = window.callbacks().clone();
-        callbacks.set_input_capabilities(crate::shared::input_availability::web(
-            super::events::has_gesture_events(),
-        ));
-        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&self.signal, &callbacks));
-        let retiring = Arc::clone(&callbacks);
-        let state = Arc::downgrade(&self.state);
-        let transfer = self.with_state(|s| Arc::clone(&s.transfer));
-        window.install(options.input_latency, &transfer, move || {
-            let removed = state.upgrade().and_then(|state| {
-                let mut state = state.lock();
-                if state
-                    .window_callbacks
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &retiring))
-                {
-                    state.window_callbacks.take()
-                } else {
-                    None
-                }
-            });
-            drop(removed);
-        })?;
-        self.with_state(|s| {
-            s.window_callbacks = Some(callbacks);
-        });
-
-        // Notify window created
-        Self::dispatch_window_event(&self.state, WindowEvent::Created(WindowId(0)));
-
-        Ok(Arc::new(window))
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        self.state
-            .lock()
-            .window_callbacks
-            .as_ref()
-            .map(|_| WindowId(0))
-    }
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.displays.snapshot()
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.with_state(|s| s.clipboard.clone())
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // HTML drag and drop; `clipboard_offer` stays `None`, since the
-        // clipboard reads only its own writes.
-        self.with_state(|s| Arc::clone(&s.transfer)) as Arc<dyn DataTransferSource>
-    }
-
-    fn name(&self) -> &'static str {
-        "Web (WASM)"
-    }
-
-    fn compositor_name(&self) -> &'static str {
-        "Browser"
-    }
-
-    fn open_url(&self, url: &str) {
-        if let Some(w) = web_sys::window() {
-            let _ = w.open_with_url_and_target(url, "_blank");
-        }
-    }
-
-    fn keyboard_layout(&self) -> String {
-        "en-US".to_string()
-    }
-
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let previous = self.with_state(|state| state.handlers.quit.replace(callback));
         drop(previous);
     }
 
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        let previous = self.with_state(|state| state.handlers.session_end.replace(callback));
-        drop(previous);
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        // The page ends when its tab does; closing the canvas never exits the
+        // loop, so there is no exit to consult the hook about.
+        drop(hook);
     }
 
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        let previous = self.with_state(|state| state.handlers.window_event.replace(callback));
-        drop(previous);
+    fn request_exit_policy_reevaluation(&self) {
+        // With no exit policy hook to consult, there is nothing to re-evaluate.
+    }
+
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        // The browser's event loop idles the page and the animation-frame loop
+        // drives its frames; there is no idle wait to bound.
+        drop(hook);
+    }
+}
+
+impl host::Services for WebLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.with_state(|s| s.background_executor.clone())
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
@@ -476,5 +367,26 @@ impl Platform for WebPlatform {
             return Ok(std::path::PathBuf::from(origin));
         }
         Ok(std::path::PathBuf::from("/"))
+    }
+
+    fn open_url(&self, url: &str) {
+        if let Some(w) = web_sys::window() {
+            let _ = w.open_with_url_and_target(url, "_blank");
+        }
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        "Browser"
+    }
+}
+
+impl host::Input<WebLoop> for WebLoop {
+    fn keyboard_layout(_: &WebLoop) -> String {
+        "en-US".to_string()
+    }
+
+    fn on_keyboard_layout_change(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
+        // The layout is the fixed "en-US" above; nothing changes it.
+        drop(callback);
     }
 }

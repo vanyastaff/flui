@@ -10,13 +10,15 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_platform::SessionEndPhase;
+use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use wasm_bindgen::JsValue;
 
 use super::listener::{Listener, warn_failure};
+use super::platform::WebLoop;
+use crate::host;
 
 /// The listeners on the page itself; removed when dropped.
-pub(super) struct PageObservers {
+pub struct PageObservers {
     /// Cleared first on drop: a browser that refuses to remove a listener
     /// leaves it calling, and a late call must reach nothing.
     active: Rc<Cell<bool>>,
@@ -61,9 +63,45 @@ impl PageObservers {
     }
 }
 
+impl std::fmt::Debug for PageObservers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PageObservers").finish_non_exhaustive()
+    }
+}
+
 impl Drop for PageObservers {
     fn drop(&mut self) {
         self.active.set(false);
+    }
+}
+
+impl host::Lifecycle<WebLoop> for PageObservers {
+    fn on_session_end(
+        owner: &WebLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        let previous = owner.with_state(|state| state.handlers.session_end.replace(callback));
+        drop(previous);
+    }
+
+    fn on_host_notice(_: &WebLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        // A page is told of none of sleep, wake, session lock or memory
+        // pressure, so nothing calls the callback.
+        drop(callback);
+    }
+
+    fn release_session_end(_: &WebLoop) {
+        // A page cannot be asked to wait, so the hook's answer is never read
+        // and no session end is held open.
+    }
+
+    fn on_reopen(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
+        // Only AppKit reports a reopen.
+        drop(callback);
+    }
+
+    fn activate(_: &WebLoop, _: bool) {
+        // A page cannot bring its tab to the front.
     }
 }
 
