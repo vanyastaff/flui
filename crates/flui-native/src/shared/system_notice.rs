@@ -13,7 +13,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 use parking_lot::Mutex;
 
 /// Something a platform caches about displays or windows, and can mark stale.
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn a_wake_leaves_a_real_display_source_and_window_state_cell_stale() {
         use flui_foundation::geometry::Size;
-        use flui_platform_api::{WindowGeometry, WindowState};
+        use flui_platform::{WindowGeometry, WindowState};
 
         use super::super::display_source::DisplaySource;
         use super::super::window_state::WindowStateCell;

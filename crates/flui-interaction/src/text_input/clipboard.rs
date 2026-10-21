@@ -9,7 +9,7 @@
 
 use std::{fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
-use flui_platform_api::Clipboard;
+use flui_platform::Clipboard;
 
 /// Widget-facing plain-text clipboard for one presentation.
 ///

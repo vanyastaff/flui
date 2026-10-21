@@ -18,7 +18,7 @@ pub enum RuntimeOperation {
     /// Apply the host lifecycle to all presentations in this runtime.
     Lifecycle(AppLifecycleState),
     /// Deliver a system notice to every presentation in this runtime.
-    HostNotice(flui_platform_api::HostNotice),
+    HostNotice(flui_platform::HostNotice),
     /// Irreversibly stop every presentation in this runtime without removing it.
     Stop,
     /// Reassemble the runtime's mounted presentations at the requested tier.
@@ -87,7 +87,7 @@ pub(super) enum RuntimeWork {
         super::presentation_dispatch::PendingWindowState,
     ),
     /// A frame and its vsync on the event timeline.
-    Frame(PresentationAddress, flui_platform_api::EventTime),
+    Frame(PresentationAddress, flui_platform::EventTime),
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
@@ -103,7 +103,7 @@ pub(super) enum RuntimeWork {
     Input {
         address: PresentationAddress,
         surface: flui_interaction::InputSurface,
-        input: flui_platform_api::PlatformInput,
+        input: flui_platform::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },
 }
@@ -151,8 +151,8 @@ impl RuntimeWork {
                     && matches!(
                         (queued, next),
                         (
-                            flui_platform_api::HostNotice::MemoryPressure(queued),
-                            flui_platform_api::HostNotice::MemoryPressure(next),
+                            flui_platform::HostNotice::MemoryPressure(queued),
+                            flui_platform::HostNotice::MemoryPressure(next),
                         ) if queued == next
                     )
             }
@@ -303,7 +303,7 @@ mod tests {
 
     use flui_foundation::UiRuntimeId;
     use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
-    use flui_platform_api::HostNotice;
+    use flui_platform::HostNotice;
 
     use super::{RuntimeOperation, RuntimeWork};
 

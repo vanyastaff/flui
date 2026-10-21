@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_platform_api::{
+use flui_platform::{
     CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowShowError,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -57,7 +57,7 @@ pub struct TestWindow {
     pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
     /// Reported from [`PlatformWindow::system_chrome`].
-    system_chrome: Option<Arc<dyn flui_platform_api::PlatformSystemChrome>>,
+    system_chrome: Option<Arc<dyn flui_platform::PlatformSystemChrome>>,
     /// The bridge a host-side wrapper reports for this window. A
     /// `PlatformWindow` names no accessibility type (ADR-0082 §1), so the
     /// double only carries it for a test that builds a presentation from it
@@ -160,7 +160,7 @@ impl TestWindow {
     #[must_use]
     pub fn with_system_chrome(
         mut self,
-        system_chrome: Arc<dyn flui_platform_api::PlatformSystemChrome>,
+        system_chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
     ) -> Self {
         self.system_chrome = Some(system_chrome);
         self
@@ -256,7 +256,7 @@ impl PlatformWindow for TestWindow {
         self.text_input.clone()
     }
 
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         self.system_chrome.clone()
     }
 
@@ -265,23 +265,20 @@ impl PlatformWindow for TestWindow {
         Ok(())
     }
 
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 

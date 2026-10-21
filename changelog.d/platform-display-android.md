@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: `PlatformWindow::set_frame_rate_hint(FrameRateHint)`, a request for the
+- **`flui-platform`**: `PlatformWindow::set_frame_rate_hint(FrameRateHint)`, a request for the
   display's highest refresh rate (`High`) or none (`Default`); a backend without such a request ignores it.
 - **`flui-runtime`**: a presentation asks for the highest refresh rate while it animates or a pointer
   is down and lets go 250 ms after both end, published to the host through

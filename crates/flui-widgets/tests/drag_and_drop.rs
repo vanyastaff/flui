@@ -20,10 +20,10 @@ use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_painting::typography::TextDirection;
-use flui_platform_api::data_transfer::{TransferActions, TransferFormat};
-use flui_platform_api::drag::OsDragEnd;
-use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
-use flui_platform_api::{CursorIcon, EventTime, HapticFeedback, TargetPlatform};
+use flui_platform::data_transfer::{TransferActions, TransferFormat};
+use flui_platform::drag::OsDragEnd;
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::{CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
 use flui_view::StateHandle;
 use flui_view::element::ElementKind;
@@ -449,7 +449,7 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
             .build(),
         Pointer::Virtual => flui_testing::replay::VirtualScript::new(
             "virtual press",
-            flui_platform_api::DeviceId::try_from(7_u64).expect("a nonzero device id"),
+            flui_platform::DeviceId::try_from(7_u64).expect("a nonzero device id"),
         )
         .press(at)
         .wait(wait)
@@ -1015,14 +1015,14 @@ pub(crate) fn draggable_and_drop_target_by_every_path() {
     // Under reduced motion, the user's setting or an animator duration scale
     // of 0, assistive technology's transfer settles within two frames.
     for motion in [
-        flui_platform_api::MotionPreference::Reduce,
-        flui_platform_api::MotionPreference::from_duration_scale(0.0)
+        flui_platform::MotionPreference::Reduce,
+        flui_platform::MotionPreference::from_duration_scale(0.0)
             .expect("a zero duration scale is a valid observation"),
     ] {
         let shared = shared();
         let mut laid = mount(&shared);
         laid.set_system_preferences(
-            flui_platform_api::SystemPreferences::default().with_motion(motion),
+            flui_platform::SystemPreferences::default().with_motion(motion),
         );
         laid.enable_semantics();
         laid.pump();

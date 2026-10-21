@@ -10,7 +10,7 @@ use flui_interaction::__runtime::{CloseMode, close_focus};
 use flui_interaction::focus::{
     FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, KeyEventResult,
 };
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     keyboard::{Code, Key, KeyEvent, KeyState},
 };

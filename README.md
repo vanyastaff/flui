@@ -18,7 +18,7 @@ are defined in the [release requirements](docs/plans/specs/release/requirements.
 ## Status
 
 - ✅ Foundation: `flui-foundation` (with the `f64` geometry values), `flui-macros`, `flui-log`, `flui-native`
-- ✅ Contracts: `flui-platform-api` (platform capability traits and the window, input and data-transfer vocabulary, no OS backend), `flui-protocol` (semantics roles and actions, the agent-protocol wire names)
+- ✅ Contracts: `flui-platform` (platform capability traits and the window, input and data-transfer vocabulary, no OS code), `flui-protocol` (semantics roles and actions, the agent-protocol wire names)
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-runtime` (the UI runtime and the per-presentation frame transaction it drives; internal), `flui-testing`, `flui-animation`, `flui-assets`, `flui-app`
 - ✅ Package-author surface: `flui-sdk` (what an official or third-party package builds on, without the host, engine or GPU stack; evolving, versioned `0.N` apart from the other crates)

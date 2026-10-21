@@ -4,7 +4,7 @@
 
 use parking_lot::Mutex;
 
-use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
+use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 use flui_view::{Reactive, Signal};
 use flui_widgets::AnnotatedRegion;
 
@@ -64,12 +64,12 @@ struct Fixture {
     chrome: Arc<RecordingChrome>,
     scene: Signal<u32>,
     graph: Reactive,
-    window: Arc<dyn flui_platform_api::PlatformWindow>,
+    window: Arc<dyn flui_platform::PlatformWindow>,
 }
 
 fn styled_runtime() -> Fixture {
     let chrome = Arc::new(RecordingChrome::default());
-    let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(
+    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(
         crate::testing::TestWindow::new()
             .focused(true)
             .with_system_chrome(Arc::clone(&chrome) as Arc<dyn PlatformSystemChrome>),
@@ -151,7 +151,7 @@ pub(crate) fn a_refused_frame_announces_nothing() {
 /// Detaching the native presentation forgets the last delivery, so the next
 /// frame resends even an unchanged style.
 pub(crate) fn a_detached_presentation_resends_its_style() {
-    use flui_platform_api::WindowExecutionState::{Detached, Running};
+    use flui_platform::WindowExecutionState::{Detached, Running};
     let Fixture {
         ui_runtime,
         chrome,

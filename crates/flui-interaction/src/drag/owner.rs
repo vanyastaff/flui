@@ -12,17 +12,17 @@ use std::sync::atomic::AtomicUsize;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationIndex,
     TransferActions, TransferError, TransferPayload,
 };
-use flui_platform_api::drag::{
+use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragEnd, OsDragRequest,
     OsDragStart, OsOffer, OsSessionPlan, PlatformDragSource, ProcessNonce, plan_os_session,
     validate_session,
 };
-use flui_platform_api::pointer::PointerInfo;
-use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
+use flui_platform::pointer::PointerInfo;
+use flui_platform::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
 
 use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
@@ -39,7 +39,7 @@ use crate::pointer::mouse_tracker::WeakMouseTracker;
 use crate::pointer::{
     HitTestEntry, HitTestHandle, LocalPayloadTarget, PointerCapture, active_dispatch_handle,
 };
-use flui_platform_api::CursorIcon;
+use flui_platform::CursorIcon;
 
 /// How a drag ended, as its source is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1375,7 +1375,7 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
 
 /// A no-op view source: a window-scope view never asks the platform.
 fn no_source() -> Arc<dyn DataTransferSource> {
-    Arc::new(flui_platform_api::NullDataTransferSource)
+    Arc::new(flui_platform::NullDataTransferSource)
 }
 
 fn move_session(
@@ -1912,7 +1912,7 @@ fn os_request(
             match index.cmp(&serialized) {
                 std::cmp::Ordering::Less => data.serialized(index),
                 std::cmp::Ordering::Equal => Ok(TransferPayload::Custom {
-                    mime: Mime::new(flui_platform_api::drag::IDENTITY_ESSENCE),
+                    mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
                     bytes: Arc::from(Vec::new()),
                 }),
                 std::cmp::Ordering::Greater => Err(TransferError::Cancelled),

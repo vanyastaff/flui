@@ -1,4 +1,4 @@
-# ADR-0082: `flui-platform-api` is the contract crate; OS backends stay in `flui-native`
+# ADR-0082: `flui-platform` is the contract crate; OS backends stay in `flui-native`
 
 - **Status:** Accepted in part (2026-09-26): §1 for the items both of §3's changes move; §2's
   rule that only composition roots depend on `flui-native` (its `allowed-dependents`); §3's
@@ -101,9 +101,9 @@ keep:
 
 ## Decision
 
-### 1. A new crate, `flui-platform-api`, holds the contracts
+### 1. A new crate, `flui-platform`, holds the contracts
 
-`flui-platform-api` is tier C, kind `stable` (ADR-0081). It contains what the framework, plugins
+`flui-platform` is tier C, kind `stable` (ADR-0081). It contains what the framework, plugins
 and tests program against, and nothing that names an OS, winit, AccessKit or tokio:
 
 - the per-window contract `PlatformWindow`, without `as_winit` and without `accessibility()`;
@@ -149,7 +149,7 @@ points to the same layer, which amends [ADR-0041](ADR-0041-workspace-topology-co
 layer table. `HostWindow::accessibility` stays in `flui-native`: only the trait
 moved, not the discovery. A runtime-owned port was not chosen because it has one implementation
 and would move the translation in `PresentationState` into the host. The trait is still not in
-`flui-platform-api`: [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks
+`flui-platform`: [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks
 every backend, third-party ones included, to implement it, and an out-of-tree backend would then
 depend on the internal `flui-semantics`; that clause has to re-home the trait, or re-export it
 through a contract crate, when it is accepted.
@@ -162,7 +162,7 @@ it stays with #560. Keeping `Platform` out of the Stable crate is what keeps `Ta
 ### 3. Move the contracts in two changes, re-exporting them
 
 **First change (accepted).** Every item §1 lists except `PlatformWindow` and the ADR-0084 seam
-moves to `flui-platform-api` with its signature unchanged: `PlatformTextInput`,
+moves to `flui-platform` with its signature unchanged: `PlatformTextInput`,
 `PlatformHaptics`, `PlatformDisplay`/`DisplayId` (since replaced by `DisplaySnapshot`, ADR-0236), `Clipboard`/`ClipboardItem`, the whole
 `data_transfer` module, the input vocabulary (`PlatformInput`, `DispatchEventResult`,
 `DragDropEvent`, the re-exported `ui-events` pointer and keyboard types, the pixel conversion
@@ -170,7 +170,7 @@ helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOp
 `WindowReveal`, `WindowMode`, `WindowEvent`, `WindowExecutionState`, `WindowShowError`,
 `WindowAppearance`, `WindowBackgroundAppearance`, `WindowBounds`, `CursorError`).
 `flui-native` re-exports every moved item at its old path, so no caller outside the two
-edges changes; `flui-interaction` and the widget harness switch to `flui-platform-api`.
+edges changes; `flui-interaction` and the widget harness switch to `flui-platform`.
 `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` stay in `flui-native` until
 §5 deletes them.
 
@@ -202,7 +202,7 @@ a reach fact:
   tool, so this direct-edge rule means nothing layered below `flui-app` reaches `flui-native`
   through a chain of workspace crates.
 - `cargo tree --locked --target all -e normal` for `flui-interaction`,
-  `flui-widgets --features testing` and `flui-platform-api` names none of `flui-native`,
+  `flui-widgets --features testing` and `flui-platform` names none of `flui-native`,
   `winit`, `windows`, `objc2-app-kit`, `android-activity`, `ndk` or `tokio`. That is a grep over
   the full tree rather than a `cargo tree -i` probe, because `-i` errors on an absent package
   instead of printing nothing.
@@ -324,7 +324,7 @@ goes with ADR-0047's consolidation, not here.
 - `flui-native` sits in tier H with `flui-app`. Its layer-2 position in ADR-0041's table, and
   ADR-0041's `interaction -> platform` edge note, are obsolete.
 - ADR-0030 §2, ADR-0031 §1–§3 and ADR-0038 §4 describe traits that now live in
-  `flui-platform-api`; their contracts are unchanged. ADR-0038 §9's required
+  `flui-platform`; their contracts are unchanged. ADR-0038 §9's required
   `Platform::clipboard()` stays on `Platform` in `flui-native`. ADR-0039 §2's "registration
   writes a `Send` callback" is replaced by §4 above once step 2 lands.
 - Win32, AppKit, UIKit and Android are clippy-only in CI (AGENTS.md). Each backend change in §4
@@ -336,12 +336,12 @@ goes with ADR-0047's consolidation, not here.
 ## Verification
 
 The first change is held by `flui-native`'s `allowed-dependents` (`cargo xtask workspace`) and
-by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` and
+by the `flui_platform` crate doctest, which implements `PlatformTextInput` and
 `PlatformHaptics` with no `flui-native` in scope. The second change is held by:
 
 - `cargo xtask reach` (ADR-0081) with `flui-native`, `winit`, `windows`, `objc2-app-kit`,
   `objc2-ui-kit`, `android-activity` and `ndk` forbidden for tier K, and a reach fact for
-  `flui-platform-api` itself: its tier C set forbids the OS crates and winit, and its own
+  `flui-platform` itself: its tier C set forbids the OS crates and winit, and its own
   `reach-forbid` entry (ADR-0081 §2) adds `tokio` and `accesskit`;
 - the doctests on `PlatformWindow`: one implements it with no `flui-native` in scope, and its
   `compile_fail` twin, identical but for an `accessibility` method, is rejected with E0407;
@@ -363,5 +363,5 @@ Not yet in place:
 
 - A compile-time pin that registered callbacks accept `!Send` closures once step 2 lands: a
   doctest on `PlatformWindow::on_input` that registers a closure capturing an `Rc`.
-- The API-closure gate of ADR-0089 run over `flui-platform-api`, with a planted
+- The API-closure gate of ADR-0089 run over `flui-platform`, with a planted
   `pub fn f() -> winit::window::WindowId` that it must reject.

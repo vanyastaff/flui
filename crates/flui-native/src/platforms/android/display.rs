@@ -39,7 +39,7 @@ use std::thread::ThreadId;
 
 use android_activity::AndroidApp;
 use android_activity::ndk::native_window::NativeWindow;
-use flui_platform_api::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
+use flui_platform::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
 use jni::{
     Env, JValue, jni_sig, jni_str,
     objects::{JObject, JObjectArray, JString},

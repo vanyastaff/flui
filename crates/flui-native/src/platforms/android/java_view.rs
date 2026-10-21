@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
-use flui_platform_api::DragDropEvent;
+use flui_platform::DragDropEvent;
 use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::refs::Global;
 use jni::sys::{jboolean, jfloat, jint, jlong};

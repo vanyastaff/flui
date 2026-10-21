@@ -4,7 +4,7 @@
 //! reading in the candidate window, and an email, URL, phone or number field
 //! the keyboard its purpose asks for.
 
-use flui_platform_api::text_store::{TextInputPurpose, TextStoreStatus};
+use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
 use windows::Win32::{
     Foundation::E_NOTIMPL,
     System::{Com::CoTaskMemAlloc, Variant::VARIANT},

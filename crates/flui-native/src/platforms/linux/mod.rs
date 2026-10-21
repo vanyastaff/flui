@@ -155,8 +155,8 @@ impl LinuxPlatform {
 }
 
 impl Platform for LinuxPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     #[expect(

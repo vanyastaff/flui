@@ -6,7 +6,7 @@
 //! from (ADR-0207 §2): timestamps from different backends, and the deadlines
 //! the arena arms from them, share one timeline.
 
-use flui_platform_api::pointer::{PointerId, PointerInfo, PointerKind, PointerRole};
+use flui_platform::pointer::{PointerId, PointerInfo, PointerKind, PointerRole};
 
 /// Nanoseconds since the process event epoch.
 #[inline]

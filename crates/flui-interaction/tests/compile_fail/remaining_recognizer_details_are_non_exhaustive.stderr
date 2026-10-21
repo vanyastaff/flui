@@ -98,53 +98,55 @@ error[E0639]: cannot create non-exhaustive struct using struct expression
 58 | |         global_position: Offset::ZERO,
 59 | |         local_position: Offset::ZERO,
 60 | |         kind: PointerKind::Touch,
-61 | |     };
+61 | |         pointer: PointerId::try_from(1_u64).expect("authored contact"),
+62 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:62:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:63:13
    |
-62 |       let _ = TapUpDetails {
+63 |       let _ = TapUpDetails {
    |  _____________^
-63 | |         global_position: Offset::ZERO,
-64 | |         local_position: Offset::ZERO,
-65 | |         kind: PointerKind::Touch,
-66 | |     };
+64 | |         global_position: Offset::ZERO,
+65 | |         local_position: Offset::ZERO,
+66 | |         kind: PointerKind::Touch,
+67 | |         pointer: PointerId::try_from(1_u64).expect("authored contact"),
+68 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:67:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:69:13
    |
-67 |       let _ = LongPressMoveUpdateDetails {
+69 |       let _ = LongPressMoveUpdateDetails {
    |  _____________^
-68 | |         global_position: Offset::ZERO,
-69 | |         local_position: Offset::ZERO,
-70 | |         offset_from_origin: Offset::ZERO,
-71 | |         local_offset_from_origin: Offset::ZERO,
-72 | |         kind: PointerKind::Touch,
-73 | |     };
+70 | |         global_position: Offset::ZERO,
+71 | |         local_position: Offset::ZERO,
+72 | |         offset_from_origin: Offset::ZERO,
+73 | |         local_offset_from_origin: Offset::ZERO,
+74 | |         kind: PointerKind::Touch,
+75 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:74:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:76:13
    |
-74 |       let _ = LongPressEndDetails {
+76 |       let _ = LongPressEndDetails {
    |  _____________^
-75 | |         global_position: Offset::ZERO,
-76 | |         local_position: Offset::ZERO,
-77 | |         velocity: Velocity::ZERO,
-78 | |         kind: PointerKind::Touch,
-79 | |     };
+77 | |         global_position: Offset::ZERO,
+78 | |         local_position: Offset::ZERO,
+79 | |         velocity: Velocity::ZERO,
+80 | |         kind: PointerKind::Touch,
+81 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:80:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:82:13
    |
-80 |       let _ = ForcePressDetails {
+82 |       let _ = ForcePressDetails {
    |  _____________^
-81 | |         global_position: Offset::ZERO,
-82 | |         local_position: Offset::ZERO,
-83 | |         pressure: 0.5,
-84 | |         max_pressure: 1.0,
-85 | |     };
+83 | |         global_position: Offset::ZERO,
+84 | |         local_position: Offset::ZERO,
+85 | |         pressure: 0.5,
+86 | |         max_pressure: 1.0,
+87 | |     };
    | |_____^

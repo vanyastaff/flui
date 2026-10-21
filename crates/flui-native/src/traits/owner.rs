@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
-use flui_platform_api::text_store::TextStoreHost;
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::text_store::TextStoreHost;
+use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
@@ -128,7 +128,7 @@ impl OwnerPlatform {
     /// The commands and observations every window of this platform has, known
     /// before one opens. See [`Platform::window_capabilities`].
     #[must_use]
-    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    pub fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         self.platform.window_capabilities()
     }
 
@@ -159,7 +159,7 @@ impl OwnerPlatform {
     ///
     /// # Errors
     /// Forwards native read and owner-lifetime failures.
-    pub fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    pub fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         self.platform.preferences()
     }
 
@@ -167,7 +167,7 @@ impl OwnerPlatform {
     ///
     /// # Errors
     /// Forwards a failed native read.
-    pub fn display_snapshot(&self) -> Result<flui_platform_api::DisplaySnapshot, PlatformError> {
+    pub fn display_snapshot(&self) -> Result<flui_platform::DisplaySnapshot, PlatformError> {
         self.platform.display_snapshot()
     }
 
@@ -307,10 +307,7 @@ impl SharedPlatform {
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]
-    pub fn data_dirs(
-        &self,
-        app: &flui_platform_api::StorageName,
-    ) -> Option<crate::storage::DataDirs> {
+    pub fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
         self.platform.data_dirs(app)
     }
 
@@ -355,7 +352,7 @@ impl SharedPlatform {
     /// The commands and observations every window of this platform has, known
     /// before one opens; see [`Platform::window_capabilities`].
     #[must_use]
-    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    pub fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         self.platform.window_capabilities()
     }
 
@@ -942,7 +939,7 @@ pub(crate) trait ProxyTransport: Send + Sync {
 mod tests {
     use std::cell::Cell;
 
-    use flui_platform_api::text_store::{CompositionEnd, TextStore, TextStoreHostError};
+    use flui_platform::text_store::{CompositionEnd, TextStore, TextStoreHostError};
 
     use super::*;
     use crate::platforms::HeadlessPlatform;

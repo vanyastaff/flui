@@ -35,10 +35,10 @@ use crate::shared::os_version::android::{
 
 /// `PackageManager.PERMISSION_GRANTED`.
 const PERMISSION_GRANTED: i32 = 0;
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// The primitives the composition plan can choose from.
 const PRIMITIVES: [AndroidPrimitive; 4] = [

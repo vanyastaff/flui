@@ -98,7 +98,7 @@ framework does not control is contained.
    text service re-reads the document. There is no merge: nothing gives a base for a three-way
    comparison. The count never wraps: a store that exhausts it drops every later session, so
    no session can find its count again after the application moved past it. The controller and
-   the in-memory store share the count's type, `flui_platform_api::text_store::EditGeneration`.
+   the in-memory store share the count's type, `flui_platform::text_store::EditGeneration`.
 4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
    presentation (inside the composing field too), an accepted close request, the end of the
    session, blur, paste and undo, and unmount commit the visible composition before the event's
@@ -190,7 +190,7 @@ framework does not control is contained.
 
 In place:
 
-- Items 1–3: `flui-platform-api` `tests/lock_gate.rs`'s
+- Items 1–3: `flui-platform` `tests/lock_gate.rs`'s
   `settling_runs_owner_code_outside_the_lock` (settle after each release and before the next
   grant, a panicking settle reaching the gate while the queue drains, and resuming when no owner
   installed a gate); `the_ledger_follows_the_reference`, which checks the ledger against a

@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     RepresentationDescriptor, RepresentationIndex, TransferActions,
 };
-use flui_platform_api::drag::OsDragProvider;
-use flui_platform_api::{DragDropEvent, PlatformInput};
+use flui_platform::drag::OsDragProvider;
+use flui_platform::{DragDropEvent, PlatformInput};
 use windows::Win32::{
     Foundation::{
         DATA_S_SAMEFORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
@@ -67,8 +67,8 @@ mod objects {
     use std::sync::Arc;
 
     use flui_foundation::DataTransferId;
-    use flui_platform_api::data_transfer::TransferActions;
-    use flui_platform_api::drag::OsDragProvider;
+    use flui_platform::data_transfer::TransferActions;
+    use flui_platform::drag::OsDragProvider;
     use windows::Win32::System::Com::{IDataObject, IEnumFORMATETC};
     use windows::Win32::System::Ole::{IDropSource, IDropTarget};
     use windows_core::implement;
@@ -148,8 +148,8 @@ impl SourceData {
             let identity = match (&native, &descriptor.format) {
                 (
                     NativeFormat::Named(name),
-                    flui_platform_api::data_transfer::TransferFormat::Custom { mime },
-                ) if name == flui_platform_api::drag::IDENTITY_ESSENCE => {
+                    flui_platform::data_transfer::TransferFormat::Custom { mime },
+                ) if name == flui_platform::drag::IDENTITY_ESSENCE => {
                     Some(mime.as_str().as_bytes().to_vec())
                 }
                 _ => None,

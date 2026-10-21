@@ -18,7 +18,7 @@ use flui_interaction::{
     GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
     gesture::GestureArenaMember,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 thread_local! {
     static WAKE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
@@ -29,9 +29,9 @@ struct WakeWindow {
     panic_on_drop: bool,
 }
 
-impl flui_platform_api::PlatformWindow for WakeWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
-        flui_platform_api::WindowId(1)
+impl flui_platform::PlatformWindow for WakeWindow {
+    fn id(&self) -> flui_platform::WindowId {
+        flui_platform::WindowId(1)
     }
     fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
         flui_foundation::geometry::Size::new(1, 1)
@@ -54,29 +54,23 @@ impl flui_platform_api::PlatformWindow for WakeWindow {
     fn is_visible(&self) -> bool {
         true
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
@@ -690,7 +684,7 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-    let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(WakeWindow {
         drops: Arc::default(),
         panic_on_drop: false,
     });
@@ -729,7 +723,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
         let clock = ManualClock::new();
         let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
         let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+        let window: Arc<dyn flui_platform::PlatformWindow> = Arc::new(WakeWindow {
             drops: Arc::clone(&drops),
             panic_on_drop: true,
         });

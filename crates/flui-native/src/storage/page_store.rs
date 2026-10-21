@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 
-use flui_platform_api::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
+use flui_platform::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
 use js_sys::{Array, Function, Promise, Uint8Array};
 use tokio::sync::oneshot;
 use wasm_bindgen::{JsCast, prelude::*};

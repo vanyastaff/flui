@@ -1,7 +1,7 @@
 //! Portable failure-policy seam for Android's owner-local scroll-factor cache.
 
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_platform_api::pointer::{ScrollDelta, ScrollUnit};
+use flui_platform::pointer::{ScrollDelta, ScrollUnit};
 
 use super::os_version::android::{AndroidApi, ScaledScrollFactor};
 

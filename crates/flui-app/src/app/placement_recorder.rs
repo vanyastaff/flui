@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::Size;
 use flui_native::WindowOptions;
-use flui_platform_api::{
+use flui_platform::{
     DisplaySnapshot, Storage, StorageFuture, StorageName, StoredVersion, WindowCapabilities,
     WindowGeometry, WindowMode, WindowPlacement, WindowState, WriteMode,
 };

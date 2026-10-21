@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform_api::{Storage, StorageError};
+use flui_platform::{Storage, StorageError};
 
 use super::{Document, PersistError, Revision, SaveStatus};
 use crate::LifecycleContext;

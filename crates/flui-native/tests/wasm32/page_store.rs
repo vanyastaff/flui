@@ -7,7 +7,7 @@
 //! every CI pass while the scheduling itself is the browser's.
 
 use flui_native::storage::{DataDirs, FileStore};
-use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
+use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 

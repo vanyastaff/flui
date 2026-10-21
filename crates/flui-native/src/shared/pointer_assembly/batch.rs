@@ -1,8 +1,8 @@
 //! A native batch of readings delivered as one move.
 
 use flui_foundation::geometry::Point;
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerMove, PointerPosition, PointerSample};
+use flui_platform::EventTime;
+use flui_platform::pointer::{PointerMove, PointerPosition, PointerSample};
 
 use super::clock::{ClockChoice, NativeClock};
 use super::registry::sample;

@@ -18,7 +18,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_foundation::NSObjectProtocol;
 use objc2_ui_kit::{UIRectEdge, UIStatusBarStyle, UIViewController};
 
-use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
+use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
 use super::native_owner::NativeOwner;
 

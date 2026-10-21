@@ -1,6 +1,6 @@
 //! API admission and absence/error handling for Android's native text-weight query.
 
-use flui_platform_api::TextWeightPreference;
+use flui_platform::TextWeightPreference;
 
 use super::os_version::{Since, android::TextWeight};
 

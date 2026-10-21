@@ -31,7 +31,7 @@ contact generation, so an ended contact or closed presentation makes it inert.
 This is logical routing capture; it does not request explicit OS release.
 See [ADR-0164](../../docs/adr/ADR-0164-down-route-logical-pointer-capture.md).
 
-The public wire uses `flui-platform-api`'s owned `PointerEvent` and `KeyEvent`
+The public wire uses `flui-platform`'s owned `PointerEvent` and `KeyEvent`
 contracts. `PointerId` names a contact, `DeviceId` names hardware, and
 `PointerInfo` carries the reported `PointerKind` and primary role. Samples use
 checked logical positions and monotonic `EventTime`. Missing sensors stay
@@ -48,7 +48,7 @@ UI state.
 ```rust
 use std::{cell::Cell, rc::Rc};
 use flui_foundation::geometry::Point;
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use flui_interaction::{
     GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
     PointerButtons, PointerEvent,

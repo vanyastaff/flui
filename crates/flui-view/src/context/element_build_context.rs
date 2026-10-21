@@ -609,7 +609,7 @@ impl LifecycleContext for ElementBuildContext {
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.owner.read().texture_registry().cloned()
     }
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.owner.read().storage().cloned()
     }
     fn flush_registry_in_crate(
@@ -711,7 +711,7 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's external textures.
     pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
     /// The UI runtime's byte storage.
-    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
     /// The host's flush registry; crate-private, for `Persisted`.
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
     /// The UI runtime's fresh-hit-test capability, narrowed from its interaction
@@ -1063,7 +1063,7 @@ impl LifecycleContext for BuildCtx<'_> {
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.capabilities.texture_registry.clone()
     }
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.capabilities.storage.clone()
     }
     fn flush_registry_in_crate(

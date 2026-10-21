@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use block2::RcBlock;
-use flui_platform_api::{MotionPreference, SystemPreferences, TextWeightPreference};
+use flui_platform::{MotionPreference, SystemPreferences, TextWeightPreference};
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use objc2_ui_kit::{

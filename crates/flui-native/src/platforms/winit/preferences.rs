@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use flui_platform_api::{MotionPreference, SystemPreferences, WindowAppearance};
+use flui_platform::{MotionPreference, SystemPreferences, WindowAppearance};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{Proxy, zvariant::OwnedValue};

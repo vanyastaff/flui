@@ -43,7 +43,7 @@ use flui_interaction::focus::{
     TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
-use flui_platform_api::keyboard::KeyEvent;
+use flui_platform::keyboard::KeyEvent;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};

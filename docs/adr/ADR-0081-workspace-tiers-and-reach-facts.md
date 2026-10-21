@@ -137,7 +137,7 @@ and the gate reports any other H → `pkg` edge.
 
 The tier assignment had six refused edges, each seeded as an `edge-exceptions` entry.
 `flui-interaction -> flui-native` and `flui-widgets -> flui-native` (the widget harness,
-optional under `testing`) exited with ADR-0082: both now name `flui-platform-api` (tier C), and
+optional under `testing`) exited with ADR-0082: both now name `flui-platform` (tier C), and
 their entries are gone. `flui-app -> flui-hot-reload` exited with ADR-0094's hook (2026-09-29:
 `flui-app` reaches a reload tool only through an installed `DevReloadHook`). Three remain:
 `flui -> flui-hot-reload` exits with ADR-0094; `flui -> flui-material` and
@@ -150,7 +150,7 @@ do not by themselves approve this record's remaining Proposed clauses.
 | Tier | Contains | Forbidden in the normal graph (reach fact) |
 |---|---|---|
 | **V** values | `flui-macros`, `flui-foundation` (owned geometry and the signal read contract; [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) keeps the graph in `flui-view`) | everything in S's set, plus `tokio` |
-| **C** contracts | `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
+| **C** contracts | `flui-platform` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
 | **S** substrate | `flui-log`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-semantics`, `flui-animation`, `flui-assets` | K's set |
 | **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set; `wgpu` stays in it, and only `flui-engine`'s `grant` (§2) admits it |
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-native`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
@@ -226,7 +226,7 @@ configuration error. `pkg`'s "any other OS crate" is the globs `windows-*`, `obj
 A package may add names to its tier's forbidden set with `reach-forbid` in its own
 `[package.metadata.flui]`, and may never remove one except through `reach-exceptions`. This is
 how a single crate states a fact its tier cannot, such as "`tokio` and `accesskit` are absent
-from `flui-platform-api`" (ADR-0082).
+from `flui-platform`" (ADR-0082).
 
 `reach-exceptions` on a package E is an array of
 `{ to = "<package>", exit | grant = "ADR-NNNN", reason = "<text>" }`, exactly one of `exit` and
@@ -261,7 +261,7 @@ with ADR-0094, and `flui-engine`'s `wgpu` is the grant of §1. With them the gat
 
 | Kind | Promise | Crates |
 |---|---|---|
-| `stable` | semver on the transitive closure of its public signatures; the only crates a 1.0 freezes | `flui`, `flui-platform-api`, `flui-protocol` |
+| `stable` | semver on the transitive closure of its public signatures; the only crates a 1.0 freezes | `flui`, `flui-platform`, `flui-protocol` |
 | `evolving` | own `0.N` version, bumped on every release train; no promise across trains | `flui-sdk` |
 | `internal` | none; exact-pinned by the crates above; not for direct use | every other core crate |
 | `official` | a package built on `flui-sdk` and the two contract crates, released on the same train | the `pkg` tier |
@@ -293,7 +293,7 @@ entry: `flui-cli` has kind `tool`. The partial supersession of ADR-0028's exempt
 ADR-0088's; this record supplies the kind rule it uses.
 
 The forward direction (an `official` package's normal and build dependencies are `flui-sdk`,
-`flui-platform-api` and `flui-protocol`, and an edge to another `official` package, in any
+`flui-platform` and `flui-protocol`, and an edge to another `official` package, in any
 dependency kind, is declared) is ADR-0088's rule. `cargo xtask workspace` checks it; a package
 not yet on `flui-sdk` declares its remaining internal-crate edges in its own `edge-exceptions`,
 a list that can only shrink, and a member under `packages/` declares none.
@@ -395,7 +395,7 @@ For the accepted part:
   removing one of the facade's `edge-exceptions` entries makes it fail with the refused
   `flui -> flui-material` (or `flui-cupertino`, `flui-hot-reload`) edge, and an exception whose
   edge is gone is itself a finding (it caught the two `flui-native` entries when
-  `flui-platform-api` landed).
+  `flui-platform` landed).
 - `cargo xtask workspace --self-test` runs the rule over a built-in graph that plants an upward
   cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
   stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it

@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use flui_platform_api::WheelPreferences;
+use flui_platform::WheelPreferences;
 
 /// Presentation-owned writer of the host's wheel projection.
 ///

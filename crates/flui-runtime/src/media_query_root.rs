@@ -61,7 +61,7 @@ impl MediaQuerySource {
     }
 
     pub(crate) fn from_window(
-        window: &dyn flui_platform_api::PlatformWindow,
+        window: &dyn flui_platform::PlatformWindow,
         device_pixel_ratio: f64,
     ) -> Self {
         Self {

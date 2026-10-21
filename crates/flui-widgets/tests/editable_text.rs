@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
 };
@@ -226,8 +226,8 @@ pub(crate) mod native_actions {
         // A real IME commit reaches the session attached by semantic focus.
         fixture
             .ui_runtime
-            .dispatch(flui_platform_api::PlatformInput::Ime(
-                flui_platform_api::ImeEvent::Commit("😀".into()),
+            .dispatch(flui_platform::PlatformInput::Ime(
+                flui_platform::ImeEvent::Commit("😀".into()),
             ));
         assert_eq!(fixture.controller.borrow().text(), "unfocused😀");
         fixture.pump();
@@ -409,7 +409,7 @@ pub(crate) mod native_actions {
     }
 
     pub(crate) fn a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it() {
-        use flui_platform_api::text_store::{LockOutcome, project_ime_event};
+        use flui_platform::text_store::{LockOutcome, project_ime_event};
         let controller = TextEditingController::new();
         let node = FocusNode::with_debug_label("deferred semantic edit");
         let make_unfocusable = Rc::clone(&node);
@@ -445,7 +445,7 @@ pub(crate) mod native_actions {
             .post_frame_handle()
             .schedule(move |_| {
                 assert_eq!(
-                    project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
+                    project_ime_event(&*store, &flui_platform::ImeEvent::Commit("IME".into())),
                     Ok(LockOutcome::Deferred)
                 );
                 panic!("leave the accepted grant queued before its commit anchor");
@@ -538,7 +538,7 @@ pub(crate) mod native_actions {
     }
 
     pub(crate) fn re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit() {
-        use flui_platform_api::text_store::{LockOutcome, project_ime_event};
+        use flui_platform::text_store::{LockOutcome, project_ime_event};
         let controller = TextEditingController::new();
         let node = FocusNode::with_debug_label("grant takeover");
         let takeover_node = Rc::clone(&node);
@@ -582,7 +582,7 @@ pub(crate) mod native_actions {
             .post_frame_handle()
             .schedule(move |_| {
                 assert_eq!(
-                    project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
+                    project_ime_event(&*store, &flui_platform::ImeEvent::Commit("IME".into())),
                     Ok(LockOutcome::Deferred)
                 );
                 panic!("leave an accepted grant queued before its commit anchor");
@@ -682,7 +682,7 @@ pub(crate) mod native_actions {
 // the platform event has been demultiplexed to its presentation.
 // ------------------------------------------------------------------
 
-fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform_api::ImeEvent) {
+fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform::ImeEvent) {
     harness.dispatch_ime(event);
 }
 
@@ -714,7 +714,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
 
     dispatch_ime(
         &harness,
-        &flui_platform_api::ImeEvent::Preedit {
+        &flui_platform::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((0, 2)),
         },
@@ -804,7 +804,7 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
         )
     };
     let geometry = |harness: &crate::common::harness::Harness| {
-        use flui_platform_api::text_store::{
+        use flui_platform::text_store::{
             LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
         };
         use std::cell::RefCell;
@@ -1046,7 +1046,7 @@ pub(crate) fn a_tap_places_the_caret_where_it_landed() {
 /// the caret inside a composition that is still open), or from the paste
 /// action (a paste is refused while composing).
 pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
-    use flui_platform_api::Clipboard as _;
+    use flui_platform::Clipboard as _;
     use flui_testing::StoreHostCall;
 
     fn composing(text: &str) -> (crate::common::harness::Harness, TextEditingController) {
@@ -1058,7 +1058,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
         ));
         let _ = node.request_focus();
         harness.tick();
-        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
             text: "東京".to_owned(),
             cursor: Some(("東京".len(), "東京".len())),
         });
@@ -1155,7 +1155,7 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
         let (source, destination) = if compose_in_later { (1, 0) } else { (0, 1) };
         let _ = nodes[source].request_focus();
         harness.tick();
-        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
             text: "東京".to_owned(),
             cursor: Some(("東京".len(), "東京".len())),
         });
@@ -1224,7 +1224,7 @@ pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
     );
     let _ = node.request_focus();
     harness.tick();
-    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+    harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
         text: "東京".to_owned(),
         cursor: Some(("東京".len(), "東京".len())),
     });
@@ -1400,7 +1400,7 @@ pub(crate) mod text_store {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
-    use flui_platform_api::text_store::{
+    use flui_platform::text_store::{
         LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
         TextStoreRead, Utf16Offset,
     };
@@ -1464,7 +1464,7 @@ pub(crate) mod text_store {
 
     pub(crate) fn rtl_scalar_rect_midpoints_resolve_to_the_source_scalar() {
         use flui_foundation::geometry::Point;
-        use flui_platform_api::text_store::{PointMode, Utf16Range};
+        use flui_platform::text_store::{PointMode, Utf16Range};
         let controller = TextEditingController::with_text("אב");
         let (harness, _focus) = focused(&controller);
         let field = store(&harness);
@@ -1545,9 +1545,9 @@ pub(crate) mod text_store {
         harness
             .post_frame_handle()
             .schedule(move |_| {
-                let outcome = flui_platform_api::text_store::project_ime_event(
+                let outcome = flui_platform::text_store::project_ime_event(
                     &*field,
-                    &flui_platform_api::ImeEvent::Commit("A".to_owned()),
+                    &flui_platform::ImeEvent::Commit("A".to_owned()),
                 );
                 assert_eq!(outcome, Ok(LockOutcome::Deferred));
                 *observed_text.borrow_mut() = Some(observed_controller.text());
@@ -1585,7 +1585,7 @@ pub(crate) mod text_store {
     /// lock — the nested request is refused; or compare the whole text — the
     /// owner receives the preedit.
     pub(crate) fn on_changed_runs_after_the_lock_is_released() {
-        use flui_platform_api::text_store::{Composition, Utf16Range};
+        use flui_platform::text_store::{Composition, Utf16Range};
         type Seen = (
             Result<LockOutcome, TextStoreError>,
             Option<(Utf16Offset, Option<Utf16Range>)>,
@@ -1752,7 +1752,7 @@ pub(crate) mod text_store {
     /// Red-check: write the session back without comparing the controller's
     /// generation — the text reads "ime" and the observer hears nothing.
     pub(crate) fn an_app_edit_during_a_lock_is_not_overwritten() {
-        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        use flui_platform::text_store::{TextChange, TextStoreObserver};
         struct Changes(Rc<RefCell<Vec<TextChange>>>);
         impl TextStoreObserver for Changes {
             fn text_changed(&self, change: TextChange) {
@@ -1793,10 +1793,10 @@ pub(crate) mod text_store {
     /// Red-check: drop `settle_owed_layout` from `CursorAreaLoop::fire` — the
     /// observer hears nothing after the frame.
     pub(crate) fn a_no_layout_answer_is_followed_by_a_layout_notification() {
-        use flui_platform_api::text_store::{TextStoreError, TextStoreObserver, Utf16Range};
+        use flui_platform::text_store::{TextStoreError, TextStoreObserver, Utf16Range};
         struct Layouts(Rc<std::cell::Cell<usize>>);
         impl TextStoreObserver for Layouts {
-            fn text_changed(&self, _: flui_platform_api::text_store::TextChange) {}
+            fn text_changed(&self, _: flui_platform::text_store::TextChange) {}
             fn selection_changed(&self) {}
             fn layout_changed(&self) {
                 self.0.set(self.0.get() + 1);
@@ -1986,13 +1986,13 @@ pub(crate) mod text_store {
         let (calls, owner) = failing_owner(&["a"]);
         let (mut harness, _focus) = focused_with(&controller, owner);
         assert_eq!(
-            raised(|| harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("a".to_owned()))),
+            raised(|| harness.dispatch_ime(&flui_platform::ImeEvent::Commit("a".to_owned()))),
             Some("owner failure on a".to_owned()),
             "the dispatch that ran the grant reports the failure"
         );
         assert_eq!(controller.text(), "a");
         assert_eq!(raised(|| harness.tick()), None, "it is reported once");
-        harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("b".to_owned()));
+        harness.dispatch_ime(&flui_platform::ImeEvent::Commit("b".to_owned()));
         assert_eq!(controller.text(), "ab");
         assert_eq!(*calls.borrow(), ["a", "ab"]);
     }
@@ -2030,7 +2030,7 @@ pub(crate) mod text_store {
     }
 
     fn the_platform_hears_of_an_owner_edit_before_the_next_grant() {
-        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        use flui_platform::text_store::{TextChange, TextStoreObserver};
         struct Logged(Rc<RefCell<Vec<&'static str>>>);
         impl TextStoreObserver for Logged {
             fn text_changed(&self, _: TextChange) {
@@ -2094,7 +2094,7 @@ pub(crate) mod text_store {
     /// field reports, which follows the visible caret, not its position in
     /// the whole text.
     fn long_input_reports_the_visible_candidate_area() {
-        use flui_platform_api::{
+        use flui_platform::{
             EventTime,
             keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
         };
@@ -2159,8 +2159,8 @@ pub(crate) mod text_store {
 
     fn long_input(text: &'static str, obscured: bool) {
         use flui_foundation::geometry::Point;
-        use flui_platform_api::text_store::{PointMode, TextStoreError, Utf16Range};
-        use flui_platform_api::{
+        use flui_platform::text_store::{PointMode, TextStoreError, Utf16Range};
+        use flui_platform::{
             EventTime,
             keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
         };
@@ -2185,9 +2185,8 @@ pub(crate) mod text_store {
         let field = store(&harness);
         let assert_visible = |_: &Harness| {
             let caret = controller.caret_byte_offset();
-            let units =
-                flui_platform_api::text_store::utf16::utf16_offset(&controller.text(), caret)
-                    .expect("controller caret is a scalar boundary");
+            let units = flui_platform::text_store::utf16::utf16_offset(&controller.text(), caret)
+                .expect("controller caret is a scalar boundary");
             let rect = read(&field, move |session| {
                 session
                     .rect_for_range(Utf16Range::collapsed(units))
@@ -2225,7 +2224,7 @@ pub(crate) mod text_store {
             rect
         };
         assert_visible(&harness);
-        let units = flui_platform_api::text_store::utf16::utf16_len(text);
+        let units = flui_platform::text_store::utf16::utf16_len(text);
         let full = read(&field, move |session| {
             session
                 .rect_for_range(Utf16Range::new(at(0), units).expect("ordered document range"))
@@ -2314,7 +2313,7 @@ pub(crate) mod text_store {
         harness.swap_root(SizedBox::new(30.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
         ));
-        let units = flui_platform_api::text_store::utf16::utf16_len(&controller.text());
+        let units = flui_platform::text_store::utf16::utf16_len(&controller.text());
         let rect = read(&field, move |session| {
             session
                 .rect_for_range(Utf16Range::collapsed(units))
@@ -2325,7 +2324,7 @@ pub(crate) mod text_store {
             rect.origin.x >= -0.001 && rect.origin.x + rect.size.width <= 30.001,
             "resize reveals the same active caret: {rect:?}"
         );
-        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
             text: "xy".to_owned(),
             cursor: Some((0, 2)),
         });
@@ -2685,7 +2684,7 @@ pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
 /// Red-check: leave `did_update_view` without the purpose cell — the store
 /// keeps reporting the first purpose after the swap.
 pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
-    use flui_platform_api::text_store::TextInputPurpose;
+    use flui_platform::text_store::TextInputPurpose;
     use flui_widgets::SizedBox;
 
     let controller = TextEditingController::new();

@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use flui_native::{HostWindow, WindowOpen, WindowOptions};
-use flui_platform_api::{
+use flui_platform::{
     PlatformWindow, SessionEndAnswer, SessionEndPhase, WindowCapabilities, WindowExecutionState,
     WindowMode,
 };

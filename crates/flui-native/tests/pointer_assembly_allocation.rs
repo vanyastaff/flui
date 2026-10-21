@@ -13,8 +13,8 @@ use flui_native::shared::pointer_assembly::{
     ContactRegistry, GestureComponent, GestureDelta, GesturePhase, GestureReading, MoveBatch,
     NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerKind};
+use flui_platform::EventTime;
+use flui_platform::pointer::{PointerButton, PointerKind};
 
 thread_local! {
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]

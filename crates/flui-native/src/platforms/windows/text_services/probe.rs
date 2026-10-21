@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point, Size};
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
     RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
@@ -182,7 +182,7 @@ impl TextStore for LateLayoutStore {
 impl LateLayoutStore {
     /// The probe's "frame": lay out what the last sessions inserted and say so.
     fn tick(&self) {
-        let len = flui_platform_api::text_store::utf16::utf16_len(&self.inner.text()).get();
+        let len = flui_platform::text_store::utf16::utf16_len(&self.inner.text()).get();
         if self.laid_out.replace(len) != len
             && let Some(observer) = self.observer.borrow().clone()
         {
@@ -662,8 +662,8 @@ fn text_services_probe() {
         late.inner.text(),
         late.inner.composition()
     );
-    if shut == Ok(flui_platform_api::text_store::CompositionEnd::Abandoned) {
-        let _ = flui_platform_api::text_store::commit_composition_in_place(&*late_store);
+    if shut == Ok(flui_platform::text_store::CompositionEnd::Abandoned) {
+        let _ = flui_platform::text_store::commit_composition_in_place(&*late_store);
         println!("PROBE (7) owner commits the composition in place");
     }
     gate.set_open(true);

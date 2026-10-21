@@ -14,8 +14,8 @@ use flui_native::shared::pointer_assembly::capture::{
 use flui_native::shared::pointer_assembly::{
     ContactRegistry, NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerEvent, PointerKind};
+use flui_platform::EventTime;
+use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
 use super::codec::{NativeRecording, Row};
@@ -99,7 +99,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
         let Some(event) = input.as_pointer() else {
             continue;
         };
-        let head = |verb: &str, pointer: &flui_platform_api::pointer::PointerInfo| {
+        let head = |verb: &str, pointer: &flui_platform::pointer::PointerInfo| {
             format!("{verb} p{} {:?}", pointer.id.get(), pointer.kind)
         };
         let line = match event {
@@ -128,10 +128,10 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
             ),
             PointerEvent::PanZoom(gesture) => {
                 let phase = match gesture.phase {
-                    flui_platform_api::pointer::PanZoomPhase::Start => "start",
-                    flui_platform_api::pointer::PanZoomPhase::Update(_) => "update",
-                    flui_platform_api::pointer::PanZoomPhase::End => "end",
-                    flui_platform_api::pointer::PanZoomPhase::Cancelled => "cancelled",
+                    flui_platform::pointer::PanZoomPhase::Start => "start",
+                    flui_platform::pointer::PanZoomPhase::Update(_) => "update",
+                    flui_platform::pointer::PanZoomPhase::End => "end",
+                    flui_platform::pointer::PanZoomPhase::Cancelled => "cancelled",
                     _ => "?",
                 };
                 format!("{} {phase}", head("panzoom", gesture.pointer()))
@@ -148,7 +148,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
 }
 
 /// The sensor readings a press carries, to two decimals.
-fn sensors(sample: &flui_platform_api::pointer::PointerSample) -> String {
+fn sensors(sample: &flui_platform::pointer::PointerSample) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     if let Some(pressure) = sample.pressure {

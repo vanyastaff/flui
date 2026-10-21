@@ -13,9 +13,9 @@
 
 ## Context
 
-Before the migration, `flui_platform_api::PlatformInput` carried `ui_events::pointer::PointerEvent` and
+Before the migration, `flui_platform::PlatformInput` carried `ui_events::pointer::PointerEvent` and
 `ui_events::keyboard::KeyboardEvent`, and the crate re-exported them with `ScrollDelta`, `Key`
-and `Modifiers` (`crates/flui-platform-api/src/input.rs:28-38`). `flui-platform-api` is a
+and `Modifiers` (`crates/flui-platform/src/input.rs:28-38`). `flui-platform` is a
 Stable crate; ADR-0089 forbids upstream types in its signatures and names this vocabulary as
 the first thing to replace (§4). The replacement also has to carry what the upstream shape
 cannot, which the interaction audit's market matrix lists against the code:
@@ -35,7 +35,7 @@ cannot, which the interaction audit's market matrix lists against the code:
 
 ### 1. Where and what
 
-`flui-platform-api` defines the vocabulary in two public modules and one root type:
+`flui-platform` defines the vocabulary in two public modules and one root type:
 
 - `pointer`: `PointerEvent` (`Down`, `ButtonChange`, `Up`, `Move`, `Cancel`, `Enter`, `Leave`,
   `Scroll`, `ScrollInertiaCancel`, `PanZoom`, `DeviceAdded`, `DeviceRemoved`), `PointerInfo`
@@ -219,11 +219,11 @@ adapters; their removal or target-feature selection cannot change the authoritat
 
 The source audit for the pointer bridge uses
 `rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-native/src crates/flui-interaction/src`.
-Runtime dependency inspection uses `cargo tree -p flui-platform-api -e normal`;
+Runtime dependency inspection uses `cargo tree -p flui-platform -e normal`;
 backend adapters are inspected separately so a legitimate keyboard mapping or
 Winit physical geometry dependency is not mistaken for a Stable signature leak.
 
-- `flui-platform-api`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
+- `flui-platform`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
   wrapping, button sets, coalesced ordering, scroll units and phases, pan-zoom transform
   validity, key events, generated spellings.
 - `flui-native`'s `keyboard_adapter_contract`: every generated `NamedKey` and `Code`,

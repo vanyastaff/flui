@@ -1,12 +1,12 @@
 ### Added
 
-- **`flui_platform_api::text_store::TextStoreHost`**: the owner-thread side of a pull-model
+- **`flui_platform::text_store::TextStoreHost`**: the owner-thread side of a pull-model
   window's text input, with `CompositionEnd { Committed, Abandoned, Deferred }` and
   `TextStoreHostError { NotFocused, Unavailable }` (ADR-0135). `complete_composition(&store)`
   ends the composition in the store it names, if the host serves that store.
   `flui_native::OwnerPlatform::text_store_host` reads a window's host; no production backend
   offers one yet.
-- **`flui_platform_api::text_store::commit_composition_in_place`**: clear a store's composing
+- **`flui_platform::text_store::commit_composition_in_place`**: clear a store's composing
   range, keeping its text, when the platform cannot end the composition.
 - **`TextInputOwner::complete_composition`** and **`TextInputHandle::complete_composition`**:
   commit the active field's composition, keeping its text, through the host or in place.

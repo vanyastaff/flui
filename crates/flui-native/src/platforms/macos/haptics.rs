@@ -13,8 +13,8 @@ use objc2_app_kit::{
 };
 
 use crate::shared::haptic_degradation::{MacFeedback, macos_feedback, macos_pattern};
-use flui_platform_api::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// The window's haptic actuator. Requests reach it on the owner thread, which
 /// on AppKit is the main thread.

@@ -184,7 +184,7 @@ fn unrelated_wakes_do_not_repeat_failed_native_reads() {
 fn hosted_receiver() -> (
     receiver::Receiver,
     Rc<crate::platforms::windows::host_events::HostEvents>,
-    Arc<std::sync::Mutex<Vec<flui_platform_api::SystemNotice>>>,
+    Arc<std::sync::Mutex<Vec<flui_platform::SystemNotice>>>,
 ) {
     let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -207,7 +207,7 @@ fn hosted_receiver() -> (
 }
 
 fn low_memory_is_reported_once_per_hold() {
-    use flui_platform_api::{MemoryPressureLevel, SystemNotice};
+    use flui_platform::{MemoryPressureLevel, SystemNotice};
 
     let (receiver, host, heard) = hosted_receiver();
     let report =
@@ -235,7 +235,7 @@ fn low_memory_is_reported_once_per_hold() {
 }
 
 fn a_wake_that_could_not_be_posted_is_delivered_with_the_next_message() {
-    use flui_platform_api::{MemoryPressureLevel, SystemNotice};
+    use flui_platform::{MemoryPressureLevel, SystemNotice};
 
     let (receiver, host, heard) = hosted_receiver();
     host.fail_low_memory_post_for_test();

@@ -26,7 +26,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 

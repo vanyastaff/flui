@@ -7,7 +7,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
 
 /// What one `android.view.Display` reported, before it has an identity.
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +131,7 @@ pub(crate) fn requested_frame_rate(hint: FrameRateHint, max_hz: Option<f32>) -> 
 
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::{DisplayKey, DisplayRegistry};
+    use flui_platform::{DisplayKey, DisplayRegistry};
 
     use super::*;
 

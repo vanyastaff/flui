@@ -6,9 +6,9 @@
 //! `PanGesture` touch phases). Backends report the native phases as plain
 //! [`ScrollReading`]s; [`ScrollPhases`] turns them into the owned phase.
 
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{
+use flui_platform::EventTime;
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{
     PointerEvent, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision,
 };
 

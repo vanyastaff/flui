@@ -11,8 +11,8 @@ pub mod journal;
 use std::fmt::Write as _;
 
 use flui_native::traits::PlatformInput;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{
     ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerInfo, PointerKind, PointerRole,
     PointerSample,
 };
@@ -193,7 +193,7 @@ fn line(input: &PlatformInput) -> String {
     out
 }
 
-fn held(buttons: flui_platform_api::pointer::PointerButtons) -> Vec<u8> {
+fn held(buttons: flui_platform::pointer::PointerButtons) -> Vec<u8> {
     buttons.iter().map(|button| button.number().get()).collect()
 }
 

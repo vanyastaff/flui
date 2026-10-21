@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
+use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
 use flui_runtime::owner::{DisplayUpdate, WindowObservation};
 
 use crate::HostInputExt as _;

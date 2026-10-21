@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::{DisplayId, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplaySnapshot};
 use parking_lot::Mutex;
 use raw_window_handle::HasDisplayHandle;
 use winit::platform::{wayland::MonitorHandleExtWayland, x11::MonitorHandleExtX11};

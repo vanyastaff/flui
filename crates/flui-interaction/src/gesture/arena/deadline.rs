@@ -8,10 +8,10 @@ use std::{
 
 use core::time::Duration;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
-use flui_platform_api::PlatformWindow;
+use flui_platform::PlatformWindow;
 use smallvec::SmallVec;
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
 use crate::gesture::observer::{GestureContest, GestureObservation, ObservedMember, ObserverHub};

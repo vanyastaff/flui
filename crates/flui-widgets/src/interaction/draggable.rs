@@ -30,10 +30,10 @@ use flui_interaction::{
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
     PointerEvent, PointerId,
 };
-use flui_platform_api::data_transfer::TransferActions;
-use flui_platform_api::haptics::{HapticRequest, HapticTiming};
-use flui_platform_api::pointer::PointerInfo;
-use flui_platform_api::{CursorIcon, HapticFeedback};
+use flui_platform::data_transfer::TransferActions;
+use flui_platform::haptics::{HapticRequest, HapticTiming};
+use flui_platform::pointer::PointerInfo;
+use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;

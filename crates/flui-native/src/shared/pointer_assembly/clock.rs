@@ -8,7 +8,7 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 /// A `QueryPerformanceCounter` reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

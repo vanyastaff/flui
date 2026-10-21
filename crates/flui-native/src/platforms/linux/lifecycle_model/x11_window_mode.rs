@@ -18,7 +18,7 @@
 //! Atoms are numbers the server hands out at run time, so the adapter passes
 //! the numbers it interned in [`NetWmStateAtoms`].
 
-use flui_platform_api::WindowMode;
+use flui_platform::WindowMode;
 
 use crate::shared::window_state::mode_of;
 

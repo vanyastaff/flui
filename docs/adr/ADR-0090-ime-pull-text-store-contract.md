@@ -19,7 +19,7 @@
   session), [ADR-0069](ADR-0069-a-keydown-produces-one-semantic-event.md) (one text-editing
   authority; the input method is a route), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   (capability acquisition), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the trait moves
-  to `flui-platform-api`), [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (the layout that
+  to `flui-platform`), [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (the layout that
   answers geometry queries)
 - **Refs:** decision D10 and owner decision 8 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   panel record in
@@ -30,8 +30,8 @@
 
 [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) made the IME contract winit's push
 model: the platform pushes `ImeEvent::{Enabled, Preedit, Commit, Disabled}`
-(`crates/flui-platform-api/src/ime.rs`) and the framework pushes back two things,
-`set_ime_allowed` and `set_ime_cursor_area` (`crates/flui-platform-api/src/text_input.rs`,
+(`crates/flui-platform/src/ime.rs`) and the framework pushes back two things,
+`set_ime_allowed` and `set_ime_cursor_area` (`crates/flui-platform/src/text_input.rs`,
 the whole `PlatformTextInput` trait). The platform never asks the framework anything. Its §1
 already noted that Android's `InputConnection` is a pull model and left the bridge to "the backend
 that needs it".
@@ -76,7 +76,7 @@ cannot use; the contract below includes both.
 ### 1. The contract is a text store the platform pulls from
 
 A text field that accepts IME implements a synchronous text-store surface, called on the owner
-thread, in `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)):
+thread, in `flui-platform` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)):
 
 - **Reads:** document length; text in a range; the selection (anchor and active end); the
   composing range, if any; the screen rect of a range (window-root logical pixels, the coordinate
@@ -100,7 +100,7 @@ thread, in `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.
   `Arc<Mutex<…>>` does not survive into this surface. Until then the built-in field implements
   it over today's state ("Interim implementation" below).
 
-The surface is `flui_platform_api::text_store`:
+The surface is `flui_platform::text_store`:
 
 - `TextStore` (owner thread, shared as `Rc<dyn TextStore>`, not `Send`): `status`,
   `request_lock`, `run_deferred_grants`, `set_commit_gate`, `set_observer`. `TextStoreObserver`
@@ -137,7 +137,7 @@ The surface is `flui_platform_api::text_store`:
 ### 2. The push vocabulary becomes a projection
 
 `ImeEvent` stays as the adapter for push-model sources (winit today).
-`flui_platform_api::text_store::project_ime_event` translates `Preedit`/`Commit`/`Disabled` into
+`flui_platform::text_store::project_ime_event` translates `Preedit`/`Commit`/`Disabled` into
 store edits under a read-write lock, and `TextInputOwner::dispatch` calls it for the active
 client, so there is one editing path. The lock is **asynchronous**, not synchronous as first
 written: a push event that arrives while the store cannot grant a lock (inside a frame
@@ -177,7 +177,7 @@ reset, an app-side edit, a commit anchor, its own change count, a hook run insid
 notification, and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
 through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
 store that ignores its gate. Each `Case` names the
-version that added it, so a pinned version never grows. `flui_platform_api::text_store::
+version that added it, so a pinned version never grows. `flui_platform::text_store::
 InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemoryFixture` as the
 worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
 one.
@@ -286,7 +286,7 @@ set is unverified.
 
 In place:
 
-- §1: `flui-platform-api` `text_store::utf16::tests` (surrogates, combining marks, ZWJ, flags,
+- §1: `flui-platform` `text_store::utf16::tests` (surrogates, combining marks, ZWJ, flags,
   round trips, refusals), `text_store::lock::tests` (a sync request inside a session is refused,
   deferred grants run FIFO, a full queue refuses, and `a_panicking_grant_releases_the_lock`), and the
   `compile_fail` doctest on `text_store::lock`.

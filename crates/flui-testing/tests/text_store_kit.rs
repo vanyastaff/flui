@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
     RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,

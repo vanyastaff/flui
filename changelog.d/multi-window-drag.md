@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: `PlatformWindow::window_at` answers which window of the platform
+- **`flui-platform`**: `PlatformWindow::window_at` answers which window of the platform
   instance has its content topmost under a point given in one window's coordinates (`WindowAt`).
   Win32 implements it through the desktop's stacking order; the other backends answer
   `WindowAt::Unknown`. **`flui-native`**: `HeadlessPlatform::with_window_placement` and

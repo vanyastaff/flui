@@ -91,7 +91,7 @@ reason = "the decision's context names the layout the decision changed"
 path = "docs/adr/ADR-0151-platform-layer-boundary-and-names.md"
 kind = "path"
 count = 17
-reason = "the record cites the core host's tree at `main` `083b0f75d`, before the rename it decides, and its text is not rewritten (section 12)"
+reason = "the record cites the platform crates' tree at `main` `083b0f75d`, before the two renames it decides, and its text is not rewritten (section 12)"
 
 [[allow]]
 path = "docs/hot-reload.md"

@@ -1,6 +1,6 @@
 ### Added
 
-- **Two-tier haptics** (`flui-platform-api`, `flui-interaction`, `flui-view`, `flui-runtime`,
+- **Two-tier haptics** (`flui-platform`, `flui-interaction`, `flui-view`, `flui-runtime`,
   `flui-native`; ADR-0210): `HapticFeedback` gains `Alignment`, `LevelChange`, `DragLift`,
   `Drop`, `Confirm` and `Reject`; `HapticPattern`, built by a validating builder over
   `Intensity` and `Sharpness`, is the second tier. Both take a `HapticRequest` (source device,
@@ -17,6 +17,6 @@
 
 ### Changed
 
-- **`FakeHaptics`** (`flui-native`) now lives in `flui-platform-api::haptics` (still
+- **`FakeHaptics`** (`flui-native`) now lives in `flui-platform::haptics` (still
   re-exported at its old path) and records each request with the actuator and outcome;
   `calls()` returns `HapticCall`s and `feedback()` the kinds that played.

@@ -65,9 +65,9 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
-use flui_platform_api::ImeEvent;
-use flui_platform_api::PlatformTextInput;
-use flui_platform_api::text_store::{
+use flui_platform::ImeEvent;
+use flui_platform::PlatformTextInput;
+use flui_platform::text_store::{
     CommitGate, CompositionEnd, LockOutcome, OwnerCalls, RetainOnFailure, TextStore, TextStoreHost,
     commit_composition_in_place, project_ime_event,
 };
@@ -1358,7 +1358,7 @@ impl std::fmt::Debug for TextInputHandle {
 #[cfg(test)]
 mod tests {
 
-    use flui_platform_api::text_store::InMemoryTextStore;
+    use flui_platform::text_store::InMemoryTextStore;
     use parking_lot::Mutex;
 
     use super::*;

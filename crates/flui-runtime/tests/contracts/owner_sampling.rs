@@ -25,7 +25,7 @@ use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
 struct DeadlineQuery {
     calls: Rc<Cell<usize>>,
-    due: flui_platform_api::EventTime,
+    due: flui_platform::EventTime,
     fail: Cell<bool>,
 }
 
@@ -34,7 +34,7 @@ impl GestureArenaMember for DeadlineQuery {
 
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.calls.set(self.calls.get() + 1);
         if self.fail.get() {
             std::panic::panic_any("external deadline query");
@@ -205,7 +205,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
     }
 }
 
-fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform_api::PlatformWindow>) {
+fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform::PlatformWindow>) {
     let window = crate::owner_publication::window();
     // A native host owns the window; the runtime intentionally holds it weakly.
     let native_window = Arc::clone(window.window());
@@ -215,7 +215,7 @@ fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform_api::
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock),
         ),
@@ -237,7 +237,7 @@ fn nested_owner_drain_defers_discovery_until_lease_return() {
 }
 
 struct RetryDeadline {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     queries: Cell<usize>,
     polls: Cell<usize>,
     fail_query: Cell<bool>,
@@ -247,13 +247,13 @@ impl GestureArenaMember for RetryDeadline {
     fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
         assert!(!self.fail_query.get(), "native gate deadline query");
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
+    fn poll_deadline(&self, _: flui_platform::EventTime) {
         self.polls.set(self.polls.get() + 1);
         self.due.set(None);
     }
@@ -749,7 +749,7 @@ fn original_owner_failure_survives_query_report_competition() {
 }
 
 struct PublishedDeadline {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     queries: Rc<Cell<usize>>,
 }
 
@@ -758,7 +758,7 @@ impl GestureArenaMember for PublishedDeadline {
 
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
         self.due.get()
     }
@@ -1044,7 +1044,7 @@ fn registered_query_reprobe_success_stays_cached() {
 struct CompletionRefresh {
     member: Rc<PublishedDeadline>,
     publisher: GestureDeadlineUpdate,
-    due: flui_platform_api::EventTime,
+    due: flui_platform::EventTime,
 }
 
 struct CompletionEffects {
@@ -1440,7 +1440,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
 }
 
 struct HostedDeadline {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     polls: Rc<Cell<usize>>,
     queries: Rc<Cell<usize>>,
     fail_after_effect: bool,
@@ -1450,12 +1450,12 @@ impl GestureArenaMember for HostedDeadline {
     fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
+    fn poll_deadline(&self, _: flui_platform::EventTime) {
         self.polls.set(self.polls.get() + 1);
         if self.fail_after_effect {
             std::panic::panic_any("hosted unknown deadline progress");
@@ -1622,7 +1622,7 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
 
 struct ReentrantDeadlineQuery {
     runtime: Weak<UiRuntime>,
-    due: flui_platform_api::EventTime,
+    due: flui_platform::EventTime,
     queries: Cell<usize>,
     reentries: Cell<usize>,
     enter_once: Cell<bool>,
@@ -1633,7 +1633,7 @@ impl GestureArenaMember for ReentrantDeadlineQuery {
     fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.queries.set(self.queries.get() + 1);
         if self.enter_once.replace(false) {
             self.reentries.set(self.reentries.get() + 1);

@@ -18,8 +18,8 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::EventTime;
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::EventTime;
+use flui_platform::input_capabilities::PointerKindSet;
 use smallvec::SmallVec;
 use std::{
     cell::{Cell, RefCell},

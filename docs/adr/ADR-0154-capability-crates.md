@@ -28,8 +28,8 @@
   `rust-mobile/ndk-context@0eb252bf23`, `bilelmoussaoui/ashpd@c9b9ddcf4a`, the XDG portals
   (`flatpak/xdg-desktop-portal@49075617ff`) and the Cargo book (`rust-lang/cargo@d4a2c5853b`).
 
-Crate names follow ADR-0151: the contract crate is `flui-platform` (today `flui-platform-api`) and
-the core host is `flui-native`.
+Crate names follow ADR-0151: the contract crate is `flui-platform` and the core host is
+`flui-native`.
 
 ## Context and problem statement
 

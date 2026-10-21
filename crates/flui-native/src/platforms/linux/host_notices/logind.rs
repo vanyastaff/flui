@@ -12,7 +12,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 use futures_util::StreamExt;
 use zbus::{
     Proxy,

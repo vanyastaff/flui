@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use winit::event_loop::ActiveEventLoop;
 
 use super::{WinitApp, WinitPlatform};

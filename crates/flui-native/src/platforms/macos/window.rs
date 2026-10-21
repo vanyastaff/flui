@@ -16,7 +16,7 @@ use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyl
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{
+use flui_platform::{
     SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
     WindowGeometry, WindowMode, WindowState,
 };

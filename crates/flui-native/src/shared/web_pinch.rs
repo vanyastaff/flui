@@ -8,7 +8,7 @@
 //!
 //! The DOM does not say whether a Control-held wheel event came from a
 //! pinch or from a mouse wheel with the key held, so the decision is
-//! [`Availability::Emulated`](flui_platform_api::input_capabilities::Availability)
+//! [`Availability::Emulated`](flui_platform::input_capabilities::Availability)
 //! and is taken once per sequence, from its first event:
 //!
 //! - a pinch is a pixel-mode vertical delta that is a whole number neither
@@ -42,7 +42,7 @@
 
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 use super::pointer_assembly::{GestureComponent, GestureDelta, GesturePhase, GestureReading};
 

@@ -40,7 +40,7 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 futures-core = { workspace = true }
 # The byte-storage capability `LifecycleContext::storage` hands out and the
 # `persist` documents write through. Contracts only, no backend (ADR-0082).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 
 # The agent-protocol schema the development-agent seam speaks
 # (`dev_agent`, ADR-0095 §3).

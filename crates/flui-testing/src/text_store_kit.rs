@@ -34,8 +34,8 @@ mod cases;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_platform_api::TextStore;
-use flui_platform_api::text_store::InMemoryTextStore;
+use flui_platform::TextStore;
+use flui_platform::text_store::InMemoryTextStore;
 
 /// The newest kit version.
 ///
@@ -276,9 +276,9 @@ impl TextStoreFixture for InMemoryFixture {
     }
 
     fn app_replace_all(&mut self, text: &str) {
-        let whole = flui_platform_api::text_store::Utf16Range::new(
-            flui_platform_api::text_store::Utf16Offset::ZERO,
-            flui_platform_api::text_store::utf16::utf16_len(&self.store.text()),
+        let whole = flui_platform::text_store::Utf16Range::new(
+            flui_platform::text_store::Utf16Offset::ZERO,
+            flui_platform::text_store::utf16::utf16_len(&self.store.text()),
         )
         .expect("BUG: zero precedes every length");
         self.store.app_replace(whole, text);

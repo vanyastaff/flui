@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use flui_platform_api::MotionPreference;
+use flui_platform::MotionPreference;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSEvent, NSWorkspace};
 

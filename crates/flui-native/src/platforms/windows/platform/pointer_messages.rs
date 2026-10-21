@@ -2,7 +2,7 @@
 //! the mouse's hover on either route, and the end of every open contact when
 //! the window loses focus or is minimised.
 
-use flui_platform_api::{EventTime, pointer::PointerEvent};
+use flui_platform::{EventTime, pointer::PointerEvent};
 use windows::Win32::{
     Foundation::{HANDLE, HWND, LPARAM, WPARAM},
     UI::WindowsAndMessaging::{

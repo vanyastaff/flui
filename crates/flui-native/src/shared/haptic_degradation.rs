@@ -15,10 +15,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern, PatternPlayback,
 };
-use flui_platform_api::{DeviceId, HapticFeedback};
+use flui_platform::{DeviceId, HapticFeedback};
 
 /// The pulse a backend that can only switch its actuator on and off plays
 /// for a transient: one `EFFECT_TICK`-length tap.
@@ -240,7 +240,7 @@ pub fn ios_pattern_parts(pattern: &HapticPattern) -> Vec<CoreHapticsPart> {
             },
             HapticEvent::Continuous { at, curve } => {
                 let points = curve.points();
-                let held = |value: fn(&flui_platform_api::haptics::ControlPoint) -> f32| {
+                let held = |value: fn(&flui_platform::haptics::ControlPoint) -> f32| {
                     points
                         .first()
                         .map(|first| (Duration::ZERO, value(first)))

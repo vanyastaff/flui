@@ -5,7 +5,7 @@
 //! machinery of [`crate::observation`].
 pub(crate) use crate::observation::preserve;
 use crate::observation::{CloseWindow, Observation, Panic, Phase, Subscription, WeakObservation};
-use flui_platform_api::HostNotice;
+use flui_platform::HostNotice;
 use flui_scheduler::AppLifecycleState;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -78,7 +78,7 @@ impl LifecycleHandle {
     /// inside this call, reentrant notices queued behind the active walk, and a
     /// callback panic contained until every eligible callback has run. The
     /// owner delivers a notice within the call that reported it, so a callback
-    /// that takes a [`SessionEndBlock`](flui_platform_api::SessionEndBlock)
+    /// that takes a [`SessionEndBlock`](flui_platform::SessionEndBlock)
     /// from [`HostNotice::SessionEnding`] has done so before the host answers
     /// the operating system.
     ///

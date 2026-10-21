@@ -17,10 +17,10 @@ use flui_native::shared::haptic_degradation::{
 };
 use flui_native::traits::WindowOptions;
 use flui_native::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
 };
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 use HapticOutcome::{Approximated, FellBack, Submitted};
 

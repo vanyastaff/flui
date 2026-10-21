@@ -70,7 +70,7 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use flui_platform_api::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowExecutionState};
+use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowExecutionState};
 
 use parking_lot::Mutex;
 use window::ActivityFlags;
@@ -333,7 +333,7 @@ impl AndroidPlatform {
                         window.request_redraw();
                     }
                     None => {
-                        if let flui_platform_api::DragDropEvent::Dropped { id, .. } = event {
+                        if let flui_platform::DragDropEvent::Dropped { id, .. } = event {
                             self.java_view.transfer().conclude_drop(id);
                         }
                     }
@@ -351,7 +351,7 @@ impl AndroidPlatform {
     /// to the input method's handwriting (API 33+): Android's own initiation
     /// sees only the stylus events native code leaves unhandled.
     fn offer_handwriting(&self, window: &AndroidWindow, events: &[crate::traits::PlatformInput]) {
-        use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
+        use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
         let Some(handwriting) = self.api.since::<StylusHandwriting>() else {
             return;
         };
@@ -552,8 +552,8 @@ impl ActivityTarget for AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
@@ -562,7 +562,7 @@ impl Platform for AndroidPlatform {
 
     fn on_session_end(
         &self,
-        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform_api::SessionEndAnswer + Send>,
+        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform::SessionEndAnswer + Send>,
     ) {
         let replaced = self.handlers.lock().session_end.replace(callback);
         drop(replaced);
@@ -1033,7 +1033,7 @@ impl Platform for AndroidPlatform {
         &self,
         options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        if options.input_latency == flui_platform_api::InputLatency::Low {
+        if options.input_latency == flui_platform::InputLatency::Low {
             // NativeActivity takes touch from the native input queue, which
             // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
             tracing::warn!(
@@ -1123,7 +1123,7 @@ impl Platform for AndroidPlatform {
     /// The app's private `files` directory, which Auto Backup copies, for
     /// data that follows the user; its sibling `no_backup`, which Android
     /// never backs up, for state that belongs to this device.
-    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
         let files = self.app.internal_data_path()?;
         let no_backup = files.parent()?.join("no_backup");
         Some(crate::storage::DataDirs {

@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use flui_interaction::FocusNode;
-use flui_platform_api::text_store::TextInputPurpose;
+use flui_platform::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
 use super::AutovalidateMode;

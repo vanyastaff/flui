@@ -39,13 +39,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferError, TransferLimits, TransferRequest,
 };
-use flui_platform_api::drag::{
-    DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource,
-};
+use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{DRAGDROP_S_DROP, GlobalFree, HGLOBAL, HWND, LPARAM, WPARAM},
@@ -76,7 +74,7 @@ use crate::shared::ole_drag_drop::{
 };
 use crate::shared::owner_slot::OwnerSlot;
 use crate::shared::panic_boundary::{contain_owner_callback, owner_callback_panicked};
-use flui_platform_api::pointer::PointerKind;
+use flui_platform::pointer::PointerKind;
 
 pub(super) use com::WindowDropTarget;
 
@@ -548,7 +546,7 @@ impl Win32DragSource {
 
     /// The kind of the contact whose press began `pointer`'s drag, as the
     /// window's pointer registry read it.
-    fn contact_kind(&self, pointer: Option<flui_platform_api::PointerId>) -> Option<PointerKind> {
+    fn contact_kind(&self, pointer: Option<flui_platform::PointerId>) -> Option<PointerKind> {
         let pointer = pointer?;
         self.window
             .with_context("drag source", |context| {
@@ -712,7 +710,7 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
             }
         }
     }
-    let identity_format = NativeFormat::Named(flui_platform_api::drag::IDENTITY_ESSENCE.to_owned());
+    let identity_format = NativeFormat::Named(flui_platform::drag::IDENTITY_ESSENCE.to_owned());
     let identity = formats
         .contains(&identity_format)
         .then(|| fetch(object, &identity_format, IDENTITY_MAX_BYTES).ok())

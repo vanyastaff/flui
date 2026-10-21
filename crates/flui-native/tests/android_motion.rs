@@ -11,9 +11,9 @@ use flui_native::shared::android_motion::{
 };
 use flui_native::shared::pointer_assembly::{NativeCancel, PenAngles};
 use flui_native::traits::PlatformInput;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{
+use flui_platform::EventTime;
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{
     CancelReason, PanZoomPhase, PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
     ScrollDelta, ScrollPhase,
 };
@@ -529,7 +529,7 @@ fn a_wheel_scrolls_unphased_from_the_cursor() {
         SCALE,
         &|horizontal, vertical| {
             ScrollDelta::try_new(
-                flui_platform_api::pointer::ScrollUnit::Lines,
+                flui_platform::pointer::ScrollUnit::Lines,
                 f64::from(-horizontal),
                 f64::from(-vertical),
             )

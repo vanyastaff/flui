@@ -189,7 +189,7 @@ fn sample_delivery(
 ) {
     use flui_foundation::geometry::Point;
     use flui_interaction::InteractionLane;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,

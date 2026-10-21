@@ -3,8 +3,8 @@
 //! Cfg-free plain functions over integers and UTF-16, so Linux CI pins them;
 //! `platforms::web::text_input` reads the DOM.
 
-use flui_platform_api::keyboard::ImeComposition;
-use flui_platform_api::text_store::TextInputPurpose;
+use flui_platform::keyboard::ImeComposition;
+use flui_platform::text_store::TextInputPurpose;
 
 /// `KeyboardEvent.keyCode` of a key an input method processes: every
 /// browser reports 229 for it, including WebKit for the key that commits a

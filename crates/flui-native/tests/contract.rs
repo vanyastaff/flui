@@ -479,7 +479,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let first = platform.display_snapshot().expect("first sample");
         let second = platform.display_snapshot().expect("second sample");
-        let ids = |snapshot: &flui_platform_api::DisplaySnapshot| {
+        let ids = |snapshot: &flui_platform::DisplaySnapshot| {
             snapshot
                 .displays()
                 .iter()
@@ -562,7 +562,7 @@ mod native_windows {
         assert!(!rates.is_empty(), "the system reports an active path");
         let mut compared = 0;
         for (gdi_name, numerator, denominator) in rates {
-            let Ok(expected) = flui_platform_api::RefreshPeriod::from_ratio(numerator, denominator)
+            let Ok(expected) = flui_platform::RefreshPeriod::from_ratio(numerator, denominator)
             else {
                 continue;
             };
@@ -760,7 +760,7 @@ mod native_windows {
     #[expect(unsafe_code, reason = "owned Win32 messages to the fixture's own HWND")]
     fn touchpad_viewport_initialises_and_survives_its_messages() {
         use flui_native::traits::PlatformInput;
-        use flui_platform_api::input_capabilities::Availability;
+        use flui_platform::input_capabilities::Availability;
         use windows::Win32::UI::WindowsAndMessaging::{
             DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
         };
@@ -1526,9 +1526,7 @@ mod native_windows {
                 }
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
-                    flui_platform_api::keyboard::Key::Named(
-                        flui_platform_api::keyboard::NamedKey::F4
-                    )
+                    flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::F4)
                 );
                 let first = input_observations.fetch_add(1, Ordering::SeqCst) == 0;
                 if mode == "reentrant" && first {
@@ -1667,8 +1665,8 @@ mod native_windows {
                 return flui_native::traits::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
-                && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
+                && keyboard.state() == flui_platform::keyboard::KeyState::Down
+                && let flui_platform::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
                     .lock()
@@ -1802,8 +1800,8 @@ mod native_windows {
             .expect("Win32 backend")
             .hwnd();
         let keys = Arc::new(Mutex::new(Vec::<(
-            flui_platform_api::keyboard::KeyState,
-            flui_platform_api::keyboard::Key,
+            flui_platform::keyboard::KeyState,
+            flui_platform::keyboard::Key,
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
@@ -1815,11 +1813,11 @@ mod native_windows {
             if let Some(keyboard) = event.as_keyboard()
                 && !matches!(
                     keyboard.key,
-                    flui_platform_api::keyboard::Key::Named(
-                        flui_platform_api::keyboard::NamedKey::Control
-                            | flui_platform_api::keyboard::NamedKey::Alt
-                            | flui_platform_api::keyboard::NamedKey::AltGraph
-                            | flui_platform_api::keyboard::NamedKey::Shift
+                    flui_platform::keyboard::Key::Named(
+                        flui_platform::keyboard::NamedKey::Control
+                            | flui_platform::keyboard::NamedKey::Alt
+                            | flui_platform::keyboard::NamedKey::AltGraph
+                            | flui_platform::keyboard::NamedKey::Shift
                     )
                 )
             {
@@ -1891,22 +1889,18 @@ mod native_windows {
         // Leave no composition pending for the rows that follow.
         flush_dead_key_state();
         drop(layout);
-        let dead =
-            flui_platform_api::keyboard::Key::Named(flui_platform_api::keyboard::NamedKey::Dead);
+        let dead = flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Dead);
         let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
-            let apostrophe = flui_platform_api::keyboard::Key::character("'");
+            let apostrophe = flui_platform::keyboard::Key::character("'");
             vec![
-                (flui_platform_api::keyboard::KeyState::Down, dead),
-                (
-                    flui_platform_api::keyboard::KeyState::Down,
-                    apostrophe.clone(),
-                ),
-                (flui_platform_api::keyboard::KeyState::Up, apostrophe),
+                (flui_platform::keyboard::KeyState::Down, dead),
+                (flui_platform::keyboard::KeyState::Down, apostrophe.clone()),
+                (flui_platform::keyboard::KeyState::Up, apostrophe),
             ]
         } else {
             vec![
-                (flui_platform_api::keyboard::KeyState::Down, dead.clone()),
-                (flui_platform_api::keyboard::KeyState::Up, dead),
+                (flui_platform::keyboard::KeyState::Down, dead.clone()),
+                (flui_platform::keyboard::KeyState::Up, dead),
             ]
         };
         assert_eq!(
@@ -2106,8 +2100,8 @@ mod native_windows {
                 return flui_native::traits::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
-                && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
+                && keyboard.state() == flui_platform::keyboard::KeyState::Down
+                && let flui_platform::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
                     .lock()
@@ -2248,7 +2242,7 @@ mod native_windows {
             }
             if event
                 .as_keyboard()
-                .is_some_and(|key| key.state() == flui_platform_api::keyboard::KeyState::Down)
+                .is_some_and(|key| key.state() == flui_platform::keyboard::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
@@ -2493,10 +2487,10 @@ mod native_windows {
         }
         assert!(
             observed.lock().expect("keys").iter().any(|event| event.key
-                == flui_platform_api::keyboard::Key::character("+")
+                == flui_platform::keyboard::Key::character("+")
                 && event
                     .modifiers
-                    .contains(flui_platform_api::keyboard::Modifiers::SHIFT)),
+                    .contains(flui_platform::keyboard::Modifiers::SHIFT)),
             "native character translation retains the Shift that produced the character"
         );
         window.close();
@@ -2723,7 +2717,7 @@ mod native_windows {
     )]
     fn appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag() {
         use flui_native::WindowAppearance;
-        use flui_platform_api::Brightness;
+        use flui_platform::Brightness;
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
         use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
@@ -2894,7 +2888,7 @@ mod native_windows {
         }));
         for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
             window
-                .apply(flui_platform_api::WindowCommand::SetSize(requested))
+                .apply(flui_platform::WindowCommand::SetSize(requested))
                 .expect("the native window resizes");
             let values = observations.lock().expect("resize observations");
             let &(size, scale, observed, physical, observed_scale) =
@@ -2949,7 +2943,7 @@ mod native_windows {
     /// Every pointer event `window` delivers, in order.
     fn record_pointer(
         window: &Arc<dyn HostWindow>,
-    ) -> Arc<Mutex<Vec<flui_platform_api::pointer::PointerEvent>>> {
+    ) -> Arc<Mutex<Vec<flui_platform::pointer::PointerEvent>>> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
@@ -2964,8 +2958,8 @@ mod native_windows {
         events
     }
 
-    fn kinds(events: &Mutex<Vec<flui_platform_api::pointer::PointerEvent>>) -> Vec<&'static str> {
-        use flui_platform_api::pointer::PointerEvent;
+    fn kinds(events: &Mutex<Vec<flui_platform::pointer::PointerEvent>>) -> Vec<&'static str> {
+        use flui_platform::pointer::PointerEvent;
         events
             .lock()
             .expect("pointer log")
@@ -2973,12 +2967,12 @@ mod native_windows {
             .map(|event| match event {
                 PointerEvent::Down(_) => "down",
                 PointerEvent::Up(_) => "up",
-                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Pressed(
-                    _,
-                )) => "button_down",
-                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Released(
-                    _,
-                )) => "button_up",
+                PointerEvent::ButtonChange(flui_platform::pointer::ButtonChange::Pressed(_)) => {
+                    "button_down"
+                }
+                PointerEvent::ButtonChange(flui_platform::pointer::ButtonChange::Released(_)) => {
+                    "button_up"
+                }
                 PointerEvent::Move(_) => "move",
                 PointerEvent::Cancel(_) => "cancel",
                 _ => "other",
@@ -3033,7 +3027,7 @@ mod native_windows {
     /// released outside the client area still reaches the window — at the
     /// sign-extended client coordinates of that outside point.
     fn press_captures_the_mouse_until_the_last_release() {
-        use flui_platform_api::pointer::PointerEvent;
+        use flui_platform::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -3158,7 +3152,7 @@ mod native_windows {
         reason = "real native touch injection into an ephemeral shown test window"
     )]
     fn focus_loss_ends_a_touch_and_silences_its_tail() {
-        use flui_platform_api::pointer::{PointerEvent, PointerKind};
+        use flui_platform::pointer::{PointerEvent, PointerKind};
         use windows::Win32::UI::{
             Controls::{
                 CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
@@ -3380,7 +3374,7 @@ mod native_windows {
     }
 
     fn extended_mouse_buttons_share_contact_and_capture() {
-        use flui_platform_api::pointer::{ButtonChange, PointerButton, PointerEvent};
+        use flui_platform::pointer::{ButtonChange, PointerButton, PointerEvent};
         use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
@@ -3438,7 +3432,7 @@ mod native_windows {
         reason = "moves capture between actual owned hidden windows"
     )]
     fn extended_mouse_capture_loss_cancels_and_recovers() {
-        use flui_platform_api::pointer::{CancelReason, PointerEvent};
+        use flui_platform::pointer::{CancelReason, PointerEvent};
         use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
@@ -3511,7 +3505,7 @@ mod native_windows {
         reason = "real native pointer injection into an ephemeral shown test window"
     )]
     fn synthetic_touch_and_pen_reach_native_pointer_dispatch() {
-        use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
+        use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
         use windows::Win32::UI::{
             Controls::{
                 CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
@@ -3743,12 +3737,12 @@ mod native_windows {
             assert_eq!(ups.len(), 2, "{expected_kind:?}: {log:?}");
             assert!(
                 !log.iter().any(|event| match event {
-                    PointerEvent::ButtonChange(
-                        flui_platform_api::pointer::ButtonChange::Pressed(press),
-                    ) => press.pointer.kind == expected_kind,
-                    PointerEvent::ButtonChange(
-                        flui_platform_api::pointer::ButtonChange::Released(release),
-                    ) => release.pointer.kind == expected_kind,
+                    PointerEvent::ButtonChange(flui_platform::pointer::ButtonChange::Pressed(
+                        press,
+                    )) => press.pointer.kind == expected_kind,
+                    PointerEvent::ButtonChange(flui_platform::pointer::ButtonChange::Released(
+                        release,
+                    )) => release.pointer.kind == expected_kind,
                     _ => false,
                 }),
                 "single-button injection must not invent another press on ENTER: {log:?}"
@@ -3769,7 +3763,7 @@ mod native_windows {
                 assert_eq!(
                     down.sample
                         .pressure
-                        .map(flui_platform_api::pointer::Pressure::get),
+                        .map(flui_platform::pointer::Pressure::get),
                     Some(0.5)
                 );
                 let point = down.sample.position.get();
@@ -3810,7 +3804,7 @@ mod native_windows {
                 downs[0].pointer.id, downs[1].pointer.id,
                 "fresh admission after Up"
             );
-            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(flui_platform_api::pointer::Pressure::get) == Some(0.75))), "actual update sensor reading: {log:?}");
+            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(flui_platform::pointer::Pressure::get) == Some(0.75))), "actual update sensor reading: {log:?}");
             if native_kind == PT_TOUCH {
                 let contact = downs[0]
                     .sample
@@ -3996,7 +3990,7 @@ mod native_windows {
         assert!(
             delivered
                 .iter()
-                .filter(|event| matches!(event, flui_platform_api::pointer::PointerEvent::Down(_)))
+                .filter(|event| matches!(event, flui_platform::pointer::PointerEvent::Down(_)))
                 .count()
                 >= 2,
             "the injected touch and pen were delivered: {delivered:?}"
@@ -4036,7 +4030,7 @@ mod native_windows {
     fn captured_native_mouse_session() {
         use crate::native_recording::capture::{hold_against_golden, record};
         use crate::native_recording::codec::Backend;
-        use flui_platform_api::pointer::PointerEvent;
+        use flui_platform::pointer::PointerEvent;
         use windows::Win32::UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
@@ -4237,7 +4231,7 @@ mod native_windows {
         reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration"
     )]
     fn native_mouse_wheels_keep_hover_identity_and_signed_units() {
-        use flui_platform_api::pointer::{PointerEvent, PointerKind, ScrollUnit};
+        use flui_platform::pointer::{PointerEvent, PointerKind, ScrollUnit};
         use windows::Win32::UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, MOUSEINPUT,
@@ -4361,7 +4355,7 @@ mod native_windows {
         reason = "real mouse input sent to an ephemeral foreground test window, with the cursor restored"
     )]
     fn a_pointer_routed_mouse_hovers_the_window() {
-        use flui_platform_api::pointer::{PointerEvent, PointerKind};
+        use flui_platform::pointer::{PointerEvent, PointerKind};
         use windows::Win32::UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE,
@@ -4620,7 +4614,7 @@ mod native_windows {
         reason = "queued native wheel packets target an actual owned hidden HWND"
     )]
     fn fractional_native_wheel_packets_preserve_observed_precision_and_source() {
-        use flui_platform_api::pointer::{PointerEvent, ScrollPrecision, ScrollUnit};
+        use flui_platform::pointer::{PointerEvent, ScrollPrecision, ScrollUnit};
         use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEHWHEEL, WM_MOUSEWHEEL};
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
@@ -4797,7 +4791,7 @@ mod native_windows {
         reason = "real mouse input to an ephemeral foreground test window, with the cursor restored"
     )]
     fn a_leave_callback_that_hovers_again_keeps_the_hover() {
-        use flui_platform_api::pointer::{PointerEvent, PointerKind};
+        use flui_platform::pointer::{PointerEvent, PointerKind};
         use windows::Win32::UI::{
             Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS,
             WindowsAndMessaging::{GetCursorPos, SetCursorPos, WM_POINTERENTER, WindowFromPoint},
@@ -4891,7 +4885,7 @@ mod native_windows {
         reason = "queues and dispatches mouse messages for an owned window"
     )]
     fn queued_mouse_samples_keep_native_message_time() {
-        use flui_platform_api::pointer::PointerEvent;
+        use flui_platform::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         // A hidden native window excludes unrelated physical cursor traffic
         // while retaining the actual queue and window-procedure producer.
@@ -4972,7 +4966,7 @@ mod native_windows {
         window.on_input(Box::new(move |input| {
             let time = match &input {
                 PlatformInput::Keyboard(key) => Some(key.time),
-                PlatformInput::Pointer(flui_platform_api::pointer::PointerEvent::Move(update)) => {
+                PlatformInput::Pointer(flui_platform::pointer::PointerEvent::Move(update)) => {
                     Some(update.current().time)
                 }
                 _ => None,
@@ -5035,18 +5029,18 @@ mod native_windows {
         send_mouse(hwnd, WM_MOUSEMOVE, 0, mouse_lparam(6, 6));
 
         let log = events.lock().expect("pointer log");
-        let modifiers: Vec<flui_platform_api::keyboard::Modifiers> = log
+        let modifiers: Vec<flui_platform::keyboard::Modifiers> = log
             .iter()
             .map(|event| match event {
-                flui_platform_api::pointer::PointerEvent::Move(update) => update.modifiers,
+                flui_platform::pointer::PointerEvent::Move(update) => update.modifiers,
                 _ => unreachable!("only moves were sent"),
             })
             .collect();
         assert_eq!(
             modifiers,
             [
-                flui_platform_api::keyboard::Modifiers::SHIFT,
-                flui_platform_api::keyboard::Modifiers::NONE
+                flui_platform::keyboard::Modifiers::SHIFT,
+                flui_platform::keyboard::Modifiers::NONE
             ]
         );
         drop(log);

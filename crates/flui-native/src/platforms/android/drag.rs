@@ -22,13 +22,13 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
-use flui_platform_api::DragDropEvent;
-use flui_platform_api::data_transfer::{
+use flui_platform::DragDropEvent;
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferLimits,
     TransferPayload, TransferRequest,
 };
-use flui_platform_api::drag::{
+use flui_platform::drag::{
     DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use jni::objects::{JObject, JObjectArray, JString};
@@ -426,14 +426,14 @@ impl AndroidDragSource {
     pub(super) fn retire(&self) {
         if let Some(Running { on_end, .. }) = self.running.take() {
             self.view.transfer().set_own(None);
-            contain_owner_callback(|| on_end(flui_platform_api::drag::OsDragEnd::Cancelled));
+            contain_owner_callback(|| on_end(flui_platform::drag::OsDragEnd::Cancelled));
         }
     }
 }
 
 /// Serve representation `index` through `provider`, containing a panic.
 fn serve(
-    provider: &mut flui_platform_api::drag::OsDragProvider,
+    provider: &mut flui_platform::drag::OsDragProvider,
     index: u16,
 ) -> Option<TransferPayload> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -509,7 +509,7 @@ impl PlatformDragSource for AndroidDragSource {
         }
         self.view.transfer().set_own(Some(allowed));
         let session = match key.representation().format {
-            flui_platform_api::data_transfer::TransferFormat::Custom { mime } => {
+            flui_platform::data_transfer::TransferFormat::Custom { mime } => {
                 mime.as_str().to_owned()
             }
             _ => String::new(),

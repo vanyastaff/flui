@@ -22,8 +22,8 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::PointerKind;
+use flui_platform::EventTime;
+use flui_platform::pointer::PointerKind;
 use parking_lot::{Mutex, ReentrantMutex};
 
 use super::{

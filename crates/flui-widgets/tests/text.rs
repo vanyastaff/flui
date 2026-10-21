@@ -206,7 +206,7 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
     // Exercise snapshot admission through the actual paragraph consumer. A
     // failed native observation falls back to unknown, never a non-finite size.
     for observed in [f64::MAX, f64::from_bits(1)] {
-        let preferences = flui_platform_api::SystemPreferences::default()
+        let preferences = flui_platform::SystemPreferences::default()
             .with_text_scale(observed)
             .unwrap_or_default();
         let paragraph = lay_out(
@@ -232,7 +232,7 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
         );
     }
     for observed in [1.0 / 64.0, 64.0] {
-        let preferences = flui_platform_api::SystemPreferences::default()
+        let preferences = flui_platform::SystemPreferences::default()
             .with_text_scale(observed)
             .expect("supported scale boundary");
         let paragraph = lay_out(

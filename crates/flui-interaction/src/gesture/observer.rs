@@ -13,7 +13,7 @@ use std::{
 };
 
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform_api::{EventTime, PlatformWindow};
+use flui_platform::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
 use crate::events::CancelReason;

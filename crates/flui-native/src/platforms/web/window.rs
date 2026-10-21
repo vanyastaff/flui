@@ -79,7 +79,7 @@ impl StatePublisher {
 fn sample_state(
     canvas: &web_sys::HtmlCanvasElement,
     state: &Mutex<WebWindowState>,
-    display: Option<flui_platform_api::DisplayId>,
+    display: Option<flui_platform::DisplayId>,
 ) -> WindowState {
     let (title, size, focused, visible) = {
         let state = state.lock();
@@ -617,11 +617,11 @@ impl crate::traits::HostWindow for WebWindow {
     fn text_store_host(
         &self,
         _owner: crate::traits::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         self.text
             .borrow()
             .as_ref()
-            .map(|text| Rc::clone(text) as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+            .map(|text| Rc::clone(text) as Rc<dyn flui_platform::text_store::TextStoreHost>)
     }
 }
 
@@ -739,7 +739,7 @@ impl PlatformWindow for WebWindow {
     /// The browser's screen the page is on: the one screen of a tab, or the
     /// current screen when the Window Management API lists several. The id is
     /// the snapshot's, so the host derives the period from it.
-    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+    fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self.registration.borrow().is_none() {
             return None;
         }
@@ -754,9 +754,9 @@ impl PlatformWindow for WebWindow {
         // Not applicable for web canvas
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         self.drag.borrow().as_ref().map(|drag| {
-            Arc::clone(&drag.source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+            Arc::clone(&drag.source) as Arc<dyn flui_platform::drag::PlatformDragSource>
         })
     }
 

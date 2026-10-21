@@ -8,7 +8,7 @@ use flui_interaction::{
     EventPropagation, GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerTarget,
     RenderId, ScrollTarget,
 };
-use flui_platform_api::{
+use flui_platform::{
     EventTime, PointerEvent,
     pointer::{
         DeviceId, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,

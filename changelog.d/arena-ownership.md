@@ -22,7 +22,7 @@
   summed, never accessibility floors (`GestureSettings::authored_long_press_timeout`).
   `GestureArena::with_settings` sets the profiles a handle checks against; `GestureArenaScope::of`
   applies the scope's.
-- **`CancelReason::Claimed`** (`flui-platform-api`): when a recognizer that claimed a continuing
+- **`CancelReason::Claimed`** (`flui-platform`): when a recognizer that claimed a continuing
   contact wins, every other target on the contact's route receives one `Cancel` with this reason
   and nothing more of the contact.
 - **`flui_testing::assert_ownership_table`**: every cell of the table, for touch and mouse.

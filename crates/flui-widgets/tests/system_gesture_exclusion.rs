@@ -6,8 +6,8 @@
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Matrix4};
 use flui_painting::styling::Color;
-use flui_platform_api::input_regions::{DeviceInputRegion, InputRegionKind};
-use flui_platform_api::{DisplayId, DisplayKey, DisplayRegistry};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegionKind};
+use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 use flui_testing::log_capture;
 use flui_view::{IntoView, View};
 use flui_widgets::row;

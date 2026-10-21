@@ -4,8 +4,8 @@
 use std::io::{BufRead, Write};
 
 use flui_interaction::GestureProfiles;
-use flui_platform_api::WindowId;
-use flui_platform_api::pointer::{DeviceId, PointerKind};
+use flui_platform::WindowId;
+use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_runtime::{InputRecord, PreferencesRow};
 use serde::{Deserialize, Serialize};
 

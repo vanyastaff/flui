@@ -14,7 +14,7 @@ use flui_native::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
     MockWindow, Platform as _,
 };
-use flui_platform_api::{DisplayId, DisplaySnapshot, WindowDisplay};
+use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
 
 use super::super::host::{
     OwnerHostClearGuard, build_ui_runtime, install_owner_platform, refresh_displays_with,
@@ -759,7 +759,7 @@ fn display_pacing_contract() {
 /// presentation follows, and a native surface that replaces the one it rode on
 /// gets the request again.
 fn hint_is_reapplied_when_the_native_window_is_replaced_after_resume() {
-    use flui_platform_api::FrameRateHint::{Default, High};
+    use flui_platform::FrameRateHint::{Default, High};
     use flui_runtime::frame_rate_demand::FrameRateDemand;
 
     let rig = boot();

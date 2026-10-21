@@ -50,7 +50,7 @@ const OFFICIAL: &str = "official";
 
 /// What an official package may name in a normal or build dependency: the
 /// package-author surface and the contract crates (ADR-0081 §3, ADR-0088 §2).
-const SDK_SURFACE: [&str; 3] = ["flui-sdk", "flui-platform-api", "flui-protocol"];
+const SDK_SURFACE: [&str; 3] = ["flui-sdk", "flui-platform", "flui-protocol"];
 
 /// The keys a crate with a tier declares.
 const TIER_KEYS: [&str; 3] = ["tier", "tier-kind", "order"];

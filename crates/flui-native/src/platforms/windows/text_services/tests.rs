@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::geometry::Size;
-use flui_platform_api::ImeEvent;
-use flui_platform_api::text_store::{
+use flui_platform::ImeEvent;
+use flui_platform::text_store::{
     CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, OwnerCalls,
     TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
     TextStoreStatus, project_ime_event,

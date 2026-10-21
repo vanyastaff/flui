@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use flui_interaction::InteractionDispatchHandle;
-use flui_platform_api::{Clipboard, Storage};
+use flui_platform::{Clipboard, Storage};
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
 use flui_view::GlobalKeyScope;
 

@@ -1278,9 +1278,7 @@ mod tests {
         .with_config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_storage_dir(flui_platform_api::StorageName::from_static(
-                    "storage-host-test",
-                )),
+                .with_storage_dir(flui_platform::StorageName::from_static("storage-host-test")),
         )
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(

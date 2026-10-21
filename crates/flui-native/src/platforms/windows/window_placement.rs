@@ -92,7 +92,7 @@ pub(super) struct OpenSpot {
 /// scale; with no `target` they are global logical pixels at `system_scale`.
 pub(super) fn open_spot(
     options: &WindowOptions,
-    target: Option<&flui_platform_api::DisplayInfo>,
+    target: Option<&flui_platform::DisplayInfo>,
     system_scale: f64,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {

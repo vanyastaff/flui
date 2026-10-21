@@ -25,13 +25,13 @@ use flui_interaction::{
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationIndex, TransferActions, TransferCompleter, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,
 };
-use flui_platform_api::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowId};
+use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::{DragDropEvent, EventTime, PlatformWindow, WindowId};
 use parking_lot::Mutex;
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -143,29 +143,26 @@ impl PlatformWindow for DragWindow {
     fn is_visible(&self) -> bool {
         true
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         self.source.clone()
     }
-    fn state(&self) -> flui_platform_api::WindowState {
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, self.size),
+    fn state(&self) -> flui_platform::WindowState {
+        flui_platform::WindowState::new(
+            flui_platform::WindowGeometry::new(None, self.size),
             self.size,
         )
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
     fn as_any(&self) -> &dyn std::any::Any {
@@ -433,7 +430,7 @@ impl Fixture {
     fn text_offer(&self) -> DataTransferOffer {
         let mut table = self.offers.borrow_mut();
         let representations: Arc<[_]> = Arc::from(vec![
-            flui_platform_api::data_transfer::RepresentationDescriptor {
+            flui_platform::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },
@@ -871,7 +868,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     // A refusal names the session by its full identity: the same session
                     // number in another runtime is not this drag.
                     let key = session.key().expect("live");
-                    let foreign = flui_platform_api::drag::DragSessionKey::new(
+                    let foreign = flui_platform::drag::DragSessionKey::new(
                         key.nonce(),
                         UiRuntimeId::new(9),
                         key.session(),
@@ -1113,7 +1110,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
         let offer = {
             let mut table = f.offers.borrow_mut();
             let representations: Arc<[_]> = Arc::from(vec![
-                flui_platform_api::data_transfer::RepresentationDescriptor {
+                flui_platform::data_transfer::RepresentationDescriptor {
                     format: TransferFormat::Text,
                     declared_len: None,
                 },

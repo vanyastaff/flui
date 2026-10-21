@@ -82,7 +82,7 @@ fn implicit_opacity_settles_under_reduce() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -136,7 +136,7 @@ impl StatelessView for MotionReader {
 fn system_motion_change_reaches_media_query_and_the_clock() {
     use flui_animation::{Animation, AnimationBehavior, AnimationController, MotionPolicy};
     use flui_foundation::{ManualClock, MonotonicClock};
-    use flui_platform_api::{MotionPreference, SystemPreferences};
+    use flui_platform::{MotionPreference, SystemPreferences};
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::{
         Arc,
@@ -156,7 +156,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
                 recorded_wakes.fetch_add(1, Ordering::SeqCst);
             }),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -260,7 +260,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             )
@@ -340,7 +340,7 @@ struct MetricsReader {
     contrast: Rc<RefCell<Vec<bool>>>,
     text_scale: Rc<RefCell<Vec<TextSizing>>>,
     owner: OwnerHost,
-    brightness: Rc<RefCell<Vec<flui_platform_api::Brightness>>>,
+    brightness: Rc<RefCell<Vec<flui_platform::Brightness>>>,
     padding: Rc<RefCell<Vec<EdgeInsets>>>,
 }
 
@@ -465,12 +465,12 @@ impl OwnerEffects for Effects {
             let target = self.owner.presentation_dispatcher(address).expect("window");
             let frame = self.owner.frame_dispatcher(address).expect("frame");
             for (width, brightness, text_scale) in [
-                (200.0, flui_platform_api::Brightness::Dark, 2.0),
-                (400.0, flui_platform_api::Brightness::Light, 1.0),
+                (200.0, flui_platform::Brightness::Dark, 2.0),
+                (400.0, flui_platform::Brightness::Light, 1.0),
             ] {
                 self.owner
                     .update_preferences(
-                        flui_platform_api::SystemPreferences::default()
+                        flui_platform::SystemPreferences::default()
                             .with_text_scale(text_scale)
                             .expect("valid preference"),
                         self,
@@ -561,7 +561,7 @@ fn initial_inherited_scale_matches_the_renderer() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -736,7 +736,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     );
     assert_eq!(contrast.borrow().last(), Some(&false));
     for preference in [Some(true), Some(false), Some(true), None] {
-        let values = flui_platform_api::SystemPreferences::default();
+        let values = flui_platform::SystemPreferences::default();
         owner
             .update_preferences(
                 preference.map_or_else(
@@ -758,7 +758,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     for scale in [2.0, 1.0] {
         owner
             .update_preferences(
-                flui_platform_api::SystemPreferences::default()
+                flui_platform::SystemPreferences::default()
                     .with_text_scale(scale)
                     .expect("valid observation"),
                 &effects,
@@ -775,7 +775,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     }
     owner
         .update_preferences(
-            flui_platform_api::SystemPreferences::default()
+            flui_platform::SystemPreferences::default()
                 .with_high_contrast(true)
                 .with_text_scale(2.0)
                 .expect("valid observation"),
@@ -789,7 +789,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Platform,
         )
@@ -895,7 +895,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         .presentation_dispatcher(secondary)
         .expect("secondary authority")
         .observe(
-            WindowObservation::Brightness(flui_platform_api::Brightness::Dark),
+            WindowObservation::Brightness(flui_platform::Brightness::Dark),
             &effects,
         )
         .expect("secondary appearance update");
@@ -987,7 +987,7 @@ fn bold_text_changes_the_painted_glyphs() {
     use flui_painting::typography::{
         FontVariation, FontWeight, TextDirection, TextSpan, TextStyle,
     };
-    use flui_platform_api::{SystemPreferences, TextWeightPreference};
+    use flui_platform::{SystemPreferences, TextWeightPreference};
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::{Arc, atomic::AtomicBool};
 
@@ -1014,7 +1014,7 @@ fn bold_text_changes_the_painted_glyphs() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &fonts,
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -1201,7 +1201,7 @@ fn bold_text_changes_the_painted_glyphs() {
                 RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(AtomicBool::new(false)),
-                    Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1319,7 +1319,7 @@ fn bold_text_changes_the_painted_glyphs() {
 
 fn preferred_locales_select_resources_and_direction() {
     use flui_painting::typography::TextDirection;
-    use flui_platform_api::{Locale, SystemPreferences};
+    use flui_platform::{Locale, SystemPreferences};
     use flui_widgets::localization::{
         BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate,
         Localizations, LocalizationsDelegate,
@@ -1507,7 +1507,7 @@ fn preferred_locales_select_resources_and_direction() {
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     std::sync::Arc::new(|| {}),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1596,11 +1596,11 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         ManualClock, MonotonicClock,
         geometry::{DevicePixelRatio, Point},
     };
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
         PointerPosition, PointerPress, PointerRelease, PointerSample,
     };
-    use flui_platform_api::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
+    use flui_platform::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
     use std::{
         sync::{
             Arc, Mutex,
@@ -1621,7 +1621,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         );
         let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
         let sample = PointerSample::new(
-            flui_platform_api::EventTime::from_nanos(millis * 1_000_000),
+            flui_platform::EventTime::from_nanos(millis * 1_000_000),
             PointerPosition::try_new(Point::new(150.0, y)).expect("position"),
         );
         match phase {
@@ -1656,7 +1656,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1779,7 +1779,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{
+    use flui_platform::{
         Distance, GestureGeometry, PlatformInput, PreferenceQueryError, SystemPreferences,
     };
     use std::{
@@ -1806,7 +1806,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         );
@@ -1954,15 +1954,15 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
 }
 
 struct GeometryWindow {
-    inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
+    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
     answer: std::sync::Mutex<
-        Result<Option<flui_platform_api::GestureGeometry>, flui_platform_api::PreferenceQueryError>,
+        Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>,
     >,
     calls: std::sync::atomic::AtomicUsize,
     query_time: std::sync::Mutex<Option<(flui_foundation::ManualClock, std::time::Duration)>>,
     panic_next: std::sync::atomic::AtomicBool,
     /// The display the window reports being on.
-    display: std::sync::Mutex<Option<flui_platform_api::DisplayId>>,
+    display: std::sync::Mutex<Option<flui_platform::DisplayId>>,
 }
 
 /// Geometry belongs to the display a presentation is on: a move to a display
@@ -1977,7 +1977,7 @@ fn gesture_values_follow_the_presentation_display() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{
+    use flui_platform::{
         DisplayId, DisplayKey, DisplayRegistry, Distance, GestureGeometry, PlatformInput,
     };
     use std::sync::{
@@ -2013,7 +2013,7 @@ fn gesture_values_follow_the_presentation_display() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -2124,8 +2124,8 @@ fn gesture_values_follow_the_presentation_display() {
     owner.shutdown(&effects);
 }
 
-impl flui_platform_api::PlatformWindow for GeometryWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+impl flui_platform::PlatformWindow for GeometryWindow {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -2148,40 +2148,36 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+    fn display_id(&self) -> Option<flui_platform::DisplayId> {
         *self.display.lock().expect("display script")
     }
     fn gesture_geometry(
         &self,
-    ) -> Result<Option<flui_platform_api::GestureGeometry>, flui_platform_api::PreferenceQueryError>
-    {
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
         self.calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self
@@ -2201,7 +2197,7 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
 /// A window whose input-region backend, or display query, fails once on
 /// request.
 struct RegionWindow {
-    inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
+    inner: std::sync::Arc<dyn flui_platform::PlatformWindow>,
     /// How many regions each call handed the backend.
     sent: std::sync::Mutex<Vec<usize>>,
     panic_next: std::sync::atomic::AtomicBool,
@@ -2209,8 +2205,8 @@ struct RegionWindow {
     panic_display: std::sync::atomic::AtomicBool,
 }
 
-impl flui_platform_api::PlatformWindow for RegionWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+impl flui_platform::PlatformWindow for RegionWindow {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -2233,27 +2229,27 @@ impl flui_platform_api::PlatformWindow for RegionWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+    fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self
             .panic_display
             .swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -2262,7 +2258,7 @@ impl flui_platform_api::PlatformWindow for RegionWindow {
         }
         None
     }
-    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
         self.sent.lock().expect("sent regions").push(regions.len());
         if self
             .panic_next
@@ -2277,32 +2273,32 @@ impl flui_platform_api::PlatformWindow for RegionWindow {
 struct MovingWindow {
     position: std::sync::Mutex<(
         flui_foundation::geometry::Point<f64>,
-        flui_platform_api::WindowRevision,
+        flui_platform::WindowRevision,
     )>,
 }
 
 /// [`MovingWindow`] shared with the test that moves it.
 struct SharedControl(std::sync::Arc<MovingWindow>);
 
-impl flui_platform_api::WindowControl for SharedControl {
-    fn state(&self) -> flui_platform_api::WindowState {
+impl flui_platform::WindowControl for SharedControl {
+    fn state(&self) -> flui_platform::WindowState {
         let (position, revision) = *self.0.position.lock().expect("position");
         let size = Size::new(40.0, 40.0);
-        let mut state = flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(Some(position), size),
+        let mut state = flui_platform::WindowState::new(
+            flui_platform::WindowGeometry::new(Some(position), size),
             size,
         );
         state.revision = revision;
         state
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
     fn submit(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
     fn request_close(&self) {}
@@ -2314,7 +2310,7 @@ impl flui_platform_api::WindowControl for SharedControl {
 /// state subscribers and the recording, with the regions kept for the next.
 fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::WindowRevision;
+    use flui_platform::WindowRevision;
     use flui_runtime::{HostInput, InputRecord};
     use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
@@ -2330,7 +2326,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -2456,7 +2452,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{
+    use flui_platform::{
         Distance, GestureGeometry, PlatformInput, PreferenceQueryError, SystemPreferences,
     };
     use std::{
@@ -2485,7 +2481,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -2698,7 +2694,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             SystemPreferences::default()
                 .with_high_contrast(true)
                 .with_gestures(
-                    flui_platform_api::GesturePreferences::default()
+                    flui_platform::GesturePreferences::default()
                         .with_long_press_timeout(Duration::from_millis(10)),
                 ),
             &effects,
@@ -3054,13 +3050,11 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 }
 
 fn wheel_preferences_reach_the_next_mounted_input() {
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
-    use flui_platform_api::{
-        EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep,
-    };
+    use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
 
     for authored_gestures in [false, true] {
         let owner = OwnerHost::new();
@@ -3317,7 +3311,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_up},
     };
-    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use flui_platform::{GesturePreferences, PlatformInput, SystemPreferences};
     use std::{sync::Arc, time::Duration};
 
     for (preferences_first, authored_timeout) in [
@@ -3333,7 +3327,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -3478,7 +3472,7 @@ fn accessibility_floor_holds_under_an_authored_scope() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_up},
     };
-    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use flui_platform::{GesturePreferences, PlatformInput, SystemPreferences};
     use std::{sync::Arc, time::Duration};
 
     let owner = OwnerHost::new();
@@ -3489,7 +3483,7 @@ fn accessibility_floor_holds_under_an_authored_scope() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -3646,7 +3640,7 @@ fn preference_fanout_survives_a_failing_runtime() {
         let result = catch_unwind(AssertUnwindSafe(|| {
             owner
                 .update_preferences(
-                    flui_platform_api::SystemPreferences::default()
+                    flui_platform::SystemPreferences::default()
                         .with_text_scale(2.0)
                         .expect("valid preference"),
                     &recipients[0].0,
@@ -3686,7 +3680,7 @@ fn preference_fanout_survives_a_failing_runtime() {
         }
         owner
             .update_preferences(
-                flui_platform_api::SystemPreferences::default()
+                flui_platform::SystemPreferences::default()
                     .with_text_scale(1.0)
                     .expect("valid preference"),
                 &recipients[0].0,
@@ -3773,8 +3767,8 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
     assert_eq!(
         &brightness.borrow()[1..],
         [
-            flui_platform_api::Brightness::Dark,
-            flui_platform_api::Brightness::Light
+            flui_platform::Brightness::Dark,
+            flui_platform::Brightness::Light
         ]
     );
     assert_eq!(
@@ -3789,7 +3783,7 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
 }
 
 fn resize_failure_preserves_other_batched_window_state() {
-    use flui_platform_api::Brightness;
+    use flui_platform::Brightness;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{
         Arc,
@@ -3884,7 +3878,7 @@ fn resize_failure_preserves_other_batched_window_state() {
             }
             owner
                 .update_preferences(
-                    flui_platform_api::SystemPreferences::default()
+                    flui_platform::SystemPreferences::default()
                         .with_text_scale(2.0)
                         .expect("valid preference"),
                     &effects,
@@ -3971,7 +3965,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
         events::{Code, PointerKind},
         testing::input::{KeyEventBuilder, pointer_cancel, pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{PlatformInput, WindowExecutionState};
+    use flui_platform::{PlatformInput, WindowExecutionState};
     use flui_runtime::owner::InputOutcome;
     use flui_widgets::{Listener, SizedBox, prelude::HitTestBehavior};
 

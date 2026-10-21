@@ -33,7 +33,7 @@ use crate::{
     gesture::settings::GestureSettingsProvider,
     pointer::PointerDispatch,
 };
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 
 /// Default pressure needed to start a force press.
 pub const FORCE_PRESS_START_PRESSURE: f64 = 0.4;

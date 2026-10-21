@@ -306,7 +306,23 @@ graph LR
   -p flui-testing` — 388 прошли; doctest'ы `flui-native` и `flui-app` — 19 прошли. Повтор
   команд на результате ничего не меняет (`rg` по `flui-platform` вне исключений и имени контракта
   пуст). `cross-typecheck` для Apple на этой машине не собирается без `cargo-zigbuild`
-  (C-сборка `psm`, `objc2-exception-helper`); его доказательство — job CI.
+  (C-сборка `psm`, `objc2-exception-helper`); job CI прошёл для macOS, iOS, Android и Windows
+  (#1829).
+- [x] **LY21** — ветка `platform/flui-platform`. Начальная проверка: вне архива, текста ADR-0151 и
+  `CHANGELOG.md` токены `flui-platform`/`flui_platform`, называющие ядро, не остались (совпали только
+  строки ADR-0152, 0153, 0154 и 0254, уже означавшие контракт, и фрагмент changelog LY20). Команды:
+  `git mv crates/flui-platform-api crates/flui-platform`; `sd -s` `flui-platform-api` →
+  `flui-platform`, `flui_platform_api` → `flui_platform` с исключениями LY20 и фрагментом
+  `changelog.d/platform-flui-native.md`; `cargo metadata`; `TRYBUILD=overwrite cargo test -p
+  flui-platform --test compile_fail` (снимки не изменились); `cargo fmt --all`, `taplo fmt`. По
+  смыслу: ADR-0152, 0153, 0154 и 0254 называют итоговые имена; README и `docs/crates.md` —
+  «no OS code»; причина allowlist ADR-0151 покрывает оба переименования, счёт остался 17. Отдельно:
+  снимок `remaining_recognizer_details_are_non_exhaustive.stderr` у `flui-interaction` отставал от
+  входа с #1811 и перегенерирован. Проверки на Windows: `xtask checks` (с `key-vocabulary` и
+  `recording-vocabulary`), `workspace`, `reach`, `deps`, `wasm-check`, clippy `--workspace
+  --all-targets -D warnings` — зелёные; nextest по контракту и девяти зависимым — 759 из 760 до
+  исправления снимка, trybuild `flui-interaction` после него — зелёный; doctest'ы десяти крейтов — 321
+  прошли. Повтор команд ничего не меняет.
 
 ## Работа вне серии: LY8 и LY9
 

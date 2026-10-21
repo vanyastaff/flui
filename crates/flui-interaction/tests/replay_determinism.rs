@@ -19,7 +19,7 @@ use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureBinding, GestureRecognizer, HitTestResult,
     LongPressGestureRecognizer, ManualClock, PointerId, PointerRouteHandler, TapGestureRecognizer,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 /// One recorded host input: when it arrived, and what it was.
 #[derive(Clone)]

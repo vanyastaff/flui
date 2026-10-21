@@ -262,8 +262,8 @@ pub(super) enum QuitNotification {
 /// UI runtime the host builds so their drags name one platform instance.
 #[derive(Clone)]
 pub(crate) struct PlatformDataTransfer {
-    pub(crate) source: Arc<dyn flui_platform_api::DataTransferSource>,
-    pub(crate) nonce: flui_platform_api::drag::ProcessNonce,
+    pub(crate) source: Arc<dyn flui_platform::DataTransferSource>,
+    pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
 /// The loop-scoped composition root: installed host, platform event-loop
@@ -403,7 +403,7 @@ pub(crate) struct AppRuntime {
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
-    pub(super) host_storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
@@ -1142,13 +1142,13 @@ impl AppRuntime {
     /// retirement outside the caller's borrow.
     pub(super) fn set_platform_data_transfer(
         &self,
-        source: Arc<dyn flui_platform_api::DataTransferSource>,
+        source: Arc<dyn flui_platform::DataTransferSource>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
             .lock()
             .replace(PlatformDataTransfer {
                 source,
-                nonce: flui_platform_api::drag::ProcessNonce::mint(),
+                nonce: flui_platform::drag::ProcessNonce::mint(),
             })
     }
 
@@ -1172,7 +1172,7 @@ impl AppRuntime {
     }
 
     /// The host's byte storage, if the run configured one.
-    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform_api::Storage>> {
+    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform::Storage>> {
         self.host_storage.clone()
     }
 

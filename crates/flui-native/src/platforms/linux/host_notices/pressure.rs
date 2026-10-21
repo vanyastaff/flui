@@ -19,7 +19,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 use rustix::{
     event::{EventfdFlags, PollFd, PollFlags, eventfd, poll},
     io::Errno,

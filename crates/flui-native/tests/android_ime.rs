@@ -15,8 +15,8 @@ use flui_native::shared::android_ime::{
     cursor_anchor, editor_action_key, editor_info, key_composition, replay_current,
     starts_handwriting,
 };
-use flui_platform_api::keyboard::{ImeComposition, NamedKey};
-use flui_platform_api::text_store::{
+use flui_platform::keyboard::{ImeComposition, NamedKey};
+use flui_platform::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
     TextStoreStatus, Utf16Offset, Utf16Range,
 };

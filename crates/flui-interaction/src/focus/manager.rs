@@ -11,8 +11,8 @@ use std::{
 };
 
 use flui_foundation::ListenerId;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::EventTime;
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
 use crate::containment::RoutePanic;
 use crate::focus::focus_scope::{
@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     fn key_event() -> KeyEvent {
-        use flui_platform_api::{
+        use flui_platform::{
             EventTime,
             keyboard::{Code, Key, KeyState},
         };

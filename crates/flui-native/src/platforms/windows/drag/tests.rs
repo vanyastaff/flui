@@ -25,13 +25,13 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest, TransferUri,
 };
-use flui_platform_api::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
-use flui_platform_api::{DispatchEventResult, DragDropEvent, PlatformInput};
+use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput};
 use windows::Win32::Foundation::{
     DRAGDROP_E_ALREADYREGISTERED, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, HWND, LPARAM, POINT, POINTL,
     S_OK, WPARAM,
@@ -739,9 +739,9 @@ fn hold_mouse_buttons(buttons: u32) {
 }
 
 /// The pointer a pen press on `hwnd` opens in its window's registry.
-fn pen_pressed(hwnd: HWND) -> flui_platform_api::PointerId {
-    use flui_platform_api::EventTime;
-    use flui_platform_api::pointer::{PenTool, PointerButton, PointerEvent, PointerKind};
+fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
+    use flui_platform::EventTime;
+    use flui_platform::pointer::{PenTool, PointerButton, PointerEvent, PointerKind};
 
     use crate::shared::pointer_assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
@@ -1065,7 +1065,7 @@ fn pending(
 ) -> (
     WindowsPlatform,
     Window,
-    Arc<dyn flui_platform_api::drag::PlatformDragSource>,
+    Arc<dyn flui_platform::drag::PlatformDragSource>,
 ) {
     let platform = WindowsPlatform::new().expect("platform");
     let source = open(&platform, "flui pending drag", |_| {});
@@ -1131,7 +1131,7 @@ fn a_pending_session_is_retained_when_its_platform_unwinds() {
 /// context by handle alone in `contact_kind`.
 fn a_drag_source_reads_only_its_own_windows_contacts() {
     use crate::platforms::windows::platform::WindowRef;
-    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use flui_platform::pointer::{PenTool, PointerKind};
 
     let platform = WindowsPlatform::new().expect("platform");
     let first = open(&platform, "flui drag source a", |_| {});
@@ -1262,7 +1262,7 @@ fn place(hwnd: HWND, x: i32, y: i32) {
 /// whose content is under it, in that window's own coordinates, as a drag on
 /// the first window's capture asks while it moves over the second.
 fn a_window_finds_the_window_of_this_process_under_a_point() {
-    use flui_platform_api::WindowAt;
+    use flui_platform::WindowAt;
 
     let platform = WindowsPlatform::new().expect("platform");
     let source = open(&platform, "flui drag source", |_| {});

@@ -7,7 +7,7 @@
 //! channel, drag sessions, recordings and observers name the same sequence by
 //! the same [`InputSequenceId`], so none of them needs a translation table.
 //!
-//! The id lives here, below the contract crates, so `flui-platform-api` and
+//! The id lives here, below the contract crates, so `flui-platform` and
 //! every consumer can name it; only the interaction layer mints it.
 
 use std::cell::Cell;

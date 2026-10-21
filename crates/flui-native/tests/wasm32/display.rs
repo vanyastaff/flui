@@ -12,7 +12,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_native::{HostWindow, OwnerPlatform, Platform, WebPlatform, WindowOpen, WindowOptions};
-use flui_platform_api::DisplaySnapshot;
+use flui_platform::DisplaySnapshot;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -469,7 +469,7 @@ fn primary_period(snapshot: &DisplaySnapshot) -> Option<Duration> {
     snapshot
         .primary()
         .and_then(|display| display.refresh_period)
-        .map(flui_platform_api::RefreshPeriod::get)
+        .map(flui_platform::RefreshPeriod::get)
 }
 
 /// Within 3% of `expected_ms`: the published estimate is not exact, it is
@@ -909,7 +909,7 @@ async fn web_period_belongs_to_the_screen_the_window_is_on() {
     assert!(near(
         moved.displays()[1]
             .refresh_period
-            .map(flui_platform_api::RefreshPeriod::get),
+            .map(flui_platform::RefreshPeriod::get),
         8.333
     ));
     running.quit();
@@ -953,7 +953,7 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     assert!(near(
         display
             .refresh_period
-            .map(flui_platform_api::RefreshPeriod::get),
+            .map(flui_platform::RefreshPeriod::get),
         8.333
     ));
     drop(window);

@@ -505,11 +505,11 @@ fn playback_and_motion_policy_changes_are_observable() {
         registry.tick_all(&clock.frame(Duration::ZERO));
         controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("rate"));
         registry.tick_all(&clock.frame(Duration::from_millis(20)));
-        clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+        clock.set_system_motion(flui_platform::MotionPreference::Reduce);
         registry.tick_all(&clock.frame(Duration::from_millis(40)));
         assert!(!registry.has_running());
         assert!(!run.is_complete() && !run.is_canceled());
-        clock.set_system_motion(flui_platform_api::MotionPreference::NoPreference);
+        clock.set_system_motion(flui_platform::MotionPreference::NoPreference);
         registry.tick_all(&clock.frame(Duration::from_millis(60)));
         assert!(registry.has_running());
         controller.stop().expect("cancel repeat");
@@ -1772,7 +1772,7 @@ fn a_run_ticked_to_its_end_settles_on_its_clock() {
 fn a_run_settled_by_reduced_motion_says_so() {
     let reasons = settle_reasons(|| {
         let (registry, mut clock, _owner) = bound_run();
-        clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+        clock.set_system_motion(flui_platform::MotionPreference::Reduce);
         registry.tick_all(&clock.frame(Duration::from_millis(20)));
     });
     assert_eq!(reasons, ["reduced_motion"]);

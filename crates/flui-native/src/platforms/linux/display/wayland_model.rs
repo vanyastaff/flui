@@ -29,7 +29,7 @@
 //!   bounds.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayKey, RefreshPeriod};
+use flui_platform::{DisplayKey, RefreshPeriod};
 
 use super::view::{Identity, OutputView};
 
@@ -307,7 +307,7 @@ fn refresh_period(refresh_millihertz: i32) -> Option<RefreshPeriod> {
 mod tests {
     use std::time::Duration;
 
-    use flui_platform_api::DisplayRegistry;
+    use flui_platform::DisplayRegistry;
 
     use super::super::view::FreshIds;
     use super::*;

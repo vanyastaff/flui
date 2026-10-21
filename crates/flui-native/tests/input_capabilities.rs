@@ -12,12 +12,12 @@ use flui_native::{
     HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform, HostWindow, MockWindow,
     OwnerPlatform, Platform as _, WindowOptions,
 };
-use flui_platform_api::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
-use flui_platform_api::pointer::{
+use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerPress, PointerSample,
 };
-use flui_platform_api::{EventTime, ImeEvent};
+use flui_platform::{EventTime, ImeEvent};
 use parking_lot::Mutex;
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
@@ -335,7 +335,7 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
 /// unhandled key (AppKit resends it as `keyDown:`) is recognized, whether it
 /// arrives still inside the callback or after (ADR-0207 §7).
 fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
-    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
     let key = |at| {
         PlatformInput::Keyboard(KeyEvent::new(
             KeyState::Down,
@@ -478,7 +478,7 @@ fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
 const HELD_INPUT: u64 = 256;
 
 fn key_at(at: u64) -> PlatformInput {
-    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
     PlatformInput::Keyboard(KeyEvent::new(
         KeyState::Down,
         Key::character("k"),

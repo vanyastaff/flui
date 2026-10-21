@@ -1,6 +1,6 @@
 //! The user's light/dark app theme and the window chrome that follows it.
 
-use flui_platform_api::{Brightness, WindowAppearance};
+use flui_platform::{Brightness, WindowAppearance};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};

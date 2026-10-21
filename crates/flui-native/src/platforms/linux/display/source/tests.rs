@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::DisplayKey;
+use flui_platform::DisplayKey;
 
 use super::*;
 use crate::platforms::linux::display::session::wait_readable;

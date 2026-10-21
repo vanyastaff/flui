@@ -56,7 +56,7 @@ fn captured_value<T: Clone>(cell: &Arc<Mutex<Option<T>>>) -> Option<T> {
 }
 
 pub(crate) fn locale_override_removal_uses_the_nearest_current_preferences() {
-    use flui_platform_api::Locale;
+    use flui_platform::Locale;
     use flui_widgets::localization::Localizations;
     use flui_widgets::{MediaQuery, MediaQueryData};
 

@@ -10,7 +10,7 @@ pub(crate) mod intent_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_interaction::focus::FocusNode;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers},
     };
@@ -168,7 +168,7 @@ pub(crate) mod tab_tests {
         ReadingOrderPolicy,
     };
     use flui_painting::typography::TextDirection;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
     };
@@ -490,7 +490,7 @@ pub(crate) mod activation_tests {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
     };
@@ -565,7 +565,7 @@ pub(crate) mod event_cx_tests {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
     };
@@ -711,7 +711,7 @@ pub(crate) mod event_cx_tests {
 }
 
 pub(crate) mod activator_tests {
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
     };

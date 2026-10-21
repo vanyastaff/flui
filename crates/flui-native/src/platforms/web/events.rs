@@ -10,7 +10,7 @@ use std::{
 };
 
 use flui_foundation::geometry::Point;
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey},
     pointer::{

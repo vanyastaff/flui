@@ -20,14 +20,14 @@
 //! replaces inside one readwrite transaction, which the browser does not
 //! interleave with another tab's.
 //!
-//! [`StorageName`]: flui_platform_api::StorageName
-//! [`StorageName::from_static`]: flui_platform_api::StorageName::from_static
-//! [`StorageName::machine_local`]: flui_platform_api::StorageName::machine_local
-//! [`WriteMode::IfUnchanged`]: flui_platform_api::WriteMode::IfUnchanged
+//! [`StorageName`]: flui_platform::StorageName
+//! [`StorageName::from_static`]: flui_platform::StorageName::from_static
+//! [`StorageName::machine_local`]: flui_platform::StorageName::machine_local
+//! [`WriteMode::IfUnchanged`]: flui_platform::WriteMode::IfUnchanged
 
 use std::path::PathBuf;
 
-use flui_platform_api::StorageName;
+use flui_platform::StorageName;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod file_store;

@@ -22,7 +22,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform_api::text_store::TextStoreHost;
+use flui_platform::text_store::TextStoreHost;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };

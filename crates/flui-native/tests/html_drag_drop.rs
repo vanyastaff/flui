@@ -13,11 +13,11 @@ use flui_native::shared::html_drag_drop::{
     DomSource, ProviderPanicked, action_of, allowed_of, drop_effect, effect_allowed_of, format_of,
     offered, payload_of, payload_of_bytes, serve_stored, stored,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::{DragSessionKey, OsDragProvider, ProcessNonce};
+use flui_platform::drag::{DragSessionKey, OsDragProvider, ProcessNonce};
 
 fn effect_names_round_trip_the_actions() {
     for actions in [

@@ -169,7 +169,7 @@ pub(in crate::app) enum RuntimeEvent {
     /// The window's system light/dark appearance changed
     /// (`PlatformWindow::on_appearance_changed`). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
-    AppearanceChanged(flui_platform_api::Brightness),
+    AppearanceChanged(flui_platform::Brightness),
     /// The host derived a new display for this window from the platform's
     /// snapshot (`display_host`): which display it is on and that display's
     /// refresh period, possibly "unknown". Delivered after every sample and
@@ -543,8 +543,8 @@ fn dispatch_platform_input(
 /// A delivered frame's vsync on the event timeline: the host's reading of the
 /// process event epoch when the frame is admitted. No backend reports the
 /// display's own vsync timestamp yet.
-pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
-    flui_platform_api::EventTime::from_nanos(flui_native::shared::events::event_timestamp_ns())
+pub(super) fn frame_vsync() -> flui_platform::EventTime {
+    flui_platform::EventTime::from_nanos(flui_native::shared::events::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(

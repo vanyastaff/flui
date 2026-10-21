@@ -57,7 +57,7 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
 /// The host's byte storage, resolved once from the run's configuration when
 /// the host started (`AppRuntime::install_host_storage`). Same borrow rule
 /// as [`runtime_wake_callback`].
-pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
+pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
@@ -117,7 +117,7 @@ pub(super) enum HostServicesError {
 pub(super) fn refresh_preferences_with(
     read: impl FnOnce(
         &flui_native::OwnerPlatform,
-    ) -> Result<flui_platform_api::SystemPreferences, flui_native::PlatformError>,
+    ) -> Result<flui_platform::SystemPreferences, flui_native::PlatformError>,
 ) -> Result<(), HostServicesError> {
     let (owner, host) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
@@ -166,7 +166,7 @@ pub(super) fn refresh_preferences_with(
 pub(super) fn refresh_displays_with(
     read: impl FnOnce(
         &flui_native::OwnerPlatform,
-    ) -> Result<flui_platform_api::DisplaySnapshot, flui_native::PlatformError>,
+    ) -> Result<flui_platform::DisplaySnapshot, flui_native::PlatformError>,
 ) -> Result<(), HostServicesError> {
     let (owner, host) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();

@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use flui_platform_api::RefreshPeriod;
+use flui_platform::RefreshPeriod;
 
 use super::os_version::{Gate, Since, apple::AppleVersion};
 
@@ -171,7 +171,7 @@ impl<W: Copy + PartialEq> ScreenPeriods<W> {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::RefreshPeriod;
+    use flui_platform::RefreshPeriod;
 
     use super::{
         AppleVersion, FrameRatePreference, FrameRateRange, LinkPeriod, ScreenPeriods,

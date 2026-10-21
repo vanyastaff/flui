@@ -27,7 +27,7 @@
 //!   mid-press (a grab, a drag) sends no release, so the mouse's sequence is
 //!   cancelled at the leave; on X11 the implicit grab keeps delivering it.
 
-use flui_platform_api::{EventTime, pointer as owned};
+use flui_platform::{EventTime, pointer as owned};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use std::collections::HashMap;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
@@ -234,7 +234,7 @@ pub(super) struct NativePointerState {
     labels: HashMap<winit::event::DeviceId, DeviceLabels>,
     next_label: u64,
     scrolling: ScrollPhases,
-    present: flui_platform_api::input_capabilities::PointerKindSet,
+    present: flui_platform::input_capabilities::PointerKindSet,
     /// The OS session, once a window told it.
     session: Option<WinitSession>,
     held: Option<HeldMove>,
@@ -253,7 +253,7 @@ impl NativePointerState {
             labels: HashMap::new(),
             next_label: 0,
             scrolling: ScrollPhases::default(),
-            present: flui_platform_api::input_capabilities::PointerKindSet::empty(),
+            present: flui_platform::input_capabilities::PointerKindSet::empty(),
             session: None,
             held: None,
         }
@@ -325,7 +325,7 @@ impl NativePointerState {
     }
 
     /// The device kinds present now, from the registry that mints device ids.
-    pub(super) fn present(&self) -> flui_platform_api::input_capabilities::PointerKindSet {
+    pub(super) fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
         self.contacts.devices().present()
     }
 
@@ -333,7 +333,7 @@ impl NativePointerState {
     /// device arrived, left, or its first reading told its kind.
     pub(super) fn presence_change(
         &mut self,
-    ) -> Option<flui_platform_api::input_capabilities::PointerKindSet> {
+    ) -> Option<flui_platform::input_capabilities::PointerKindSet> {
         let present = self.present();
         (present != self.present).then(|| {
             self.present = present;
@@ -532,7 +532,7 @@ impl NativePointerState {
         device_id: &winit::event::DeviceId,
         step: ScrollStep,
         phase: winit::event::TouchPhase,
-        mods: flui_platform_api::keyboard::Modifiers,
+        mods: flui_platform::keyboard::Modifiers,
     ) -> Vec<PlatformInput> {
         // A wheel and a two-finger pan scroll from the device's cursor.
         let device = self.label(*device_id, KindClass::Cursor);
@@ -650,23 +650,23 @@ impl NativePointerState {
     }
 }
 
-/// Convert winit's `Ime` event to [`flui_platform_api::ImeEvent`].
+/// Convert winit's `Ime` event to [`flui_platform::ImeEvent`].
 ///
 /// A pure, unit-tested mapping: winit's `Ime` enum is already
-/// [`flui_platform_api::ImeEvent`]'s reference shape (see that type's module doc),
+/// [`flui_platform::ImeEvent`]'s reference shape (see that type's module doc),
 /// so this is a direct variant-for-variant translation with no coordinate
 /// or encoding conversion.
 pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
     use winit::event::Ime;
 
     let ime_event = match event {
-        Ime::Enabled => flui_platform_api::ImeEvent::Enabled,
-        Ime::Preedit(text, cursor) => flui_platform_api::ImeEvent::Preedit {
+        Ime::Enabled => flui_platform::ImeEvent::Enabled,
+        Ime::Preedit(text, cursor) => flui_platform::ImeEvent::Preedit {
             text: text.clone(),
             cursor: *cursor,
         },
-        Ime::Commit(text) => flui_platform_api::ImeEvent::Commit(text.clone()),
-        Ime::Disabled => flui_platform_api::ImeEvent::Disabled,
+        Ime::Commit(text) => flui_platform::ImeEvent::Commit(text.clone()),
+        Ime::Disabled => flui_platform::ImeEvent::Disabled,
     };
 
     PlatformInput::Ime(ime_event)
@@ -706,7 +706,7 @@ mod pointer_translation_tests {
 
     use super::*;
     use flui_foundation::geometry::Point;
-    use flui_platform_api::pointer::PointerEvent;
+    use flui_platform::pointer::PointerEvent;
 
     impl NativePointerState {
         /// The window event's input as its own loop turn delivers it,
@@ -965,8 +965,8 @@ mod pointer_translation_tests {
         );
         let present = state.present();
         assert!(
-            present.contains(flui_platform_api::input_capabilities::PointerKindSet::MOUSE)
-                && present.contains(flui_platform_api::input_capabilities::PointerKindSet::TOUCH),
+            present.contains(flui_platform::input_capabilities::PointerKindSet::MOUSE)
+                && present.contains(flui_platform::input_capabilities::PointerKindSet::TOUCH),
             "{present:?}"
         );
     }
@@ -1237,7 +1237,7 @@ mod pointer_translation_tests {
                 assert!(
                     scroll
                         .modifiers
-                        .contains(flui_platform_api::keyboard::Modifiers::SHIFT)
+                        .contains(flui_platform::keyboard::Modifiers::SHIFT)
                 );
                 if invalid_end {
                     assert_eq!((scroll.delta.x(), scroll.delta.y()), (0.0, 0.0));
@@ -1285,7 +1285,7 @@ mod pointer_translation_tests {
     #[test]
     fn native_pan_zoom_phase_and_recovery_matrix() {
         native_pan_zoom_converter_keeps_terminal_after_invalid_position();
-        use flui_platform_api::pointer::PanZoomPhase;
+        use flui_platform::pointer::PanZoomPhase;
         use winit::event::{TouchPhase, WindowEvent};
 
         let native = winit::event::DeviceId::dummy();
@@ -1569,7 +1569,7 @@ mod pointer_translation_tests {
             assert_eq!(
                 down.sample
                     .pressure
-                    .map(flui_platform_api::pointer::Pressure::get),
+                    .map(flui_platform::pointer::Pressure::get),
                 expected,
                 "{name}"
             );

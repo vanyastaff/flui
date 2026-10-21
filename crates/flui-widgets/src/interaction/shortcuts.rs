@@ -25,8 +25,8 @@ use std::any::Any;
 use std::rc::Rc;
 
 use flui_interaction::focus::{FocusNode, KeyEventResult};
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
@@ -934,8 +934,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
 mod collision_tests {
     use super::{ReservedKey, ShowContextMenuIntent, SingleActivator, reserved_key};
     use flui_foundation::geometry::Axis;
-    use flui_platform_api::TargetPlatform;
-    use flui_platform_api::keyboard::NamedKey;
+    use flui_platform::TargetPlatform;
+    use flui_platform::keyboard::NamedKey;
 
     const PLATFORMS: [TargetPlatform; 7] = [
         TargetPlatform::Android,

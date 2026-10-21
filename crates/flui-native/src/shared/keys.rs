@@ -33,7 +33,7 @@
 //! is queued by `TranslateMessage` of the Alt *keyup* — and is assembled by
 //! [`assemble_stray_wm_char`] into its own event instead of being dropped.
 
-use flui_platform_api::keyboard::{Code, Key, Location, NamedKey};
+use flui_platform::keyboard::{Code, Key, Location, NamedKey};
 
 // Virtual-key codes, from `winuser.h`. Raw `u16` rather than the `windows`
 // crate's `VIRTUAL_KEY` newtype so this module compiles on every host.

@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
-use flui_platform_api::data_transfer::{DataTransferOffer, TransferActions};
-use flui_platform_api::drag::{
+use flui_platform::data_transfer::{DataTransferOffer, TransferActions};
+use flui_platform::drag::{
     AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform_api::{PlatformWindow, WindowId};
+use flui_platform::{PlatformWindow, WindowId};
 use slab::Slab;
 
 use super::cursor::DragCursor;
@@ -61,7 +61,7 @@ pub(crate) struct Entry {
     pub(crate) allowed: AllowedActions,
     pub(crate) reach: DragReach,
     pub(crate) source: PresentationId,
-    pub(crate) pointer: Option<flui_platform_api::pointer::PointerInfo>,
+    pub(crate) pointer: Option<flui_platform::pointer::PointerInfo>,
     pub(crate) window: Option<std::sync::Weak<dyn PlatformWindow>>,
     pub(crate) hit_test: Option<HitTestHandle>,
     pub(crate) capture: Option<PointerCapture>,
@@ -269,8 +269,6 @@ pub(crate) type Shared = Rc<RefCell<DragSessions>>;
 pub(crate) type WeakShared = Weak<RefCell<DragSessions>>;
 
 /// The pointer kind hit tests ask with when a session knows none.
-pub(crate) fn pointer_kind(
-    pointer: Option<flui_platform_api::pointer::PointerInfo>,
-) -> PointerKind {
+pub(crate) fn pointer_kind(pointer: Option<flui_platform::pointer::PointerInfo>) -> PointerKind {
     pointer.map_or(PointerKind::Unknown, |info| info.kind)
 }

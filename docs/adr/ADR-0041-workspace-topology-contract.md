@@ -13,7 +13,7 @@
 - **Superseded in part by:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) — the
   paragraph "No `flui-runtime` without two consumers"; `flui-runtime` exists.
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (L1 gains
-  `flui-platform-api`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
+  `flui-platform`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
   and `flui-native` allows only `flui-app` as a dependent; its §2 amendment of 2026-09-26
   moves `flui-native` from L2 to L3, because its accessibility bridge implements
   `PlatformAccessibility`, which now lives in `flui-semantics`)

@@ -13,8 +13,8 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEvent, PointerEventExt};
 use flui_interaction::pointer::PointerEventResampler;
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{
+use flui_platform::EventTime;
+use flui_platform::pointer::{
     CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample,

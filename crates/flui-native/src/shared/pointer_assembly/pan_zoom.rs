@@ -3,7 +3,7 @@
 //! A two-finger pan is not a component: it is a phased scroll
 //! ([`ScrollPhases`](super::ScrollPhases)), on every backend (ADR-0217 §4).
 
-use flui_platform_api::pointer::{PanZoomPhase, PanZoomTransform};
+use flui_platform::pointer::{PanZoomPhase, PanZoomTransform};
 use smallvec::SmallVec;
 
 /// One component of a trackpad gesture. The platform starts and ends each on

@@ -6,7 +6,7 @@
 //! `PlatformWindow::refresh_period` answered for the same display and a 120 Hz
 //! panel does not fall back to 60 Hz.
 
-use flui_platform_api::RefreshPeriod;
+use flui_platform::RefreshPeriod;
 
 /// The period of a CoreGraphics refresh rate in hertz; `None` for a rate that
 /// does not describe a cadence (zero — CoreGraphics reports 0 for modes it
@@ -20,7 +20,7 @@ pub(crate) fn core_graphics_refresh_period(hz: f64) -> Option<RefreshPeriod> {
 mod tests {
     use std::time::Duration;
 
-    use flui_platform_api::RefreshPeriod;
+    use flui_platform::RefreshPeriod;
 
     use super::core_graphics_refresh_period;
 

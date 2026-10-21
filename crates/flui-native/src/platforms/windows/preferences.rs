@@ -10,7 +10,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_foundation::geometry::{DevicePixelRatio, Size};
-use flui_platform_api::{
+use flui_platform::{
     GesturePreferences, MotionPreference, NativeMouseGeometry, PreferenceQueryError,
     SystemPreferences, WheelPreferences, WheelStep,
 };
@@ -410,7 +410,7 @@ pub(super) fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, Preference
     // magnitude; widen before absolute value and refuse an unrepresentable size.
     let drag_extent = |index| -> Result<i32, PreferenceQueryError> {
         i32::try_from(i64::from(metric(index)?).abs())
-            .map_err(|_| flui_platform_api::InvalidPreference::GestureArea.into())
+            .map_err(|_| flui_platform::InvalidPreference::GestureArea.into())
     };
     let drag = Size::new(drag_extent(SM_CXDRAG)?, drag_extent(SM_CYDRAG)?);
     Ok(NativeMouseGeometry::new(double_click, drag, ratio)?)

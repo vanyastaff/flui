@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flui_platform_api::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
+use flui_platform::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
 
 use super::DataDirs;
 use super::os_error::{lock_error, replace_error, storage_error};
@@ -390,7 +390,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
+    use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
 
     use super::{FileStore, STAGED_PREFIX, STALE_STAGED_AGE, Step};
     use crate::storage::DataDirs;

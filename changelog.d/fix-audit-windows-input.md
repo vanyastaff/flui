@@ -1,6 +1,6 @@
 ### Added
 
-- **`TextStore::screen_moved`** (`flui-platform-api`): the platform tells a field's store that
+- **`TextStore::screen_moved`** (`flui-platform`): the platform tells a field's store that
   its text moved on the screen without a relayout (its window moved or changed scale); the store
   reports `layout_changed` under its own notification rule. Provided as a no-op;
   `InMemoryTextStore` and `EditableTextStore` report it.

@@ -180,10 +180,10 @@ assert_eq!(rect.size(), Size::new(100.0, 50.0));
 
 ### Platform Detection
 
-`TargetPlatform` lives in `flui-platform-api`:
+`TargetPlatform` lives in `flui-platform`:
 
 ```rust
-use flui_platform_api::TargetPlatform;
+use flui_platform::TargetPlatform;
 
 let platform = TargetPlatform::current();
 
@@ -326,7 +326,7 @@ at your option.
 ## Related Crates
 
 - [`flui-painting`](../flui-painting): Paint, colour, border and text-style values
-- [`flui-platform-api`](../flui-platform-api): Platform contracts, `TargetPlatform`
+- [`flui-platform`](../flui-platform): Platform contracts, `TargetPlatform`
 - [`flui-view`](../flui-view): View/Element trees, GlobalKey, ObjectKey
 - [`flui_rendering`](../flui-rendering): Render tree and layout
 - [`flui_app`](../flui-app): Application framework

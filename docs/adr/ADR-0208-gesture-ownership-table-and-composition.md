@@ -67,7 +67,7 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    member (`GestureDetector` and `Draggable` feed recognizers through a `Listener`), receive
    exactly one `Cancel { reason: CancelReason::Claimed }` and nothing more for that
    `InputSequenceId`, as `pointercancel` does. `Claimed` is a new variant of the
-   `#[non_exhaustive]` `flui_platform_api::pointer::CancelReason`, emitted only by the framework;
+   `#[non_exhaustive]` `flui_platform::pointer::CancelReason`, emitted only by the framework;
    an observing `Listener` is cancelled too. Verdicts precede it (ADR-0159 order); an accepted end
    still carries `GestureEndReason` (ADR-0112).
    Only a *claimed* hand-off cancels: a member that asked for the contact (an acceptance, a

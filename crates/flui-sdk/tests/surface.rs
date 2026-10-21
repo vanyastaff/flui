@@ -366,23 +366,20 @@ mod measured_unstable {
 #[test]
 fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     let _: fn(
-        flui_platform_api::input_capabilities::InputCapabilities,
+        flui_platform::input_capabilities::InputCapabilities,
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
     let _: fn(
-        flui_platform_api::input_capabilities::Availability,
+        flui_platform::input_capabilities::Availability,
     ) -> flui_sdk::platform::input_capabilities::Availability = |x| x;
     let _: fn(
-        flui_platform_api::input_capabilities::PointerKindSet,
+        flui_platform::input_capabilities::PointerKindSet,
     ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticPattern,
-    ) -> flui_sdk::platform::haptics::HapticPattern = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticRequest,
-    ) -> flui_sdk::platform::haptics::HapticRequest = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticOutcome,
-    ) -> flui_sdk::platform::haptics::HapticOutcome = |x| x;
+    let _: fn(flui_platform::haptics::HapticPattern) -> flui_sdk::platform::haptics::HapticPattern =
+        |x| x;
+    let _: fn(flui_platform::haptics::HapticRequest) -> flui_sdk::platform::haptics::HapticRequest =
+        |x| x;
+    let _: fn(flui_platform::haptics::HapticOutcome) -> flui_sdk::platform::haptics::HapticOutcome =
+        |x| x;
     let _: fn(flui_interaction::HapticsHandle) -> flui_sdk::interaction::HapticsHandle = |x| x;
     let _: fn(flui_interaction::HapticObserver) -> flui_sdk::interaction::HapticObserver = |x| x;
 }
@@ -512,40 +509,40 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
-        "pub use flui_platform_api::Brightness;",
-        "pub use flui_platform_api::EventTime;",
-        "pub use flui_platform_api::HapticFeedback;",
-        "pub use flui_platform_api::HostNotice;",
-        "pub use flui_platform_api::InvalidLocale;",
-        "pub use flui_platform_api::Locale;",
-        "pub use flui_platform_api::MemoryPressureLevel;",
-        "pub use flui_platform_api::SessionEndBlock;",
-        "pub use flui_platform_api::SessionEndRequest;",
-        "pub use flui_platform_api::SystemPreferences;",
-        "pub use flui_platform_api::TargetPlatform;",
-        "pub use flui_platform_api::WindowCommandError;",
-        "pub use flui_platform_api::WindowMode;",
-        "pub use flui_platform_api::WindowState;",
-        "pub use flui_platform_api::data_transfer::TransferActions;",
-        "pub use flui_platform_api::haptics::ControlPoint;",
-        "pub use flui_platform_api::haptics::HapticCapabilities;",
-        "pub use flui_platform_api::haptics::HapticEvent;",
-        "pub use flui_platform_api::haptics::HapticOutcome;",
-        "pub use flui_platform_api::haptics::HapticPattern;",
-        "pub use flui_platform_api::haptics::HapticPatternBuilder;",
-        "pub use flui_platform_api::haptics::HapticPatternError;",
-        "pub use flui_platform_api::haptics::HapticRequest;",
-        "pub use flui_platform_api::haptics::HapticTicket;",
-        "pub use flui_platform_api::haptics::HapticTiming;",
-        "pub use flui_platform_api::haptics::Intensity;",
-        "pub use flui_platform_api::haptics::ParameterCurve;",
-        "pub use flui_platform_api::haptics::PatternPlayback;",
-        "pub use flui_platform_api::haptics::Sharpness;",
-        "pub use flui_platform_api::haptics::UnitRangeError;",
-        "pub use flui_platform_api::input_capabilities::Availability;",
-        "pub use flui_platform_api::input_capabilities::InputCapabilities;",
-        "pub use flui_platform_api::input_capabilities::PointerKindSet;",
-        "pub use flui_platform_api::text_store::TextInputPurpose;",
+        "pub use flui_platform::Brightness;",
+        "pub use flui_platform::EventTime;",
+        "pub use flui_platform::HapticFeedback;",
+        "pub use flui_platform::HostNotice;",
+        "pub use flui_platform::InvalidLocale;",
+        "pub use flui_platform::Locale;",
+        "pub use flui_platform::MemoryPressureLevel;",
+        "pub use flui_platform::SessionEndBlock;",
+        "pub use flui_platform::SessionEndRequest;",
+        "pub use flui_platform::SystemPreferences;",
+        "pub use flui_platform::TargetPlatform;",
+        "pub use flui_platform::WindowCommandError;",
+        "pub use flui_platform::WindowMode;",
+        "pub use flui_platform::WindowState;",
+        "pub use flui_platform::data_transfer::TransferActions;",
+        "pub use flui_platform::haptics::ControlPoint;",
+        "pub use flui_platform::haptics::HapticCapabilities;",
+        "pub use flui_platform::haptics::HapticEvent;",
+        "pub use flui_platform::haptics::HapticOutcome;",
+        "pub use flui_platform::haptics::HapticPattern;",
+        "pub use flui_platform::haptics::HapticPatternBuilder;",
+        "pub use flui_platform::haptics::HapticPatternError;",
+        "pub use flui_platform::haptics::HapticRequest;",
+        "pub use flui_platform::haptics::HapticTicket;",
+        "pub use flui_platform::haptics::HapticTiming;",
+        "pub use flui_platform::haptics::Intensity;",
+        "pub use flui_platform::haptics::ParameterCurve;",
+        "pub use flui_platform::haptics::PatternPlayback;",
+        "pub use flui_platform::haptics::Sharpness;",
+        "pub use flui_platform::haptics::UnitRangeError;",
+        "pub use flui_platform::input_capabilities::Availability;",
+        "pub use flui_platform::input_capabilities::InputCapabilities;",
+        "pub use flui_platform::input_capabilities::PointerKindSet;",
+        "pub use flui_platform::text_store::TextInputPurpose;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use flui_platform_api::WindowMode;
+use flui_platform::WindowMode;
 
 /// What AppKit says about a window, as plain flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

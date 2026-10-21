@@ -10,7 +10,7 @@
 use android_activity::AndroidApp;
 use jni::{JValue, jni_sig, jni_str};
 
-use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
+use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
 use crate::shared::os_version::android::{AndroidApi, InsetsController};
 

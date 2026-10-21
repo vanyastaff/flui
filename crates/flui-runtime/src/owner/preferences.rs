@@ -2,7 +2,7 @@
 
 use std::{rc::Rc, sync::Arc};
 
-use flui_platform_api::SystemPreferences;
+use flui_platform::SystemPreferences;
 
 use super::runtime_dispatch::RuntimeWork;
 use super::{Delivery, DeliveryClaim, DispatchError, OwnerEffects, OwnerHost, OwnerWork};

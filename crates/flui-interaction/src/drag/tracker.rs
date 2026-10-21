@@ -16,8 +16,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
-use flui_platform_api::data_transfer::{DropFeedback, TransferActions};
+use flui_platform::EventTime;
+use flui_platform::data_transfer::{DropFeedback, TransferActions};
 
 use super::receiver::{
     Autoscroll, DragPoint, DropReceiver, ResolvedReceiver, SpringLoading, still_registered,

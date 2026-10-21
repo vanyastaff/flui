@@ -20,7 +20,7 @@ use flui_interaction::{
     GestureArena, GestureArenaMember, GestureContest, GestureDeadlineRegistration,
     GestureDeadlineUpdate, ScrollLatchEnd,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 use super::ScrollSequence;
 

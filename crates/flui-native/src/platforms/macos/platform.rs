@@ -231,7 +231,7 @@ impl MacOSPlatform {
 }
 
 impl Platform for MacOSPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         super::window::window_capabilities()
     }
 
@@ -249,15 +249,14 @@ impl Platform for MacOSPlatform {
     fn on_session_end(
         &self,
         callback: Box<
-            dyn FnMut(flui_platform_api::SessionEndPhase) -> flui_platform_api::SessionEndAnswer
-                + Send,
+            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
         >,
     ) {
         let previous = self.handlers.lock().session_end.replace(callback);
         crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
-    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
+    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>) {
         self.notices.set_hook(callback);
     }
 

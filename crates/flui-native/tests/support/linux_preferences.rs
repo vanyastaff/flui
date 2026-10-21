@@ -4,7 +4,7 @@
 
 pub mod linux {
     use flui_native::{Platform, PlatformProxy, WinitPlatform};
-    use flui_platform_api::{MotionPreference, WindowAppearance};
+    use flui_platform::{MotionPreference, WindowAppearance};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},

@@ -2,7 +2,7 @@
 //! [`DisplayId`]s, the snapshot it last published, and the rules for when that
 //! snapshot is read from the OS again.
 
-use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot};
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
@@ -306,7 +306,7 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Bounds;
-    use flui_platform_api::{DisplayInfo, DisplayKey};
+    use flui_platform::{DisplayInfo, DisplayKey};
 
     use super::DisplaySource;
     use crate::error::PlatformError;

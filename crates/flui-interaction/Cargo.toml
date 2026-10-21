@@ -31,7 +31,7 @@ web-time = { workspace = true }
 # This removes the former app-layer Any/downcast + closure-bridge path. The
 # contract crate, not `flui-native`: naming a capability trait must not link
 # the OS backends (ADR-0082).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 
 cursor-icon = { workspace = true }
 
@@ -119,7 +119,7 @@ default = []
 testing = []
 
 # Serialize the gesture values (details, velocity, pointer device kind).
-serde = ["dep:serde", "flui-painting/serde", "flui-platform-api/serde"]
+serde = ["dep:serde", "flui-painting/serde", "flui-platform/serde"]
 
 [lints]
 workspace = true

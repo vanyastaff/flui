@@ -5,7 +5,7 @@
 //! They live apart from `platforms::windows::display` so every host runs their
 //! tests.
 
-use flui_platform_api::{DisplayId, DisplayKey, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayKey, RefreshPeriod};
 
 /// The period of the rational rate `QueryDisplayConfig` reports for a target
 /// (`DISPLAYCONFIG_RATIONAL`), kept exact: 60000/1001 stays 16.683 ms. `None`
@@ -59,7 +59,7 @@ pub(crate) fn resolve_display(
 mod tests {
     use std::time::Duration;
 
-    use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod};
+    use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
     use super::{SampledMonitor, frequency_period, rational_refresh_period, resolve_display};
 

@@ -17,7 +17,7 @@
 //! Cfg-free plain values, so Linux CI pins them; `platforms::android` reads
 //! the map through JNI.
 
-use flui_platform_api::keyboard::NamedKey;
+use flui_platform::keyboard::NamedKey;
 
 /// `KeyEvent.KEYCODE_MENU`.
 pub const KEYCODE_MENU: i32 = 82;
