@@ -32,25 +32,42 @@ pub(crate) fn from_language_tags(
 /// `C` or `POSIX` there turns translation off, and so is no observation, as is
 /// no locale at all. Otherwise `LANGUAGE`'s colon-separated list is the
 /// priority order, and the messages locale stands in when that list names
-/// nothing usable. An encoding (`.UTF-8`) or modifier (`@euro`) does not name
-/// a locale and is dropped.
+/// nothing usable. Each name reads as [`posix_language_tag`] reads it.
 #[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
 pub(crate) fn from_posix_environment(var: impl Fn(&str) -> Option<String>) -> Option<Vec<Locale>> {
     let messages = ["LC_ALL", "LC_MESSAGES", "LANG"]
         .into_iter()
         .find_map(|name| var(name).filter(|value| !value.is_empty()))?;
-    let messages = posix_locale_name(&messages);
-    if matches!(messages, "C" | "POSIX") {
+    let messages = posix_language_tag(&messages);
+    if matches!(messages.as_str(), "C" | "POSIX") {
         return None;
     }
     let language = var("LANGUAGE").unwrap_or_default();
-    from_language_tags(language.split(':').map(posix_locale_name))
+    from_language_tags(language.split(':').map(posix_language_tag))
         .or_else(|| from_language_tags([messages]))
 }
 
+/// A POSIX locale name, `language_REGION.charset@modifier`, as a BCP 47 tag.
+/// The charset names no locale. Of the modifiers, a script one (`@latin`,
+/// `@cyrillic`, `@devanagari`) does and becomes the tag's script, as in
+/// `sr_RS@latin`, `sr-Latn-RS`; the others (`@euro`) are dropped.
 #[cfg(any(all(target_os = "linux", feature = "winit-backend"), test))]
-fn posix_locale_name(value: &str) -> &str {
-    value.split(['.', '@']).next().unwrap_or_default()
+fn posix_language_tag(value: &str) -> String {
+    let (name, modifier) = value
+        .split_once('@')
+        .map_or((value, None), |(name, modifier)| (name, Some(modifier)));
+    let name = name.split('.').next().unwrap_or_default();
+    let script = match modifier {
+        Some("latin") => Some("Latn"),
+        Some("cyrillic") => Some("Cyrl"),
+        Some("devanagari") => Some("Deva"),
+        _ => None,
+    };
+    match (script, name.split_once('_')) {
+        (Some(script), Some((language, region))) => format!("{language}-{script}-{region}"),
+        (Some(script), None) => format!("{name}-{script}"),
+        (None, _) => name.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -103,7 +120,30 @@ mod tests {
                     ("LANG", "de_DE.UTF-8"),
                     ("LANGUAGE", "sr_RS@latin:en_GB:en"),
                 ][..],
-                Some(&["sr-RS", "en-GB", "en"][..]),
+                Some(&["sr-Latn-RS", "en-GB", "en"][..]),
+            ),
+            // A script modifier names the script; any other modifier, and
+            // the charset before it, names nothing.
+            (
+                &[(
+                    "LANGUAGE",
+                    "uz_UZ.UTF-8@cyrillic:be@latin:hi_IN@devanagari:de_DE.UTF-8@euro",
+                )][..],
+                None,
+            ),
+            (
+                &[
+                    ("LANG", "en_US.UTF-8"),
+                    (
+                        "LANGUAGE",
+                        "uz_UZ.UTF-8@cyrillic:be@latin:hi_IN@devanagari:de_DE.UTF-8@euro",
+                    ),
+                ][..],
+                Some(&["uz-Cyrl-UZ", "be-Latn", "hi-Deva-IN", "de-DE"][..]),
+            ),
+            (
+                &[("LANG", "sr_RS.UTF-8@latin")][..],
+                Some(&["sr-Latn-RS"][..]),
             ),
             (
                 &[("LANG", "en_US.UTF-8"), ("LC_MESSAGES", "pt_BR.UTF-8")][..],

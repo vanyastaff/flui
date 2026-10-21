@@ -513,6 +513,10 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `[fr-CA, en]` в первом наблюдении каждого случая, `unsupported` без контраста и масштаба. Без
   `contrast` в фильтре `SettingChanged` случай `contrast` падает по сторожу через 30 с. В сессии
   GNOME не запускалось.
+- [x] **PR 5a** — ветка `platform/preferences-locale-scripts`, по ревью: модификатор письменности в
+  имени POSIX называет письменность (`sr_RS@latin` → `sr-Latn-RS`, `@cyrillic`, `@devanagari`),
+  остальные модификаторы и кодировка отбрасываются; строки в
+  `a_posix_environment_is_read_as_gettext_reads_it`.
 
 ## Чего нет в этой серии
 
