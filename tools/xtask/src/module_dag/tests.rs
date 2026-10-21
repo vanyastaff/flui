@@ -259,6 +259,48 @@ fn test_only_relay_items_do_not_change_production_attribution() {
     );
 }
 
+/// A statement or expression compiled only under `cfg(test)` inside production
+/// code is test code: what it names is no production edge.
+fn test_only_statements_name_no_production_edge() {
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                TWO_LIB,
+                (
+                    "low.rs",
+                    "pub fn run() {\n\
+                     #[cfg(test)]\n\
+                     crate::high::record();\n\
+                     #[cfg(test)]\n\
+                     let _probe = crate::high::High;\n\
+                     #[cfg(test)]\n\
+                     crate::high::note!();\n\
+                     }",
+                ),
+                (
+                    "high.rs",
+                    "pub struct High; pub fn record() {}\n\
+                     #[macro_export] macro_rules! note { () => {} }",
+                ),
+            ],
+        ),
+        set(&[]),
+    );
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                TWO_LIB,
+                ("low.rs", "pub fn run() { crate::high::record(); }"),
+                ("high.rs", "pub fn record() {}"),
+            ],
+        ),
+        set(&[("low", "high", "refused")]),
+        "the same statement outside cfg(test) is an edge"
+    );
+}
+
 fn inner_test_only_relay_modules_do_not_change_production_attribution() {
     assert_eq!(
         identities(
@@ -1684,6 +1726,10 @@ fn module_dag_contract() {
             (
                 "test_only_relay_items_do_not_change_production_attribution",
                 test_only_relay_items_do_not_change_production_attribution as fn(),
+            ),
+            (
+                "test_only_statements_name_no_production_edge",
+                test_only_statements_name_no_production_edge as fn(),
             ),
             (
                 "inner_test_only_relay_modules_do_not_change_production_attribution",

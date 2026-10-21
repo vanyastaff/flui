@@ -6,24 +6,24 @@
 //! public platform names are those platforms. Nothing in the crate names this
 //! module except the crate root, which picks a host.
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub(crate) mod apple;
 #[cfg(target_os = "android")]
 pub(crate) mod android;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod apple;
 pub(crate) mod headless;
-#[cfg(windows)]
-pub(crate) mod windows;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
+#[cfg(windows)]
+pub(crate) mod windows;
 
+#[cfg(target_os = "android")]
+pub use android::AndroidPlatform;
 #[cfg(target_os = "ios")]
 pub use apple::IOSPlatform;
 #[cfg(target_os = "macos")]
 pub use apple::MacOSPlatform;
-#[cfg(target_os = "android")]
-pub use android::AndroidPlatform;
 pub use headless::HeadlessPlatform;
-#[cfg(windows)]
-pub use windows::WindowsPlatform;
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
+#[cfg(windows)]
+pub use windows::WindowsPlatform;

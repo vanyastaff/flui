@@ -694,6 +694,25 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
     }
 
+    /// A `let`, macro statement or expression under `cfg(test)` is test code.
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if !implies_test(&local.attrs) {
+            visit::visit_local(self, local);
+        }
+    }
+
+    fn visit_stmt_macro(&mut self, mac: &'ast syn::StmtMacro) {
+        if !implies_test(&mac.attrs) {
+            visit::visit_stmt_macro(self, mac);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if !implies_test(expr_attrs(expr)) {
+            visit::visit_expr(self, expr);
+        }
+    }
+
     /// Each import of the tree once; a glob names the module it reads.
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         for leaf in use_leaves(&item.tree) {
@@ -736,6 +755,53 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         for (path, span) in found {
             self.record(path, span.start().line);
         }
+    }
+}
+
+/// The outer attributes of an expression; `syn` keeps them on each variant.
+fn expr_attrs(expr: &syn::Expr) -> &[Attribute] {
+    use syn::Expr;
+    match expr {
+        Expr::Array(e) => &e.attrs,
+        Expr::Assign(e) => &e.attrs,
+        Expr::Async(e) => &e.attrs,
+        Expr::Await(e) => &e.attrs,
+        Expr::Binary(e) => &e.attrs,
+        Expr::Block(e) => &e.attrs,
+        Expr::Break(e) => &e.attrs,
+        Expr::Call(e) => &e.attrs,
+        Expr::Cast(e) => &e.attrs,
+        Expr::Closure(e) => &e.attrs,
+        Expr::Const(e) => &e.attrs,
+        Expr::Continue(e) => &e.attrs,
+        Expr::Field(e) => &e.attrs,
+        Expr::ForLoop(e) => &e.attrs,
+        Expr::Group(e) => &e.attrs,
+        Expr::If(e) => &e.attrs,
+        Expr::Index(e) => &e.attrs,
+        Expr::Infer(e) => &e.attrs,
+        Expr::Let(e) => &e.attrs,
+        Expr::Lit(e) => &e.attrs,
+        Expr::Loop(e) => &e.attrs,
+        Expr::Macro(e) => &e.attrs,
+        Expr::Match(e) => &e.attrs,
+        Expr::MethodCall(e) => &e.attrs,
+        Expr::Paren(e) => &e.attrs,
+        Expr::Path(e) => &e.attrs,
+        Expr::Range(e) => &e.attrs,
+        Expr::RawAddr(e) => &e.attrs,
+        Expr::Reference(e) => &e.attrs,
+        Expr::Repeat(e) => &e.attrs,
+        Expr::Return(e) => &e.attrs,
+        Expr::Struct(e) => &e.attrs,
+        Expr::Try(e) => &e.attrs,
+        Expr::TryBlock(e) => &e.attrs,
+        Expr::Tuple(e) => &e.attrs,
+        Expr::Unary(e) => &e.attrs,
+        Expr::Unsafe(e) => &e.attrs,
+        Expr::While(e) => &e.attrs,
+        Expr::Yield(e) => &e.attrs,
+        _ => &[],
     }
 }
 
