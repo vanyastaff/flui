@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use flui_native::storage::{DataDirs, FileStore, data_dirs};
-use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
+use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
 
 use crate::run_table;
 

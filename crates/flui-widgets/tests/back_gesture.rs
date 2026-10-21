@@ -406,7 +406,7 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
     use flui_foundation::geometry::Point;
     use flui_interaction::{GestureSettings, GestureSettingsSource};
     use flui_painting::styling::Color;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,

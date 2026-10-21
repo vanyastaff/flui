@@ -284,7 +284,7 @@ impl IOSPlatform {
         let hook = self.handlers.lock().session_end.take();
         if let Some(mut hook) = hook {
             crate::shared::panic_boundary::contain_owner_callback(|| {
-                let _ = hook(flui_platform_api::SessionEndPhase::Ending);
+                let _ = hook(flui_platform::SessionEndPhase::Ending);
             });
             crate::shared::panic_boundary::contain_owner_callback(|| drop(hook));
         }
@@ -294,7 +294,7 @@ impl IOSPlatform {
     /// application, which is the critical level.
     fn warn_of_memory_pressure(&self) {
         self.notices
-            .dispatch(flui_platform_api::SystemNotice::MemoryPressure(
+            .dispatch(flui_platform::SystemNotice::MemoryPressure(
                 flui_foundation::memory::MemoryPressureLevel::Critical,
             ));
     }
@@ -410,8 +410,8 @@ struct DelegateState {
 }
 
 impl Platform for IOSPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
@@ -469,7 +469,7 @@ impl Platform for IOSPlatform {
         MainThreadMarker::new().and_then(|_| self.active().map(|window| window.id()))
     }
 
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
             message: "UIKit preference sampling must run on the main thread".into(),
         })?;
@@ -498,15 +498,14 @@ impl Platform for IOSPlatform {
     fn on_session_end(
         &self,
         callback: Box<
-            dyn FnMut(flui_platform_api::SessionEndPhase) -> flui_platform_api::SessionEndAnswer
-                + Send,
+            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
         >,
     ) {
         let previous = self.handlers.lock().session_end.replace(callback);
         crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
-    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
+    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>) {
         self.notices.set_hook(callback);
     }
 

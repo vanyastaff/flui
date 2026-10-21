@@ -30,7 +30,7 @@ No widget can reach haptics today.
 
 ## Decision
 
-1. **Tier 1, semantic.** `HapticFeedback` (Stable, `flui-platform-api`) keeps its variants and
+1. **Tier 1, semantic.** `HapticFeedback` (Stable, `flui-platform`) keeps its variants and
    gains `Alignment`, `LevelChange`, `DragLift`, `Drop`, `Confirm` and `Reject`. A kind the
    device lacks maps to the nearest one the backend has and reports `Approximated`.
 2. **Tier 2, patterns.** `HapticPattern` is an ordered list of `HapticEvent`s, built only by a
@@ -173,7 +173,7 @@ No widget can reach haptics today.
    (`stoppedHandler`) and after a haptic-server error (`resetHandler`). Both handlers only
    record a restart obligation and wake the owner, which restarts the engine before the next
    play; a pattern requested while it is down falls back to tier 1.
-9. **Gate.** `flui-platform-api` always builds `HapticPattern` and its parts, `HapticRequest`,
+9. **Gate.** `flui-platform` always builds `HapticPattern` and its parts, `HapticRequest`,
    `HapticOutcome`, `HapticTicket`, `HapticCapabilities` and the `PlatformHaptics` methods that
    take them (with default bodies, so a new method never breaks an implementor), so Cargo's
    feature unification cannot change them. The user-facing gate is the additive

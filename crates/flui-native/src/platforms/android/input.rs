@@ -8,7 +8,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
-use flui_platform_api::{EventTime, keyboard::Modifiers as OwnedModifiers};
+use flui_platform::{EventTime, keyboard::Modifiers as OwnedModifiers};
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
 
@@ -302,11 +302,11 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
 /// The key presses an input method's editor action arrives as: `key`
 /// pressed and released at `uptime_ms`, with Shift when `shift`.
 pub(crate) fn editor_action_keys(
-    key: flui_platform_api::keyboard::NamedKey,
+    key: flui_platform::keyboard::NamedKey,
     shift: bool,
     uptime_ms: i64,
 ) -> [PlatformInput; 2] {
-    use flui_platform_api::keyboard::{Code, Key as OwnedKey, KeyEvent, KeyState as OwnedState};
+    use flui_platform::keyboard::{Code, Key as OwnedKey, KeyEvent, KeyState as OwnedState};
     let time = EventTime::from_nanos(
         u64::try_from(uptime_ms)
             .unwrap_or(0)
@@ -375,7 +375,7 @@ pub fn convert_key_event(
             modifiers,
             repeat,
             is_composing: crate::shared::android_ime::key_composition(composing)
-                == flui_platform_api::keyboard::ImeComposition::Active,
+                == flui_platform::keyboard::ImeComposition::Active,
         },
         u64::try_from(event.event_time()).ok()?,
     ))

@@ -38,18 +38,18 @@ use flui_native::shared::pointer_assembly::{
 use flui_native::shared::web_text::key_composition;
 use flui_native::traits::{DispatchEventResult, PlatformInput};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
-use flui_platform_api::EventTime;
-use flui_platform_api::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform_api::haptics::{
+use flui_platform::EventTime;
+use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
-use flui_platform_api::input_capabilities::{Availability, InputCapabilities};
-use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use flui_platform_api::pointer::{
+use flui_platform::input_capabilities::{Availability, InputCapabilities};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ContactAction, ContactStep, KeyStep, PanStep, PinchChange,

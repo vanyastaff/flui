@@ -1,4 +1,4 @@
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
 };
 
@@ -139,7 +139,7 @@ pub(crate) fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_dr
 #[derive(Default)]
 struct FocusLog(std::cell::RefCell<Vec<bool>>);
 
-impl flui_platform_api::TextStoreHost for FocusLog {
+impl flui_platform::TextStoreHost for FocusLog {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         self.0.borrow_mut().push(store.is_some());
     }
@@ -148,10 +148,10 @@ impl flui_platform_api::TextStoreHost for FocusLog {
         &self,
         _: &Rc<dyn TextStore>,
     ) -> Result<
-        flui_platform_api::text_store::CompositionEnd,
-        flui_platform_api::text_store::TextStoreHostError,
+        flui_platform::text_store::CompositionEnd,
+        flui_platform::text_store::TextStoreHostError,
     > {
-        Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+        Ok(flui_platform::text_store::CompositionEnd::Committed)
     }
 }
 
@@ -163,7 +163,7 @@ impl flui_platform_api::TextStoreHost for FocusLog {
 /// host hears nothing.
 pub(crate) fn a_window_with_a_text_store_host_takes_input_through_it() {
     let log = Rc::new(FocusLog::default());
-    let host: Rc<dyn flui_platform_api::TextStoreHost> = log.clone();
+    let host: Rc<dyn flui_platform::TextStoreHost> = log.clone();
     let ui_runtime = UiRuntime::new(
         super::test_window().with_text_store_host(Some(host)),
         1.0,

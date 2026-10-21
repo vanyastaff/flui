@@ -262,7 +262,7 @@ pub(super) struct OwnerTracking {
     pub(super) mode: NativeMode,
     pub(super) restore_style: u32,
     pub(super) constraints: SizeConstraints,
-    pub(super) display: Option<flui_platform_api::DisplayId>,
+    pub(super) display: Option<flui_platform::DisplayId>,
 }
 
 /// The window's title as the system holds it, `None` when it cannot be read.
@@ -690,7 +690,7 @@ impl WindowsWindow {
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 is_hovered: std::cell::Cell::new(false),
-                modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
+                modifiers: std::cell::Cell::new(flui_platform::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
@@ -1740,15 +1740,14 @@ impl crate::traits::HostWindow for WindowsWindow {
     /// destroyed; a host read before that answers
     /// [`TextStoreHostError::Unavailable`] from then on.
     ///
-    /// [`TextStoreHostError::Unavailable`]: flui_platform_api::text_store::TextStoreHostError::Unavailable
+    /// [`TextStoreHostError::Unavailable`]: flui_platform::text_store::TextStoreHostError::Unavailable
     fn text_store_host(
         &self,
         _owner: crate::traits::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         super::platform::with_window_context(self.hwnd, "text_store_host", |context| {
             let services = context.text_services.borrow().clone();
-            services
-                .map(|services| services as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+            services.map(|services| services as Rc<dyn flui_platform::text_store::TextStoreHost>)
         })
         .flatten()
     }
@@ -1763,12 +1762,12 @@ impl PlatformWindow for WindowsWindow {
         Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
     }
 
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
-        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>)
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform::drag::PlatformDragSource>)
     }
 
-    fn window_at(&self, position: Point<f64>) -> flui_platform_api::WindowAt {
-        use flui_platform_api::WindowAt;
+    fn window_at(&self, position: Point<f64>) -> flui_platform::WindowAt {
+        use flui_platform::WindowAt;
         use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
 
         let scale = self.state.lock().scale_factor;
@@ -1841,10 +1840,9 @@ impl PlatformWindow for WindowsWindow {
 
     fn gesture_geometry(
         &self,
-    ) -> Result<Option<flui_platform_api::GestureGeometry>, flui_platform_api::PreferenceQueryError>
-    {
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
         use crate::shared::hwnd_affinity::UserDataRefusal;
-        use flui_platform_api::{GestureGeometry, PreferenceQueryError};
+        use flui_platform::{GestureGeometry, PreferenceQueryError};
 
         super::platform::with_window_context_checked(self.hwnd, "gesture geometry", |_| {
             // SAFETY: the checked owner context proves this is the still-live
@@ -1995,9 +1993,9 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn modifiers(&self) -> flui_platform_api::keyboard::Modifiers {
+    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
         super::platform::with_window_context(self.hwnd, "modifiers", |ctx| ctx.modifiers.get())
-            .unwrap_or(flui_platform_api::Modifiers::NONE)
+            .unwrap_or(flui_platform::Modifiers::NONE)
     }
 
     fn appearance(&self) -> WindowAppearance {
@@ -2007,7 +2005,7 @@ impl PlatformWindow for WindowsWindow {
         super::appearance::system_appearance()
     }
 
-    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+    fn display_id(&self) -> Option<flui_platform::DisplayId> {
         // A destroyed or recycled `HWND` names another window's monitor: refuse
         // it with the identity probe `window_handle` uses.
         if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
@@ -2900,7 +2898,7 @@ thread_local! {
 #[cfg(test)]
 mod open_tests {
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform_api::{
+    use flui_platform::{
         DisplayInfo, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
         WindowOptions,
     };
@@ -3120,7 +3118,7 @@ mod open_tests {
             )
             .expect("window");
         let normal = window.state().outer;
-        let same_as_normal = |state: flui_platform_api::WindowState, what: &str| {
+        let same_as_normal = |state: flui_platform::WindowState, what: &str| {
             let reported = state
                 .normal_geometry
                 .unwrap_or_else(|| panic!("{what} reports the rectangle it returns to"));

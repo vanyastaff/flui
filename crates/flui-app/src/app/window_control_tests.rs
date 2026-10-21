@@ -13,7 +13,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_native::traits::WindowId;
 use flui_native::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
-use flui_platform_api::{CursorError, CursorIcon};
+use flui_platform::{CursorError, CursorIcon};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;

@@ -60,8 +60,8 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_interaction::InputSequenceId;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::NamedKey;
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::NamedKey;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,

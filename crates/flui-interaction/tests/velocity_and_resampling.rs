@@ -76,14 +76,14 @@ fn contact() -> PointerId {
 fn with_time(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            button.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            button.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(update) => {
             let mut sample = *update.current();
-            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            sample.time = flui_platform::EventTime::from_nanos(nanos);
             *update =
                 flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
                     .with_modifiers(update.modifiers)
@@ -526,8 +526,8 @@ fn inverted_fling_range_is_rejected() {
 fn invalid_settings_are_rejected() {
     let base = || {
         GestureSettings::preset(
-            flui_platform_api::TargetPlatform::Unknown,
-            flui_platform_api::pointer::PointerKind::Mouse,
+            flui_platform::TargetPlatform::Unknown,
+            flui_platform::pointer::PointerKind::Mouse,
         )
     };
     let invalid = |field, value| Err(GestureSettingsError::InvalidValue { field, value });
@@ -622,7 +622,7 @@ fn interpolation_uses_the_bracketing_samples() {
 
 fn interpolation_does_not_publish_future_sensor_readings() {
     use flui_interaction::events::{PointerButtons, PointerMove, PointerSample};
-    use flui_platform_api::{EventTime, pointer::Pressure};
+    use flui_platform::{EventTime, pointer::Pressure};
 
     for (previous, next) in [(Some(0.2), Some(0.9)), (None, Some(0.9)), (Some(0.2), None)] {
         let at = origin();
@@ -662,7 +662,7 @@ fn interpolation_does_not_publish_future_sensor_readings() {
 }
 
 fn queued_leave_does_not_starve_accepted_boundaries() {
-    use flui_platform_api::{EventTime, pointer::PointerSignal};
+    use flui_platform::{EventTime, pointer::PointerSignal};
     for contact_sequence in [false, true] {
         let at = origin();
         let resampler = PointerEventResampler::new(contact());
@@ -906,7 +906,7 @@ fn interleaved_non_moves_stay_bounded() {
         resampler.add_event_at(
             PointerEvent::Scroll(ScrollEvent::new(
                 PointerInfo::new(contact(), PointerKind::Mouse),
-                flui_platform_api::EventTime::from_nanos(0),
+                flui_platform::EventTime::from_nanos(0),
                 PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
                     .expect("finite scroll position"),
                 ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 1.0).expect("finite scroll delta"),
@@ -1259,7 +1259,7 @@ fn binding_terminal_withdrawal_cancels_prepared_contact_output() {
 
 fn binding_reentry_orders_motion_before_observing_input() {
     use flui_foundation::MonotonicClock;
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         ButtonChange, PointerButton, PointerButtons, PointerPress, PointerSample,
     };
     for button_edge in [false, true] {
@@ -1280,7 +1280,7 @@ fn binding_reentry_orders_motion_before_observing_input() {
                         let binding = reentrant.upgrade().expect("binding alive");
                         if button_edge {
                             let sample = PointerSample::new(
-                                flui_platform_api::EventTime::from_nanos(20_000_000),
+                                flui_platform::EventTime::from_nanos(20_000_000),
                                 PointerPosition::try_new(flui_foundation::geometry::Point::new(
                                     20.0, 0.0,
                                 ))
@@ -1344,7 +1344,7 @@ fn binding_reentry_orders_motion_before_observing_input() {
 
 fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{PointerButtons, PointerMove, PointerSample},
     };
@@ -1686,7 +1686,7 @@ fn pinch_scale_is_finite_and_positive() {
         path.add(HitTestEntry::new(flui_foundation::RenderId::new(1)).pan_zoom_target(target));
         let event = PointerEvent::PanZoom(PanZoomEvent::new(
             PointerInfo::new(contact(), PointerKind::Trackpad),
-            flui_platform_api::EventTime::from_nanos(1_000),
+            flui_platform::EventTime::from_nanos(1_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
                 .expect("finite focal position"),
             PanZoomPhase::Update(PanZoomTransform::try_new(1.25, 0.0).expect("valid zoom")),

@@ -8,7 +8,7 @@ use flui_foundation::{
     geometry::{EdgeInsets, WindowMetrics},
 };
 use flui_interaction::InputSurface;
-use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
+use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
 
 use crate::HostInput;
 
@@ -597,7 +597,7 @@ impl OwnerHost {
 #[cfg(test)]
 mod tests {
     use flui_foundation::PresentationAddress;
-    use flui_platform_api::Brightness;
+    use flui_platform::Brightness;
 
     use super::{PendingWindowState, WindowObservation};
     use crate::ui_runtime::UiRuntime;

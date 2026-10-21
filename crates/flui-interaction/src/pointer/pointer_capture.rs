@@ -7,7 +7,7 @@ use std::{
     sync::Weak as SharedWeak,
 };
 
-use flui_platform_api::{PlatformWindow, pointer::PointerInfo};
+use flui_platform::{PlatformWindow, pointer::PointerInfo};
 
 use super::PointerTarget;
 

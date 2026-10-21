@@ -4,7 +4,7 @@
 //! Logical pixels, translated lines and pages retain their own units. Raw
 //! Win32 detents remain rotation until the consumer applies system preferences.
 
-use flui_platform_api::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
 
 /// A Win32 vertical wheel detent points away from the user, toward earlier
 /// content: invert its sign and divide by WHEEL_DELTA (120).

@@ -25,5 +25,5 @@
 
 ### Removed
 
-- `DisplayKey::Backend` (`flui-platform-api`): the label key of the winit display source, which
+- `DisplayKey::Backend` (`flui-platform`): the label key of the winit display source, which
   keyed a monitor by a name a backend could reuse. The Wayland and X11 keys replace it on Linux.

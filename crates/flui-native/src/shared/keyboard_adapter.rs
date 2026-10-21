@@ -4,7 +4,7 @@
 //! are converted here into the owned FLUI contract; pointer input never passes
 //! through upstream event values.
 
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     keyboard::{
         Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
@@ -15,11 +15,8 @@ use keyboard_types as upstream;
 pub(crate) fn keyboard_input(
     event: upstream::KeyboardEvent,
     observed_ns: u64,
-) -> flui_platform_api::PlatformInput {
-    flui_platform_api::PlatformInput::Keyboard(key_event(
-        &event,
-        EventTime::from_nanos(observed_ns),
-    ))
+) -> flui_platform::PlatformInput {
+    flui_platform::PlatformInput::Keyboard(key_event(&event, EventTime::from_nanos(observed_ns)))
 }
 
 pub(crate) fn modifiers(value: upstream::Modifiers) -> Modifiers {
@@ -129,7 +126,7 @@ mod tests {
             repeat: true,
             is_composing: true,
         };
-        let flui_platform_api::PlatformInput::Keyboard(event) = keyboard_input(upstream, 19) else {
+        let flui_platform::PlatformInput::Keyboard(event) = keyboard_input(upstream, 19) else {
             panic!("keyboard adapter produces keyboard input")
         };
         assert_eq!(event.state(), KeyState::Down);

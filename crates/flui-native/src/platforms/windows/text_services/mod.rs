@@ -52,7 +52,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::panic::retain_opaque_payload;
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CompositionEnd, OwnerCalls, TextStore, TextStoreHost, TextStoreHostError,
     commit_composition_in_place,
 };

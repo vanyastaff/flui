@@ -140,7 +140,7 @@ class = "slice"
 count = 3
 
 [[allow]]
-path = "crates/flui-platform-api/src/platform_window.rs"
+path = "crates/flui-platform/src/platform_window.rs"
 class = "spec-task"
 count = 2
 

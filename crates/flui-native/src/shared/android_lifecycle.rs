@@ -21,7 +21,7 @@
 //! when a callback that can change it arrives, never polled. This module
 //! decides what each of them means; reading the level is the backend's.
 
-use flui_platform_api::{MemoryPressureLevel, WindowExecutionState};
+use flui_platform::{MemoryPressureLevel, WindowExecutionState};
 
 /// The Activity callbacks that matter for the lifecycle, without the payloads
 /// `android_activity::MainEvent` carries.
@@ -234,7 +234,7 @@ mod tests {
         ActivityEvent::{self, *},
         ActivityLifecycle, ActivitySignal, MemoryPressureLevel, Reaction, pressure_for_trim_level,
     };
-    use flui_platform_api::WindowExecutionState::{Running, Suspended};
+    use flui_platform::WindowExecutionState::{Running, Suspended};
 
     const ALL_EVENTS: [ActivityEvent; 8] = [
         Start,
@@ -266,7 +266,7 @@ mod tests {
         fn visibility_changed(&self, visible: bool) {
             self.0.borrow_mut().push(format!("visible {visible}"));
         }
-        fn execution_changed(&self, state: flui_platform_api::WindowExecutionState) {
+        fn execution_changed(&self, state: flui_platform::WindowExecutionState) {
             self.0.borrow_mut().push(format!("execution {state:?}"));
         }
         fn focus_changed(&self, focused: bool) {

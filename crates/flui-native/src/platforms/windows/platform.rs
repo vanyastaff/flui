@@ -359,7 +359,7 @@ pub(super) struct WindowContext {
     /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
     pub chrome_follows_system: std::cell::Cell<bool>,
     /// Current keyboard modifiers.
-    pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
+    pub modifiers: std::cell::Cell<flui_platform::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -369,7 +369,7 @@ pub(super) struct WindowContext {
     pub restore_style: std::cell::Cell<u32>,
     /// The inner-size limits the app set, in logical pixels; `WM_GETMINMAXINFO`
     /// turns them into outer limits at the window's current DPI.
-    pub constraints: std::cell::Cell<flui_platform_api::SizeConstraints>,
+    pub constraints: std::cell::Cell<flui_platform::SizeConstraints>,
     /// Whether the app wants the window resizable. A window without a frame
     /// cannot be, but gets the frame back with this still set.
     pub resizable: std::cell::Cell<bool>,
@@ -471,7 +471,7 @@ impl WindowContext {
     /// The window's published state, read from the OS again first when
     /// something invalidated it; `on_state_changed` is raised when that
     /// produced a new revision.
-    pub(super) fn window_state(&self, hwnd: HWND) -> flui_platform_api::WindowState {
+    pub(super) fn window_state(&self, hwnd: HWND) -> flui_platform::WindowState {
         // While a change takes several steps the window is half-way between two
         // states; a read from inside a callback it raises sees the last whole one.
         if self.publish_hold.get() > 0 {
@@ -2501,7 +2501,7 @@ impl WindowsPlatform {
 }
 
 impl Platform for WindowsPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         super::window::window_capabilities()
     }
 
@@ -2677,7 +2677,7 @@ impl Platform for WindowsPlatform {
         "Windows"
     }
 
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         self.owner_control
             .shares("read system preferences")
             .map_err(|reason| PlatformError::Preferences {

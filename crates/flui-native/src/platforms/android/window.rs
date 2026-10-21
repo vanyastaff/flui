@@ -14,8 +14,8 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform_api::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
-use flui_platform_api::{
+use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
+use flui_platform::{
     DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
     WindowCommandError, WindowGeometry, WindowState,
 };
@@ -339,7 +339,7 @@ impl AndroidWindow {
 fn input_capabilities(
     api: AndroidApi,
     java_view: bool,
-) -> flui_platform_api::input_capabilities::InputCapabilities {
+) -> flui_platform::input_capabilities::InputCapabilities {
     crate::shared::input_availability::android(AndroidInputApis {
         gesture_exclusion: api.since::<GestureExclusion>().is_some(),
         touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
@@ -434,9 +434,9 @@ impl crate::traits::HostWindow for AndroidWindow {
     fn text_store_host(
         &self,
         _owner: crate::traits::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         self.text_input()
-            .map(|input| input as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+            .map(|input| input as Rc<dyn flui_platform::text_store::TextStoreHost>)
     }
 }
 
@@ -521,8 +521,8 @@ impl PlatformWindow for AndroidWindow {
         self.safe_area.lock().accepted
     }
 
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform::PlatformSystemChrome>)
     }
 
     /// Callable from any thread: the first request since the last frame wakes
@@ -566,9 +566,9 @@ impl PlatformWindow for AndroidWindow {
 
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
     /// what `InputCapabilities::outgoing_drag` claims.
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         (self.java_view.is_ready() && self.api.since::<DragSource>().is_some()).then(|| {
-            Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+            Arc::clone(&self.drag_source) as Arc<dyn flui_platform::drag::PlatformDragSource>
         })
     }
 

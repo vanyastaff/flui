@@ -12,10 +12,10 @@ use flui_native::shared::ole_drag_drop::{
     effect_bits, encode, encode_file_drop, encode_html, encode_text, identity_descriptor,
     modal_frame_wait_ms, native_format, offer_representations, os_loop_buttons, transfer_format,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     Mime, TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::IDENTITY_ESSENCE;
+use flui_platform::drag::IDENTITY_ESSENCE;
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
@@ -256,7 +256,7 @@ fn the_drop_source_drops_on_release_and_cancels_otherwise() {
 /// OLE's loop carries a drag only on the mouse buttons held as it starts:
 /// none held, or a pen or touch contact, leaves the drag in its window.
 fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
-    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use flui_platform::pointer::{PenTool, PointerKind};
     const LEFT: u32 = 0x01;
     const SHIFT: u32 = 0x04;
     let pen = PointerKind::Pen { tool: PenTool::Tip };

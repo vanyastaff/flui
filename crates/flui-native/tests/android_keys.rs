@@ -5,7 +5,7 @@
 //! side runs on a device.
 
 use flui_native::shared::android_keys::{KEYCODE_MENU, character_meta_state, unnamed_key};
-use flui_platform_api::keyboard::NamedKey;
+use flui_platform::keyboard::NamedKey;
 
 /// The Menu key opens the focused item's context menu on Android, so it
 /// must arrive named; character keys stay to the key map.

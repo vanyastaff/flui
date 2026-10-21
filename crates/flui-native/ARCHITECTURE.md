@@ -8,7 +8,7 @@ The contracts this crate's backends implement — `PlatformWindow`,
 `PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the display snapshot
 vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`), the
 `data_transfer` transport and the window and input vocabulary — live in
-`flui-platform-api` (ADR-0082) and are re-exported here at their old paths
+`flui-platform` (ADR-0082) and are re-exported here at their old paths
 (`flui_native::X`, `flui_native::traits::X`, `flui_native::data_transfer`),
 so a backend or `flui-app` names them as before. What stays here is what names
 an OS stack, AccessKit or tokio: `Platform`, the owner-thread capability,
@@ -16,7 +16,7 @@ an OS stack, AccessKit or tokio: `Platform`, the owner-thread capability,
 AccessKit adapters implement, is `flui-semantics`' (ADR-0082 §2, amended) and is
 re-exported at `flui_native::traits`. Only `flui-app` may
 depend on this crate (`allowed-dependents`); a crate that needs a capability
-trait depends on `flui-platform-api` instead.
+trait depends on `flui-platform` instead.
 
 ## Invariants
 
@@ -1120,7 +1120,7 @@ embedder code that closed the window. The native rows in `tests/contract.rs`
 
 **Rule:** every native keyboard event this crate receives must be normalized
 into FLUI's owned keyboard vocabulary (`Code`, `Key`,
-`Location`) at the platform boundary — see the module doc of `crates/flui-platform-api/src/input.rs`.
+`Location`) at the platform boundary — see the module doc of `crates/flui-platform/src/input.rs`.
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
 
@@ -1583,7 +1583,7 @@ application never saw that key go down.
 the composition (ADR-0069) and `unmarkText` emits
 `ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing.
 It is grounded in the client-side bug class
-`flui-platform-api/src/ime.rs` records — a client left holding composition state it was
+`flui-platform/src/ime.rs` records — a client left holding composition state it was
 never told ended suppresses `Key::Character` for the rest of the focus session
 and keeps the cancelled slice in its buffer — and in winit's own macOS
 implementation, which drops the marked text on `set_ime_allowed(false)`, so

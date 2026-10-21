@@ -12,9 +12,9 @@ use flui_native::shared::pointer_assembly::{
     ContactRegistry, CounterAnchor, NativeClock, NativeSurface, NativeTime, QpcTicks, ReadingTime,
 };
 use flui_native::traits::PlatformInput;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{PanZoomPhase, PointerEvent};
+use flui_platform::EventTime;
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{PanZoomPhase, PointerEvent};
 use std::num::NonZeroU64;
 
 const EPOCH: EventTime = EventTime::from_nanos(1_000_000_000);

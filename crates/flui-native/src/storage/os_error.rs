@@ -12,7 +12,7 @@
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
-use flui_platform_api::StorageError;
+use flui_platform::StorageError;
 
 /// `ERROR_INVALID_FUNCTION`: a file system without byte-range locks.
 #[cfg(windows)]
@@ -142,7 +142,7 @@ fn probe(target: &Path) -> StorageError {
 mod tests {
     use std::io::{self, ErrorKind};
 
-    use flui_platform_api::StorageError;
+    use flui_platform::StorageError;
 
     use super::{lock_error, storage_error};
 

@@ -11,7 +11,7 @@ use std::{
 
 use flui_foundation::panic::payload_text;
 use flui_interaction::{GestureArena, GestureArenaMember, ManualClock, PointerId};
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 struct Member {
     accepted: Rc<Cell<u32>>,

@@ -28,7 +28,7 @@
 
 use std::cell::RefCell;
 
-use flui_platform_api::{
+use flui_platform::{
     EventTime, Modifiers as KeyboardModifiers,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
     pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
@@ -164,8 +164,8 @@ impl MessageClock {
 
 /// When `event` happened; `None` for a revision, whose time names the
 /// reading it replaces.
-fn pointer_time(event: &flui_platform_api::pointer::PointerEvent) -> Option<EventTime> {
-    use flui_platform_api::pointer::{ButtonChange, PointerEvent};
+fn pointer_time(event: &flui_platform::pointer::PointerEvent) -> Option<EventTime> {
+    use flui_platform::pointer::{ButtonChange, PointerEvent};
     Some(match event {
         PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
             press.sample.time
@@ -268,8 +268,8 @@ mod message_clock_contract {
     /// placed before that reading.
     #[test]
     fn a_coarse_stamp_never_precedes_a_delivered_precise_one() {
-        use flui_platform_api::EventTime;
-        use flui_platform_api::pointer::{
+        use flui_platform::EventTime;
+        use flui_platform::pointer::{
             CancelReason, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
         };
         let clock = MessageClock::anchored(100, None, 1_000_000);
@@ -776,7 +776,7 @@ pub(super) fn native_device(lparam: LPARAM) -> NativeDevice {
 #[cfg(test)]
 mod native_pointer_contracts {
     use super::*;
-    use flui_platform_api::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
+    use flui_platform::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
     use windows::Win32::{
         Foundation::HANDLE,
         UI::{
@@ -830,7 +830,7 @@ mod native_pointer_contracts {
     }
 
     /// The sample of the move `packet` makes for a hovering contact.
-    fn sampled(packet: PointerPacket) -> (flui_platform_api::pointer::PointerInfo, PointerSample) {
+    fn sampled(packet: PointerPacket) -> (flui_platform::pointer::PointerInfo, PointerSample) {
         let events = assemble(&mut registry(), &[packet], WM_POINTERUPDATE);
         events
             .into_iter()
@@ -1081,7 +1081,7 @@ mod native_pointer_contracts {
         })
     }
 
-    fn down(registry: &mut ContactRegistry, id: u32) -> flui_platform_api::pointer::PointerInfo {
+    fn down(registry: &mut ContactRegistry, id: u32) -> flui_platform::pointer::PointerInfo {
         assemble(
             registry,
             &[touch_packet(
@@ -1196,7 +1196,7 @@ mod native_pointer_contracts {
     /// A 240 Hz burst inside one system tick: every reading carries the same
     /// `dwTime`, and only the performance count tells them apart. Native
     /// history is newest first; the contact went down at the burst's start.
-    fn assembled_burst(clock: &MessageClock) -> flui_platform_api::pointer::PointerMove {
+    fn assembled_burst(clock: &MessageClock) -> flui_platform::pointer::PointerMove {
         let mut registry = ContactRegistry::new(clock.native());
         let start = timed_touch(5_016, 1_160_000, 130);
         assemble_history(

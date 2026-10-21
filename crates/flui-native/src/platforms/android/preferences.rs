@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use android_activity::AndroidApp;
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_platform_api::{MotionPreference, TextWeightPreference};
+use flui_platform::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
 use crate::shared::os_version::android::{AndroidApi, TextWeight};

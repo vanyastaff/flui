@@ -17,7 +17,7 @@ use flui_interaction::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     pointer::PointerDispatch,
 };
-use flui_platform_api::{
+use flui_platform::{
     EventTime, GestureGeometry, GesturePreferences,
     pointer::{
         PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
@@ -472,7 +472,7 @@ fn consecutive_candidates_do_not_cross_pointer_kinds() {
 }
 
 fn consecutive_candidates_compare_device_identity() {
-    use flui_platform_api::pointer::DeviceId;
+    use flui_platform::pointer::DeviceId;
     for (first, second, expected) in [
         (Some(9), Some(10), 0),
         (Some(9), None, 0),
@@ -632,7 +632,7 @@ fn native_double_click_full_area_is_halved_per_axis() {
 }
 
 fn native_touch_projection_preserves_authored_tier_ratios() {
-    use flui_platform_api::Distance;
+    use flui_platform::Distance;
     let baseline = GestureSettings::default()
         .try_with_touch_slop(10.0)
         .expect("valid hit tier")
@@ -1272,7 +1272,7 @@ fn force_press_snapshots_live_drift_policy_at_down() {
 }
 
 fn native_touch_span_preserves_baseline_ratio() {
-    use flui_platform_api::Distance;
+    use flui_platform::Distance;
     let baseline = GestureSettings::default()
         .try_with_touch_slop(10.0)
         .expect("valid hit")
@@ -1329,7 +1329,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     use flui_interaction::{
         gesture::PanZoomDisposition, gesture::VelocityEstimator, pointer::PanZoomDispatch,
     };
-    use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+    use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 
     let old = GestureSettings::default().with_velocity_estimator(VelocityEstimator::LeastSquares);
     let new = old

@@ -93,9 +93,9 @@ use std::{
 };
 
 use flui_foundation::{ClaimOutcome, ClaimSlot};
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 #[cfg(target_os = "linux")]
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use parking_lot::Mutex;
 use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
@@ -240,7 +240,7 @@ impl std::fmt::Debug for WinitPlatform {
 #[cfg(windows)]
 #[derive(Clone)]
 enum PreferenceObservation {
-    Observed(flui_platform_api::SystemPreferences),
+    Observed(flui_platform::SystemPreferences),
     Deferred,
     Failed(String),
 }
@@ -1027,13 +1027,13 @@ enum NativeDispatch {
     Input(PlatformInput),
     Hover(bool),
     /// The device kinds present changed: a capability change (ADR-0213).
-    Present(flui_platform_api::input_capabilities::PointerKindSet),
+    Present(flui_platform::input_capabilities::PointerKindSet),
 }
 
 /// One `Present` per tracked window, sorted by window.
 fn presence_dispatch(
     state: &WinitPlatformState,
-    present: flui_platform_api::input_capabilities::PointerKindSet,
+    present: flui_platform::input_capabilities::PointerKindSet,
 ) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
     let mut windows: Vec<_> = state.windows.iter().collect();
     windows.sort_by_key(|(id, _)| id.0);
@@ -2459,7 +2459,7 @@ impl Platform for WinitPlatform {
         self.notices.set_hook(callback);
     }
 
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         self.expected_shell().capabilities()
     }
 
@@ -2468,7 +2468,7 @@ impl Platform for WinitPlatform {
     }
 
     #[cfg(target_os = "linux")]
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
         if !signal
             .as_ref()
@@ -2485,7 +2485,7 @@ impl Platform for WinitPlatform {
     }
 
     #[cfg(target_os = "macos")]
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
         if !signal
             .as_ref()
@@ -2500,7 +2500,7 @@ impl Platform for WinitPlatform {
     }
 
     #[cfg(windows)]
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
         if !signal
             .as_ref()

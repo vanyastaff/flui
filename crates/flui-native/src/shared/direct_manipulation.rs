@@ -21,8 +21,8 @@
 //! no manipulation is open and is not input.
 
 use flui_foundation::geometry::Point;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{
     PointerEvent, PointerPosition, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
 use smallvec::SmallVec;
@@ -451,7 +451,7 @@ impl TouchpadAssembler {
                     let (x, y) = frame.position;
                     let native = NativeReading::new(
                         PINCH_CONTACT,
-                        flui_platform_api::pointer::PointerKind::Trackpad,
+                        flui_platform::pointer::PointerKind::Trackpad,
                         ReadingAction::Gesture(gesture),
                         frame.time,
                     )

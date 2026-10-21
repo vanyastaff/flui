@@ -7,9 +7,9 @@
 //! it on any host.
 
 use flui_foundation::geometry::Point;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{PointerEvent, PointerPosition, ScrollEvent, ScrollPrecision};
+use flui_platform::EventTime;
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{PointerEvent, PointerPosition, ScrollEvent, ScrollPrecision};
 
 use super::ContactRegistry;
 use crate::shared::events::primary_mouse_info;

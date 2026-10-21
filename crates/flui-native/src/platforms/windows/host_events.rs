@@ -20,7 +20,7 @@ use std::{
     time::Instant,
 };
 
-use flui_platform_api::{MemoryPressureLevel, SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{MemoryPressureLevel, SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM},

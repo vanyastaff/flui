@@ -15,7 +15,7 @@
   profile and hit testing carries the pointer kind, so `HitSlop`'s minimum target follows the
   contact. Runners configure `GestureProfiles::preset(platform)`, and a presentation without one
   gets the platform-neutral preset per kind.
-- **Input callbacks need not be `Send`** (`flui-platform-api`, `flui-native`, ADR-0082 §4):
+- **Input callbacks need not be `Send`** (`flui-platform`, `flui-native`, ADR-0082 §4):
   every backend holds a window's input callback for its owner thread and refuses a registration
   from any other, so `PlatformWindow::on_input` takes a callback that may capture an `Rc`.
 

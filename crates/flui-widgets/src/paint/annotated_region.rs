@@ -11,7 +11,7 @@ use flui_view::{Child, IntoView, RenderView};
 /// composited scene.
 ///
 /// The presentation reads a
-/// [`SystemUiOverlayStyle`](flui_platform_api::SystemUiOverlayStyle) region at
+/// [`SystemUiOverlayStyle`](flui_platform::SystemUiOverlayStyle) region at
 /// the top edge of the window after every frame and hands the topmost one to
 /// the window's system chrome. Any other `T` is found with
 /// [`LayerTree::find_annotations`](flui_rendering::layer::LayerTree::find_annotations).

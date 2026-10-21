@@ -15,11 +15,11 @@ use flui_widgets::{Listener, SizedBox};
 /// The hosted frame's manual time, not wall time, selects the measured
 /// intermediate point; the default policy retains its immediate harness path.
 pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
         PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
     };
-    use flui_platform_api::{EventTime, PlatformInput};
+    use flui_platform::{EventTime, PlatformInput};
     use flui_testing::{HeadlessHost, HeadlessWindow, PointerResampling};
     use std::cell::RefCell;
     use std::time::Duration;
@@ -217,7 +217,7 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
 
 pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
     use flui_interaction::PointerCapture;
-    use flui_platform_api::pointer::{CancelReason, PointerEvent};
+    use flui_platform::pointer::{CancelReason, PointerEvent};
     use std::cell::RefCell;
 
     let token = Rc::new(RefCell::new(None::<PointerCapture>));
@@ -289,7 +289,7 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
 
 pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
     use flui_interaction::PointerCapture;
-    use flui_platform_api::pointer::{CancelReason, PointerEvent};
+    use flui_platform::pointer::{CancelReason, PointerEvent};
     use std::cell::RefCell;
 
     let token = Rc::new(RefCell::new(None::<PointerCapture>));
@@ -506,8 +506,8 @@ pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
     use flui_interaction::{
         CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer, PointerId,
     };
-    use flui_platform_api::EventTime;
-    use flui_platform_api::pointer::{
+    use flui_platform::EventTime;
+    use flui_platform::pointer::{
         PenTool, PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
         PointerPosition, PointerPress, PointerRelease, PointerRevision, PointerSample, Pressure,
     };

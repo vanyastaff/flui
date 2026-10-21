@@ -9,9 +9,9 @@ use flui_native::shared::screen_edges::DeferredEdges;
 use flui_native::{
     HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _, WindowOptions,
 };
-use flui_platform_api::input_capabilities::Availability;
-use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
-use flui_platform_api::{DispatchEventResult, PlatformInput};
+use flui_platform::input_capabilities::Availability;
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+use flui_platform::{DispatchEventResult, PlatformInput};
 use parking_lot::Mutex;
 
 use crate::run_table;

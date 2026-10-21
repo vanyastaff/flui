@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use flui_platform_api::{
+use flui_platform::{
     Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     WindowEvent, WindowId, WindowOptions,
 };
@@ -257,8 +257,8 @@ pub trait Platform: Send + Sync + 'static {
     /// # Errors
     /// Reports a failed native read or an unavailable owner. An error is not an
     /// observation that a setting has been disabled.
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
-        Ok(flui_platform_api::SystemPreferences::default())
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        Ok(flui_platform::SystemPreferences::default())
     }
 
     // ==================== Display Management ====================
@@ -275,7 +275,7 @@ pub trait Platform: Send + Sync + 'static {
     /// snapshot it accepted.
     ///
     /// Display ids come from the platform's own
-    /// [`DisplayRegistry`](flui_platform_api::DisplayRegistry) and are
+    /// [`DisplayRegistry`](flui_platform::DisplayRegistry) and are
     /// comparable only with ids from this platform instance (ADR-0236).
     ///
     /// # Errors
@@ -416,7 +416,7 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
-    /// last [`SessionEndBlock`](flui_platform_api::SessionEndBlock) was
+    /// last [`SessionEndBlock`](flui_platform::SessionEndBlock) was
     /// released. A backend that holds the session open (Windows'
     /// `ShutdownBlockReason`) lets go here; one that answered synchronously has
     /// nothing to undo, and the default does nothing.
@@ -426,10 +426,10 @@ pub trait Platform: Send + Sync + 'static {
     /// known before any window exists.
     ///
     /// It is the same set every window the platform opens reports through
-    /// [`PlatformWindow::capabilities`](flui_platform_api::PlatformWindow::capabilities),
+    /// [`PlatformWindow::capabilities`](flui_platform::PlatformWindow::capabilities),
     /// so a caller can fit a remembered placement to what the window will be
     /// able to do (`WindowCapabilities::places_at_open`) before it opens one.
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities;
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities;
 
     /// How much larger a decorated window's outer size is than its content
     /// size on a display of scale `scale_factor`, in logical pixels: the title
@@ -489,7 +489,7 @@ pub trait Platform: Send + Sync + 'static {
     /// The default is the current user's data directories
     /// ([`crate::storage::data_dirs`]); a backend whose process has no such
     /// directories (Android) answers with its own.
-    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
         crate::storage::data_dirs(app)
     }
 }

@@ -6,7 +6,7 @@ use flui_foundation::{
     geometry::{Offset, Size},
 };
 use flui_painting::TextSizing;
-use flui_platform_api::{Distance, PlatformWindow};
+use flui_platform::{Distance, PlatformWindow};
 use flui_view::prelude::*;
 use std::{
     cell::Cell,
@@ -36,7 +36,7 @@ struct Window {
     panic_query: AtomicBool,
 }
 impl PlatformWindow for Window {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -59,27 +59,24 @@ impl PlatformWindow for Window {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
@@ -154,7 +151,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
                 RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(AtomicBool::new(false)),
-                    Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Manual(clock.clone()),
                 ),
@@ -249,7 +246,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             runtime.enter(|runtime| {
                 runtime.handle_input_addressed(
                     runtime.presentations.primary().id(),
-                    flui_platform_api::PlatformInput::Pointer(event),
+                    flui_platform::PlatformInput::Pointer(event),
                 )
             });
         }
@@ -261,7 +258,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentations.primary().id(),
-                flui_platform_api::PlatformInput::Pointer(
+                flui_platform::PlatformInput::Pointer(
                     pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch)
                         .expect("stationary down"),
                 ),
@@ -280,7 +277,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentations.primary().id(),
-                flui_platform_api::PlatformInput::Pointer(
+                flui_platform::PlatformInput::Pointer(
                     pointer_up(Offset::new(40.0, 40.0), PointerKind::Touch).expect("stationary up"),
                 ),
             )
@@ -308,10 +305,10 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
 
 struct HapticWindow {
     inner: Arc<dyn PlatformWindow>,
-    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::haptics::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -334,26 +331,26 @@ impl PlatformWindow for HapticWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
         self.inner.capabilities()
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
         self.inner.apply(command)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())
     }
 }
@@ -362,8 +359,8 @@ impl PlatformWindow for HapticWindow {
 /// before they reach the backend; unobserved and "on" play them, and each
 /// accepted revision decides the next request (ADR-0212 §1).
 pub(crate) fn haptics_preference_suppresses_both_tiers() {
-    use flui_platform_api::HapticFeedback;
-    use flui_platform_api::haptics::{
+    use flui_platform::HapticFeedback;
+    use flui_platform::haptics::{
         FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
     let haptics = Arc::new(FakeHaptics::new());
@@ -379,7 +376,7 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -451,8 +448,8 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
 pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
     use crate::{presentation::PresentationWindow, runtime_services::RuntimeHostServices};
     use crate::{sink::SubmitVerdict, testing::ScriptedSink};
-    use flui_platform_api::HapticFeedback;
-    use flui_platform_api::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
+    use flui_platform::HapticFeedback;
+    use flui_platform::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
     for verdict in [
         SubmitVerdict::Presented,
         SubmitVerdict::NotShown,
@@ -472,7 +469,7 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),

@@ -44,7 +44,7 @@ use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
 use flui_foundation::geometry::Bounds;
-use flui_platform_api::ImeEvent;
+use flui_platform::ImeEvent;
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
@@ -160,7 +160,7 @@ fn byte_offset_of_utf16_boundary(text: &str, units: usize) -> Option<usize> {
 /// encoding of the same text.
 ///
 /// AppKit speaks UTF-16 (`NSRange`, `NSTextInputClient`'s `selectedRange`),
-/// `flui_platform_api::ImeEvent` speaks bytes, and the two diverge at the first
+/// `flui_platform::ImeEvent` speaks bytes, and the two diverge at the first
 /// non-BMP or multi-byte character. Returns `None` when the range runs past the
 /// end of `text` or either end falls inside a surrogate pair — a range no byte
 /// offset can express, and one the caller must not round to a nearby boundary
@@ -337,7 +337,7 @@ extern "C-unwind" fn set_marked_text(
 /// `unmarkText` — the composition was abandoned; nothing is committed.
 ///
 /// Announced as an empty `Preedit`, the vocabulary's own spelling of "the
-/// composition ended" (`flui_platform_api::ImeEvent`'s type-level doc: a cancelled
+/// composition ended" (`flui_platform::ImeEvent`'s type-level doc: a cancelled
 /// composition arrives as `Preedit { text: "", cursor: None }` with no
 /// following `Commit`/`Disabled`). Emitting nothing here would be the
 /// previously-shipped bug class that doc records from the other side: a client
@@ -346,7 +346,7 @@ extern "C-unwind" fn set_marked_text(
 /// cancelled slice stays in its buffer. AppKit's own header is silent on
 /// whether `unmarkText` is always preceded by an empty `setMarkedText:`, so
 /// both paths must be covered. The event is inert when nothing is composing
-/// (`flui_platform_api::text_store::project_ime_event` strips an empty
+/// (`flui_platform::text_store::project_ime_event` strips an empty
 /// preedit's composition only when one is active, and edits nothing when
 /// there is none), which is why this
 /// callback needs no `hasMarkedText` check of its own.

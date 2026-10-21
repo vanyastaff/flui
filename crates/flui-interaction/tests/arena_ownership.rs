@@ -20,7 +20,7 @@ use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureBinding, HitTestEntry, HitTestResult, InteractionLane,
     ManualClock, PointerId, PointerKindSet, RecognizerSet, RenderId,
 };
-use flui_platform_api::{GesturePreferences, pointer::CancelReason, pointer::PenTool};
+use flui_platform::{GesturePreferences, pointer::CancelReason, pointer::PenTool};
 
 type Log = Rc<RefCell<Vec<(&'static str, GestureDisposition)>>>;
 
@@ -494,9 +494,9 @@ impl RedrawCounter {
     }
 }
 
-impl flui_platform_api::PlatformWindow for RedrawCounter {
-    fn id(&self) -> flui_platform_api::WindowId {
-        flui_platform_api::WindowId(1)
+impl flui_platform::PlatformWindow for RedrawCounter {
+    fn id(&self) -> flui_platform::WindowId {
+        flui_platform::WindowId(1)
     }
     fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
         flui_foundation::geometry::Size::new(100, 100)
@@ -516,27 +516,21 @@ impl flui_platform_api::PlatformWindow for RedrawCounter {
     fn is_visible(&self) -> bool {
         true
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
     fn as_any(&self) -> &dyn std::any::Any {
@@ -573,7 +567,7 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
         let lane = InteractionLane::try_new().expect("owner lane");
         let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
         let window = Arc::new(RedrawCounter(std::sync::atomic::AtomicUsize::new(0)));
-        let wake: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
+        let wake: Arc<dyn flui_platform::PlatformWindow> = window.clone();
         flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&wake));
         let arena = binding.arena().clone();
         let scroll = DragGestureRecognizer::builder(arena, DragAxis::Horizontal).build();

@@ -34,7 +34,7 @@
 //! the one whose sampled monitor has that handle, found through its native key.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
 use parking_lot::Mutex;
 use windows::Win32::{
     Devices::Display::{
@@ -470,7 +470,7 @@ fn enumerate_monitors() -> Vec<Monitor> {
 // path), so they live beside it.
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::DisplayRegistry;
+    use flui_platform::DisplayRegistry;
 
     use super::*;
 

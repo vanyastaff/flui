@@ -14,8 +14,8 @@ use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::GestureProfiles;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::NamedKey;
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::NamedKey;
 use flui_testing::a11y::{Action, Role};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
@@ -225,11 +225,11 @@ pub(crate) fn a_press_off_the_revealed_control_frees_the_trailing_edge() {
     );
     laid.enable_semantics();
     laid.pump();
-    let tab = flui_platform_api::keyboard::KeyEvent::new(
-        flui_platform_api::keyboard::KeyState::Down,
-        flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
-        flui_platform_api::keyboard::Code::Unidentified,
-        flui_platform_api::EventTime::from_nanos(0),
+    let tab = flui_platform::keyboard::KeyEvent::new(
+        flui_platform::keyboard::KeyState::Down,
+        flui_platform::keyboard::Key::Named(NamedKey::Tab),
+        flui_platform::keyboard::Code::Unidentified,
+        flui_platform::EventTime::from_nanos(0),
     );
     let _ = laid.focus_manager().dispatch_key_event(&tab);
     laid.pump();
@@ -752,7 +752,7 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
         }
         let trigger = if desktop {
             MouseScript::new("secondary click")
-                .press_button(row, flui_platform_api::pointer::PointerButton::SECONDARY)
+                .press_button(row, flui_platform::pointer::PointerButton::SECONDARY)
                 .wait(Duration::from_millis(16))
                 .release()
                 .build()
@@ -809,11 +809,9 @@ pub(crate) fn the_menu_long_press_waits_for_the_system_setting() {
             },
             tight(400.0, 300.0),
         );
-        laid.set_system_preferences(
-            flui_platform_api::SystemPreferences::default().with_gestures(
-                flui_platform_api::GesturePreferences::default().with_long_press_timeout(setting),
-            ),
-        );
+        laid.set_system_preferences(flui_platform::SystemPreferences::default().with_gestures(
+            flui_platform::GesturePreferences::default().with_long_press_timeout(setting),
+        ));
         laid.pump();
         let press = TouchScript::new("hold")
             .down(1, Offset::new(200.0, 25.0))
@@ -872,11 +870,11 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
         laid.pump();
         match entry {
             RowFocus::Tab => {
-                let tab = flui_platform_api::keyboard::KeyEvent::new(
-                    flui_platform_api::keyboard::KeyState::Down,
-                    flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
-                    flui_platform_api::keyboard::Code::Unidentified,
-                    flui_platform_api::EventTime::from_nanos(0),
+                let tab = flui_platform::keyboard::KeyEvent::new(
+                    flui_platform::keyboard::KeyState::Down,
+                    flui_platform::keyboard::Key::Named(NamedKey::Tab),
+                    flui_platform::keyboard::Code::Unidentified,
+                    flui_platform::EventTime::from_nanos(0),
                 );
                 let _ = laid.focus_manager().dispatch_key_event(&tab);
             }
@@ -953,11 +951,11 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
 
         // Revealed again, then within one frame focus leaves the row and a
         // pointer puts it back: the leaving counted, so nothing reveals it.
-        let _ = manager.dispatch_key_event(&flui_platform_api::keyboard::KeyEvent::new(
-            flui_platform_api::keyboard::KeyState::Down,
-            flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
-            flui_platform_api::keyboard::Code::Unidentified,
-            flui_platform_api::EventTime::from_nanos(0),
+        let _ = manager.dispatch_key_event(&flui_platform::keyboard::KeyEvent::new(
+            flui_platform::keyboard::KeyState::Down,
+            flui_platform::keyboard::Key::Named(NamedKey::Tab),
+            flui_platform::keyboard::Code::Unidentified,
+            flui_platform::EventTime::from_nanos(0),
         ));
         laid.pump();
         assert!(revealed(&laid), "{case}: Tab reveals the control again");
@@ -1219,7 +1217,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
         // resource; without one, from the built-in English strings.
         let root = if localized {
             flui_widgets::Localizations::new(
-                flui_platform_api::Locale::new("en", None::<&str>).expect("valid locale"),
+                flui_platform::Locale::new("en", None::<&str>).expect("valid locale"),
                 vec![flui_widgets::BoxedLocalizationsDelegate::new(
                     flui_widgets::DefaultWidgetsLocalizationsDelegate,
                 )],
@@ -1238,11 +1236,11 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
             "{label}: hidden until focus is in the row"
         );
         let manager = laid.focus_manager();
-        let tab = flui_platform_api::keyboard::KeyEvent::new(
-            flui_platform_api::keyboard::KeyState::Down,
-            flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
-            flui_platform_api::keyboard::Code::Unidentified,
-            flui_platform_api::EventTime::from_nanos(0),
+        let tab = flui_platform::keyboard::KeyEvent::new(
+            flui_platform::keyboard::KeyState::Down,
+            flui_platform::keyboard::Key::Named(NamedKey::Tab),
+            flui_platform::keyboard::Code::Unidentified,
+            flui_platform::EventTime::from_nanos(0),
         );
         let _ = manager.dispatch_key_event(&tab);
         laid.pump();
@@ -1288,11 +1286,11 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
         tight(400.0, 300.0),
     );
     laid.pump();
-    let tab = flui_platform_api::keyboard::KeyEvent::new(
-        flui_platform_api::keyboard::KeyState::Down,
-        flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
-        flui_platform_api::keyboard::Code::Unidentified,
-        flui_platform_api::EventTime::from_nanos(0),
+    let tab = flui_platform::keyboard::KeyEvent::new(
+        flui_platform::keyboard::KeyState::Down,
+        flui_platform::keyboard::Key::Named(NamedKey::Tab),
+        flui_platform::keyboard::Code::Unidentified,
+        flui_platform::EventTime::from_nanos(0),
     );
     let _ = laid.focus_manager().dispatch_key_event(&tab);
     laid.pump();

@@ -4,10 +4,10 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
 };
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 use super::rows::Outcome;
 use super::{BackendUnderTest, RowOutcome};

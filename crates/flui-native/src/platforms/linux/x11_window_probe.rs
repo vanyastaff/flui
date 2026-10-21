@@ -29,7 +29,7 @@ use std::{
 };
 
 use flui_foundation::geometry::Size;
-use flui_platform_api::WindowMode;
+use flui_platform::WindowMode;
 use parking_lot::Mutex;
 use rustix::{
     event::{EventfdFlags, PollFd, PollFlags, eventfd, poll},

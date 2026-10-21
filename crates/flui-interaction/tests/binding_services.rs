@@ -18,7 +18,7 @@ use flui_interaction::{
     ContactlessSource, EventPropagation, GestureArenaMember, GestureBinding, HitTestEntry,
     HitTestResult, InputSurface, InteractionLane, PointerId, PointerRouteHandler, RenderId,
 };
-use flui_platform_api::pointer::ScrollPhase;
+use flui_platform::pointer::ScrollPhase;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 assert_not_impl_any!(GestureBinding: Send, Sync);
@@ -417,7 +417,7 @@ fn a_drain_callback_that_closes_again_settles_once() {
 type Heard = Rc<RefCell<Vec<&'static str>>>;
 
 fn heard_name(event: &PointerEvent) -> &'static str {
-    use flui_platform_api::pointer::CancelReason;
+    use flui_platform::pointer::CancelReason;
     match event {
         PointerEvent::Down(_) => "down",
         PointerEvent::Move(_) => "move",

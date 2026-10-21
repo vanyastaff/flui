@@ -12,7 +12,7 @@ use flui_painting::typography::TextDirection;
 ///
 /// A `WidgetsLocalizations` implementation is what a [`LocalizationsDelegate`]
 /// (see the sibling `localizations` module) produces for a given
-/// [`Locale`](flui_platform_api::Locale); [`Localizations::of`] retrieves
+/// [`Locale`](flui_platform::Locale); [`Localizations::of`] retrieves
 /// it by (trait-object) type from the ambient scope.
 ///
 /// Every string is required, so a new locale states each of its strings,

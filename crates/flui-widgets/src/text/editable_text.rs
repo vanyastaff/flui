@@ -24,9 +24,9 @@ use flui_painting::{
     styling::Color,
     typography::{TextDirection, TextSpan, TextStyle},
 };
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_platform_api::text_store::{OwnerCalls, TextInputPurpose};
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
@@ -252,12 +252,12 @@ pub(super) fn source_offset_for_masked_offset(
 /// # IME composition
 ///
 /// The field is a text store the platform's input method pulls from
-/// ([`flui_platform_api::TextStore`], ADR-0090). On focus gain,
+/// ([`flui_platform::TextStore`], ADR-0090). On focus gain,
 /// `EditableTextState` attaches it as a [`TextInputClient`] through
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states). The input method reads
 /// the text, selection, composition and geometry in UTF-16 offsets and edits
-/// them under a lock; a push-model [`flui_platform_api::ImeEvent`] (winit) is
+/// them under a lock; a push-model [`flui_platform::ImeEvent`] (winit) is
 /// projected onto the same store, so there is one editing path. On blur and
 /// on dispose the client is detached (the ADR-0030 detach-on-dispose
 /// contract — a field unmounted while still focused must not leave a stale
@@ -293,7 +293,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// suppressing unconditionally after focus gain would silently kill plain
 /// (non-IME) typing for the rest of the session, since winit only sends
 /// `Key::Character` for keys it did **not** already route through
-/// composition. See [`flui_platform_api::ImeEvent`]'s doc for the full contract.
+/// composition. See [`flui_platform::ImeEvent`]'s doc for the full contract.
 ///
 /// # IME cursor-area tracking
 ///
@@ -1701,7 +1701,7 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let last_sent_for_session = Rc::clone(&last_sent);
-                let store: Rc<dyn flui_platform_api::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
+                let store: Rc<dyn flui_platform::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
                 // The backend may have restarted the IME session (`Enabled`
                 // re-fires on that restart) — clearing `last_sent`
                 // guarantees the new session gets a fresh rect instead of

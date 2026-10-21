@@ -13,9 +13,9 @@
   (commit-on-blur implemented), for §6's blur rule only: a field losing its input commits its composition
   instead of leaving it in place
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
-  now lives in `flui-platform-api`, re-exported at its old `flui-native` path; its contract is
+  now lives in `flui-platform`, re-exported at its old `flui-native` path; its contract is
   unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
-  and `ImeEvent` lives in `flui-platform-api`, as `flui_platform_api::ImeEvent`)
+  and `ImeEvent` lives in `flui-platform`, as `flui_platform::ImeEvent`)
 
 ## Context
 

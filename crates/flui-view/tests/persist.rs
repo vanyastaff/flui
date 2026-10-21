@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use flui_objects::RenderSizedBox;
-use flui_platform_api::StorageName;
+use flui_platform::StorageName;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
 use flui_testing::widgets::{LaidOut, lay_out_with_storage, tight};

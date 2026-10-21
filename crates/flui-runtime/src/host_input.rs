@@ -9,7 +9,7 @@
 //! request to its semantics owner. No `flui-interaction` signature names this
 //! type.
 
-use flui_platform_api::{EventTime, PlatformInput};
+use flui_platform::{EventTime, PlatformInput};
 
 use crate::owner::WindowObservation;
 
@@ -21,7 +21,7 @@ use crate::owner::WindowObservation;
 /// format with it.
 ///
 /// ```rust
-/// use flui_platform_api::EventTime;
+/// use flui_platform::EventTime;
 /// use flui_runtime::HostInput;
 ///
 /// let frame = HostInput::Frame { vsync: EventTime::from_nanos(16_666_667) };

@@ -41,8 +41,8 @@ mod wheel;
 
 use std::num::NonZeroU8;
 
-use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{
+use flui_platform::keyboard::Modifiers;
+use flui_platform::pointer::{
     CancelReason, InputValueError, PanZoomEvent, PointerButton, PointerButtons, PointerCancel,
     PointerEvent, PointerKind,
 };
@@ -68,7 +68,7 @@ pub type Assembled = SmallVec<[PlatformInput; 2]>;
 pub struct NativeSurface(pub u64);
 
 /// The backend's label for an input device. Labels are minted into
-/// [`DeviceId`](flui_platform_api::pointer::DeviceId)s by the registry, so a
+/// [`DeviceId`](flui_platform::pointer::DeviceId)s by the registry, so a
 /// label the OS reuses after removal never revives a retired identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NativeDevice(pub u64);

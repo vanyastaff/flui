@@ -1,6 +1,6 @@
 ### Changed
 
-- **`DragReach` and `DragMoment` are `#[non_exhaustive]`** (`flui-platform-api`): a match on
+- **`DragReach` and `DragMoment` are `#[non_exhaustive]`** (`flui-platform`): a match on
   either outside the crate needs a wildcard arm.
 
 ### Fixed

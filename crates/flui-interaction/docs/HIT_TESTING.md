@@ -7,7 +7,7 @@ event.
 
 A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
 event rewritten into that entry's own space, `global` is the platform's own
-value passed through untouched. Both use the owned `flui-platform-api` pointer
+value passed through untouched. Both use the owned `flui-platform` pointer
 vocabulary, so the pair travels beside the event.
 Both halves borrow values the dispatch already owns, so carrying the second one
 costs no clone.

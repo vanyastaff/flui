@@ -22,14 +22,14 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     rc::{Rc, Weak},
 };
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 /// Callback for completion or cancellation of a multi-contact tap.
 pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;

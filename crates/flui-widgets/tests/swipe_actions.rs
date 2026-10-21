@@ -281,7 +281,7 @@ pub(crate) fn swipe_rows_in_a_vertical_list_share_contacts_by_axis() {
 /// take it, and asks the OS to exclude nothing. A mouse there, or a touch
 /// just inside the strip, swipes the row.
 pub(crate) fn swipe_actions_leave_the_system_edges_to_the_os() {
-    use flui_platform_api::input_regions::InputRegionKind;
+    use flui_platform::input_regions::InputRegionKind;
     let rows: [(&str, Device, f64, f64, f64); 5] = [
         ("a touch at the left edge", Device::Touch, 8.0, 150.0, 0.0),
         (

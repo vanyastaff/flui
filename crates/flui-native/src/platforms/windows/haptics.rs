@@ -34,8 +34,8 @@ use crate::shared::haptic_degradation::{
     PenCommand, PenController, PenWaveform, actuator_for, pen_feedback_step, pen_timeline,
     windows_capabilities, windows_feedback, windows_pattern,
 };
-use flui_platform_api::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// A pen's controller with what the table needs to know about it, and the
 /// feedback object of each waveform it lists.
@@ -514,11 +514,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::Size;
-    use flui_platform_api::EventTime;
-    use flui_platform_api::haptics::{
+    use flui_platform::EventTime;
+    use flui_platform::haptics::{
         HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
-    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use flui_platform::pointer::{PenTool, PointerKind};
 
     use super::super::events::SURFACE;
     use super::super::platform::{WindowRef, with_window_context};
@@ -527,7 +527,7 @@ mod tests {
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
     use crate::traits::{Platform as _, WindowOptions};
-    use flui_platform_api::HapticFeedback;
+    use flui_platform::HapticFeedback;
 
     fn taps() -> HapticPattern {
         HapticPattern::builder()
@@ -537,7 +537,7 @@ mod tests {
             .expect("a valid pattern")
     }
 
-    fn assert_unavailable(haptics: &dyn flui_platform_api::PlatformHaptics, when: &str) {
+    fn assert_unavailable(haptics: &dyn flui_platform::PlatformHaptics, when: &str) {
         for timing in [HapticTiming::Immediate, HapticTiming::FramePresented] {
             let request = HapticRequest::new(timing);
             for kind in HapticFeedback::ALL {

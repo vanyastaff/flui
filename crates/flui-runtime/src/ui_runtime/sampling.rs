@@ -364,12 +364,10 @@ impl UiRuntime {
     }
 
     /// `instant` on the event timeline the runtime's input is stamped on.
-    fn event_time_at(&self, instant: web_time::Instant) -> flui_platform_api::EventTime {
+    fn event_time_at(&self, instant: web_time::Instant) -> flui_platform::EventTime {
         let elapsed =
             instant.saturating_duration_since(flui_foundation::MonotonicClock::epoch(&self.clock));
-        flui_platform_api::EventTime::from_nanos(
-            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX),
-        )
+        flui_platform::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
     }
 
     /// Refresh extension observations after an owner operation, never from a getter.

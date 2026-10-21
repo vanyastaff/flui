@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_foundation::{IdExhausted, PresentationAddress};
 use flui_interaction::{events::Code, testing::input::KeyEventBuilder};
-use flui_platform_api::{PlatformInput, WindowExecutionState};
+use flui_platform::{PlatformInput, WindowExecutionState};
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher};
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_runtime::{

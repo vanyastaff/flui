@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use flui_platform_api::PlatformInput;
-use flui_platform_api::keyboard::{ImeComposition, Key, KeyState, Modifiers, NamedKey};
+use flui_platform::PlatformInput;
+use flui_platform::keyboard::{ImeComposition, Key, KeyState, Modifiers, NamedKey};
 use flui_runtime::HostInput;
 
 use super::rows::Outcome;

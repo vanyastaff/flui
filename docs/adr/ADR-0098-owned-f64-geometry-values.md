@@ -225,7 +225,7 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
 | flex, stack, wrap and table-column enums, `VerticalDirection` | `flui-objects`, beside the render objects that read them; `flui-rendering` never does |
 | simulations | `flui-animation` (duplicates deleted) |
 | gesture details, `Velocity`, `PointerDeviceKind` | `flui-interaction` |
-| IME, haptics, `Brightness`, `Locale`, `TargetPlatform` | `flui-platform-api` |
+| IME, haptics, `Brightness`, `Locale`, `TargetPlatform` | `flui-platform` |
 | `MaterialColors` and design-system colours | `flui-material` / `flui-cupertino` |
 | `PointerData`, `OffsetPair`, `DeviceOrientation`, `FractionalOffset`, `Orientation`, `MaterialColors`, Bézier types, text-path types, and `flui-types`' duplicates of `BoxConstraints`, `FlexFit`, `CacheExtentStyle` and the simulations | deleted (no consumer, or an in-use counterpart) |
 | `Line` and `Circle::intersect_line` | deleted; their only callers were geometry tests (`rg -n '\bLine\b|intersect_line' crates packages src examples tools -g '*.rs'`, excluding unrelated text-line and draw-command types) |
@@ -244,7 +244,7 @@ Each step is one PR that builds and passes the pre-PR checks (AGENTS.md, "Checki
    to the old `flui-geometry` types, deleted in step 5.
 3. Consumers, lowest tier first. Each crate moves to the new types and to `f64`, converting at
    its edge to crates not yet moved:
-   - `flui-platform-api`, `flui-painting`, `flui-interaction`, `flui-semantics`,
+   - `flui-platform`, `flui-painting`, `flui-interaction`, `flui-semantics`,
      `flui-animation`;
    - `flui-layer`, `flui-rendering` (the sliver protocol's `f64` change lands here),
      `flui-objects`, `flui-engine` (§6 and the narrowing point);

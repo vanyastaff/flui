@@ -14,20 +14,20 @@ use std::sync::Arc;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{DispatchEventResult, HostWindow, Platform, WebPlatform, WindowOptions};
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform_api::drag::{
+use flui_platform::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform_api::input_capabilities::Availability;
-use flui_platform_api::keyboard::{ImeComposition, KeyEvent};
-use flui_platform_api::pointer::{PanZoomPhase, PointerEvent, PointerKind};
-use flui_platform_api::text_store::{
+use flui_platform::input_capabilities::Availability;
+use flui_platform::keyboard::{ImeComposition, KeyEvent};
+use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
+use flui_platform::text_store::{
     InMemoryTextStore, TextStore, TextStoreHost, Utf16Offset, Utf16Range,
 };
-use flui_platform_api::{DragDropEvent, PlatformInput};
+use flui_platform::{DragDropEvent, PlatformInput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
@@ -610,7 +610,7 @@ fn a_ctrl_held_mouse_wheel_stays_a_scroll() {
     assert!(
         scroll
             .modifiers
-            .contains(flui_platform_api::keyboard::Modifiers::CONTROL)
+            .contains(flui_platform::keyboard::Modifiers::CONTROL)
     );
 }
 
@@ -1032,7 +1032,7 @@ fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
                 TransferPayload::Text("dragged".to_owned())
             } else {
                 TransferPayload::Custom {
-                    mime: Mime::new(flui_platform_api::drag::IDENTITY_ESSENCE),
+                    mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
                     bytes: Arc::from(Vec::new()),
                 }
             })
@@ -1085,7 +1085,7 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
         start
             .stored
             .keys()
-            .any(|dom_type| dom_type.starts_with(flui_platform_api::drag::IDENTITY_ESSENCE)),
+            .any(|dom_type| dom_type.starts_with(flui_platform::drag::IDENTITY_ESSENCE)),
         "the identity rides in its type: {start:?}"
     );
     assert_eq!(start.effect_allowed, "copyMove");
@@ -1325,7 +1325,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
     key_at_focus("Enter", None);
     assert_eq!(
         canvas.last_key().key,
-        flui_platform_api::keyboard::Key::Named(flui_platform_api::keyboard::NamedKey::Enter)
+        flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
     );
 
     canvas.host.focus_store(None);

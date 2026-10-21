@@ -19,8 +19,8 @@
 //! `platforms::android` moves them across JNI.
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform_api::keyboard::{ImeComposition, NamedKey};
-use flui_platform_api::text_store::{
+use flui_platform::keyboard::{ImeComposition, NamedKey};
+use flui_platform::text_store::{
     Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
     TextStoreStatus, Utf16Offset, Utf16Range,
 };

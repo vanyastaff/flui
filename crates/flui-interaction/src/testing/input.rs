@@ -7,21 +7,21 @@
 //! ```rust
 //! use flui_interaction::testing::input::{pointer_down, pointer_up};
 //! use flui_foundation::geometry::Offset;
-//! use flui_platform_api::pointer::PointerKind;
+//! use flui_platform::pointer::PointerKind;
 //!
 //! let down = pointer_down(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
 //! let up = pointer_up(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
 //! assert!(matches!(down, flui_interaction::PointerEvent::Down(_)));
 //! assert!(matches!(up, flui_interaction::PointerEvent::Up(_)));
-//! # Ok::<(), flui_platform_api::pointer::InputValueError>(())
+//! # Ok::<(), flui_platform::pointer::InputValueError>(())
 //! ```
 
 use flui_foundation::geometry::Offset;
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::{
+use flui_platform::EventTime;
+use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform_api::pointer::{InputValueError, PointerEvent, PointerKind};
+use flui_platform::pointer::{InputValueError, PointerEvent, PointerKind};
 
 use crate::events::{make_cancel_event, make_down_event, make_move_event, make_up_event};
 
@@ -164,7 +164,7 @@ impl ModifiersBuilder {
 ///
 /// ```rust
 /// use flui_interaction::testing::input::KeyEventBuilder;
-/// use flui_platform_api::keyboard::{Code, KeyState, Modifiers};
+/// use flui_platform::keyboard::{Code, KeyState, Modifiers};
 ///
 /// let event = KeyEventBuilder::new(Code::KeyA)
 ///     .with_state(KeyState::Down)

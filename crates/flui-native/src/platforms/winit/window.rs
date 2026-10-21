@@ -359,7 +359,7 @@ impl WinitWindow {
     /// [`PlatformWindow::appearance`] reports.
     #[cfg(target_os = "linux")]
     pub(super) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
-        let dark = flui_platform_api::Brightness::from(appearance).is_dark();
+        let dark = flui_platform::Brightness::from(appearance).is_dark();
         let previous = self
             .portal_dark
             .swap(dark, std::sync::atomic::Ordering::Relaxed);

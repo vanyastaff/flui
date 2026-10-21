@@ -1284,7 +1284,7 @@ with a `flui_rendering::input_regions` warning, never clamped from infinity; so 
 with a corner at or behind the perspective horizon (`w <= 1e-9`), whose corner quotients
 can be finite yet describe a mirrored or unbounded shape. An unmappable clip refuses
 coverage. Device-pixel projection, `i32` checks and the OS diff are the backend's
-(`flui_platform_api::input_regions::ProjectedInputRegions`).
+(`flui_platform::input_regions::ProjectedInputRegions`).
 
 **Delivery.** The runtime collects the set when it builds a scene and hands it to
 `PlatformWindow::set_input_regions` when the sink accepts that scene, and again on a scale

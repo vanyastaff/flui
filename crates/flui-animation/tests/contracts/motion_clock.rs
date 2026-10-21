@@ -27,7 +27,7 @@ fn now_after(clock: &mut MotionClock, raw: Duration) -> Duration {
 #[test]
 fn normal_and_preserve_use_distinct_duration_timelines() {
     use flui_animation::AnimationBehavior;
-    use flui_platform_api::MotionPreference;
+    use flui_platform::MotionPreference;
     for nested in [false, true] {
         for (scale, expected) in [(2.0, 0.2), (0.5, 0.8)] {
             let registry = flui_animation::Vsync::new();
@@ -62,7 +62,7 @@ fn normal_and_preserve_use_distinct_duration_timelines() {
 #[test]
 fn reduced_motion_settles_normal_runs_on_the_next_tick() {
     use flui_animation::{AnimationBehavior, AnimationStatus};
-    use flui_platform_api::MotionPreference;
+    use flui_platform::MotionPreference;
     use std::{
         cell::RefCell,
         future::Future,
@@ -119,7 +119,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
 
 #[test]
 fn parked_repeat_resumes_from_zero_under_full() {
-    use flui_platform_api::MotionPreference;
+    use flui_platform::MotionPreference;
     use std::{
         future::Future,
         pin::Pin,
@@ -554,7 +554,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
 #[test]
 fn motion_policy_resolves_preference_against_the_system() {
     use flui_animation::{AnimationBehavior, MotionOverride, MotionPolicy};
-    use flui_platform_api::MotionPreference as SystemMotion;
+    use flui_platform::MotionPreference as SystemMotion;
     let scaled = SystemMotion::from_duration_scale(2.0).expect("finite scale");
     for (preference, system, policy, expected) in [
         (
@@ -627,7 +627,7 @@ fn motion_policy_resolves_preference_against_the_system() {
 #[test]
 fn duration_scale_changes_keep_the_published_motion_seam() {
     use flui_animation::{AnimationBehavior, MotionOverride};
-    use flui_platform_api::MotionPreference as SystemMotion;
+    use flui_platform::MotionPreference as SystemMotion;
     let registry = flui_animation::Vsync::new();
     let normal = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let preserve = AnimationController::builder(ms(1000))
@@ -683,7 +683,7 @@ fn duration_scale_changes_keep_the_published_motion_seam() {
 #[test]
 fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
     use flui_animation::AnimationStatus;
-    use flui_platform_api::MotionPreference;
+    use flui_platform::MotionPreference;
     use std::{
         cell::{Cell, RefCell},
         future::Future,
@@ -1085,8 +1085,7 @@ fn tiny_scale_saturates_and_completes_once() {
         owner.controller().forward().expect("finite run");
         let mut clock = MotionClock::new();
         clock.set_system_motion(
-            flui_platform_api::MotionPreference::from_duration_scale(scale)
-                .expect("positive scale"),
+            flui_platform::MotionPreference::from_duration_scale(scale).expect("positive scale"),
         );
         registry.tick_all(&clock.frame(Duration::ZERO));
         registry.tick_all(&clock.frame(ms(1)));
@@ -1651,7 +1650,7 @@ proptest! {
         changes in prop::collection::vec((0..100_000u64, 0..7usize, 0..3usize, 0..RATES.len()), 1..64),
     ) {
         use flui_animation::{AnimationBehavior, MotionOverride};
-        use flui_platform_api::MotionPreference as SystemMotion;
+        use flui_platform::MotionPreference as SystemMotion;
         let registry = flui_animation::Vsync::new();
         let reference = flui_animation::Vsync::new();
         let owner = AnimationController::builder(Duration::from_secs(100))
@@ -1691,7 +1690,7 @@ proptest! {
         changes in prop::collection::vec((0..100_000u64, 0..5usize, any::<bool>()), 1..64),
     ) {
         use flui_animation::MotionOverride;
-        use flui_platform_api::MotionPreference as SystemMotion;
+        use flui_platform::MotionPreference as SystemMotion;
         // Power-of-two scales permit an independent exact integer integral.
         const INVERSE_SCALES: [(u64, u64); 5] = [(4, 1), (2, 1), (1, 1), (1, 2), (1, 4)];
         let registry = flui_animation::Vsync::new();

@@ -9,7 +9,7 @@
 
 ADR-0195 named the application's motion setting `MotionPreference`
 (FollowSystem, Reduce, Full). The host's observation is also
-`flui_platform_api::MotionPreference` (NoPreference, Reduce, a duration scale),
+`flui_platform::MotionPreference` (NoPreference, Reduce, a duration scale),
 and `MotionClock` takes both, through `set_preference` and `set_system_motion`.
 Two public types with one name forced every consumer to qualify both, and the
 name hid the distinction that matters: the platform type reports what the user

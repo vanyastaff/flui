@@ -7,12 +7,12 @@ use flui_foundation::geometry::Offset;
 
 /// The platform's owned pointer vocabulary.
 pub mod pointer {
-    pub use flui_platform_api::pointer::*;
+    pub use flui_platform::pointer::*;
 }
 
 /// The platform's owned keyboard vocabulary.
 pub mod keyboard {
-    pub use flui_platform_api::keyboard::*;
+    pub use flui_platform::keyboard::*;
 }
 
 pub use cursor_icon::CursorIcon;
@@ -27,14 +27,14 @@ pub use pointer::{
 /// The interaction clock: `clock`'s current reading on the event timeline
 /// (ADR-0207 §2).
 ///
-/// Every arena and recognizer deadline is an [`EventTime`](flui_platform_api::EventTime)
+/// Every arena and recognizer deadline is an [`EventTime`](flui_platform::EventTime)
 /// compared with this reading, so a recording replays to the same decisions
 /// once the clock is driven to its arrival times.
 pub(crate) fn interaction_now(
     clock: &dyn flui_foundation::MonotonicClock,
-) -> flui_platform_api::EventTime {
+) -> flui_platform::EventTime {
     let elapsed = clock.now().saturating_duration_since(clock.epoch());
-    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+    flui_platform::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
 }
 
 /// `instant` on `clock`'s event timeline: the inverse of [`instant_at`], for
@@ -42,9 +42,9 @@ pub(crate) fn interaction_now(
 pub(crate) fn event_time_of(
     clock: &dyn flui_foundation::MonotonicClock,
     instant: web_time::Instant,
-) -> flui_platform_api::EventTime {
+) -> flui_platform::EventTime {
     let elapsed = instant.saturating_duration_since(clock.epoch());
-    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+    flui_platform::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
 }
 
 /// The instant `time` names on `clock`'s timeline, for consumers that keep
@@ -52,7 +52,7 @@ pub(crate) fn event_time_of(
 /// lies past the last instant this platform represents.
 pub(crate) fn instant_at(
     clock: &dyn flui_foundation::MonotonicClock,
-    time: flui_platform_api::EventTime,
+    time: flui_platform::EventTime,
 ) -> Option<web_time::Instant> {
     clock
         .epoch()
@@ -104,7 +104,7 @@ fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
 
 /// Extract the platform's timestamp, including the valid epoch value zero.
 #[must_use]
-pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
+pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform::EventTime> {
     Some(match event {
         PointerEvent::Down(data) | PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => {
             data.sample.time
@@ -139,7 +139,7 @@ mod sealed {
 pub trait PointerEventExt: sealed::Sealed {
     /// The reported event timestamp, including the valid epoch value zero.
     #[must_use]
-    fn time(&self) -> Option<flui_platform_api::EventTime>;
+    fn time(&self) -> Option<flui_platform::EventTime>;
     /// The reported position, when this event carries one.
     #[must_use]
     fn position(&self) -> Option<Offset<f64>>;
@@ -155,7 +155,7 @@ pub trait PointerEventExt: sealed::Sealed {
 }
 
 impl PointerEventExt for PointerEvent {
-    fn time(&self) -> Option<flui_platform_api::EventTime> {
+    fn time(&self) -> Option<flui_platform::EventTime> {
         event_time(self)
     }
 
@@ -206,7 +206,7 @@ fn test_pointer_id() -> PointerId {
 fn test_sample(position: Offset<f64>) -> Result<PointerSample, InputValueError> {
     use flui_foundation::geometry::Point;
     Ok(PointerSample::new(
-        flui_platform_api::EventTime::from_nanos(0),
+        flui_platform::EventTime::from_nanos(0),
         PointerPosition::try_new(Point::new(position.dx, position.dy))?,
     ))
 }
@@ -349,7 +349,7 @@ pub fn make_cancel_event(kind: PointerKind) -> PointerEvent {
 pub fn make_cancel_event_for_id(id: PointerId, kind: PointerKind) -> PointerEvent {
     PointerEvent::Cancel(PointerCancel::new(
         PointerInfo::new(id, kind).with_role(PointerRole::Primary),
-        flui_platform_api::EventTime::from_nanos(0),
+        flui_platform::EventTime::from_nanos(0),
         CancelReason::Platform,
     ))
 }
@@ -360,7 +360,7 @@ pub fn make_pinch_gesture_event(
     position: Offset<f64>,
     fraction: f64,
 ) -> Result<PointerEvent, InputValueError> {
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{PanZoomPhase, PanZoomTransform},
     };
@@ -394,7 +394,7 @@ pub fn make_scroll_event_with_modifiers(
     delta: Offset<f64>,
     modifiers: Modifiers,
 ) -> Result<PointerEvent, InputValueError> {
-    use flui_platform_api::{EventTime, pointer::ScrollUnit};
+    use flui_platform::{EventTime, pointer::ScrollUnit};
     let pointer = PointerInfo::new(test_pointer_id(), PointerKind::Mouse);
     let position = test_sample(position)?.position;
     let delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy)?;

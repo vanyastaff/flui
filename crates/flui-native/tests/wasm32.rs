@@ -10,7 +10,7 @@ use std::sync::{
 };
 
 use flui_native::{Platform, WebPlatform};
-use flui_platform_api::MotionPreference;
+use flui_platform::MotionPreference;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 

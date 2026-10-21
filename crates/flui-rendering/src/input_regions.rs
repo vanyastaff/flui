@@ -26,7 +26,7 @@
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use smallvec::SmallVec;
 
-pub use flui_platform_api::input_regions::{InputRegion, InputRegionKind};
+pub use flui_platform::input_regions::{InputRegion, InputRegionKind};
 
 /// Where a render object writes its input regions for one frame, in its own local
 /// coordinates. Only the pipeline creates one.

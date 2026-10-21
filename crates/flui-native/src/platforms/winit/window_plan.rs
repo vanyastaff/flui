@@ -12,7 +12,7 @@
 //!   size can be fitted before the next window exists.
 
 use flui_foundation::geometry::{Point, Size};
-use flui_platform_api::{
+use flui_platform::{
     DisplayId, DisplaySnapshot, WindowCapabilities, WindowGeometry, WindowMode, WindowOptions,
     WindowReveal,
 };
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn placement_display_is_measured_from_the_usable_area() {
         use flui_foundation::geometry::Bounds;
-        use flui_platform_api::{DisplayInfo, DisplayKey, DisplayRegistry};
+        use flui_platform::{DisplayInfo, DisplayKey, DisplayRegistry};
 
         let registry = DisplayRegistry::new();
         let id = |_| registry.mint(&DisplayKey::Unkeyed).expect("an id");

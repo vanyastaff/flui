@@ -111,13 +111,13 @@ pub(crate) fn presentation_window(
         // The runner names the platform it was built for; host observations
         // then replace the values the OS publishes (ADR-0212 §4).
         .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
-            flui_platform_api::TargetPlatform::current(),
+            flui_platform::TargetPlatform::current(),
         ))
 }
 
 fn text_store_host_of(
     window: &std::sync::Arc<dyn flui_native::traits::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -426,19 +426,19 @@ mod tests {
     /// headless platform's factory built it.
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
-    impl flui_platform_api::text_store::TextStoreHost for FocusLog {
-        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform_api::TextStore>>) {
+    impl flui_platform::text_store::TextStoreHost for FocusLog {
+        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform::TextStore>>) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform_api::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::TextStore>,
         ) -> Result<
-            flui_platform_api::text_store::CompositionEnd,
-            flui_platform_api::text_store::TextStoreHostError,
+            flui_platform::text_store::CompositionEnd,
+            flui_platform::text_store::TextStoreHostError,
         > {
-            Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+            Ok(flui_platform::text_store::CompositionEnd::Committed)
         }
     }
 
@@ -470,7 +470,7 @@ mod tests {
                 .expect("headless open_window is always Ready");
                 let ui_runtime =
                     host::build_ui_runtime(presentation_window(window), 1.0).expect("ui_runtime");
-                let store = flui_platform_api::text_store::InMemoryTextStore::new("");
+                let store = flui_platform::text_store::InMemoryTextStore::new("");
                 let _token = ui_runtime
                     .text_input_handle()
                     .attach(flui_interaction::TextInputClient::new(store))

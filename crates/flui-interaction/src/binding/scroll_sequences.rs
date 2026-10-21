@@ -9,7 +9,7 @@ use std::{
 
 use flui_foundation::geometry::Point;
 use flui_foundation::{IdMint, InputSequenceId};
-use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
+use flui_platform::pointer::{ScrollEvent, ScrollPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
@@ -26,7 +26,7 @@ pub(super) struct ScrollSequence {
     /// The arena contact this sequence opened because feeds were on the hit
     /// path at its start (ADR-0251). Such a sequence never claims a route.
     pub(super) contact: Cell<Option<ScrollContact>>,
-    last_packet: Cell<flui_platform_api::EventTime>,
+    last_packet: Cell<flui_platform::EventTime>,
     /// How long the latch may idle after its last packet: the preset's
     /// phase-less or phased value (ADR-0209 §5).
     idle: Cell<std::time::Duration>,
@@ -36,7 +36,7 @@ impl ScrollSequence {
     /// When the latch lapses without another packet: its idle time after
     /// the last one, on the owner clock [`prepare`](ScrollSequences::prepare)
     /// reads. `None` only past the end of the event timeline.
-    pub(super) fn lapses_at(&self) -> Option<flui_platform_api::EventTime> {
+    pub(super) fn lapses_at(&self) -> Option<flui_platform::EventTime> {
         self.last_packet.get().checked_add(self.idle.get())
     }
 }
@@ -79,7 +79,7 @@ impl ScrollSequences {
         &self,
         surface: InputSurface,
         event: &ScrollEvent,
-        now: flui_platform_api::EventTime,
+        now: flui_platform::EventTime,
         idle: LatchIdle,
         mint: &IdMint<InputSequenceId>,
         orphans: &mut Vec<ScrollContact>,

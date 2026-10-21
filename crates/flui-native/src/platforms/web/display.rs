@@ -59,7 +59,7 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, JsValue};
 

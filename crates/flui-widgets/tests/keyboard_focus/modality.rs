@@ -7,7 +7,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
-use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
 use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
 use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle, RawButton, Text};
 

@@ -7,7 +7,7 @@
 
 ### Changed
 
-- **Window resizes carry `WindowMetrics`** (`flui-platform-api`, `flui-native`, `flui-runtime`):
+- **Window resizes carry `WindowMetrics`** (`flui-platform`, `flui-native`, `flui-runtime`):
   `PlatformWindow::on_resize`, `WindowObservation::Metrics` and `OwnerEffects::resize_surface`
   take the metrics instead of a logical size and a scale. The recording format is version 2: its `metrics` row
   holds the device-pixel size.

@@ -17,9 +17,9 @@
 pub(crate) fn macos_display_key(
     screen_number: Option<u64>,
     uuid_of: impl FnOnce(u32) -> Option<[u8; 16]>,
-) -> Option<flui_platform_api::DisplayKey> {
+) -> Option<flui_platform::DisplayKey> {
     let display_id = u32::try_from(screen_number?).ok()?;
-    uuid_of(display_id).map(flui_platform_api::DisplayKey::MacosUuid)
+    uuid_of(display_id).map(flui_platform::DisplayKey::MacosUuid)
 }
 
 /// The text that names a macOS display across restarts: its UUID in the
@@ -117,7 +117,7 @@ impl<S: Clone + SameObject> ScreenLedger<S> {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::{DisplayKey, DisplayRegistry};
+    use flui_platform::{DisplayKey, DisplayRegistry};
 
     use super::{
         SameObject, ScreenLedger, change_screen, macos_display_key, macos_display_persistent_key,

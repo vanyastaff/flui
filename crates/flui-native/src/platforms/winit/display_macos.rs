@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::{DisplayId, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplaySnapshot};
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSView;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};

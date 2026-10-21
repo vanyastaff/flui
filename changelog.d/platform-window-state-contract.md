@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: a window publishes an immutable `WindowState` snapshot with a
+- **`flui-platform`**: a window publishes an immutable `WindowState` snapshot with a
   `WindowRevision` (`PlatformWindow::state`, `on_state_changed`) and takes `WindowCommand`s
   through `PlatformWindow::apply`. `WindowCapabilities` (`sets_title`, `sets_position`,
   `sets_size`, `sets_constraints`, `sets_resizable`, `sets_decorated`, `minimizes`, `maximizes`,
@@ -25,7 +25,7 @@
 - **`flui-app`**: `AppConfig::with_position` and `AppConfig::with_mode`, and `window_handle` to turn
   the address a `WindowRequest` delivers into the window's handle. Commands apply on the owner's
   next turn, before its frame, in the order they were queued.
-- **`flui-platform-api`**: `WindowPlacement` remembers where a window was (the display by its
+- **`flui-platform`**: `WindowPlacement` remembers where a window was (the display by its
   `persistent_key`, the outer offset from its usable area in that display's logical pixels, the
   content size, the mode) as a versioned text encoding (`to_bytes`, `from_bytes`, `from_state`),
   and `resolve` fits it to the displays, capabilities and window frame of the next run, by the
@@ -71,7 +71,7 @@
 - **`WindowMode`** is now `Normal`, `Minimized`, `Maximized` or `Fullscreen`, without the saved
   bounds the old enum carried.
 - **`flui-native`**: `OpenWindowError::LaneFull` and `OwnerGone` carry the rejected
-  `WindowOptions` boxed, and `SessionEndPhase` and `SessionEndAnswer` live in `flui-platform-api`.
+  `WindowOptions` boxed, and `SessionEndPhase` and `SessionEndAnswer` live in `flui-platform`.
   The session-end and notice callbacks are registered on `OwnerPlatform` and `SharedPlatform`
   (`on_session_end`, `on_host_notice`), and `AppConfig` converts to `WindowOptions` with its
   position and mode and without choosing `visible` or `reveal`.

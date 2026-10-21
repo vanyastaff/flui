@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
+use flui_platform::EventTime;
+use flui_platform::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
 use objc2::{msg_send, sel};
 use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::NSProcessInfo;
@@ -231,10 +231,10 @@ fn touch_sensors(has_force: bool, force: f64, maximum_force: f64, radius: f64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_platform_api::pointer::{PointerEvent, Pressure};
+    use flui_platform::pointer::{PointerEvent, Pressure};
 
     /// The Down a Pencil-less touch with `sensors` assembles into.
-    fn down(sensors: RawSensors) -> flui_platform_api::pointer::PointerSample {
+    fn down(sensors: RawSensors) -> flui_platform::pointer::PointerSample {
         let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
         let reading = NativeReading::new(
             NativeContact(9),

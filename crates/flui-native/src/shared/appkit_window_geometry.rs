@@ -8,7 +8,7 @@
 //! own scale.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayInfo, SizeConstraints};
+use flui_platform::{DisplayInfo, SizeConstraints};
 
 /// Any content limit at or beyond this counts as AppKit's "no limit"
 /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn display(scale: f64, usable_origin: (i32, i32)) -> DisplayInfo {
-        use flui_platform_api::{DisplayId, DisplayKey, DisplayRegistry};
+        use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 
         let id: DisplayId = DisplayRegistry::new()
             .mint(&DisplayKey::MacosUuid([1; 16]))

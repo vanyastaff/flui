@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use std::time::Duration;
 
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use super::{
     owner_lane::{

@@ -40,8 +40,8 @@ use crate::shared::haptic_degradation::{
     CoreHapticsControl, CoreHapticsEngine, CoreHapticsEvent, CoreHapticsPart, IosGenerator,
     IosImpact, IosNotification, ios_feedback, ios_pattern, ios_pattern_parts,
 };
-use flui_platform_api::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// Whether the generators take a view (iOS 17.5+).
 fn view_bound() -> bool {

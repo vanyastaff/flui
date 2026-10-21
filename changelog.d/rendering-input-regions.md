@@ -1,6 +1,6 @@
 ### Added
 
-- **Input regions** (`flui-platform-api`, `flui-rendering`, `flui-objects`, `flui-widgets`,
+- **Input regions** (`flui-platform`, `flui-rendering`, `flui-objects`, `flui-widgets`,
   `flui-native`): `SystemGestureExclusion` keeps the OS's edge gestures out of its child's box.
   Render objects (boxes and slivers) report regions through `RenderObject::describe_input_regions`
   (`RenderInputRegion`); `PipelineOwner::input_regions` maps them into the window through paint

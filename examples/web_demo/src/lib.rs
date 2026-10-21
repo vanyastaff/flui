@@ -45,7 +45,7 @@ pub fn start() {
     window.on_input(Box::new(|input: PlatformInput| {
         match &input {
             PlatformInput::Pointer(pe) => {
-                use flui_platform_api::pointer::PointerEvent;
+                use flui_platform::pointer::PointerEvent;
                 match pe {
                     PointerEvent::Down(e) => {
                         web_sys::console::log_1(

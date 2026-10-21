@@ -2,9 +2,9 @@
 //! capability the `Draggable` and `DropTarget` widgets acquire (ADR-0211).
 
 use flui_foundation::PresentationId;
-use flui_platform_api::PlatformWindow;
-use flui_platform_api::data_transfer::TransferActions;
-use flui_platform_api::drag::{AllowedActions, DragError};
+use flui_platform::PlatformWindow;
+use flui_platform::data_transfer::TransferActions;
+use flui_platform::drag::{AllowedActions, DragError};
 
 use super::item::DragItem;
 use super::owner::{DragHandle, DragSession, DragStart};

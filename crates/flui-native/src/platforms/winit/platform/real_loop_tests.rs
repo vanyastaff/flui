@@ -225,7 +225,7 @@ fn wake_after_native_drain(
 fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     struct RetryObserver {
         inner: WinitApp,
-        packets: Arc<Mutex<Vec<flui_platform_api::pointer::ScrollEvent>>>,
+        packets: Arc<Mutex<Vec<flui_platform::pointer::ScrollEvent>>>,
         frames: Arc<Mutex<usize>>,
         injected: bool,
     }
@@ -294,7 +294,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         }
     }
 
-    use flui_platform_api::{
+    use flui_platform::{
         WheelStep,
         pointer::{PointerEvent, ScrollUnit},
     };
@@ -448,9 +448,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             make_unactivated_offscreen(window.as_ref())?;
             window.request_redraw();
             window.on_input(Box::new(move |input| {
-                if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) =
-                    input
-                {
+                if let flui_platform::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
                     sink.lock().push(scroll);
                 }
                 crate::DispatchEventResult::default()
@@ -1004,10 +1002,10 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             crate::traits::PlatformWindow::on_input(
                 host,
                 Box::new(move |input| {
-                    use flui_platform_api::input_capabilities::PointerKindSet;
+                    use flui_platform::input_capabilities::PointerKindSet;
                     match input {
                         crate::traits::PlatformInput::Pointer(
-                            flui_platform_api::pointer::PointerEvent::Move(_),
+                            flui_platform::pointer::PointerEvent::Move(_),
                         ) => seen.lock().push("move"),
                         crate::traits::PlatformInput::Capabilities(capabilities) => {
                             seen.lock().push(

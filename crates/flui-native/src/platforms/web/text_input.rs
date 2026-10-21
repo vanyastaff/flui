@@ -27,9 +27,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use flui_platform_api::keyboard::KeyState;
-use flui_platform_api::text_store::Composition;
-use flui_platform_api::text_store::{
+use flui_platform::keyboard::KeyState;
+use flui_platform::text_store::Composition;
+use flui_platform::text_store::{
     CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
     TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset, Utf16Range,
     commit_composition_in_place,

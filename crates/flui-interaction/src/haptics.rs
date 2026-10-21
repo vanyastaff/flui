@@ -39,10 +39,10 @@ use std::time::Duration;
 
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 use flui_foundation::{IdMint, MonotonicClock};
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
-use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
 
 use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
 

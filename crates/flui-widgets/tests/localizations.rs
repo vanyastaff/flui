@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use flui_painting::typography::TextDirection;
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use flui_widgets::localization::{

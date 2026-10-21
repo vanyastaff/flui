@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::Size;
-use flui_platform_api::input_capabilities::InputCapabilities;
-use flui_platform_api::pointer::PointerEvent;
+use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::pointer::PointerEvent;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetUpdateRect, ValidateRect};
 use windows::Win32::UI::WindowsAndMessaging::{

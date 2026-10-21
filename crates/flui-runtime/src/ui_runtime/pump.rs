@@ -25,13 +25,13 @@ struct FrameTimeGuard<'a> {
 #[cfg(test)]
 pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() {
     use flui_animation::{Animation as _, AnimationController};
-    use flui_platform_api::text_store::{
+    use flui_platform::text_store::{
         InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
     };
     use flui_view::SignalWriteExt as _;
     use std::{cell::Cell, panic::AssertUnwindSafe, rc::Rc, sync::Arc, time::Duration};
 
-    let input: Arc<dyn flui_platform_api::PlatformTextInput> =
+    let input: Arc<dyn flui_platform::PlatformTextInput> =
         Arc::new(flui_native::FakeTextInput::new());
     let runtime = Rc::new(UiRuntime::for_test_with_text_input(Some(input)));
     runtime

@@ -34,7 +34,7 @@ fn installed_capture(
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Platform,
                 ),
@@ -315,7 +315,7 @@ fn acquisition_without_progress_releases_document_edits(
     use super::super::owner_dispatch::{
         PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime,
     };
-    use flui_platform_api::text_store::{
+    use flui_platform::text_store::{
         InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
     };
     installed_capture(move |record, _, _, binding| {

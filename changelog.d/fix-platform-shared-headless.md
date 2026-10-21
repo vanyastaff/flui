@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: `DropFeedback::resolve`, the one action a drop takes from a target's
+- **`flui-platform`**: `DropFeedback::resolve`, the one action a drop takes from a target's
   answer and the actions the source permits, and `TransferFormat::is_drag_identity`; every backend
   resolves its drops through them. `InputCapabilities::to_builder` changes one capability and
   keeps the others.

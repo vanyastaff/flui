@@ -8,7 +8,7 @@ use flui_foundation::geometry::{Offset, Rect};
 use flui_interaction::Velocity;
 use flui_objects::MainAxisSize;
 use flui_painting::styling::Color;
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use flui_rendering::constraints::AxisDirection;
 
 fn round_trip<T>(value: &T) -> T

@@ -433,23 +433,20 @@ mod tests {
         ) -> Result<(), crate::traits::CursorError> {
             Ok(())
         }
-        fn state(&self) -> flui_platform_api::WindowState {
+        fn state(&self) -> flui_platform::WindowState {
             let size = self.logical_size();
-            flui_platform_api::WindowState::new(
-                flui_platform_api::WindowGeometry::new(None, size),
-                size,
-            )
+            flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
         }
 
-        fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-            flui_platform_api::WindowCapabilities::NONE
+        fn capabilities(&self) -> flui_platform::WindowCapabilities {
+            flui_platform::WindowCapabilities::NONE
         }
 
         fn apply(
             &self,
-            command: flui_platform_api::WindowCommand,
-        ) -> Result<(), flui_platform_api::WindowCommandError> {
-            command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+            command: flui_platform::WindowCommand,
+        ) -> Result<(), flui_platform::WindowCommandError> {
+            command.admit(&flui_platform::WindowCapabilities::NONE)?;
             Ok(())
         }
 

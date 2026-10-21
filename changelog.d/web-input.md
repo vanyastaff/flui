@@ -21,7 +21,7 @@
 
 ### Fixed
 
-- **`flui-platform-api`**: `ProcessNonce::mint` no longer mints the same nonce on every browser
+- **`flui-platform`**: `ProcessNonce::mint` no longer mints the same nonce on every browser
   page: wasm32's std seeds its hasher with fixed keys, so two pages minting at the same point of
   their start shared one and would take each other's drags for their own; the page's random
   generator now seeds it too.

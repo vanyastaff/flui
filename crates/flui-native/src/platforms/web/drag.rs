@@ -29,15 +29,13 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
-use flui_platform_api::DragDropEvent;
-use flui_platform_api::data_transfer::{
+use flui_platform::DragDropEvent;
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, Mime, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_platform_api::drag::{
-    DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource,
-};
+use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
@@ -291,7 +289,7 @@ enum Outgoing {
     /// The browser's drag runs.
     Running {
         allowed: TransferActions,
-        on_end: flui_platform_api::drag::OsDragEndHook,
+        on_end: flui_platform::drag::OsDragEndHook,
     },
 }
 

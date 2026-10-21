@@ -28,7 +28,7 @@ pub(super) fn runtime_with_wake(wake: Arc<dyn Fn() + Send + Sync>) -> UiRuntime 
         RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

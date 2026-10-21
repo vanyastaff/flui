@@ -12,7 +12,7 @@ use flui_interaction::{
     gesture::RemainderHandoff,
     pointer::PointerDispatch,
 };
-use flui_platform_api::{GesturePreferences, TargetPlatform, pointer::PenTool};
+use flui_platform::{GesturePreferences, TargetPlatform, pointer::PenTool};
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
 

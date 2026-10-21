@@ -30,7 +30,7 @@ composition must still end somewhere.
 
 ## Decision
 
-1. **The pull side is `TextStoreHost`** (`flui_platform_api::text_store`): `focus_store(Option<Rc<dyn
+1. **The pull side is `TextStoreHost`** (`flui_platform::text_store`): `focus_store(Option<Rc<dyn
    TextStore>>)` tells the window which field's store takes input, and
    `complete_composition(&Rc<dyn TextStore>)` ends the platform's composition in that store. The
    host compares it by identity (`Rc::ptr_eq`) with the store it was last told to focus, queued

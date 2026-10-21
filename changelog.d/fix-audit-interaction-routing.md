@@ -1,6 +1,6 @@
 ### Added
 
-- **`CancelReason::Superseded`** (`flui-platform-api`): the framework ends a contact with it when a
+- **`CancelReason::Superseded`** (`flui-platform`): the framework ends a contact with it when a
   newer contact takes its place. `PointerMove::COALESCED_HISTORY_LIMIT` names the measured history a
   queue that folds moves keeps.
 

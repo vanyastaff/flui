@@ -159,7 +159,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     escalation that needs the OS fails with `DragError::Unavailable` (winit's `NotSupported` maps
     to it) and the session stays in-window; incoming drags work. The drop action is read at the
     drop, never assumed from hover, so X11's late action fits.
-12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform-api` with the
+12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform` with the
     same `COPY`, `MOVE` and `LINK`, replacing the hand-rolled `u8` with its own set algebra.
 13. **Escape and the cursor.** Escape cancels the drags that run in its presentation's window,
     and a held transfer, before focus sees the key, as an OS drag loop does; with nothing to

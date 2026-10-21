@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{
+use flui_platform::{
     DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 
@@ -179,8 +179,8 @@ impl HeadlessDisplays {
             .ok_or(DisplayChangeError::UnknownDisplay)?;
         match change {
             DisplayChange::RefreshPeriod(period) => {
-                display.refresh_period = period
-                    .and_then(|period| flui_platform_api::RefreshPeriod::try_from(period).ok());
+                display.refresh_period =
+                    period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
             }
             DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
             DisplayChange::Name(name) => display.name = name,

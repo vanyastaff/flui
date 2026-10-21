@@ -10,8 +10,8 @@ use flui_native::shared::ime_text::{PROTECTED_UNIT, document_text, scalar_spans}
 use flui_native::shared::web_text::{
     IME_PROCESS_KEY_CODE, TextDiff, diff, input_mode, key_composition,
 };
-use flui_platform_api::keyboard::ImeComposition;
-use flui_platform_api::text_store::{
+use flui_platform::keyboard::ImeComposition;
+use flui_platform::text_store::{
     InMemoryTextStore, LockGrant, LockTiming, TextInputPurpose, TextStore,
 };
 

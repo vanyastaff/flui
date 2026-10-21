@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, RefreshPeriod};
 
 /// How an output is told apart from the others.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +140,7 @@ pub(crate) fn intersection(a: Bounds<i32>, b: Bounds<i32>) -> Option<Bounds<i32>
 
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::DisplayRegistry;
+    use flui_platform::DisplayRegistry;
 
     use super::*;
 

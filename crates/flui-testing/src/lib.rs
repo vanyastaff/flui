@@ -69,8 +69,8 @@
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 //! use flui_interaction::pointer::PointerDispatch;
 //! use flui_foundation::geometry::Point;
-//! use flui_platform_api::EventTime;
-//! use flui_platform_api::pointer::{
+//! use flui_platform::EventTime;
+//! use flui_platform::pointer::{
 //!     PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
 //!     PointerPosition, PointerPress, PointerSample,
 //! };

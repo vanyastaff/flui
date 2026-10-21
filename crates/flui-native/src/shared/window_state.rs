@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_platform_api::WindowState;
+use flui_platform::WindowState;
 use parking_lot::Mutex;
 
 /// The mode of a window from what the window system says of it. A minimized
@@ -21,8 +21,8 @@ pub(crate) const fn mode_of(
     minimized: bool,
     fullscreen: bool,
     maximized: bool,
-) -> flui_platform_api::WindowMode {
-    use flui_platform_api::WindowMode;
+) -> flui_platform::WindowMode {
+    use flui_platform::WindowMode;
     if minimized {
         WindowMode::Minimized
     } else if fullscreen {
@@ -180,7 +180,7 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Size;
-    use flui_platform_api::{WindowGeometry, WindowMode, WindowRevision, WindowState};
+    use flui_platform::{WindowGeometry, WindowMode, WindowRevision, WindowState};
 
     use super::{WindowStateCell, mode_of};
 

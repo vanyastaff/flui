@@ -16,16 +16,16 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_platform_api::drag::{
+use flui_platform::drag::{
     DragError, OsDragEnd, OsDragEndHook, OsDragProvider, OsDragRequest, OsDragStart,
     PlatformDragSource,
 };
-use flui_platform_api::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
+use flui_platform::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
 use parking_lot::Mutex;
 
 use super::platform::HeadlessState;

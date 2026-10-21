@@ -16,7 +16,7 @@ use flui_foundation::IdMint;
 use flui_foundation::geometry::{Size, WindowMetrics};
 use parking_lot::Mutex;
 
-use flui_platform_api::input_capabilities::InputCapabilities;
+use flui_platform::input_capabilities::InputCapabilities;
 
 use crate::traits::{
     DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
@@ -419,7 +419,7 @@ pub struct WindowCallbacks {
     input_wake: Mutex<Option<InputWake>>,
     /// Keys answered "not handled" while queued behind a running callback,
     /// newest last, whose platform follow-up must not be delivered again.
-    unanswered_keys: Mutex<VecDeque<flui_platform_api::keyboard::KeyEvent>>,
+    unanswered_keys: Mutex<VecDeque<flui_platform::keyboard::KeyEvent>>,
 
     /// Called when the platform requests a new frame to be rendered.
     pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -2102,7 +2102,7 @@ mod tests {
                 panic!("original dispatch failure");
             }));
             let failure = catch_unwind(AssertUnwindSafe(|| {
-                callbacks.dispatch_input(PlatformInput::Ime(flui_platform_api::ImeEvent::Enabled));
+                callbacks.dispatch_input(PlatformInput::Ime(flui_platform::ImeEvent::Enabled));
             }))
             .expect_err("original callback failure");
             assert_eq!(
@@ -2162,7 +2162,7 @@ mod tests {
             panic!("original input failure");
         }));
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            callbacks.dispatch_input(PlatformInput::Ime(flui_platform_api::ImeEvent::Enabled));
+            callbacks.dispatch_input(PlatformInput::Ime(flui_platform::ImeEvent::Enabled));
         }))
         .expect_err("original input failure");
         assert_eq!(

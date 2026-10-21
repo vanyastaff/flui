@@ -765,7 +765,7 @@ role rather than by node index.
 ### Text fields and IME
 
 `flui_testing::text_store_kit` is the conformance kit for any widget that
-implements `flui_platform_api::TextStore` (ADR-0090): write a
+implements `flui_platform::TextStore` (ADR-0090): write a
 `TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
 KIT_VERSION)`. The kit holds frame transactions itself, through the
 `CommitGate` it installs with `TextStore::set_commit_gate`; the fixture only

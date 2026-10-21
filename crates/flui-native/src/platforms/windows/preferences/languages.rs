@@ -1,6 +1,6 @@
 //! Owned UI-language sampling; shares the host's existing invalidation lifetime.
 
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use windows::Win32::{
     Foundation::ERROR_INSUFFICIENT_BUFFER,
     Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME},

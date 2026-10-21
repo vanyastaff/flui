@@ -7,7 +7,7 @@
   `min_target`, `spring_loading_delay`, `swipe_edge_width`, `remainder_handoff`
   (`RemainderHandoff`), `contactless_latch_idle`, `phased_latch_idle`, `max_resolution_delay` and
   `haptic_frame_deadline_factor`.
-- **System haptics preference** (`flui-platform-api`): `SystemPreferences::haptics()`, read on
+- **System haptics preference** (`flui-platform`): `SystemPreferences::haptics()`, read on
   Android from the touch-feedback setting; an observed "off" suppresses framework haptic feedback.
 - **Named presets for presentations** (`flui-runtime`, `flui-testing`):
   `PresentationWindow::with_gesture_preset` and `HeadlessWindow::with_gesture_preset`; a headless

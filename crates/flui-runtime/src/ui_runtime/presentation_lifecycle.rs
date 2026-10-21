@@ -62,7 +62,7 @@ impl UiRuntime {
     pub fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
-        execution: flui_platform_api::WindowExecutionState,
+        execution: flui_platform::WindowExecutionState,
         focused: bool,
         visible: bool,
     ) {
@@ -76,7 +76,7 @@ impl UiRuntime {
             return;
         }
         presentation.window_execution.set(execution);
-        if execution == flui_platform_api::WindowExecutionState::Detached {
+        if execution == flui_platform::WindowExecutionState::Detached {
             presentation.overlay_style.forget_delivery();
         }
         presentation.window_visible.set(visible);
@@ -94,7 +94,7 @@ impl UiRuntime {
         } else {
             forget_pressed_keys(presentation, &mut first);
         }
-        if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
+        if !focused || !visible || execution != flui_platform::WindowExecutionState::Running {
             cancel.push(id);
         }
         self.set_presentation_hidden(id, !visible);
@@ -106,7 +106,7 @@ impl UiRuntime {
     pub fn update_window_execution(
         &self,
         id: PresentationId,
-        state: flui_platform_api::WindowExecutionState,
+        state: flui_platform::WindowExecutionState,
     ) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -120,7 +120,7 @@ impl UiRuntime {
         let changed = presentation.window_execution.replace(state) != state;
         presentation.sync_haptics_visibility();
         self.reconcile_lifecycle(
-            if changed && state != flui_platform_api::WindowExecutionState::Running {
+            if changed && state != flui_platform::WindowExecutionState::Running {
                 vec![id]
             } else {
                 Vec::new()
@@ -244,12 +244,12 @@ impl UiRuntime {
     /// so a subscriber sees the same ordering across presentations. A
     /// presentation that is closing is skipped. Every presentation is drained
     /// even when a subscriber panics; the first panic resumes afterwards.
-    pub fn deliver_host_notice(&self, notice: &flui_platform_api::HostNotice) {
+    pub fn deliver_host_notice(&self, notice: &flui_platform::HostNotice) {
         // This runtime's own caches give memory back first, so a subscriber
         // finds the easy memory already free. The host's shared receivers are
         // reclaimed once per notice by the host, not once per runtime.
         let mut first = FirstPanic::new();
-        if let flui_platform_api::HostNotice::MemoryPressure(level) = notice {
+        if let flui_platform::HostNotice::MemoryPressure(level) = notice {
             // `None` while a measurement has the context lent: it is
             // mid-layout, and the next notice reclaims it.
             first.contain(|| {
@@ -334,12 +334,12 @@ impl UiRuntime {
         if matches!(
             self.host_lifecycle.get(),
             HostLifecycle::Stopping | HostLifecycle::Observed(Detached)
-        ) || execution == flui_platform_api::WindowExecutionState::Detached
+        ) || execution == flui_platform::WindowExecutionState::Detached
         {
             return Detached;
         }
         if self.host_lifecycle.get() == HostLifecycle::Observed(Paused)
-            || execution == flui_platform_api::WindowExecutionState::Suspended
+            || execution == flui_platform::WindowExecutionState::Suspended
         {
             return Paused;
         }
@@ -692,7 +692,7 @@ mod tests {
         ui_runtime.enter(|ui_runtime| {
             ui_runtime.handle_input_addressed(
                 b,
-                flui_platform_api::PlatformInput::Pointer(
+                flui_platform::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
                         flui_foundation::geometry::Offset::new(1.0, 1.0),
                         flui_interaction::events::PointerKind::Mouse,
@@ -735,7 +735,7 @@ mod tests {
                 seen.borrow_mut().push(state);
             })
             .expect("subscription");
-        ui_runtime.update_window_execution(b, flui_platform_api::WindowExecutionState::Suspended);
+        ui_runtime.update_window_execution(b, flui_platform::WindowExecutionState::Suspended);
         assert_eq!(
             handle.snapshot().expect("live"),
             Some(AppLifecycleState::Paused)
@@ -765,7 +765,7 @@ mod tests {
     }
 
     fn host_notices_reach_every_presentation_in_arrival_order() {
-        use flui_platform_api::{HostNotice, MemoryPressureLevel};
+        use flui_platform::{HostNotice, MemoryPressureLevel};
         let (ui_runtime, a, b) = two_presentations();
         let log = Rc::new(RefCell::new(Vec::new()));
         let _tokens: Vec<_> = notice_handles(&ui_runtime, &[a, b])
@@ -804,7 +804,7 @@ mod tests {
     }
 
     fn a_notice_is_not_replayed_to_a_late_subscriber() {
-        use flui_platform_api::HostNotice;
+        use flui_platform::HostNotice;
         let (ui_runtime, a, _b) = two_presentations();
         ui_runtime.deliver_host_notice(&HostNotice::Wake);
         let count = Rc::new(Cell::new(0));
@@ -818,7 +818,7 @@ mod tests {
     }
 
     fn session_end_blocks_of_several_presentations_aggregate() {
-        use flui_platform_api::{HostNotice, SessionEndBlock, SessionEndRequest};
+        use flui_platform::{HostNotice, SessionEndBlock, SessionEndRequest};
         let (ui_runtime, a, b) = two_presentations();
         let held: Rc<RefCell<Vec<SessionEndBlock>>> = Rc::default();
         let _tokens: Vec<_> = notice_handles(&ui_runtime, &[a, b])
@@ -847,7 +847,7 @@ mod tests {
         assert!(request.is_blocked());
         assert_eq!(request.reasons(), ["save 0", "save 1"]);
         // The host answers the platform once every presentation has heard it.
-        assert_eq!(request.answer(), flui_platform_api::SessionEndAnswer::Block);
+        assert_eq!(request.answer(), flui_platform::SessionEndAnswer::Block);
 
         let first = held.borrow_mut().remove(0);
         drop(first);
@@ -859,7 +859,7 @@ mod tests {
     }
 
     fn a_panicking_notice_subscriber_does_not_starve_the_others() {
-        use flui_platform_api::HostNotice;
+        use flui_platform::HostNotice;
         let (ui_runtime, a, b) = two_presentations();
         let reached = Rc::new(Cell::new(false));
         let handles = notice_handles(&ui_runtime, &[a, b]);

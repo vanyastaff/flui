@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_painting::Alignment;
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{Key, Modifiers, NamedKey};
-use flui_platform_api::pointer::PointerButton;
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+use flui_platform::pointer::PointerButton;
 use flui_testing::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};

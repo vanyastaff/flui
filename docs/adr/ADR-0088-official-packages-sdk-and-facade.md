@@ -123,7 +123,7 @@ a refused edge through the dependent's `edge-exceptions` entry, the list the dir
 already reads; no parallel allowlist is added, and an entry that admits nothing is stale.
 
 - **Forward.** An official package's normal and build dependencies are only `flui-sdk`,
-  `flui-platform-api` and `flui-protocol`, plus declared official-to-official edges; its other
+  `flui-platform` and `flui-protocol`, plus declared official-to-official edges; its other
   dev-dependencies are free. An edge to another official package, in any kind (dev included),
   is refused unless the dependent's `edge-exceptions` declares it, so ADR-0028's "Material and
   Cupertino do not depend on each other" holds without per-package lists. Until a package
@@ -210,7 +210,7 @@ with E0308. The same guard protects facade-plus-sdk and facade-plus-Material pai
 The guard is on `flui-foundation` and not on `flui-sdk` because the facade does not depend on the
 SDK: with `links` on the SDK alone, an application on `flui` train 2 and a package on `flui-sdk`
 train 1 would hold one SDK and two copies of every internal crate, and fail with E0308 as before.
-`flui-foundation` is in the normal dependency closure of the SDK, the facade, `flui-platform-api`
+`flui-foundation` is in the normal dependency closure of the SDK, the facade, `flui-platform`
 and every crate from tier S up except `flui-log`, `flui-assets` and the `flui-cli` tool. `cargo xtask workspace` requires the key on `flui-foundation` and refuses
 it on any other member.
 
@@ -310,7 +310,7 @@ which exists.
   `.github/workflows/ci.yml:924` builds `--features material` [`--example sliver_demo`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/sliver_demo.rs); that line changes, which needs the owner's sign-off and the Linux CI gate.
 - The name `flui-sdk` is free on crates.io (checked 2026-09-26, when the crate was created); the
   fallback `flui-package-sdk` is not needed.
-- **The guard also ties platform plugins to the train.** `flui-platform-api` depends on
+- **The guard also ties platform plugins to the train.** `flui-platform` depends on
   `flui-foundation` (ADR-0082), so a plugin built on one train and an application on another
   now fail in the resolver instead of with E0308.
 - **The guard does not cover a lone duplicate outside its closure.** Two copies of `flui-geometry`,

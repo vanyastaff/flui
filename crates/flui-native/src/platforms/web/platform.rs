@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use crate::{
     data_transfer::DataTransferSource,
@@ -254,11 +254,11 @@ impl WebPlatform {
 }
 
 impl Platform for WebPlatform {
-    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
         super::window::window_capabilities()
     }
 
-    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         if !self.signal.accepting() {
             return Err(PlatformError::Preferences {
                 message: "browser preference owner has stopped".into(),
@@ -272,12 +272,12 @@ impl Platform for WebPlatform {
             )
         });
         let Some((query, no_preference, active)) = observation else {
-            return Ok(flui_platform_api::SystemPreferences::default());
+            return Ok(flui_platform::SystemPreferences::default());
         };
         let motion = if query.matches() {
-            Some(flui_platform_api::MotionPreference::Reduce)
+            Some(flui_platform::MotionPreference::Reduce)
         } else if no_preference.matches() {
-            Some(flui_platform_api::MotionPreference::NoPreference)
+            Some(flui_platform::MotionPreference::NoPreference)
         } else {
             None
         };
@@ -286,7 +286,7 @@ impl Platform for WebPlatform {
                 message: "browser preference owner stopped during sampling".into(),
             });
         }
-        let preferences = flui_platform_api::SystemPreferences::default();
+        let preferences = flui_platform::SystemPreferences::default();
         Ok(match motion {
             Some(motion) => preferences.with_motion(motion),
             None => preferences,

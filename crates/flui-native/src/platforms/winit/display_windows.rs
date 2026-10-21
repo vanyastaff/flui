@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::{DisplayId, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplaySnapshot};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
 

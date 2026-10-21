@@ -90,27 +90,24 @@ impl PlatformWindow for ReentrantIdentityWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
@@ -175,7 +172,7 @@ fn native_identity_is_observed_before_registry_publication() {
 /// publication use the complete production phase called by `bootstrap_web`.
 #[cfg(not(target_os = "ios"))]
 fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
-    use flui_platform_api::WindowExecutionState;
+    use flui_platform::WindowExecutionState;
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::atomic::AtomicBool;
 
@@ -238,7 +235,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                     RuntimeHostServices::new(
                         Arc::new(|| {}),
                         Arc::new(AtomicBool::new(false)),
-                        Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                        Arc::new(flui_platform::InMemoryClipboard::new()),
                         &flui_painting::FontCollection::new(),
                         flui_scheduler::ClockSource::Platform,
                     ),
@@ -1158,7 +1155,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
         .run(Box::new(|owner| {
             install_owner_platform(owner)?;
             super::super::host::refresh_preferences_with(|_| {
-                Ok(flui_platform_api::SystemPreferences::default()
+                Ok(flui_platform::SystemPreferences::default()
                     .with_text_scale(2.0)
                     .expect("valid scale"))
             })?;
@@ -1173,7 +1170,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                 "deferred read replaced accepted preferences"
             );
             super::super::host::refresh_preferences_with(|_| {
-                Ok(flui_platform_api::SystemPreferences::default()
+                Ok(flui_platform::SystemPreferences::default()
                     .with_text_scale(3.0)
                     .expect("valid scale"))
             })?;
@@ -1252,7 +1249,7 @@ fn preferences_wake_each_isolated_window() {
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
     host.logical()
         .update_preferences(
-            flui_platform_api::SystemPreferences::default()
+            flui_platform::SystemPreferences::default()
                 .with_text_scale(2.0)
                 .expect("scale"),
             host.effects(),
@@ -1302,7 +1299,7 @@ fn owner_wake_refreshes_installed_preference_consumers() {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
+                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
             let runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
@@ -1419,7 +1416,7 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
 fn platform_brightness_follows_the_window_appearance() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_native::{HeadlessPlatform, Platform, WindowAppearance};
-    use flui_platform_api::Brightness;
+    use flui_platform::Brightness;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
@@ -1517,7 +1514,7 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
                         let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                         host.logical()
                             .update_preferences(
-                                flui_platform_api::SystemPreferences::default()
+                                flui_platform::SystemPreferences::default()
                                     .with_text_scale(3.0)
                                     .expect("valid scale"),
                                 host.effects(),
@@ -1528,7 +1525,7 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
                                 message: "obsolete native read failed".into(),
                             })
                         } else {
-                            Ok(flui_platform_api::SystemPreferences::default()
+                            Ok(flui_platform::SystemPreferences::default()
                                 .with_text_scale(2.0)
                                 .expect("valid scale"))
                         }
@@ -1588,7 +1585,7 @@ fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
+                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
             let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
@@ -1630,7 +1627,7 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
             install_owner_platform(owner)?;
             let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
             host.logical().update_preferences(
-                flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
+                flui_platform::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
             *captured.borrow_mut() = Some(host);
@@ -1670,7 +1667,7 @@ fn platform_replacement_contains_reentrant_retirement() {
         scale: f64,
         failure: Option<&'static str>,
     }
-    impl flui_platform_api::Clipboard for RetiredProducer {
+    impl flui_platform::Clipboard for RetiredProducer {
         fn read_text(&self) -> Option<String> {
             None
         }
@@ -1682,7 +1679,7 @@ fn platform_replacement_contains_reentrant_retirement() {
             current
                 .logical()
                 .update_preferences(
-                    flui_platform_api::SystemPreferences::default()
+                    flui_platform::SystemPreferences::default()
                         .with_text_scale(self.scale)
                         .expect("valid observation"),
                     current.effects(),

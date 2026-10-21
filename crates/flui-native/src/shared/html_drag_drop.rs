@@ -11,11 +11,11 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferFormat, TransferImage, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::OsDragProvider;
+use flui_platform::drag::OsDragProvider;
 
 /// The actions an `effectAllowed` value permits. `uninitialized` (a drag
 /// from outside the page) and unknown values permit every action, as the

@@ -33,7 +33,7 @@
 //! `flagsChanged:` today; modifier *state* rides every event's
 //! `modifierFlags` instead.
 
-use flui_platform_api::keyboard::{Code, Key, NamedKey};
+use flui_platform::keyboard::{Code, Key, NamedKey};
 
 /// Apple's `kVK_*` virtual keycodes, from Carbon `HIToolbox/Events.h`.
 ///

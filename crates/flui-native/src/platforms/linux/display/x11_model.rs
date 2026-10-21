@@ -24,7 +24,7 @@
 //!   window on X11 names its monitor by its CRTC.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayKey, RefreshPeriod};
+use flui_platform::{DisplayKey, RefreshPeriod};
 
 use super::view::{Identity, OutputView, intersection};
 
@@ -247,7 +247,7 @@ mod tests {
 
     use super::super::view::{FreshIds, display_of_native_number};
     use super::*;
-    use flui_platform_api::DisplayRegistry;
+    use flui_platform::DisplayRegistry;
 
     fn mode(id: u32, dot_clock: u32, htotal: u16, vtotal: u16) -> RandrMode {
         RandrMode {

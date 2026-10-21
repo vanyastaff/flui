@@ -57,7 +57,7 @@ impl BuildOwner {
     ///
     /// Called during presentation construction when the UI runtime has storage,
     /// so `LifecycleContext::storage` answers `Some` under it.
-    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
+    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform::Storage>) {
         self.storage = Some(storage);
     }
 

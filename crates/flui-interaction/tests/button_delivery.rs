@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use flui_interaction::{GestureBinding, HitTestEntry, HitTestResult, InteractionLane, RenderId};
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     pointer::{
         ButtonChange, DeviceId, PointerButton, PointerButtons, PointerEvent, PointerId,

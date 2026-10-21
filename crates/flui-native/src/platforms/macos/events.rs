@@ -9,9 +9,9 @@
 use std::num::{NonZeroU8, NonZeroU64};
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_platform_api::pointer::{
+use flui_platform::EventTime;
+use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::pointer::{
     PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision,
     ScrollUnit,
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn native_pinch_and_rotation_share_one_cumulative_gesture() {
         use GestureComponent::{Rotation, Scale, Session};
-        use flui_platform_api::pointer::PanZoomPhase;
+        use flui_platform::pointer::PanZoomPhase;
         let mut state = MacInputState::default();
         let at = (10.25, 20.5);
         let time = ReadingTime::coarse(NativeTime::UptimeSeconds(1.0));

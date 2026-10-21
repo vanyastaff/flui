@@ -36,7 +36,7 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 use super::native_owner::NativeOwner;
 use super::os_version;

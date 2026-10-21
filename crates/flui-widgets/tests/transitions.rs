@@ -564,7 +564,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
     use std::rc::Rc;
 
     use flui_foundation::geometry::{Offset, Point};
-    use flui_platform_api::pointer::PointerEvent;
+    use flui_platform::pointer::PointerEvent;
     use flui_testing::PointerScript;
     use flui_widgets::Listener;
 

@@ -34,7 +34,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::Weak;
 
-use flui_platform_api::WindowAppearance;
+use flui_platform::WindowAppearance;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Sel};
 use objc2::{ClassType, msg_send};
 use objc2_app_kit::{

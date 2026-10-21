@@ -1,6 +1,6 @@
 # ADR-0213: Input availability comes from handles; `InputCapabilities` covers only what has no handle
 
-- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform-api::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/shared/input_availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
+- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/shared/input_availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
@@ -36,7 +36,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 
 ## Decision
 
-1. **Only handle-less capabilities.** `InputCapabilities` (`flui-platform-api`) describes pen
+1. **Only handle-less capabilities.** `InputCapabilities` (`flui-platform`) describes pen
    input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`), input
    regions and outgoing drags to the OS. Haptics and IME keep answering through their handles;
    nothing is reported twice. `outgoing_drag()` is the one authoritative answer for starting an
@@ -84,7 +84,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    `OwnerPlatform::capabilities` and the per-backend structs. Its other questions belong
    elsewhere: lifecycle to `WindowExecutionState`, frame pacing to the presentation, move
    coalescing to the binding's coalescer, device kinds to presence (item 2).
-5. **Gate.** `flui-platform-api` and `flui-native` always build `InputCapabilities` and
+5. **Gate.** `flui-platform` and `flui-native` always build `InputCapabilities` and
    `Availability` for internal use, so Cargo's feature unification cannot change them. The
    user-facing gate is the additive `unstable-input` feature on the `flui-sdk` and facade
    re-exports, kept until every backend's rows in `assert_backend_conforms` pass.
@@ -101,7 +101,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
   availability rows per backend in `assert_backend_conforms` (pen, precise scroll, trackpad
   gestures, input regions, outgoing drag, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
   `compile_fail` doctest that builds `InputCapabilities` with a struct literal outside
-  `flui-platform-api` (struct literals only; the builder is public); a recording round trip of
+  `flui-platform` (struct literals only; the builder is public); a recording round trip of
   `PlatformInput::Capabilities`.
 - The headless backend's rows, and every backend's availability table as pure functions, run in
   CI (Linux and wasm32 execute; Windows, macOS, Android and iOS are type-checked only). Device

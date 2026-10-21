@@ -20,7 +20,7 @@ each consumer derives its representation from the same accepted state.
 
 ## Scope and ownership
 
-The contract remains in `flui-platform-api`, native producers in `flui-native`,
+The contract remains in `flui-platform`, native producers in `flui-native`,
 and host composition in `flui-app`. This decision authorizes system-preference
 production, delivery and consumer integration with those existing crate names.
 The other decisions proposed in ADR-0151 through ADR-0154 retain their own status.

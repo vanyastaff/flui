@@ -9,7 +9,7 @@
 //! leaves the list with its screen and is never issued again, so a monitor that
 //! is unplugged and plugged back in is a new display.
 
-use flui_platform_api::DisplayId;
+use flui_platform::DisplayId;
 
 /// The screens of the last listing, each with the id it was given.
 #[derive(Debug)]
@@ -73,7 +73,7 @@ impl<T> RetainedScreens<T> {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform_api::{DisplayId, DisplayKey, DisplayRegistry};
+    use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 
     use super::RetainedScreens;
 

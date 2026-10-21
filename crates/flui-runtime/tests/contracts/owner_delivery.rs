@@ -998,7 +998,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 std::sync::Arc::new(|| {}),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -1096,7 +1096,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     );
     assert_eq!(effects.scenes.get(), 0);
     if case == TextServiceCase::Unavailable {
-        use flui_platform_api::text_store::{
+        use flui_platform::text_store::{
             LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
         };
         for _ in 0..3 {

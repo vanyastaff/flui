@@ -277,7 +277,7 @@ pub struct ElementOwner<'a> {
 
     /// The UI runtime's byte storage, threaded into every `BuildCtx` the same way
     /// `clipboard_handle` is.
-    pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+    pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform::Storage>>,
 
     /// The host's flush registry, threaded into every `BuildCtx` the same way
     /// `storage` is; crate-private, for `Persisted`.

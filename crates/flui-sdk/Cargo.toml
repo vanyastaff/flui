@@ -27,7 +27,7 @@ workspace = true
 # what `flui-material`, `flui-cupertino` and `flui-devtools` import outside
 # their tests; see ARCHITECTURE.md for how it was measured.
 [dependencies]
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
@@ -55,7 +55,7 @@ animation-diagnostics = ["flui-animation/diagnostics"]
 # Additive. Re-exports the handle-less input capabilities
 # (`platform::input_capabilities`) and the second haptic tier with its requests
 # and outcomes (`platform::haptics`) until every backend passes its conformance
-# rows (ADR-0213 §5, ADR-0210 §9); flui-platform-api builds them regardless.
+# rows (ADR-0213 §5, ADR-0210 §9); flui-platform builds them regardless.
 unstable-input = []
 
 # Tier K, order 5: above every spine crate it re-exports (`flui-view` 1,

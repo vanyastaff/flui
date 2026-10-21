@@ -36,7 +36,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
-use flui_platform_api::{DisplayId, DisplayInfo, DisplaySnapshot};
+use flui_platform::{DisplayId, DisplayInfo, DisplaySnapshot};
 use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, eventfd};
 

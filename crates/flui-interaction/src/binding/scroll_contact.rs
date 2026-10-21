@@ -9,7 +9,7 @@
 use std::num::NonZeroU64;
 
 use flui_foundation::geometry::Point;
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerId, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
@@ -45,7 +45,7 @@ impl GestureBinding {
     pub(super) fn drive_scroll_contact(
         &self,
         surface: InputSurface,
-        event: &flui_platform_api::pointer::ScrollEvent,
+        event: &flui_platform::pointer::ScrollEvent,
         admission: &ScrollAdmission,
         fresh: &HitTestResult,
         first: &mut Option<RoutePanic>,
@@ -105,7 +105,7 @@ impl GestureBinding {
     pub(super) fn cancel_orphaned_scroll_contacts(
         &self,
         contacts: Vec<ScrollContact>,
-        time: flui_platform_api::EventTime,
+        time: flui_platform::EventTime,
         first: &mut Option<RoutePanic>,
     ) {
         for contact in contacts {
@@ -124,7 +124,7 @@ impl GestureBinding {
         &self,
         surface: InputSurface,
         contact: ScrollContact,
-        event: &flui_platform_api::pointer::ScrollEvent,
+        event: &flui_platform::pointer::ScrollEvent,
         first: &mut Option<RoutePanic>,
     ) {
         let cancel = PointerEvent::Cancel(PointerCancel::new(
@@ -169,14 +169,14 @@ struct OpenedContact {
 
 /// Whether `event` starts a pan a drag recognizer may take: the fingers
 /// touched down on a precise surface.
-fn opens_contact(event: &flui_platform_api::pointer::ScrollEvent) -> bool {
+fn opens_contact(event: &flui_platform::pointer::ScrollEvent) -> bool {
     event.phase == Some(ScrollPhase::Began) && event.precision == ScrollPrecision::Precise
 }
 
 fn open_scroll_contact(
     surface: InputSurface,
     latch: &ScrollSequence,
-    event: &flui_platform_api::pointer::ScrollEvent,
+    event: &flui_platform::pointer::ScrollEvent,
 ) -> Option<OpenedContact> {
     let id = PointerId::new(NonZeroU64::new(latch.id.get() | VIRTUAL_POINTER_BIT)?);
     let pointer = PointerInfo::new(id, PointerKind::Trackpad).with_role(PointerRole::Primary);
@@ -200,7 +200,7 @@ fn open_scroll_contact(
 
 fn release_event(
     contact: ScrollContact,
-    event: &flui_platform_api::pointer::ScrollEvent,
+    event: &flui_platform::pointer::ScrollEvent,
 ) -> Option<PointerEvent> {
     let position = PointerPosition::try_new(contact.position).ok()?;
     Some(PointerEvent::Up(PointerRelease::new(
@@ -235,7 +235,7 @@ fn scroll_contact_path(fresh: &HitTestResult) -> HitTestResult {
 /// The contact after `event`'s displacement, and the `Move` that says so.
 fn step_scroll_contact(
     contact: ScrollContact,
-    event: &flui_platform_api::pointer::ScrollEvent,
+    event: &flui_platform::pointer::ScrollEvent,
 ) -> Option<OpenedContact> {
     // The fingers move opposite to the scroll offset's growth.
     let (dx, dy) = if event.delta.unit() == ScrollUnit::Pixels {

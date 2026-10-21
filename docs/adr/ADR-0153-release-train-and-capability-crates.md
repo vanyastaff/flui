@@ -16,14 +16,14 @@
 
 ## Context and problem statement
 
-A capability crate (ADR-0154) depends on the contract crate, which this ADR calls `flui-platform`
-(today `flui-platform-api`). The contract depends on `flui-foundation`, which carries the train
+A capability crate (ADR-0154) depends on the contract crate, which is `flui-platform`
+(ADR-0151). The contract depends on `flui-foundation`, which carries the train
 guard (`links = "flui_train"`), and pins it exactly (`flui-foundation = "=0.2.0-dev"`,
-`crates/flui-platform-api/Cargo.toml:27`).
+`crates/flui-platform/Cargo.toml:27`).
 
 ### What the contract names from `flui-foundation`
 
-Read on `main` @ `d56188c14`, `rg 'flui_foundation::' crates/flui-platform-api/src`:
+Read on `main` @ `d56188c14`, `rg 'flui_foundation::' crates/flui-platform/src`:
 
 | Item | Where in a public signature | After ADR-0151 |
 |---|---|---|

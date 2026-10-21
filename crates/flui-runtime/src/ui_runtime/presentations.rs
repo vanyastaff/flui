@@ -186,7 +186,7 @@ impl UiRuntime {
     pub fn install_presentation(&mut self, presentation: PresentationState) -> PresentationId {
         let presentation_id = presentation.id();
         let snapshot = self.preferences.borrow().clone();
-        let unknown = flui_platform_api::SystemPreferences::default();
+        let unknown = flui_platform::SystemPreferences::default();
         presentation.set_motion_override(self.motion_override.get());
         presentation.set_error_view_builder(self.error_view_builder.get());
         super::preferences::publish(
@@ -309,7 +309,7 @@ impl UiRuntime {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window: Arc<dyn flui_platform_api::PlatformWindow> =
+        let window: Arc<dyn flui_platform::PlatformWindow> =
             Arc::new(crate::testing::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
@@ -803,14 +803,14 @@ impl UiRuntime {
 
 /// One OS drag session to start, with the drag source of the window it starts in.
 pub(crate) struct OsDragEntry {
-    source: Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
+    source: Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>>,
     pending: flui_interaction::drag::PendingOsDrag,
 }
 
 /// A drag whose OS session could not start, to send back to its window.
 pub(crate) type OsDragRefusal = (
-    flui_platform_api::drag::DragSessionKey,
-    flui_platform_api::drag::DragError,
+    flui_platform::drag::DragSessionKey,
+    flui_platform::drag::DragError,
 );
 
 /// Start every one of `entries`, with the runtime released, so the OS loop a
@@ -829,7 +829,7 @@ pub(crate) fn start_os_drags(
             Ok(Ok(())) => {}
             Ok(Err(error)) => refused.push((key, error)),
             Err(failure) => {
-                refused.push((key, flui_platform_api::drag::DragError::Unavailable));
+                refused.push((key, flui_platform::drag::DragError::Unavailable));
                 crate::lifecycle_state::preserve_first_lifecycle_panic(
                     first,
                     Some(failure),

@@ -19,7 +19,7 @@ use std::collections::hash_map::Entry;
 use std::sync::{Arc, Weak};
 
 use flui_native::storage::{DataDirs, FileStore};
-use flui_platform_api::{
+use flui_platform::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
 use flui_runtime::execution::{ExecutionServices, IoFuture, SpawnError};
@@ -259,7 +259,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_native::storage::DataDirs;
-    use flui_platform_api::{Storage, StorageError, StorageName, Stored, StoredVersion, WriteMode};
+    use flui_platform::{Storage, StorageError, StorageName, Stored, StoredVersion, WriteMode};
     use flui_runtime::execution::{DeterministicExecutors, ExecutionServices};
 
     const NOTES: StorageName = StorageName::from_static("notes");
@@ -429,7 +429,7 @@ mod tests {
     /// the same name in: the race of two threads publishing before the first
     /// reaches `spawn`.
     fn a_refused_lane_gives_each_request_its_own_answer() {
-        use flui_platform_api::StorageFuture;
+        use flui_platform::StorageFuture;
         use flui_runtime::execution::{
             ComputeJob, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError,
         };

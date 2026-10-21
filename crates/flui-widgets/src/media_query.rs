@@ -16,7 +16,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{EdgeInsets, Edges};
-use flui_platform_api::{Brightness, Locale};
+use flui_platform::{Brightness, Locale};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use std::sync::Arc;

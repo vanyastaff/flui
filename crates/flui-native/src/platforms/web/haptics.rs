@@ -9,10 +9,10 @@ use js_sys::{Array, Reflect};
 use wasm_bindgen::JsValue;
 
 use crate::shared::haptic_degradation::{WebVibration, web_feedback, web_pattern};
-use flui_platform_api::haptics::{
+use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// The page's haptic actuator.
 #[derive(Debug, Default)]

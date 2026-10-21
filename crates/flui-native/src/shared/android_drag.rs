@@ -16,11 +16,11 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
     TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragEnd};
+use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
 /// `DragEvent.ACTION_DRAG_STARTED`.
 pub const ACTION_DRAG_STARTED: i32 = 1;

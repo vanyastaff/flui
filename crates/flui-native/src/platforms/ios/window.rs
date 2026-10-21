@@ -35,7 +35,7 @@ use objc2_ui_kit::{
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform_api::{
+use flui_platform::{
     WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
     WindowState,
 };
@@ -739,7 +739,7 @@ pub struct IOSWindow {
     id: WindowId,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: parking_lot::Mutex<(
-        flui_platform_api::input_regions::ProjectedInputRegions,
+        flui_platform::input_regions::ProjectedInputRegions,
         crate::shared::screen_edges::DeferredEdges,
     )>,
     /// The haptic actuator, made on first use and shared, so its Core
@@ -1204,7 +1204,7 @@ impl PlatformWindow for IOSWindow {
     /// projects the regions, and when the projection changed defers each edge an
     /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
     /// clear of every edge has no UIKit equivalent and defers nothing.
-    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
         let Some(marker) = MainThreadMarker::new() else {
             return;
         };
@@ -1231,7 +1231,7 @@ impl PlatformWindow for IOSWindow {
         }
     }
 
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::new(super::status_bar::IOSSystemChrome(Arc::clone(
             &self.status_bar,
         ))))

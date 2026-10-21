@@ -8,7 +8,7 @@ use std::{
 };
 
 use flui_foundation::InputSequenceId;
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use smallvec::SmallVec;
 
 use crate::{

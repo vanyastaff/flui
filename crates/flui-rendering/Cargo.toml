@@ -52,7 +52,7 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # `InputRegionKind` and `InputRegion`: the contract `PlatformWindow::set_input_regions`
 # takes the collected regions in (ADR-0217 §5).
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }

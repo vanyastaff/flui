@@ -24,7 +24,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
     TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
 };
@@ -198,7 +198,7 @@ impl AndroidTextInput {
                         .focused()
                         .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
                     if !focused || self.end_composition(&store) == CompositionEnd::Abandoned {
-                        let _ = flui_platform_api::text_store::commit_composition_in_place(&*store);
+                        let _ = flui_platform::text_store::commit_composition_in_place(&*store);
                     }
                 }
                 None => return,

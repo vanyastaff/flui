@@ -12,8 +12,8 @@ members = [
     "crates/flui-foundation", # IDs, keys, diagnostics, the f64 geometry values (ADR-0098)
 
     # C: contracts
-    "crates/flui-platform-api", # Platform capability traits, window and input vocabulary (ADR-0082)
-    "crates/flui-protocol",     # Semantics roles and actions, agent-protocol vocabulary (ADR-0095)
+    "crates/flui-platform", # Platform capability traits, window and input vocabulary (ADR-0082)
+    "crates/flui-protocol", # Semantics roles and actions, agent-protocol vocabulary (ADR-0095)
 
     # S: substrate
     "crates/flui-log",         # Tracing backend; only composition roots link it
@@ -78,7 +78,7 @@ members = [
 # flui-sdk and the contract crates (ADR-0081 §3, ADR-0088 §2).
 tiers = [
     "V",   # values: macros, foundation
-    "C",   # contracts: flui-platform-api, flui-protocol
+    "C",   # contracts: flui-platform, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
     "K",   # spine and runtime: view, testing, widgets, runtime, sdk
@@ -312,7 +312,7 @@ flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
 # with no OS backend (ADR-0082). Framework crates that name a platform
 # contract depend on this; only composition roots depend on flui-native.
-flui-platform-api = { path = "crates/flui-platform-api", version = "=0.2.0-dev" }
+flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
@@ -707,7 +707,7 @@ workspace = true
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
@@ -830,7 +830,7 @@ a11y = ["flui-app/a11y"]
 # layout enums (rendering, and objects through widgets) and curves (animation).
 serde = [
     "flui-painting/serde",
-    "flui-platform-api/serde",
+    "flui-platform/serde",
     "flui-interaction/serde",
     "flui-rendering/serde",
     "flui-animation/serde",

@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 

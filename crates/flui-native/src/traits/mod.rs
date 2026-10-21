@@ -24,9 +24,9 @@ mod host_window;
 pub(crate) mod owner;
 mod platform;
 
-// The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
+// The contracts live in `flui-platform` (ADR-0082) and are re-exported
 // here as the same owned vocabulary the public platform boundary carries.
-pub use flui_platform_api::{
+pub use flui_platform::{
     Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted,
     DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent,
     HostNotice, InputLatency, Key, KeyEvent, MemoryPressureLevel, Modifiers, PlacementError,
@@ -44,7 +44,7 @@ pub use flui_platform_api::{
 // The accessibility capability lives with the semantics tree it publishes
 // (ADR-0082 §2); re-exported here at its old path for the backends and the
 // composition root.
-pub use flui_platform_api::keyboard::NamedKey;
+pub use flui_platform::keyboard::NamedKey;
 pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };

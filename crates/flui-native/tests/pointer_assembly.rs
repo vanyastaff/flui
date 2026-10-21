@@ -10,8 +10,8 @@ use flui_native::shared::pointer_assembly::{
     ScrollPhases, ScrollReading, decode,
 };
 use flui_native::traits::PlatformInput;
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{
+use flui_platform::EventTime;
+use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomPhase, PointerButton, PointerEvent, PointerKind, PointerRole,
 };
 
@@ -194,7 +194,7 @@ fn the_reserved_contact_is_one_cursor_across_devices() {
 fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     let barrel = PointerButton::SECONDARY;
     decode(&mut contacts, &reading(3, pen, ReadingAction::Move, 1)).expect("valid");
@@ -218,7 +218,7 @@ fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
     };
     assert!(down.buttons().contains(barrel));
     let lifted = reading(3, pen, RELEASE, 4)
-        .with_buttons(flui_platform_api::pointer::PointerButtons::only(barrel));
+        .with_buttons(flui_platform::pointer::PointerButtons::only(barrel));
     assert!(
         matches!(
             single(&decode(&mut contacts, &lifted).expect("valid")),
@@ -234,7 +234,7 @@ fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
 fn a_pen_in_range_is_its_haptic_contact() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     let (first, second) = (NativeDevice(0x10), NativeDevice(0x20));
     let from = |device, contact, action, ms| reading(contact, pen, action, ms).from_device(device);
@@ -286,7 +286,7 @@ fn a_pen_in_range_is_its_haptic_contact() {
 fn a_lifted_pen_hovers_on_its_identity_until_it_leaves() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     let kinds = |events: &[PlatformInput]| -> Vec<(&'static str, u64)> {
         pointer_events(events)
@@ -358,7 +358,7 @@ fn a_lifted_pen_hovers_on_its_identity_until_it_leaves() {
 fn a_retired_contact_that_entered_leaves() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     for reading in [
         reading(3, pen, ReadingAction::Enter, 1),
@@ -399,7 +399,7 @@ fn a_retired_contact_that_entered_leaves() {
 fn a_hovering_mouse_relabelled_as_a_pen_leaves_before_the_pen_starts() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     let mut events = Vec::new();
     events.extend(decode(&mut contacts, &mouse(ReadingAction::Move, 1)).expect("valid"));
@@ -535,7 +535,7 @@ fn the_originating_reading_lives_for_its_sequence() {
 fn a_hot_plugged_device_is_announced_and_retired() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     };
     let first = reading(1, pen, PRESS, 1).from_device(NativeDevice(40));
     let events = decode(&mut contacts, &first).expect("valid");
@@ -782,7 +782,7 @@ fn pan_zoom_carries_only_scale_and_rotation() {
         })
         .collect::<Vec<_>>()
     };
-    let identity = flui_platform_api::pointer::PanZoomTransform::IDENTITY;
+    let identity = flui_platform::pointer::PanZoomTransform::IDENTITY;
     assert_eq!(
         at(gesture(Scale, Began, GestureDelta::None), 10.0, 1),
         [(PanZoomPhase::Start, 5.0)]
@@ -813,7 +813,7 @@ fn pan_zoom_carries_only_scale_and_rotation() {
 /// `momentumPhase`.
 fn two_finger_pan_is_phased_scroll_on_every_backend() {
     use GesturePhase::{Began, Changed, Ended};
-    use flui_platform_api::pointer::ScrollPhase;
+    use flui_platform::pointer::ScrollPhase;
     let fingers = |phase| ScrollReading::fingers(phase, true);
     type Row = (&'static str, Vec<ScrollReading>, Vec<Option<ScrollPhase>>);
     let rows: [Row; 3] = [
@@ -886,7 +886,7 @@ fn a_batch_attaches_its_readings_in_order() {
     let PointerEvent::Move(movement) = single(&assembled) else {
         panic!("move")
     };
-    let xs = |samples: &[flui_platform_api::pointer::PointerSample]| {
+    let xs = |samples: &[flui_platform::pointer::PointerSample]| {
         samples
             .iter()
             .map(|sample| sample.position.get().x)

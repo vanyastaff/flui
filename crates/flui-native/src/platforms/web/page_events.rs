@@ -10,7 +10,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_platform_api::SessionEndPhase;
+use flui_platform::SessionEndPhase;
 use wasm_bindgen::JsValue;
 
 use super::listener::{Listener, warn_failure};

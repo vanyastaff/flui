@@ -29,7 +29,7 @@ use objc2_foundation::{
     NSObjectProtocol, NSString,
 };
 
-use flui_platform_api::SystemNotice;
+use flui_platform::SystemNotice;
 
 use super::loop_control::LoopControl;
 use crate::shared::{

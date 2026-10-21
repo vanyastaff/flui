@@ -8,7 +8,7 @@
 //! The architecture is inspired by GPUI's platform layer:
 //!
 //! ```text
-//! flui-platform-api         - Contracts: PlatformWindow, capability traits,
+//! flui-platform         - Contracts: PlatformWindow, capability traits,
 //!                             window/input and data-transfer vocabulary
 //!                             (re-exported here)
 //!
@@ -165,10 +165,10 @@
 #![deny(missing_docs)]
 
 pub mod config;
-/// The data-transfer transport (ADR-0038), defined in `flui-platform-api`
+/// The data-transfer transport (ADR-0038), defined in `flui-platform`
 /// and re-exported here at its old path.
-pub use flui_platform_api::data_transfer;
-pub use flui_platform_api::{
+pub use flui_platform::data_transfer;
+pub use flui_platform::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
     MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences, WheelPreferences, WheelStep,

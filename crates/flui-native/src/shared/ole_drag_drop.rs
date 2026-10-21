@@ -9,12 +9,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferImage,
     TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::IDENTITY_ESSENCE;
-use flui_platform_api::pointer::PointerKind;
+use flui_platform::drag::IDENTITY_ESSENCE;
+use flui_platform::pointer::PointerKind;
 
 /// `DROPEFFECT_COPY`.
 pub const EFFECT_COPY: u32 = 1;

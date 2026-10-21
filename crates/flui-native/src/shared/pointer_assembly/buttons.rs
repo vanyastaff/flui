@@ -3,8 +3,8 @@
 use std::num::NonZeroU8;
 use std::time::Duration;
 
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerId, PointerKind};
+use flui_platform::EventTime;
+use flui_platform::pointer::{PointerButton, PointerButtons, PointerId, PointerKind};
 
 use super::RawPoint;
 

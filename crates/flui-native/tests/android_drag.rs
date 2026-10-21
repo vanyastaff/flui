@@ -12,11 +12,11 @@ use flui_native::shared::android_drag::{
     ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts, held,
     incoming_allowed, offered, source_end, uri_bytes,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferImage,
     TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
+use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
 fn identity() -> RepresentationDescriptor {
     DragSessionKey::new(

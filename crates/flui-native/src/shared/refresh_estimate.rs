@@ -31,7 +31,7 @@
 
 use std::time::Duration;
 
-use flui_platform_api::RefreshPeriod;
+use flui_platform::RefreshPeriod;
 
 /// How many of the most recent frame intervals the estimate is taken over.
 const WINDOW: usize = 30;
@@ -260,7 +260,7 @@ fn differs(value: f64, reference: f64, fraction: f64) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use flui_platform_api::RefreshPeriod;
+    use flui_platform::RefreshPeriod;
 
     use super::{MIN_INTERVALS, RefreshEstimator, WINDOW};
 

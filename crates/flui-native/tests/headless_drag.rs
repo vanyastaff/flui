@@ -15,13 +15,13 @@ use flui_native::traits::{DispatchEventResult, PlatformInput};
 use flui_native::{
     HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as _, WindowOptions,
 };
-use flui_platform_api::DragDropEvent;
-use flui_platform_api::data_transfer::{
+use flui_platform::DragDropEvent;
+use flui_platform::data_transfer::{
     DataTransferSource, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform_api::drag::{
+use flui_platform::drag::{
     DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, ProcessNonce,
 };
 

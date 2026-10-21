@@ -8,7 +8,7 @@ use flui_foundation::geometry::{Offset, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::RemainderHandoff;
 use flui_interaction::{GestureArena, InputSequenceId, Velocity};
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoView, View, ViewExt};
 use smallvec::SmallVec;
 
@@ -1253,7 +1253,7 @@ mod tests {
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Axis, Point, Vec2};
     use flui_interaction::InputSequenceId;
-    use flui_platform_api::pointer::PointerKind;
+    use flui_platform::pointer::PointerKind;
 
     use super::{ChainNode, Participant};
     use crate::scroll::nested::{NestedScrollConnection, OverscrollBehavior, ScrollStep};
