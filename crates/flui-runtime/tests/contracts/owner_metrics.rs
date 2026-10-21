@@ -1021,6 +1021,10 @@ fn owner_metrics_contract() {
                 an_older_preference_revision_cannot_replace_a_newer_seed as fn(),
             ),
             (
+                "queued_preferences_are_not_coalesced_across_an_input",
+                queued_preferences_are_not_coalesced_across_an_input as fn(),
+            ),
+            (
                 "text_scale_reaches_a_late_runtime_and_its_later_presentation",
                 text_scale_reaches_a_late_runtime_and_its_later_presentation as fn(),
             ),
@@ -3856,6 +3860,98 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
         "the late runtime's first build must read the newest accepted revision"
     );
     owner.shutdown(&*first);
+}
+
+/// Preferences and input accepted while the owner is busy run in the order they
+/// were accepted, and no frame separates them: each wheel input scrolls by the
+/// step of the revision accepted just before it, not of an earlier or later one.
+fn queued_preferences_are_not_coalesced_across_an_input() {
+    use flui_platform::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        ScrollEvent, ScrollUnit,
+    };
+    use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
+    use flui_runtime::owner::{Delivery, InputOutcome};
+
+    let owner = OwnerHost::new();
+    let runtime = crate::owner_publication::runtime();
+    let scroll = flui_widgets::ScrollController::new();
+    runtime
+        .attach_root_widget_with_size(
+            &NestedWheelScroll {
+                authored_gestures: false,
+                child: flui_widgets::Scrollable::new()
+                    .controller(scroll.clone())
+                    .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("mount scroll consumer");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Rc::new(Effects::new(address, &owner));
+    owner
+        .frame_dispatcher(address)
+        .expect("frame")
+        .deliver(crate::VSYNC, &*effects)
+        .expect("mount frame");
+    let lines = |count| {
+        SystemPreferences::default()
+            .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(count)))
+    };
+    let detents = |count: f64| {
+        PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("pointer"),
+                PointerKind::Mouse,
+            ),
+            EventTime::from_nanos(1),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0))
+                .expect("point"),
+            ScrollDelta::try_new(ScrollUnit::Detents, 0.0, count).expect("distance"),
+        )))
+    };
+    let input = owner.presentation_dispatcher(address).expect("input");
+    let (host, target, native) = (owner.clone(), input.clone(), Rc::clone(&effects));
+    // Everything the callback accepts joins the queue behind it, so nothing is
+    // delivered until all four are accepted: the only way to coalesce them is
+    // to merge or drop one.
+    input
+        .test_callback(
+            Box::new(move |_| {
+                assert_eq!(
+                    host.update_preferences(lines(2), &*native),
+                    Ok(Delivery::Queued)
+                );
+                assert_eq!(
+                    target.input(detents(1.0), &*native),
+                    Ok(InputOutcome::Queued)
+                );
+                assert_eq!(
+                    host.update_preferences(lines(3), &*native),
+                    Ok(Delivery::Queued)
+                );
+                assert_eq!(
+                    target.input(detents(2.0), &*native),
+                    Ok(InputOutcome::Queued)
+                );
+            }),
+            &*effects,
+        )
+        .expect("run the callback");
+    // One line is 53 logical pixels, and a wheel the host has said nothing about
+    // scrolls one line. The first input moves 1 detent and the second 2, so the
+    // two-line then three-line revisions give 2 + 2 * 3 = 8 lines; no other
+    // pairing of {none, two, three} lines over the two inputs sums to 8.
+    assert_eq!(
+        scroll.pixels(),
+        8.0 * 53.0,
+        "each input must observe the revision accepted just before it"
+    );
+    owner.shutdown(&*effects);
 }
 
 /// A runtime seeded with the host's latest accepted preferences, before any
