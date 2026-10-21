@@ -385,6 +385,24 @@ fn vertical_wheel(count: u32) -> WheelStep {
     }
 }
 
+/// The wheel preferences of one native read: vertical line count and horizontal
+/// character count, kept as the separate units Windows reports them in.
+fn wheel_preferences(lines: u32, characters: u32) -> WheelPreferences {
+    WheelPreferences::default()
+        .with_vertical(vertical_wheel(lines))
+        .with_horizontal_characters(characters)
+}
+
+/// A `SM_CXDRAG`/`SM_CYDRAG` metric as a drag half-extent.
+///
+/// These already denote displacement on each side, unlike the full
+/// double-click rectangle. Their documented negative form has the same
+/// magnitude; widen before absolute value and refuse an unrepresentable size.
+fn drag_extent(metric: i32) -> Result<i32, PreferenceQueryError> {
+    i32::try_from(i64::from(metric).abs())
+        .map_err(|_| flui_platform::InvalidPreference::GestureArea.into())
+}
+
 /// Query mouse metrics at the consuming coordinate context, without subscribing.
 pub(super) fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
     let ratio =
@@ -405,14 +423,10 @@ pub(super) fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, Preference
         Ok(value)
     };
     let double_click = Size::new(metric(SM_CXDOUBLECLK)?, metric(SM_CYDOUBLECLK)?);
-    // SM_CXDRAG/CYDRAG already denote displacement on each side, unlike the
-    // full double-click rectangle. Their documented negative form has the same
-    // magnitude; widen before absolute value and refuse an unrepresentable size.
-    let drag_extent = |index| -> Result<i32, PreferenceQueryError> {
-        i32::try_from(i64::from(metric(index)?).abs())
-            .map_err(|_| flui_platform::InvalidPreference::GestureArea.into())
-    };
-    let drag = Size::new(drag_extent(SM_CXDRAG)?, drag_extent(SM_CYDRAG)?);
+    let drag = Size::new(
+        drag_extent(metric(SM_CXDRAG)?)?,
+        drag_extent(metric(SM_CYDRAG)?)?,
+    );
     Ok(NativeMouseGeometry::new(double_click, drag, ratio)?)
 }
 
@@ -448,10 +462,9 @@ fn sample(
                     }
                 })?),
         )
-        .with_wheel(
-            WheelPreferences::default()
-                .with_vertical(vertical_wheel(wheel_count(SPI_GETWHEELSCROLLLINES)?))
-                .with_horizontal_characters(wheel_count(SPI_GETWHEELSCROLLCHARS)?),
-        );
+        .with_wheel(wheel_preferences(
+            wheel_count(SPI_GETWHEELSCROLLLINES)?,
+            wheel_count(SPI_GETWHEELSCROLLCHARS)?,
+        ));
     Ok(snapshot)
 }

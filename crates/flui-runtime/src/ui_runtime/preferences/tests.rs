@@ -530,3 +530,56 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
         drop(window);
     }
 }
+
+/// A revision no newer than the accepted one is dropped whole: its values reach
+/// neither the runtime's snapshot nor the inherited data a mounted consumer
+/// reads, and a newer revision after it still applies.
+pub(crate) fn an_older_or_repeated_preference_revision_is_ignored() {
+    let origin = Rc::new(());
+    let scaled = |scale: f64, contrast: bool| {
+        SystemPreferences::default()
+            .with_text_scale(scale)
+            .expect("valid scale")
+            .with_high_contrast(contrast)
+    };
+    let mut runtime = UiRuntime::for_test();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("root");
+    let mut sink = crate::testing::ScriptedSink::always_presents();
+    for (revision, offered, label, shown, accepted) in [
+        (2, scaled(2.0, true), "the first revision", (2.0, true), 2),
+        (1, scaled(3.0, false), "an older revision", (2.0, true), 2),
+        (
+            2,
+            scaled(3.0, false),
+            "the accepted revision again",
+            (2.0, true),
+            2,
+        ),
+        (3, scaled(3.0, false), "a newer revision", (3.0, false), 3),
+    ] {
+        runtime.apply_preferences(SystemPreferencesSnapshot {
+            origin: Rc::clone(&origin),
+            revision,
+            values: Arc::new(offered),
+        });
+        let _ = runtime.pump(
+            &mut crate::pump::SampledClock(web_time::Instant::now()),
+            &mut sink,
+        );
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&(TextSizing::linear(shown.0).expect("valid scale"), shown.1)),
+            "{label} (revision {revision}) changed what a mounted consumer reads"
+        );
+        let current = runtime.preferences.borrow();
+        let current = current.as_ref().expect("an accepted snapshot");
+        assert_eq!(
+            (current.revision, current.values.text_scale()),
+            (accepted, Some(shown.0)),
+            "{label} (revision {revision}) changed the accepted snapshot"
+        );
+    }
+}

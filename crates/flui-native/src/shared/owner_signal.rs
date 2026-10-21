@@ -176,11 +176,16 @@ impl OwnerSignal {
         };
         contain_owner_callback(|| drop(previous));
         contain_owner_callback(|| drop(incoming));
-        if accepted {
-            Ok(())
-        } else {
-            Err(WakeRegistrationError::OwnerGone)
+        if !accepted {
+            return Err(WakeRegistrationError::OwnerGone);
         }
+        // A wake that found no callback is owed to this one.
+        if let Err(error) = self.schedule() {
+            contain_owner_callback(
+                || tracing::error!(%error, "owed owner turn could not be posted"),
+            );
+        }
+        Ok(())
     }
     pub(crate) fn start(&self) -> Result<(), ProxySendError<()>> {
         self.state.lock().running = true;
@@ -318,9 +323,14 @@ impl OwnerSignal {
             if !state.accepting || !state.running || !state.pending {
                 return false;
             }
+            // With no callback registered the wake stays owed: registering
+            // one schedules the turn that runs it.
+            let Some(callback) = slot.take() else {
+                return false;
+            };
             state.pending = false;
             state.active = true;
-            slot.take()
+            Some(callback)
         };
         contain_owner_callback(|| {
             if let Some(callback) = callback.as_mut() {

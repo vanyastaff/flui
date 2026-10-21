@@ -404,3 +404,75 @@ fn host_event_sources() {
         ],
     );
 }
+
+fn vertical_wheel_count_is_lines_until_the_page_sentinel() {
+    // WHEEL_PAGESCROLL is UINT_MAX; zero disables the axis and stays a count.
+    for (count, expected) in [
+        (0, WheelStep::Lines(0)),
+        (1, WheelStep::Lines(1)),
+        (3, WheelStep::Lines(3)),
+        (u32::MAX - 1, WheelStep::Lines(u32::MAX - 1)),
+        (u32::MAX, WheelStep::Page),
+    ] {
+        assert_eq!(
+            vertical_wheel(count),
+            expected,
+            "vertical wheel count {count}"
+        );
+    }
+}
+
+fn horizontal_wheel_characters_are_never_a_page() {
+    // SPI_GETWHEELSCROLLCHARS has no page sentinel: UINT_MAX is a character count.
+    for (lines, characters) in [(3, 3), (0, 0), (u32::MAX, u32::MAX), (3, u32::MAX)] {
+        let wheel = wheel_preferences(lines, characters);
+        assert_eq!(
+            wheel.horizontal_characters(),
+            Some(characters),
+            "lines {lines}, characters {characters}"
+        );
+        assert_eq!(
+            wheel.vertical(),
+            Some(vertical_wheel(lines)),
+            "lines {lines}, characters {characters}"
+        );
+    }
+}
+
+fn drag_metric_is_a_half_extent_of_the_same_magnitude() {
+    let invalid = Err(PreferenceQueryError::Invalid(
+        flui_platform::InvalidPreference::GestureArea,
+    ));
+    for (metric, expected) in [
+        (0, Ok(0)),
+        (4, Ok(4)),
+        (-4, Ok(4)),
+        (i32::MAX, Ok(i32::MAX)),
+        (-i32::MAX, Ok(i32::MAX)),
+        // |i32::MIN| exists only after widening, and does not fit back.
+        (i32::MIN, invalid),
+    ] {
+        assert_eq!(drag_extent(metric), expected, "drag metric {metric}");
+    }
+}
+
+#[test]
+fn native_unit_conversions() {
+    crate::table_test::run_table(
+        "native_unit_conversions",
+        &[
+            (
+                "vertical_wheel_count_is_lines_until_the_page_sentinel",
+                vertical_wheel_count_is_lines_until_the_page_sentinel as fn(),
+            ),
+            (
+                "horizontal_wheel_characters_are_never_a_page",
+                horizontal_wheel_characters_are_never_a_page as fn(),
+            ),
+            (
+                "drag_metric_is_a_half_extent_of_the_same_magnitude",
+                drag_metric_is_a_half_extent_of_the_same_magnitude as fn(),
+            ),
+        ],
+    );
+}

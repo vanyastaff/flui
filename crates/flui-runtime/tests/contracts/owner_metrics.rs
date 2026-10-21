@@ -195,6 +195,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     let frame = owner.frame_dispatcher(address).expect("frame");
     owner
@@ -418,6 +419,8 @@ struct Effects {
     fail_resize: Cell<bool>,
     fail_tail: Cell<bool>,
     geometry_gate: RefCell<Option<flui_foundation::ManualClock>>,
+    /// At the end of each owner turn, whether the host had accepted any preferences.
+    accepted_at_turn_end: RefCell<Vec<bool>>,
 }
 
 impl Effects {
@@ -442,6 +445,7 @@ impl Effects {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         }
     }
 }
@@ -581,6 +585,9 @@ impl OwnerEffects for Effects {
     }
     fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
     fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {
+        self.accepted_at_turn_end
+            .borrow_mut()
+            .push(matches!(self.owner.preferences(), Ok(Some(_))));
         assert!(!self.fail_tail.replace(false), "owner completion failure");
     }
     fn request_continuation(&self) -> bool {
@@ -691,6 +698,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     let frames = owner.frame_dispatcher(address).expect("frame authority");
     frames
@@ -935,6 +943,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     let frames = owner.frame_dispatcher(primary).expect("primary frames");
     frames
@@ -1017,8 +1026,16 @@ fn owner_metrics_contract() {
                 preference_fanout_passes_a_closed_sibling as fn(),
             ),
             (
+                "a_revision_is_accepted_before_the_turn_that_delivers_it",
+                a_revision_is_accepted_before_the_turn_that_delivers_it as fn(),
+            ),
+            (
                 "an_older_preference_revision_cannot_replace_a_newer_seed",
                 an_older_preference_revision_cannot_replace_a_newer_seed as fn(),
+            ),
+            (
+                "queued_preferences_are_not_coalesced_across_an_input",
+                queued_preferences_are_not_coalesced_across_an_input as fn(),
             ),
             (
                 "text_scale_reaches_a_late_runtime_and_its_later_presentation",
@@ -1141,6 +1158,7 @@ fn bold_text_changes_the_painted_glyphs() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         let frames = owner
             .frame_dispatcher(address)
@@ -1354,6 +1372,7 @@ fn bold_text_changes_the_painted_glyphs() {
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
                 geometry_gate: RefCell::new(None),
+                accepted_at_turn_end: RefCell::default(),
             };
             owner
                 .update_preferences(
@@ -1486,6 +1505,7 @@ fn preferred_locales_select_resources_and_direction() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         let frames = owner.frame_dispatcher(address).expect("localized frames");
         frames
@@ -1633,6 +1653,7 @@ fn preferred_locales_select_resources_and_direction() {
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
                 geometry_gate: RefCell::new(None),
+                accepted_at_turn_end: RefCell::default(),
             };
             owner
                 .update_preferences(
@@ -1762,6 +1783,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     let frames = owner.frame_dispatcher(address).expect("frames");
     let target = owner.presentation_dispatcher(address).expect("input");
@@ -1919,6 +1941,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         owner
             .frame_dispatcher(address)
@@ -2119,6 +2142,7 @@ fn gesture_values_follow_the_presentation_display() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     owner
         .frame_dispatcher(address)
@@ -2592,6 +2616,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     owner
         .frame_dispatcher(address)
@@ -3159,6 +3184,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         owner
             .frame_dispatcher(address)
@@ -3440,6 +3466,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
         let frame = |duration| {
@@ -3589,6 +3616,7 @@ fn accessibility_floor_holds_under_an_authored_scope() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
     let frame = |duration| {
@@ -3687,6 +3715,7 @@ fn preference_fanout_survives_a_failing_runtime() {
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
                 geometry_gate: RefCell::new(None),
+                accepted_at_turn_end: RefCell::default(),
             };
             owner
                 .frame_dispatcher(address)
@@ -3795,6 +3824,26 @@ fn preference_fanout_passes_a_closed_sibling() {
     owner.shutdown(&open);
 }
 
+/// The host commits a revision before any of its delivery runs: the owner turn
+/// that delivers it already finds it accepted.
+fn a_revision_is_accepted_before_the_turn_that_delivers_it() {
+    let owner = OwnerHost::new();
+    let (recipient, _) = preference_recipient(&owner);
+    recipient.accepted_at_turn_end.borrow_mut().clear();
+    assert!(matches!(
+        owner
+            .update_preferences(text_scale(2.0), &recipient)
+            .expect("deliver"),
+        flui_runtime::owner::Delivery::Driven
+    ));
+    assert_eq!(
+        *recipient.accepted_at_turn_end.borrow(),
+        [true],
+        "the turn that delivered the revision ran before the host accepted it"
+    );
+    owner.shutdown(&recipient);
+}
+
 fn an_older_preference_revision_cannot_replace_a_newer_seed() {
     let owner = OwnerHost::new();
     let (first, _) = preference_recipient(&owner);
@@ -3856,6 +3905,98 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
         "the late runtime's first build must read the newest accepted revision"
     );
     owner.shutdown(&*first);
+}
+
+/// Preferences and input accepted while the owner is busy run in the order they
+/// were accepted, and no frame separates them: each wheel input scrolls by the
+/// step of the revision accepted just before it, not of an earlier or later one.
+fn queued_preferences_are_not_coalesced_across_an_input() {
+    use flui_platform::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        ScrollEvent, ScrollUnit,
+    };
+    use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
+    use flui_runtime::owner::{Delivery, InputOutcome};
+
+    let owner = OwnerHost::new();
+    let runtime = crate::owner_publication::runtime();
+    let scroll = flui_widgets::ScrollController::new();
+    runtime
+        .attach_root_widget_with_size(
+            &NestedWheelScroll {
+                authored_gestures: false,
+                child: flui_widgets::Scrollable::new()
+                    .controller(scroll.clone())
+                    .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("mount scroll consumer");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Rc::new(Effects::new(address, &owner));
+    owner
+        .frame_dispatcher(address)
+        .expect("frame")
+        .deliver(crate::VSYNC, &*effects)
+        .expect("mount frame");
+    let lines = |count| {
+        SystemPreferences::default()
+            .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(count)))
+    };
+    let detents = |count: f64| {
+        PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("pointer"),
+                PointerKind::Mouse,
+            ),
+            EventTime::from_nanos(1),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0))
+                .expect("point"),
+            ScrollDelta::try_new(ScrollUnit::Detents, 0.0, count).expect("distance"),
+        )))
+    };
+    let input = owner.presentation_dispatcher(address).expect("input");
+    let (host, target, native) = (owner.clone(), input.clone(), Rc::clone(&effects));
+    // Everything the callback accepts joins the queue behind it, so nothing is
+    // delivered until all four are accepted: the only way to coalesce them is
+    // to merge or drop one.
+    input
+        .test_callback(
+            Box::new(move |_| {
+                assert_eq!(
+                    host.update_preferences(lines(2), &*native),
+                    Ok(Delivery::Queued)
+                );
+                assert_eq!(
+                    target.input(detents(1.0), &*native),
+                    Ok(InputOutcome::Queued)
+                );
+                assert_eq!(
+                    host.update_preferences(lines(3), &*native),
+                    Ok(Delivery::Queued)
+                );
+                assert_eq!(
+                    target.input(detents(2.0), &*native),
+                    Ok(InputOutcome::Queued)
+                );
+            }),
+            &*effects,
+        )
+        .expect("run the callback");
+    // One line is 53 logical pixels, and a wheel the host has said nothing about
+    // scrolls one line. The first input moves 1 detent and the second 2, so the
+    // two-line then three-line revisions give 2 + 2 * 3 = 8 lines; no other
+    // pairing of {none, two, three} lines over the two inputs sums to 8.
+    assert_eq!(
+        scroll.pixels(),
+        8.0 * 53.0,
+        "each input must observe the revision accepted just before it"
+    );
+    owner.shutdown(&*effects);
 }
 
 /// A runtime seeded with the host's latest accepted preferences, before any
@@ -3969,6 +4110,7 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
         geometry_gate: RefCell::new(None),
+        accepted_at_turn_end: RefCell::default(),
     };
     owner
         .frame_dispatcher(address)
@@ -4076,6 +4218,7 @@ fn resize_failure_preserves_other_batched_window_state() {
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
             geometry_gate: RefCell::new(None),
+            accepted_at_turn_end: RefCell::default(),
         };
         let frame = owner.frame_dispatcher(address).expect("frame");
         let target = owner.presentation_dispatcher(address).expect("window");
@@ -4270,6 +4413,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
                 geometry_gate: RefCell::new(None),
+                accepted_at_turn_end: RefCell::default(),
             };
             let frame = owner.frame_dispatcher(address).expect("frame");
             frame

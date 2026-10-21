@@ -467,6 +467,7 @@ fn frame_pacing_and_pump_matrix() {
             ("newer_geometry_publication_survives_query_and_diagnostic_reentry", super::preferences::tests::newer_geometry_publication_survives_query_and_diagnostic_reentry as fn()),
             ("haptics_preference_suppresses_both_tiers", super::preferences::tests::haptics_preference_suppresses_both_tiers as fn()),
             ("frame_aligned_haptics_play_only_with_a_presented_frame", super::preferences::tests::frame_aligned_haptics_play_only_with_a_presented_frame as fn()),
+            ("an_older_or_repeated_preference_revision_is_ignored", super::preferences::tests::an_older_or_repeated_preference_revision_is_ignored as fn()),
             ("frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table", frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table as fn()),
             ("frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm", frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm as fn()),
             ("frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once", frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once as fn()),
