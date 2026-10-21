@@ -348,8 +348,12 @@ impl RenderBox for RenderSemanticsAnnotations {
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         *config = self.configuration.clone();
-        config.set_semantics_boundary(self.container);
-        config.set_explicit_child_nodes(self.explicit_child_nodes);
+        // A configuration that declares itself a boundary (a set, by its size
+        // or its collection) stays one whatever the widget's `container`.
+        config.set_semantics_boundary(self.container || self.configuration.is_semantics_boundary());
+        config.set_explicit_child_nodes(
+            self.explicit_child_nodes || self.configuration.explicit_child_nodes(),
+        );
         config.set_blocks_user_actions(self.block_user_actions);
         if let Some((position, axis, reversed)) = &self.scroll {
             let min = position.min_scroll_extent();

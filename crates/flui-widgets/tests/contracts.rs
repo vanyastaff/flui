@@ -520,6 +520,8 @@ fn semantics_translation_and_routing() {
             ("collection_semantics::a_row_of_several_controls_is_one_member", crate::collection_semantics::a_row_of_several_controls_is_one_member),
             ("collection_semantics::a_lone_member_sits_below_its_container", crate::collection_semantics::a_lone_member_sits_below_its_container),
             ("collection_semantics::an_explicit_position_in_a_descendant_suppresses_the_stamp", crate::collection_semantics::an_explicit_position_in_a_descendant_suppresses_the_stamp),
+            ("collection_semantics::an_unpublishable_position_withholds_no_total", crate::collection_semantics::an_unpublishable_position_withholds_no_total),
+            ("collection_semantics::a_set_declared_by_size_keeps_its_lone_member", crate::collection_semantics::a_set_declared_by_size_keeps_its_lone_member),
             ("collection_semantics::a_cell_beyond_its_table_is_not_announced", crate::collection_semantics::a_cell_beyond_its_table_is_not_announced),
             ("collection_semantics::a_size_the_adapters_cannot_convert_counts_as_unknown", crate::collection_semantics::a_size_the_adapters_cannot_convert_counts_as_unknown),
             ("semantics::sliver_fade_keeps_geometry_and_retargets_paint_and_semantics", crate::semantics::sliver_fade_keeps_geometry_and_retargets_paint_and_semantics),

@@ -1049,9 +1049,17 @@ impl SemanticsConfiguration {
     ///
     /// The size of the set belongs to the container, not to the member
     /// ([`Self::set_size_of_set`]).
+    ///
+    /// A position the adapters cannot convert (`i32::MAX` and past, whose
+    /// one-based form overflows an `i32`) is not stored, so every reader, the
+    /// assembly's set checks included, agrees it is not published.
     pub fn set_position_in_set(&mut self, index: usize) {
-        self.index_origin = Some(crate::SemanticsIndexOrigin::Authored);
-        self.attributes.collection.position_in_set = Some(index);
+        if index >= i32::MAX as usize {
+            self.clear_position_in_set();
+        } else {
+            self.index_origin = Some(crate::SemanticsIndexOrigin::Authored);
+            self.attributes.collection.position_in_set = Some(index);
+        }
         self.mark_annotated();
     }
 
@@ -1085,8 +1093,16 @@ impl SemanticsConfiguration {
     /// "item 12 of 100". A set whose size is not known says so with
     /// [`SetSize::Unknown`]; the number of members built so far is not its
     /// size.
+    ///
+    /// The container is a node of its own and so is each member: AccessKit
+    /// reads a member's set size from its ancestors, so a member folded into
+    /// its container would lose its "of 1". Declaring a size therefore makes
+    /// this a semantics boundary with explicit child nodes, as
+    /// [`Self::set_collection`] does.
     pub fn set_size_of_set(&mut self, size: SetSize) {
         self.attributes.collection.set_size = Some(size.normalized());
+        self.set_semantics_boundary(true);
+        self.set_explicit_child_nodes(true);
         self.mark_annotated();
     }
 
@@ -1123,6 +1139,19 @@ impl SemanticsConfiguration {
     #[must_use]
     pub fn table_shape(&self) -> Option<TableShape> {
         self.attributes.collection.table
+    }
+
+    /// The table shape publication keeps: the declared one when this node's
+    /// role supports one, as a table, a grid or a tree grid does. A shape on a
+    /// list is dropped from the published node, so it bounds no cell below.
+    #[must_use]
+    pub fn published_table_shape(&self) -> Option<TableShape> {
+        self.table_shape().filter(|_| {
+            crate::applicability::applicable(
+                self.attributes.effective_role(),
+                crate::applicability::RoleAttribute::TableShape,
+            )
+        })
     }
 
     /// Sets where this cell, row or header sits in its table.

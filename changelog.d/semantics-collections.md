@@ -6,7 +6,8 @@
   (`multiselectable`), on `SemanticsConfiguration` and as `Semantics` builders. They are published
   to AccessKit; a level, a table's shape, a cell's position, a sort and a selection rule are
   checked against the roles ARIA 1.2 gives them. A level, a row and a column count from one, as
-  ARIA's do. A role-less node that declares a set size publishes as a list.
+  ARIA's do. A node that declares a set size is a semantics boundary whose members form nodes
+  of their own, and publishes as a list when it has no role.
 - `flui-testing`: `A11yNode::size_of_containing_set`, `outline_level`, `row_count`,
   `column_count`, `row_index`, `column_index`, `row_span`, `column_span`, `sort_direction` and
   `is_multiselectable`.

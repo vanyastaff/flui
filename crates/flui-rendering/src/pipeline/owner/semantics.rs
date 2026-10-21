@@ -418,7 +418,7 @@ fn reconcile_collections(root: &mut BuiltSemanticsNode) {
                     scope.omit_total |= matches!(scope.size, SetSize::Known(_));
                 }
             }
-            let own_table = node.config.table_shape();
+            let own_table = node.config.published_table_shape();
             if let Some(scope) = own {
                 sets.push(scope);
             }

@@ -817,3 +817,59 @@ pub(crate) fn a_size_the_adapters_cannot_convert_counts_as_unknown() {
         tree.describe()
     );
 }
+
+/// A position the adapters cannot convert is never stored, so it neither
+/// reaches AccessKit nor counts as a member of another set: the list keeps
+/// its size, and the row falls back to the position its host stamped.
+pub(crate) fn an_unpublishable_position_withholds_no_total() {
+    let builder: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
+        (index < 3).then(|| {
+            let body = SizedBox::new(200.0, 48.0);
+            let row = Semantics::new()
+                .container(true)
+                .label(format!("row{index}"));
+            if index == 1 {
+                row.child(IndexedSemantics::new(i32::MAX as usize).child(body))
+                    .boxed()
+            } else {
+                row.child(body).boxed()
+            }
+        })
+    });
+    let laid = laid_out(vec![SliverList::new(3, 48.0, builder).boxed()]);
+    let tree = tree(&laid);
+
+    assert_eq!(
+        announced(&tree),
+        (0..3)
+            .map(|i| (format!("row{i}"), Some(i), Some(3)))
+            .collect::<Vec<_>>(),
+        "{}",
+        tree.describe()
+    );
+}
+
+/// A set declared by size alone, with no role and no `container`, is still a
+/// node of its own above its members: a lone member folded into it would read
+/// no "of 1".
+pub(crate) fn a_set_declared_by_size_keeps_its_lone_member() {
+    let set = Semantics::new().size_of_set(SetSize::Known(1)).child(
+        Semantics::new()
+            .role(SemanticsRole::ListItem)
+            .label("lone")
+            .position_in_set(0)
+            .child(SizedBox::new(200.0, 48.0)),
+    );
+    let mut laid = lay_out(set, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    let member = find(&tree, "lone");
+    assert_eq!(
+        (member.position_in_set(), member.size_of_containing_set()),
+        (Some(0), Some(1)),
+        "{}",
+        tree.describe()
+    );
+}
