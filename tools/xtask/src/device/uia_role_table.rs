@@ -189,7 +189,17 @@ pub(super) const FAMILY_FIXTURES: &[(&str, &str)] = &[
     ("status fixture", "status"),
     ("log fixture", "log"),
     ("alert fixture", "alert"),
+    ("steps list", "list"),
+    ("first step", "listItem"),
+    ("second step", "listItem"),
+    ("third step", "listItem"),
+    ("level two tree item", "treeItem"),
+    ("sorted column", "columnHeader"),
 ];
+
+/// The rows of the lazy list on the probe's page, in order: the framework
+/// numbers them, and their container carries the size.
+pub(super) const LAZY_ROWS: &[&str] = &["lazy row 1", "lazy row 2", "lazy row 3"];
 
 /// The control type and ARIA role [`ROLES`] expects for the role named `role`.
 pub(super) fn role_row(role: &str) -> Option<(ControlType, &'static str)> {
@@ -246,6 +256,12 @@ mod tests {
             on_page, registered,
             "the page's family fixtures are the registry's"
         );
+        for row in LAZY_ROWS {
+            assert!(
+                page.contains(&format!("{row:?}")),
+                "lazy row {row} is not on the page"
+            );
+        }
         for &(name, role) in FAMILY_FIXTURES {
             assert!(
                 role_row(role).is_some(),

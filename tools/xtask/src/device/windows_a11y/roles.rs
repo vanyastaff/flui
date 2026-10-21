@@ -26,19 +26,20 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsTogglePatternAvailablePropertyId, UIA_LevelPropertyId, UIA_ListControlTypeId,
     UIA_ListItemControlTypeId, UIA_LiveSettingPropertyId, UIA_MenuBarControlTypeId,
     UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_PaneControlTypeId,
-    UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId, UIA_RangeValuePatternId,
-    UIA_ScrollBarControlTypeId, UIA_SelectionItemPatternId, UIA_SeparatorControlTypeId,
-    UIA_SliderControlTypeId, UIA_SpinnerControlTypeId, UIA_StatusBarControlTypeId,
-    UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId,
-    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
+    UIA_PositionInSetPropertyId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
+    UIA_RangeValuePatternId, UIA_ScrollBarControlTypeId, UIA_SelectionItemPatternId,
+    UIA_SeparatorControlTypeId, UIA_SizeOfSetPropertyId, UIA_SliderControlTypeId,
+    UIA_SpinnerControlTypeId, UIA_StatusBarControlTypeId, UIA_TabControlTypeId,
+    UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
+    UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
     UIA_TreeItemControlTypeId, UIA_ValuePatternId, UIA_WindowControlTypeId, UIA_WindowPatternId,
 };
 use windows::core::Interface;
 
 use super::super::uia::{self, Session, Start};
 use super::super::uia_role_table::{
-    ADAPTER_CHECKED_AGAINST, ControlType, FAMILY_FIXTURES, NAME_PROHIBITED, ROLES, ROLES_PAGE,
-    role_row,
+    ADAPTER_CHECKED_AGAINST, ControlType, FAMILY_FIXTURES, LAZY_ROWS, NAME_PROHIBITED, ROLES,
+    ROLES_PAGE, role_row,
 };
 
 /// The fixture the window is recognised by once its tree is published.
@@ -91,6 +92,23 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
             failures.push(format!("{name}: {error:#}"));
         }
     }
+    // The lazy list numbers its own rows and sizes its container: each row is
+    // a list item at its one-based place in a set of the list's whole length.
+    let (control, aria_role) =
+        role_row("listItem").expect("BUG: the table has a row for every role");
+    for (index, &name) in LAZY_ROWS.iter().enumerate() {
+        let outcome = fixture(&nodes, name, false).and_then(|node| {
+            check_role(node, uia_control(control), aria_role)?;
+            place_in_set(
+                node,
+                i32::try_from(index + 1)?,
+                i32::try_from(LAZY_ROWS.len())?,
+            )
+        });
+        if let Err(error) = outcome {
+            failures.push(format!("{name}: {error:#}"));
+        }
+    }
     // `session` outlives `window` and `nodes` (locals drop in reverse order),
     // so COM stays initialised until every element handle is released.
     if failures.is_empty() {
@@ -98,7 +116,7 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
             "UIA role families: {} roles and {} family fixtures as expected \
              (table checked against accesskit_windows {ADAPTER_CHECKED_AGAINST})",
             ROLES.len(),
-            FAMILY_FIXTURES.len()
+            FAMILY_FIXTURES.len() + LAZY_ROWS.len()
         );
         return Ok(0);
     }
@@ -226,6 +244,16 @@ fn family(name: &str) -> Option<Check> {
         "disabled button" => disabled,
         "status fixture" | "log fixture" => |e| live(e, Polite),
         "alert fixture" => |e| live(e, Assertive),
+        // The container reads no size of its own: its members do.
+        "steps list" => |_| Ok(()),
+        "first step" => |e| place_in_set(e, 1, 3),
+        "second step" => |e| place_in_set(e, 2, 3),
+        "third step" => |e| place_in_set(e, 3, 3),
+        "level two tree item" => |e| {
+            level(e, 2)?;
+            aria_properties(e, "level=1")
+        },
+        "sorted column" => |e| aria_properties(e, "sort=ascending"),
         _ => return None,
     })
 }
@@ -390,6 +418,23 @@ fn password_flag(element: &IUIAutomationElement) -> anyhow::Result<bool> {
 
 fn password(element: &IUIAutomationElement) -> anyhow::Result<()> {
     anyhow::ensure!(password_flag(element)?, "not a password field");
+    Ok(())
+}
+
+/// A member of a set of `size`, at the one-based `position` an assistive
+/// technology announces: the position is the item's own, and the size is read
+/// from the container that declares it.
+fn place_in_set(element: &IUIAutomationElement, position: i32, size: i32) -> anyhow::Result<()> {
+    let actual = (
+        int(element, UIA_PositionInSetPropertyId)?,
+        int(element, UIA_SizeOfSetPropertyId)?,
+    );
+    anyhow::ensure!(
+        actual == (position, size),
+        "item {} of {} where item {position} of {size} was expected",
+        actual.0,
+        actual.1
+    );
     Ok(())
 }
 

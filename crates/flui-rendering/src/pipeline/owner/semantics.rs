@@ -33,10 +33,13 @@
 //! mark-driven, where a full rebuild would refresh every node's geometry
 //! as a side effect of ANY mark, an accident no contract promises.
 
+use std::num::NonZeroUsize;
+
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
+    AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
+    SemanticsNode, SemanticsOwner, SemanticsTree, SetSize, TableShape,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -177,7 +180,7 @@ impl PipelineOwner<Semantics> {
                     }
                 };
                 if let SemanticsPlan::Rebuild(Some(root)) = &mut planned {
-                    reconcile_collection_totals(root);
+                    reconcile_collections(root);
                 }
                 // Exit the phase before rejected configurations retire their
                 // callback captures. Their destruction is authored code too.
@@ -357,84 +360,192 @@ enum SemanticsPlan {
     Graft(Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>),
 }
 
-/// AccessKit searches every included ancestor for a set total. An unknown or
-/// separately authored member must not acquire an unrelated generated total.
-/// Withhold those ancestor totals rather than inventing a sentinel size.
+/// A set an ancestor in the built tree contains, as a member below it sees it.
 #[derive(Clone, Copy)]
-struct CollectionScope {
-    host: RenderId,
-    declaration: flui_semantics::SemanticsCollection,
-    origin: flui_semantics::SemanticsCollectionOrigin,
+struct SetScope {
+    /// The render node that declared it; a region declares sets of its own.
+    host: Option<RenderId>,
+    size: SetSize,
+    origin: SemanticsCollectionOrigin,
+    /// A member below would read this set's total as its own: withhold it.
+    omit_total: bool,
 }
 
-fn reconcile_collection_totals(root: &mut BuiltSemanticsNode) {
-    fn inspect(
-        node: &BuiltSemanticsNode,
-        scopes: &mut Vec<CollectionScope>,
-        omit: &mut FxHashSet<RenderId>,
+/// Holds every place a node declares to the sets and tables it actually sits
+/// in once the tree is built, so a node the clip dropped imposes no scope.
+///
+/// AccessKit pairs a position with the size of the nearest included ancestor
+/// that declares one (`size_of_set_from_container`) and a cell with the
+/// nearest table. So:
+///
+/// - a position past its own known set's size is not published ("item 8 of
+///   3"), nor a cell or row outside its known table ("row 5 of 3");
+/// - a member of an unknown or separately authored set must not
+///   acquire an unrelated total through that walk ("item 12 of 5"): the totals
+///   of the known sets above it are withheld rather than a sentinel invented.
+fn reconcile_collections(root: &mut BuiltSemanticsNode) {
+    fn visit(
+        node: &mut BuiltSemanticsNode,
+        sets: &mut Vec<SetScope>,
+        tables: &mut Vec<TableShape>,
     ) {
         ensure_stack(|| {
-            let own = match (node.source, node.config.collection()) {
-                (SemanticsSource::Render(host), Some(declaration)) => Some(CollectionScope {
-                    host,
-                    declaration,
-                    origin: node
-                        .config
-                        .collection_origin()
-                        .expect("BUG: a collection declaration has an origin"),
-                }),
-                _ => None,
-            };
-            let unknown_scope = own.is_some_and(|scope| scope.declaration.count().is_none());
-            let unmatched_member = match node.config.index_origin() {
-                Some(flui_semantics::SemanticsIndexOrigin::Authored) => {
-                    !scopes.last().is_some_and(|scope| {
-                        scope.declaration.count().is_some()
-                            && scope.origin == flui_semantics::SemanticsCollectionOrigin::Authored
-                    })
+            // A position is held to its own set's size only: one numbered for
+            // another set is that set's, and the total is withheld below.
+            let member_of_nearest = node.config.position_in_set().is_some()
+                && member_matches(node.config.index_origin(), sets.last());
+            hold_places_to_scopes(
+                &mut node.config,
+                sets.last().copied().filter(|_| member_of_nearest),
+                tables.last().copied(),
+            );
+            let own = node.config.size_of_set().map(|size| SetScope {
+                host: match node.source {
+                    SemanticsSource::Render(id) => Some(id),
+                    SemanticsSource::Region(_) => None,
+                },
+                size,
+                origin: node
+                    .config
+                    .collection_origin()
+                    .unwrap_or(SemanticsCollectionOrigin::Authored),
+                omit_total: false,
+            });
+            let unmatched_member = node.config.position_in_set().is_some() && !member_of_nearest;
+            // Only a member that would read an unrelated total withholds it:
+            // an unknown set with no positioned member below leaves the totals
+            // above it alone, and one with members reaches here through them.
+            if unmatched_member {
+                for scope in sets.iter_mut() {
+                    scope.omit_total |= matches!(scope.size, SetSize::Known(_));
                 }
-                Some(flui_semantics::SemanticsIndexOrigin::Collection(host)) => !scopes
-                    .last()
-                    .is_some_and(|scope| scope.host == host && scope.declaration.count().is_some()),
-                None => false,
-            };
-            if unknown_scope || unmatched_member {
-                omit.extend(
-                    scopes.iter().filter_map(|scope| {
-                        scope.declaration.count().is_some().then_some(scope.host)
-                    }),
-                );
             }
+            // A table, a grid or a tree grid is its cells' table whether or
+            // not it declares a shape: without one its extent is unbounded,
+            // and an outer table's shape does not bound its cells.
+            let own_table = node.config.published_table_shape().or_else(|| {
+                matches!(
+                    node.config.role(),
+                    flui_semantics::SemanticsRole::Table
+                        | flui_semantics::SemanticsRole::Grid
+                        | flui_semantics::SemanticsRole::TreeGrid
+                )
+                .then(|| TableShape::new(SetSize::Unknown, SetSize::Unknown))
+            });
             if let Some(scope) = own {
-                scopes.push(scope);
+                sets.push(scope);
             }
-            for child in &node.children {
-                inspect(child, scopes, omit);
-            }
-            if own.is_some() {
-                scopes.pop();
-            }
-        });
-    }
-    fn apply(node: &mut BuiltSemanticsNode, omit: &FxHashSet<RenderId>) {
-        ensure_stack(|| {
-            if matches!(node.source, SemanticsSource::Render(id) if omit.contains(&id)) {
-                node.config.omit_collection_total();
+            if let Some(table) = own_table {
+                tables.push(table);
             }
             for child in &mut node.children {
-                apply(child, omit);
+                visit(child, sets, tables);
+            }
+            if own_table.is_some() {
+                tables.pop();
+            }
+            if own.is_some()
+                && sets
+                    .pop()
+                    .expect("BUG: the scope pushed for this node is on top")
+                    .omit_total
+            {
+                node.config.omit_collection_total();
             }
         });
     }
-    let mut omit = FxHashSet::default();
-    inspect(root, &mut Vec::new(), &mut omit);
-    apply(root, &omit);
+    visit(root, &mut Vec::new(), &mut Vec::new());
+}
+
+/// Whether a member's position belongs to the nearest set above it: a lazy
+/// host's stamp to that host, an authored position to an authored set.
+fn member_matches(origin: Option<SemanticsIndexOrigin>, nearest: Option<&SetScope>) -> bool {
+    let Some(scope) = nearest.filter(|scope| matches!(scope.size, SetSize::Known(_))) else {
+        return false;
+    };
+    match origin {
+        Some(SemanticsIndexOrigin::Collection(host)) => scope.host == Some(host),
+        Some(SemanticsIndexOrigin::Authored) | None => {
+            scope.origin == SemanticsCollectionOrigin::Authored
+        }
+    }
+}
+
+/// Clear the places `config` declares that its nearest set and table cannot
+/// hold. Assembly re-runs on every mark, so a drop is logged at debug level
+/// only, where a warning would repeat.
+fn hold_places_to_scopes(
+    config: &mut SemanticsConfiguration,
+    set: Option<SetScope>,
+    table: Option<TableShape>,
+) {
+    if let Some(index) = config.position_in_set()
+        && let Some(SetSize::Known(size)) = set.map(|set| set.size)
+        && index >= size
+    {
+        tracing::debug!(
+            index,
+            size,
+            "a semantics position is past its set's size; not published"
+        );
+        config.clear_position_in_set();
+    }
+    if let Some(cell) = config.cell_position()
+        && !cell_fits(cell, table)
+    {
+        tracing::debug!(
+            ?cell,
+            ?table,
+            "a semantics cell does not lie inside its table; not published"
+        );
+        config.clear_cell_position();
+    }
+    if let Some(row) = config.row_index()
+        && !row_fits(row, table)
+    {
+        tracing::debug!(
+            row = row.get(),
+            ?table,
+            "a semantics row is not one of its table's; not published"
+        );
+        config.clear_row_index();
+    }
+}
+
+/// Whether a cell, with its spans, lies inside the table it sits in. A known
+/// extent bounds it; an unknown one cannot be exceeded.
+fn cell_fits(cell: flui_semantics::CellPosition, table: Option<TableShape>) -> bool {
+    let within = |first: NonZeroUsize, span: NonZeroUsize, extent: SetSize| match extent {
+        SetSize::Known(count) => first
+            .get()
+            .checked_add(span.get() - 1)
+            .is_some_and(|last| last <= count),
+        _ => true,
+    };
+    table.is_none_or(|table| {
+        within(cell.row(), cell.row_span(), table.rows())
+            && within(cell.column(), cell.column_span(), table.columns())
+    })
+}
+
+/// Whether a row is one of the rows of the table it sits in.
+fn row_fits(row: NonZeroUsize, table: Option<TableShape>) -> bool {
+    table.is_none_or(|table| match table.rows() {
+        SetSize::Known(count) => row.get() <= count,
+        _ => true,
+    })
+}
+
+/// Whether `config` declares a set or a table, whose members' places
+/// [`reconcile_collections`] holds to it.
+fn declares_collection_scope(config: &SemanticsConfiguration) -> bool {
+    config.size_of_set().is_some() || config.table_shape().is_some()
 }
 
 fn has_collection_metadata(root: &BuiltSemanticsNode) -> bool {
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
-        if node.config.collection().is_some() {
+        if declares_collection_scope(&node.config) {
             return true;
         }
         pending.extend(&node.children);
@@ -1020,7 +1131,7 @@ fn build_semantics_fragments_impl(
     // stamped index before that ran would make the stamp win, since `absorb`
     // does not overwrite a value the parent already holds, and hand-indexed
     // content inside a lazy list would become impossible.
-    apply_lazy_child_semantic_index(node, &mut config);
+    apply_lazy_child_semantic_index(node, &mut config, &children);
     let pending = PendingSemanticsNode {
         source: SemanticsSource::Render(id),
         config,
@@ -1454,7 +1565,7 @@ fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::Seman
         let Some(node) = tree.get(id) else {
             return true;
         };
-        if node.config().collection().is_some() {
+        if declares_collection_scope(node.config()) {
             return true;
         }
         cursor = node.parent();
@@ -1468,7 +1579,7 @@ fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::Seman
         let Some(node) = tree.get(id) else {
             return true;
         };
-        if node.config().collection().is_some() {
+        if declares_collection_scope(node.config()) {
             return true;
         }
         pending.extend(node.children());
@@ -1526,49 +1637,65 @@ fn describe_semantics_configuration(
     config
 }
 
-/// Publish a lazy sliver child's position in the set, from the index its host
-/// stamped rather than from a wrapper widget.
-///
-/// A screen reader's "item 12 of 100" needs the 12. Wrapping every
-/// materialised item in an indexing render node would cost a node per item,
-/// carrying an index captured when the item was built. The sliver instead
-/// already stamps each child's slot into its parent data and keeps it in step
-/// with the row's real position as the band moves, so reading it here costs
-/// no node and cannot go stale against the row it describes.
-///
-/// Applied AFTER the render object's own description on purpose: an explicit
-/// `IndexedSemantics` on the item wins, which is what makes hand-indexed
-/// content inside a lazy list possible at all.
-///
-/// A `semantic_index` of `None` publishes nothing — the child occupies a
-/// logical index without being a member of the set, which is what a separator
-/// is. A missing position degrades to "item ? of 100"; a wrong one misleads.
+/// The configuration a fragment carries, formed or not.
+fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfiguration {
+    match fragment {
+        SemanticsFragment::Pending(pending) => &mut pending.config,
+        SemanticsFragment::Formed(formed) => &mut formed.config,
+    }
+}
+
+/// Whether one logical item already declares its place among the members of
+/// its set, at any depth: an explicit `IndexedSemantics` absorbed into a
+/// descendant boundary is that item's member as much as one folded into its
+/// root. A nested set's members belong to that set, so the search stops at a
+/// node that declares a set of its own.
+fn item_declares_position(
+    config: &SemanticsConfiguration,
+    children: &[BuiltSemanticsNode],
+) -> bool {
+    fn within(node: &BuiltSemanticsNode) -> bool {
+        node.config.position_in_set().is_some()
+            || (node.config.size_of_set().is_none() && node.children.iter().any(within))
+    }
+    config.position_in_set().is_some()
+        || (config.size_of_set().is_none() && children.iter().any(within))
+}
+
+/// Record the position `node`'s host stamped, as that host's member.
+fn stamp_position(node: &RenderNode, config: &mut SemanticsConfiguration, index: usize) {
+    match node.parent() {
+        Some(host) => config.set_collection_index(host, index),
+        None => config.set_position_in_set(index),
+    }
+}
+
 /// Hand a transparent stamped node's position down to the fragments it
 /// forwards, so the node that does form for this item carries it.
 ///
-/// Only offered where nothing already declared one, at every level — an
-/// explicit `IndexedSemantics` anywhere in the item wins, the same rule the
-/// contributing path follows.
+/// The stamped node forms no semantics node of its own — a `Padding` or an
+/// `Align` at the item's root, which is what a builder most often returns —
+/// so its position would be lost where it is. One logical item is one member:
+/// a position already declared anywhere in it is that member's, and otherwise
+/// only the first fragment carries it, so a row that forms two controls does
+/// not announce both as "item 1".
 fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
     let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
     };
-    for fragment in fragments {
-        let config = match fragment {
-            SemanticsFragment::Pending(pending) => &mut pending.config,
-            SemanticsFragment::Formed(formed) => &mut formed.config,
-        };
-        // Same rule as the contributing path: an explicit `IndexedSemantics`
-        // keeps its position AND suppresses the stamped size, because explicit
-        // numbering describes a different set from the one the delegate
-        // materialises.
-        if config.index_in_parent().is_none() {
-            if let Some(host) = node.parent() {
-                config.set_collection_index(host, index);
-            } else {
-                config.set_index_in_parent(index);
-            }
+    let declared = fragments.iter().any(|fragment| match fragment {
+        SemanticsFragment::Pending(pending) => {
+            item_declares_position(&pending.config, &pending.children)
         }
+        SemanticsFragment::Formed(formed) => {
+            item_declares_position(&formed.config, &formed.children)
+        }
+    });
+    if declared {
+        return;
+    }
+    if let Some(first) = fragments.first_mut() {
+        stamp_position(node, fragment_config(first), index);
     }
 }
 
@@ -1580,28 +1707,36 @@ fn stamped_sliver_parent_data(
         .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
 }
 
-fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConfiguration) {
-    let Some(pd) = stamped_sliver_parent_data(node) else {
+/// Publish a lazy sliver child's position in the set, from the index its host
+/// stamped rather than from a wrapper widget.
+///
+/// A screen reader's "item 12 of 100" needs the 12. Wrapping every
+/// materialised item in an indexing render node would cost a node per item,
+/// carrying an index captured when the item was built. The sliver instead
+/// already stamps each child's slot into its parent data and keeps it in step
+/// with the row's real position as the band moves, so reading it here costs
+/// no node and cannot go stale against the row it describes.
+///
+/// Applied AFTER the fold, so this is a genuine fallback: an explicit
+/// `IndexedSemantics` anywhere in the item, folded into the row or formed as a
+/// descendant boundary, keeps its own position and the stamp is not applied.
+/// Explicit numbering belongs to an authored set, not to the host's, so
+/// [`reconcile_collections`] withholds the host's total rather than pairing
+/// the two.
+///
+/// A `semantic_index` of `None` publishes nothing — the child occupies a
+/// logical index without being a member of the set, which is what a separator
+/// is.
+fn apply_lazy_child_semantic_index(
+    node: &RenderNode,
+    config: &mut SemanticsConfiguration,
+    children: &[BuiltSemanticsNode],
+) {
+    let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
     };
-    // An explicit `IndexedSemantics` owns the POSITION, and the stamped size
-    // does NOT pair with it. Explicit numbering exists to describe a DIFFERENT
-    // set from the one the delegate materialises — six cards numbered as three
-    // rows, or an offset numbering — so pairing "row 2" with the delegate's
-    // count of six announces "row 2 of 6", and an offset can put the position
-    // past the size entirely. A caller wanting both supplies both.
-    //
-    // The honest degradation is "row 2 of ?", the same trade this entry already
-    // makes for an unresolved `ItemCount::Unknown`.
-    if config.index_in_parent().is_some() {
-        return;
-    }
-    if let Some(index) = pd.semantic_index {
-        if let Some(host) = node.parent() {
-            config.set_collection_index(host, index);
-        } else {
-            config.set_index_in_parent(index);
-        }
+    if !item_declares_position(config, children) {
+        stamp_position(node, config, index);
     }
 }
 

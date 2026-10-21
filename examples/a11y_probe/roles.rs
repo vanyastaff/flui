@@ -8,7 +8,11 @@
 //! names are the contract with the check: renaming one here fails it.
 
 use flui::prelude::*;
-use flui::widgets::{HeadingLevel, NumericRange, Toggled, Wrap};
+use std::num::NonZeroU32;
+
+use flui::widgets::{
+    Column, HeadingLevel, ListView, NumericRange, SetSize, SortDirection, Toggled, Wrap,
+};
 
 /// The variable that selects this page instead of the counter.
 pub(super) const FIXTURE_ENV: &str = "FLUI_PROBE_FIXTURE";
@@ -33,9 +37,13 @@ impl StatelessView for RoleFixtures {
             })
             .collect();
         fixtures.extend(states());
+        fixtures.extend(collections());
         Wrap::new(fixtures).spacing(2.0).run_spacing(2.0)
     }
 }
+
+/// The rows of the lazy list on the page, named for the check that reads them.
+pub(super) const LAZY_ROWS: [&str; 3] = ["lazy row 1", "lazy row 2", "lazy row 3"];
 
 /// A node of its own, named `label`, that declares what `semantics` does.
 fn fixture(label: impl Into<String>, semantics: Semantics) -> BoxedView {
@@ -167,4 +175,70 @@ fn states() -> Vec<BoxedView> {
             Semantics::new().role(SemanticsRole::Button).enabled(false),
         ),
     ]
+}
+
+/// Where a node sits in a set, a tree and a table: a set a caller built and a
+/// list that builds its rows lazily, whose rows read their position from
+/// themselves and their size from the container.
+fn collections() -> Vec<BoxedView> {
+    vec![
+        // A set the caller built: the size on the container, each place on its
+        // member.
+        container_fixture(
+            "steps list",
+            Semantics::new()
+                .role(SemanticsRole::List)
+                .size_of_set(SetSize::Known(3)),
+            vec![
+                fixture(
+                    "first step",
+                    Semantics::new()
+                        .role(SemanticsRole::ListItem)
+                        .position_in_set(0),
+                ),
+                fixture(
+                    "second step",
+                    Semantics::new()
+                        .role(SemanticsRole::ListItem)
+                        .position_in_set(1),
+                ),
+                fixture(
+                    "third step",
+                    Semantics::new()
+                        .role(SemanticsRole::ListItem)
+                        .position_in_set(2),
+                ),
+            ],
+        ),
+        fixture(
+            "level two tree item",
+            Semantics::new()
+                .role(SemanticsRole::TreeItem)
+                .level(NonZeroU32::new(2).expect("BUG: two is not zero")),
+        ),
+        fixture(
+            "sorted column",
+            Semantics::new()
+                .role(SemanticsRole::ColumnHeader)
+                .sort_direction(SortDirection::Ascending),
+        ),
+        // A lazy list: the framework numbers its rows and sizes its container.
+        SizedBox::new(120.0, 80.0)
+            .child(ListView::builder(3, 24.0, |index| {
+                LAZY_ROWS
+                    .get(index)
+                    .map(|label| fixture(*label, Semantics::new().role(SemanticsRole::ListItem)))
+            }))
+            .boxed(),
+    ]
+}
+
+/// A node of its own that declares what `semantics` does and holds
+/// `children`.
+fn container_fixture(label: &str, semantics: Semantics, children: Vec<BoxedView>) -> BoxedView {
+    semantics
+        .container(true)
+        .label(label)
+        .child(Column::new(children))
+        .boxed()
 }

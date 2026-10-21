@@ -6438,7 +6438,7 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
     let root_id = owner.root().expect("indexed semantics root");
     let node = owner.get(root_id).expect("root id must resolve");
     assert_eq!(
-        node.config().index_in_parent(),
+        node.config().position_in_set(),
         Some(11),
         "the index reaches the semantics configuration zero-based, as the \
          reference carries it",

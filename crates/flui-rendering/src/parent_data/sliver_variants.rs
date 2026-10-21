@@ -88,26 +88,7 @@ pub struct SliverSlot {
     /// The position within the semantic set, or `None` for a child that is not
     /// a member of it — see
     /// [`SliverMultiBoxAdaptorParentData::semantic_index`].
-    pub semantic: Option<i32>,
-}
-
-/// A logical index as a semantic position, or `None` if it does not fit.
-///
-/// The platform property is `i32`. Casting past its range wraps, and a wrapped
-/// position is a *wrong* announcement — "item 3 of 100" on the four-billionth
-/// row — where `None` is an honest "item ? of 100". A list that long is not one
-/// a screen reader can navigate anyway, so nothing is lost by declining.
-const fn semantic_position(logical: usize) -> Option<i32> {
-    if logical <= i32::MAX as usize {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_possible_wrap,
-            reason = "guarded by the bound immediately above"
-        )]
-        Some(logical as i32)
-    } else {
-        None
-    }
+    pub semantic: Option<usize>,
 }
 
 impl SliverSlot {
@@ -118,7 +99,7 @@ impl SliverSlot {
     pub const fn identity(logical: usize) -> Self {
         Self {
             logical,
-            semantic: semantic_position(logical),
+            semantic: Some(logical),
         }
     }
 
@@ -157,7 +138,7 @@ pub struct SliverMultiBoxAdaptorParentData {
     /// Carried beside the logical index rather than derived from it, because
     /// the delegate is the only thing that knows which is which and the
     /// semantics assembler that publishes the position never sees the delegate.
-    pub semantic_index: Option<i32>,
+    pub semantic_index: Option<usize>,
 }
 
 impl SliverMultiBoxAdaptorParentData {
@@ -166,7 +147,7 @@ impl SliverMultiBoxAdaptorParentData {
         Self {
             layout_offset: 0.0,
             index,
-            semantic_index: semantic_position(index),
+            semantic_index: Some(index),
         }
     }
 
@@ -174,7 +155,7 @@ impl SliverMultiBoxAdaptorParentData {
     ///
     /// `None` marks a child that is not a member of the set.
     #[must_use]
-    pub const fn with_semantic_index(index: usize, semantic_index: Option<i32>) -> Self {
+    pub const fn with_semantic_index(index: usize, semantic_index: Option<usize>) -> Self {
         Self {
             layout_offset: 0.0,
             index,
@@ -201,7 +182,7 @@ impl SliverMultiBoxAdaptorParentData {
         // prevent -- `zero().with_index(9)` would otherwise keep announcing the
         // position it held at index 0. A caller that needs them to differ says
         // so through [`Self::with_semantic_index`].
-        self.semantic_index = semantic_position(index);
+        self.semantic_index = Some(index);
         self
     }
 

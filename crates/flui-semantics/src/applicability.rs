@@ -24,7 +24,10 @@ use crate::role::SemanticsRole;
 /// The global ones (`hidden`, `disabled`, `invalid`, `live`, the naming and
 /// relation properties) are not listed: every role carries them. A set's place
 /// and size are not listed either: the framework derives them from the
-/// collection a node sits in, whatever the role the node itself declares.
+/// collection a node sits in, whatever the role the node itself declares. The
+/// rest of a node's place (its level, a table's shape, a cell's position, a
+/// header's sort, a container's selection rule) is an author's to declare, so
+/// the role it is declared on is checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RoleAttribute {
@@ -46,12 +49,25 @@ pub enum RoleAttribute {
     Placeholder,
     /// `aria-level` of a heading.
     HeadingLevel,
+    /// `aria-level` of a tree item, a list item or a row.
+    Level,
+    /// `aria-rowcount` and `aria-colcount`.
+    TableShape,
+    /// `aria-rowindex`, `aria-colindex`, `aria-rowspan` and `aria-colspan` of
+    /// a cell or a header.
+    CellPosition,
+    /// `aria-rowindex` of a row.
+    RowIndex,
+    /// `aria-sort`.
+    Sort,
+    /// `aria-multiselectable`.
+    Multiselectable,
 }
 
 impl RoleAttribute {
     /// Every role-dependent attribute.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Toggled,
         Self::Selected,
         Self::Expanded,
@@ -61,6 +77,12 @@ impl RoleAttribute {
         Self::NumericRange,
         Self::Placeholder,
         Self::HeadingLevel,
+        Self::Level,
+        Self::TableShape,
+        Self::CellPosition,
+        Self::RowIndex,
+        Self::Sort,
+        Self::Multiselectable,
     ];
 
     /// The ARIA attributes it stands for.
@@ -75,7 +97,12 @@ impl RoleAttribute {
             Self::Modal => "aria-modal",
             Self::NumericRange => "aria-valuenow/aria-valuemin/aria-valuemax",
             Self::Placeholder => "aria-placeholder",
-            Self::HeadingLevel => "aria-level",
+            Self::HeadingLevel | Self::Level => "aria-level",
+            Self::TableShape => "aria-rowcount/aria-colcount",
+            Self::CellPosition => "aria-rowindex/aria-colindex/aria-rowspan/aria-colspan",
+            Self::RowIndex => "aria-rowindex",
+            Self::Sort => "aria-sort",
+            Self::Multiselectable => "aria-multiselectable",
         }
     }
 }
@@ -89,7 +116,7 @@ struct Field {
 }
 
 /// The fields behind each [`RoleAttribute`], one row each.
-const FIELDS: [Field; 9] = [
+const FIELDS: [Field; 15] = [
     Field {
         attribute: RoleAttribute::Toggled,
         declared: |a| a.states.toggled.is_some(),
@@ -134,6 +161,36 @@ const FIELDS: [Field; 9] = [
         attribute: RoleAttribute::HeadingLevel,
         declared: |a| a.heading_level.is_some(),
         clear: |a| a.heading_level = None,
+    },
+    Field {
+        attribute: RoleAttribute::Level,
+        declared: |a| a.collection.level.is_some(),
+        clear: |a| a.collection.level = None,
+    },
+    Field {
+        attribute: RoleAttribute::TableShape,
+        declared: |a| a.collection.table.is_some(),
+        clear: |a| a.collection.table = None,
+    },
+    Field {
+        attribute: RoleAttribute::CellPosition,
+        declared: |a| a.collection.cell.is_some(),
+        clear: |a| a.collection.cell = None,
+    },
+    Field {
+        attribute: RoleAttribute::RowIndex,
+        declared: |a| a.collection.row.is_some(),
+        clear: |a| a.collection.row = None,
+    },
+    Field {
+        attribute: RoleAttribute::Sort,
+        declared: |a| a.collection.sort.is_some(),
+        clear: |a| a.collection.sort = None,
+    },
+    Field {
+        attribute: RoleAttribute::Multiselectable,
+        declared: |a| a.collection.multiselectable.is_some(),
+        clear: |a| a.collection.multiselectable = None,
     },
 ];
 
@@ -228,6 +285,15 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
         ),
         A::Placeholder => text_input,
         A::HeadingLevel => role == R::Heading,
+        A::Level => matches!(role, R::ListItem | R::Row | R::TreeItem),
+        A::TableShape => matches!(role, R::Table | R::Grid | R::TreeGrid),
+        A::CellPosition => matches!(role, R::Cell | R::ColumnHeader | R::GridCell | R::RowHeader),
+        A::RowIndex => role == R::Row,
+        A::Sort => matches!(role, R::ColumnHeader | R::RowHeader),
+        A::Multiselectable => matches!(
+            role,
+            R::Grid | R::ListBox | R::TabList | R::Tree | R::TreeGrid
+        ),
     }
 }
 
@@ -257,14 +323,15 @@ fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field>
 /// and none for a static one.
 fn supported(attrs: &SemanticsAttributes, attribute: RoleAttribute) -> bool {
     use SemanticsRole as R;
-    applicable(attrs.role, attribute)
+    let role = attrs.effective_role();
+    applicable(role, attribute)
         && match attribute {
             RoleAttribute::Toggled => {
                 attrs.states.toggled != Some(crate::Toggled::Mixed)
-                    || !matches!(attrs.role, R::RadioButton | R::Switch | R::MenuItemRadio)
+                    || !matches!(role, R::RadioButton | R::Switch | R::MenuItemRadio)
             }
             RoleAttribute::NumericRange => {
-                attrs.role != R::Separator || attrs.states.focusable == Some(true)
+                role != R::Separator || attrs.states.focusable == Some(true)
             }
             _ => true,
         }
@@ -338,6 +405,29 @@ mod tests {
             (R::GridCell, A::Expanded, false),
             (R::GridCell, A::ReadOnly, true),
             (R::ColumnHeader, A::ReadOnly, false),
+            (R::TreeItem, A::Level, true),
+            (R::ListItem, A::Level, true),
+            (R::Row, A::Level, true),
+            (R::Heading, A::Level, false),
+            (R::Button, A::Level, false),
+            (R::Table, A::TableShape, true),
+            (R::Grid, A::TableShape, true),
+            (R::TreeGrid, A::TableShape, true),
+            (R::List, A::TableShape, false),
+            (R::GridCell, A::CellPosition, true),
+            (R::Row, A::CellPosition, false),
+            (R::Row, A::RowIndex, true),
+            (R::GridCell, A::RowIndex, false),
+            (R::RowHeader, A::CellPosition, true),
+            (R::ListItem, A::CellPosition, false),
+            (R::ColumnHeader, A::Sort, true),
+            (R::RowHeader, A::Sort, true),
+            (R::Cell, A::Sort, false),
+            (R::ListBox, A::Multiselectable, true),
+            (R::Tree, A::Multiselectable, true),
+            (R::TabList, A::Multiselectable, true),
+            (R::Button, A::Multiselectable, false),
+            (R::List, A::Multiselectable, false),
         ];
         for &(role, attribute, expected) in rows {
             assert_eq!(
