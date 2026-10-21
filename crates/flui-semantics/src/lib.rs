@@ -120,7 +120,9 @@ pub use node::SemanticsNode;
 // ============================================================================
 // RE-EXPORTS - Owner Types
 // ============================================================================
-pub use owner::{InapplicableAttribute, report_inapplicable};
+pub use owner::{
+    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, report_diagnostic,
+};
 pub use owner::{
     SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
 };

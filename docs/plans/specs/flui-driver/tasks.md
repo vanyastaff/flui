@@ -176,9 +176,11 @@ graph LR
     `Focus` for the same reason (under it, the focus formed the node and absorbed them).
   - Siblings sharing an identifier break ADR-0240 §4 (amended 2026-10-21: unique among siblings,
     as AccessKit requires of `author_id`). The clash is reported, not repaired: translation
-    publishes the identifiers as written, debug builds log a warning, and the wire read lists a
+    publishes the identifiers as written, debug builds queue a `SemanticsDiagnostic` for the frame
+    driver to log, once per clash and again when its siblings change, and the wire read lists a
     `duplicate_identifier` diagnostic naming the parent and the siblings (protocol `0.6`,
-    `Tree.diagnostics`).
+    `Tree.diagnostics`). Both check the siblings an agent sees, after AccessKit's filter lifts
+    the children of unlabelled containers.
   - ADR-0240 §3's normalization of an equal `automation_id` does not exist yet: `flui-protocol`
     has no ADR-0095 §4 projection, and `desktop-mcp` reads UIA into its own node type. It lands
     with the locator work (FD3) or the OS lanes.
@@ -188,7 +190,8 @@ graph LR
       export (`author_id`, wire `identifier`), not announced (adapter and wire), not merged
       (label without identifier, merged parent keeps its own) and no boundary; the `identifier`
       row of `every_published_attribute_reads_through_the_consumer`;
-      `identifier::siblings_sharing_an_identifier_are_reported_and_published_as_written`;
+      `identifier::siblings_sharing_an_identifier_are_reported_and_published_as_written` and
+      `identifier::debug_builds_queue_a_published_clash_once_per_shape`;
     - `flui-protocol`: `diagnostics_are_tagged_and_an_unknown_kind_still_reads`, and the `0.6`
       schema golden;
     - `flui-rendering`'s `semantics_assembly_matrix`:

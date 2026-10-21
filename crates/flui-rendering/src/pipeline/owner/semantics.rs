@@ -205,7 +205,7 @@ impl PipelineOwner<Semantics> {
                 let diagnostics = owner.take_diagnostics();
                 #[cfg(any(test, feature = "testing"))]
                 self.unchecked_semantics_diagnostics
-                    .extend(diagnostics.iter().copied());
+                    .extend(diagnostics.iter().cloned());
                 self.semantics_diagnostics.extend(diagnostics);
                 self.counters.semantics_nodes_updated += published as u64;
                 callbacks = std::mem::take(&mut regions.callbacks);

@@ -1995,7 +1995,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// oldest first. They live on this pipeline, not on the semantics owner,
     /// so disabling semantics or replacing the owner does not drop them.
     #[must_use]
-    pub fn take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::InapplicableAttribute> {
+    pub fn take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::SemanticsDiagnostic> {
         self.semantics_diagnostics.drain(..).collect()
     }
 
@@ -2003,7 +2003,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// queued since.
     pub fn restore_semantics_diagnostics(
         &mut self,
-        unreported: Vec<flui_semantics::InapplicableAttribute>,
+        unreported: Vec<flui_semantics::SemanticsDiagnostic>,
     ) {
         for finding in unreported.into_iter().rev() {
             self.semantics_diagnostics.push_front(finding);
@@ -2016,7 +2016,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[must_use]
     pub fn take_unchecked_semantics_diagnostics(
         &mut self,
-    ) -> Vec<flui_semantics::InapplicableAttribute> {
+    ) -> Vec<flui_semantics::SemanticsDiagnostic> {
         std::mem::take(&mut self.unchecked_semantics_diagnostics)
     }
 

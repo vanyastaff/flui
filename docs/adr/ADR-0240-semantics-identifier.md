@@ -35,7 +35,7 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
    an OS automation client matching it on two siblings finds only one. It need not be unique
    anywhere else, so a row template can name its "delete" button in every row. A clash is the
    author's defect and is reported, never repaired: translation publishes the identifiers as
-   written, debug builds log a warning naming the parent, and a wire read lists a
+   written, debug builds report the clash to the log naming the parent, and a wire read lists a
    `duplicate_identifier` diagnostic naming the parent and the siblings (schema `0.6`), so a test
    or agent can assert on it. A strict locator on an identifier more than one node carries fails
    `ambiguous` like any other criterion.

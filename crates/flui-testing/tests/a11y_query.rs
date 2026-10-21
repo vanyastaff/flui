@@ -162,7 +162,7 @@ pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support()
             .downcast_ref::<String>()
             .map(String::as_str)
             .unwrap_or_default();
-        assert!(message.contains("left unpublished"), "{message}");
+        assert!(message.contains("attribute: Selected"), "{message}");
     };
     fails(None);
     fails(Some(Disabling));
