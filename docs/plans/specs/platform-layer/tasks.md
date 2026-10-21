@@ -323,6 +323,23 @@ graph LR
   --all-targets -D warnings` — зелёные; nextest по контракту и девяти зависимым — 759 из 760 до
   исправления снимка, trybuild `flui-interaction` после него — зелёный; doctest'ы десяти крейтов — 321
   прошли. Повтор команд ничего не меняет.
+- [x] **LY23** — ветка `platform/contract-paths`. Ядро не реэкспортирует контракт: из
+  `traits/mod.rs` ушли 64 имени `flui_platform`, `NamedKey` и три имени
+  `flui_semantics::platform`, из корня `lib.rs` — модуль `data_transfer`, имена предпочтений,
+  передачи данных, `CursorIcon` и контрактные имена списка `traits`; корень оставляет только свои
+  (`Platform`, `HostWindow`, owner-типы, хосты, ошибки). Пути переписал одноразовый инструмент на
+  `syn` (вне репозитория): лист `use`-дерева с корнем `flui_native`/`flui_native::traits` (в
+  `crates/flui-native/src` — `crate`/`crate::traits`) и контрактным именем уходит в
+  `flui_platform::…`, `flui_semantics::platform::…` или `flui_platform::data_transfer`; встроенные
+  пути и doc-ссылки — тем же отображением. Руками: относительные `super::` в `traits/`, `$crate::`
+  в `impl_window_callback_setters`, doc-пример `lib.rs`, ARCHITECTURE.md и README обоих крейтов.
+  Проверки: `cargo check --workspace --all-targets` на Windows; ядро под `aarch64-apple-darwin` и
+  `x86_64-unknown-linux-gnu` (`winit-backend,a11y`); ядро и `flui-app` под `aarch64-linux-android`;
+  `flui-app`, `flui-runtime`, `flui-testing` под Linux и macOS (`CC`/`AR` из LLVM для `psm`);
+  `wasm-check`; clippy `--workspace --all-targets -D warnings`; `xtask checks`, `workspace`,
+  `reach`, `deps` — зелёные; nextest пяти изменённых крейтов — 422 прошли; doctest'ы — 80 прошли;
+  `rg` по `flui_native::` с контрактными именами пуст. iOS локально не собирается
+  (`objc2-exception-helper` требует SDK), его проверяет CI.
 
 ## Работа вне серии: LY8 и LY9
 

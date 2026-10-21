@@ -5,7 +5,7 @@ use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
-use flui_native::WindowMode;
+use flui_platform::WindowMode;
 
 use super::close_request::CloseRequestHandler;
 use super::dev_agent::DevAgent;
@@ -129,7 +129,7 @@ pub struct AppConfig {
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
     /// and line formatting run only while the overlay is enabled.
     ///
-    /// `From<&AppConfig> for flui_native::WindowOptions` drops this field —
+    /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
@@ -608,7 +608,7 @@ impl AppConfig {
     }
 }
 
-impl From<&AppConfig> for flui_native::WindowOptions {
+impl From<&AppConfig> for flui_platform::WindowOptions {
     fn from(config: &AppConfig) -> Self {
         // `visible` and `reveal` are not the configuration's to set, so they
         // keep the options' own defaults: on screen when the window opens

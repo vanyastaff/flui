@@ -55,10 +55,12 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
-use crate::traits::{
-    Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
-    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    owner::{DirectOwnerHooks, OwnerHooks},
+use crate::{
+    traits::OpenWindowError, traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
 };
 
 use super::clipboard::IOSClipboard;
@@ -487,8 +489,8 @@ impl Platform for IOSPlatform {
         self.clipboard.clone()
     }
 
-    fn data_transfer(&self) -> Arc<dyn crate::data_transfer::DataTransferSource> {
-        Arc::new(crate::data_transfer::NullDataTransferSource)
+    fn data_transfer(&self) -> Arc<dyn flui_platform::data_transfer::DataTransferSource> {
+        Arc::new(flui_platform::data_transfer::NullDataTransferSource)
     }
 
     fn name(&self) -> &'static str {
@@ -927,7 +929,7 @@ impl IOSPlatform {
             if can_publish
                 && self.signal.accepting()
                 && window.is_visible()
-                && window.execution_state() == crate::WindowExecutionState::Running
+                && window.execution_state() == flui_platform::WindowExecutionState::Running
             {
                 window.publish(origin.attachment, marker);
             }

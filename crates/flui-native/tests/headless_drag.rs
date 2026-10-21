@@ -11,11 +11,9 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Point;
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
-use flui_native::traits::{DispatchEventResult, PlatformInput};
-use flui_native::{
-    HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as _, WindowOptions,
-};
+use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as _};
 use flui_platform::DragDropEvent;
+use flui_platform::WindowOptions;
 use flui_platform::data_transfer::{
     DataTransferSource, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
@@ -24,6 +22,7 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, ProcessNonce,
 };
+use flui_platform::{DispatchEventResult, PlatformInput};
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;

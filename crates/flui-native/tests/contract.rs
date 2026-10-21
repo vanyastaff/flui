@@ -3,7 +3,8 @@
 //! factor, `visible: false` is respected, and windows are independent.
 
 use flui_foundation::geometry::Size;
-use flui_native::{WindowOptions, current_platform};
+use flui_native::current_platform;
+use flui_platform::WindowOptions;
 
 #[test]
 #[cfg_attr(
@@ -166,9 +167,8 @@ fn test_window_lifecycle_contract() {
 mod native_windows {
     use flui_foundation::geometry::Size;
     use flui_native::platforms::windows::WindowsWindow;
-    use flui_native::{
-        DispatchEventResult, HostWindow, OwnerPlatform, Platform, WindowOptions, WindowsPlatform,
-    };
+    use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
+    use flui_platform::{DispatchEventResult, WindowOptions};
     use std::{
         cell::RefCell,
         marker::PhantomData,
@@ -759,7 +759,7 @@ mod native_windows {
     // it needs the hardware (docs/platform-parity.md).
     #[expect(unsafe_code, reason = "owned Win32 messages to the fixture's own HWND")]
     fn touchpad_viewport_initialises_and_survives_its_messages() {
-        use flui_native::traits::PlatformInput;
+        use flui_platform::PlatformInput;
         use flui_platform::input_capabilities::Availability;
         use windows::Win32::UI::WindowsAndMessaging::{
             DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
@@ -1521,8 +1521,8 @@ mod native_windows {
             let callback_replacement = Arc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
             window.on_input(Box::new(move |event| {
-                if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                    return flui_native::traits::DispatchEventResult::default();
+                if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                    return flui_platform::DispatchEventResult::default();
                 }
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
@@ -1605,7 +1605,7 @@ mod native_windows {
         let replacement = replacement.lock().expect("replacement storage").take();
         if let Some(replacement) = replacement {
             assert!(
-                flui_native::traits::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),
+                flui_platform::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),
                 "replacement remains natively live"
             );
             replacement.close();
@@ -1661,8 +1661,8 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
-            if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform::keyboard::KeyState::Down
@@ -1805,8 +1805,8 @@ mod native_windows {
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
-            if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             // Only the dead key under test; modifier releases the platform
             // synthesizes around a layout switch are not part of this contract.
@@ -2096,8 +2096,8 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
-            if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform::keyboard::KeyState::Down
@@ -2237,8 +2237,8 @@ mod native_windows {
         // The input callback must be `Send`; carry the handle as an address.
         let pumped_window = hwnd.0 as usize;
         window.on_input(Box::new(move |event| {
-            if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             if event
                 .as_keyboard()
@@ -2462,8 +2462,8 @@ mod native_windows {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let keys = observed.clone();
         window.on_input(Box::new(move |event| {
-            if matches!(event, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             if let Some(event) = event.as_keyboard() {
                 keys.lock().expect("keys").push(event.clone());
@@ -2716,8 +2716,8 @@ mod native_windows {
         reason = "inverts an owned window's DWM flag and sends it a settings broadcast"
     )]
     fn appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag() {
-        use flui_native::WindowAppearance;
         use flui_platform::Brightness;
+        use flui_platform::WindowAppearance;
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
         use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
@@ -2947,8 +2947,8 @@ mod native_windows {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
-            if matches!(input, flui_native::traits::PlatformInput::Capabilities(_)) {
-                return flui_native::traits::DispatchEventResult::default();
+            if matches!(input, flui_platform::PlatformInput::Capabilities(_)) {
+                return flui_platform::DispatchEventResult::default();
             }
             if let Some(event) = input.as_pointer() {
                 recorded.lock().expect("pointer log").push(event.clone());
@@ -3204,10 +3204,10 @@ mod native_windows {
         let (recorded, timed) = (Arc::clone(&events), Arc::clone(&timeline));
         window.on_input(Box::new(move |input| {
             match &input {
-                flui_native::traits::PlatformInput::Keyboard(key) => {
+                flui_platform::PlatformInput::Keyboard(key) => {
                     timed.lock().expect("timeline").push(("key", key.time));
                 }
-                flui_native::traits::PlatformInput::Pointer(event) => {
+                flui_platform::PlatformInput::Pointer(event) => {
                     let time = match event {
                         PointerEvent::Down(press) => Some(press.sample.time),
                         PointerEvent::Move(update) => Some(update.current().time),
@@ -4956,7 +4956,7 @@ mod native_windows {
         reason = "queues and dispatches key and mouse messages for an owned window"
     )]
     fn queued_key_events_keep_native_message_time() {
-        use flui_native::traits::PlatformInput;
+        use flui_platform::PlatformInput;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
@@ -5247,8 +5247,8 @@ mod native_appkit {
         atomic::{AtomicBool, Ordering},
     };
 
-    use flui_native::WindowOptions;
-    use flui_native::traits::{DispatchEventResult, PlatformInput};
+    use flui_platform::WindowOptions;
+    use flui_platform::{DispatchEventResult, PlatformInput};
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSString};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};

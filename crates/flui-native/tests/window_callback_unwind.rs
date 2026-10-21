@@ -10,9 +10,9 @@ use std::{
     time::Duration,
 };
 
-use flui_native::traits::{DispatchEventResult, PlatformInput};
 use flui_native::{WindowCallbacks, executor::BackgroundExecutor};
 use flui_platform::ImeEvent;
+use flui_platform::{DispatchEventResult, PlatformInput};
 
 fn frame_callback_is_restored_after_real_dispatch_panics() {
     let callbacks = Arc::new(WindowCallbacks::new());

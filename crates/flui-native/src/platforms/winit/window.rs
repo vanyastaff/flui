@@ -28,13 +28,14 @@ use super::control::ControlSender;
 use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell};
 use crate::shared::window_state::{WindowStateCell, mode_of};
-#[cfg(all(target_os = "linux", feature = "a11y"))]
-use crate::traits::PlatformAccessibility;
-use crate::traits::{
-    CursorError, DisplayId, HostWindow, PlatformTextInput, PlatformWindow, SizeConstraints,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
-    WindowId, WindowMode, WindowOptions, WindowState,
+use crate::traits::HostWindow;
+use flui_platform::{
+    CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
+    WindowOptions, WindowState,
 };
+#[cfg(all(target_os = "linux", feature = "a11y"))]
+use flui_semantics::platform::PlatformAccessibility;
 
 /// How long a window that opens unmapped waits for the window manager to say
 /// what frame it will have.
@@ -794,8 +795,8 @@ impl PlatformWindow for WinitWindow {
             WindowCommand::SetDecorated(decorated) => self.window.set_decorations(decorated),
             WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
             WindowCommand::Show => self.show().map_err(|error| match error {
-                crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => {
+                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
+                flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
                 _ => WindowCommandError::Unsupported,
@@ -812,13 +813,13 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    fn show(&self) -> Result<(), crate::WindowShowError> {
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(crate::WindowShowError::Closed);
+            return Err(flui_platform::WindowShowError::Closed);
         }
         // Winit cannot unminimize or focus Wayland windows.
         if !self.capabilities.shows {
-            return Err(crate::WindowShowError::Unsupported);
+            return Err(flui_platform::WindowShowError::Unsupported);
         }
         self.make_visible();
         self.window.set_minimized(false);

@@ -19,10 +19,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
-use flui_native::{
-    DispatchEventResult, HostWindow, Platform as _, SizeConstraints, WindowCommand,
-    WindowCommandError, WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
-    WindowsPlatform, platforms::windows::WindowsWindow,
+use flui_native::{HostWindow, Platform as _, WindowsPlatform, platforms::windows::WindowsWindow};
+use flui_platform::{
+    DispatchEventResult, SizeConstraints, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, RECT, WPARAM},
@@ -697,7 +697,7 @@ fn a_hidden_windows_frame_request_reaches_the_global_redraw_event() {
     let redraws = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&redraws);
     platform.on_window_event(Box::new(move |event| {
-        if matches!(event, flui_native::WindowEvent::RedrawRequested { .. }) {
+        if matches!(event, flui_platform::WindowEvent::RedrawRequested { .. }) {
             counted.fetch_add(1, Ordering::SeqCst);
         }
     }));

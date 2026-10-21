@@ -10,7 +10,7 @@ pub mod journal;
 
 use std::fmt::Write as _;
 
-use flui_native::traits::PlatformInput;
+use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerInfo, PointerKind, PointerRole,

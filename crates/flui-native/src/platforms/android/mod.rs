@@ -77,22 +77,19 @@ use window::ActivityFlags;
 pub use window::AndroidWindow;
 
 use crate::{
+    error::BootstrapError, error::PlatformError, redraw_poll::RedrawPoll, shared::PlatformHandlers,
+    shared::android_display::LoopTurn, shared::android_display::poll_timeout,
+    shared::android_lifecycle::ActivityEvent, shared::android_lifecycle::ActivityLifecycle,
+    shared::android_lifecycle::ActivityTarget, shared::android_lifecycle::Reaction,
+    shared::android_ndk::LoadedLibraries, shared::android_ndk::SymbolSource,
+    shared::os_version::android::AndroidApi, shared::os_version::android::StylusHandwriting,
+    shared::owner_signal::OwnerSignal, traits::OpenWindowError, traits::OwnerPlatform,
+    traits::Platform, traits::PlatformExecutor, traits::PlatformReadyCallback,
+    traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     data_transfer::DataTransferSource,
-    error::{BootstrapError, PlatformError},
-    redraw_poll::RedrawPoll,
-    shared::{
-        PlatformHandlers,
-        android_display::{LoopTurn, poll_timeout},
-        android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
-        android_ndk::{LoadedLibraries, SymbolSource},
-        os_version::android::{AndroidApi, StylusHandwriting},
-        owner_signal::OwnerSignal,
-    },
-    traits::{
-        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
-        PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
-    },
 };
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
@@ -235,7 +232,7 @@ impl AndroidPlatform {
         }
     }
 
-    fn refresh_preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+    fn refresh_preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         if !self.owner_signal.accepting() {
             return Err(PlatformError::Preferences {
                 message: "the Android preference owner has stopped".into(),
@@ -329,7 +326,7 @@ impl AndroidPlatform {
                     Some(window) => {
                         window
                             .callbacks()
-                            .dispatch_input(crate::traits::PlatformInput::DragDrop(event));
+                            .dispatch_input(flui_platform::PlatformInput::DragDrop(event));
                         window.request_redraw();
                     }
                     None => {
@@ -350,13 +347,13 @@ impl AndroidPlatform {
     /// A pen tip that touches down inside the focused field hands its stroke
     /// to the input method's handwriting (API 33+): Android's own initiation
     /// sees only the stylus events native code leaves unhandled.
-    fn offer_handwriting(&self, window: &AndroidWindow, events: &[crate::traits::PlatformInput]) {
+    fn offer_handwriting(&self, window: &AndroidWindow, events: &[flui_platform::PlatformInput]) {
         use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
         let Some(handwriting) = self.api.since::<StylusHandwriting>() else {
             return;
         };
         for event in events {
-            let crate::traits::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
+            let flui_platform::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
                 continue;
             };
             let pen = press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip });
@@ -556,7 +553,7 @@ impl Platform for AndroidPlatform {
         flui_platform::WindowCapabilities::NONE
     }
 
-    fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         self.refresh_preferences()
     }
 

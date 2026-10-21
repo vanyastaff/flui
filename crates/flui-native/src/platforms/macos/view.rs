@@ -674,7 +674,7 @@ pub(super) unsafe fn with_view_context_mut<R>(
 ///
 /// `pub(super)` for [`super::text_input`], whose IME events take this same
 /// throat so they are ordered against pointer and keyboard events.
-pub(super) fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::PlatformInput) {
+pub(super) fn dispatch_input_event(ctx: &ViewContext, input: flui_platform::PlatformInput) {
     if let Some(callbacks) = ctx.callbacks.upgrade() {
         let _result = callbacks.dispatch_input(input);
     } else {

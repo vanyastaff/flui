@@ -12,7 +12,7 @@
 
 use parking_lot::Mutex;
 
-use crate::traits::Clipboard;
+use flui_platform::Clipboard;
 
 pub struct WebClipboard {
     /// In-memory fallback: caches the last written text for synchronous reads.

@@ -12,10 +12,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use flui_native::{
-    HeadlessPlatform, Platform as _, SessionEndAnswer, SessionEndPhase, WindowOptions,
-    current_platform, headless_platform,
-};
+use flui_native::{HeadlessPlatform, Platform as _, current_platform, headless_platform};
+use flui_platform::{SessionEndAnswer, SessionEndPhase, WindowOptions};
 
 fn flui_headless_env_var_selects_the_headless_platform() {
     // Set environment variable

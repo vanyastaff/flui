@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
-use flui_native::{DispatchEventResult, HostWindow, Platform, WebPlatform, WindowOptions};
+use flui_native::{HostWindow, Platform, WebPlatform};
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
@@ -27,6 +27,7 @@ use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{
     InMemoryTextStore, TextStore, TextStoreHost, Utf16Offset, Utf16Range,
 };
+use flui_platform::{DispatchEventResult, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};

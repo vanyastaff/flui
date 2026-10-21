@@ -8,13 +8,13 @@ The contracts this crate's backends implement — `PlatformWindow`,
 `PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the display snapshot
 vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`), the
 `data_transfer` transport and the window and input vocabulary — live in
-`flui-platform` (ADR-0082) and are re-exported here at their old paths
-(`flui_native::X`, `flui_native::traits::X`, `flui_native::data_transfer`),
-so a backend or `flui-app` names them as before. What stays here is what names
-an OS stack, AccessKit or tokio: `Platform`, the owner-thread capability,
-`HostWindow` and every backend. `PlatformAccessibility`, the trait the backends'
-AccessKit adapters implement, is `flui-semantics`' (ADR-0082 §2, amended) and is
-re-exported at `flui_native::traits`. Only `flui-app` may
+`flui-platform` (ADR-0082), and this crate does not re-export them: each item
+has one path (ADR-0151 §9), so a host and `flui-app` import them from
+`flui_platform`. What stays here is what names an OS stack, AccessKit or tokio:
+`Platform`, the owner-thread capability, `HostWindow` and every host.
+`PlatformAccessibility`, the trait the hosts' AccessKit adapters implement, is
+`flui-semantics`' (ADR-0082 §2, amended) and is imported from
+`flui_semantics::platform`. Only `flui-app` may
 depend on this crate (`allowed-dependents`); a crate that needs a capability
 trait depends on `flui-platform` instead.
 

@@ -17,10 +17,9 @@ use flui_interaction::drag::{
     DragSession, DragStage, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome,
     ProcessNonce,
 };
-use flui_native::{
-    HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform, WindowOptions,
-};
+use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_objects::RenderMetaData;
+use flui_platform::WindowOptions;
 use flui_platform::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };

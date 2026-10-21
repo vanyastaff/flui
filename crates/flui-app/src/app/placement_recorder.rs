@@ -28,7 +28,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::Size;
-use flui_native::WindowOptions;
+use flui_platform::WindowOptions;
 use flui_platform::{
     DisplaySnapshot, Storage, StorageFuture, StorageName, StoredVersion, WindowCapabilities,
     WindowGeometry, WindowMode, WindowPlacement, WindowState, WriteMode,

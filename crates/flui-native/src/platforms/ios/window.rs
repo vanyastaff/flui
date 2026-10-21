@@ -51,7 +51,7 @@ use crate::shared::display_link_rate::{
 };
 use crate::shared::os_version::Since;
 use crate::shared::window_state::WindowStateCell;
-use crate::traits::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
+use flui_platform::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
 
 /// The content view: a `UIView` subclass that forwards touches.
 ///
@@ -1190,14 +1190,14 @@ impl PlatformWindow for IOSWindow {
         self.metrics.lock().safe_area
     }
 
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         let marker = MainThreadMarker::new()?;
         let haptics = self.haptics.get_or_init(|| {
             let view: Retained<objc2_ui_kit::UIView> =
                 Retained::into_super(self.native.get(marker).view.clone());
             Arc::new(super::haptics::IOSHaptics::new(view, marker))
         });
-        Some(Arc::clone(haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+        Some(Arc::clone(haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
     /// UIKit defers system gestures per screen edge, not per rectangle: the window

@@ -55,7 +55,8 @@ use windows_core::HRESULT;
 use super::OleTransfer;
 use crate::platforms::windows::platform::with_window_context;
 use crate::platforms::windows::{WindowsPlatform, WindowsWindow};
-use crate::traits::{HostWindow, Platform as _, WindowOptions};
+use crate::{traits::HostWindow, traits::Platform as _};
+use flui_platform::WindowOptions;
 
 /// A drop source whose answers the case scripts.
 #[expect(

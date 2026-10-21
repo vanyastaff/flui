@@ -18,7 +18,7 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_native::WindowOptions;
+    use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
     tracing::info!("Starting web platform via flui-native");
@@ -194,7 +194,7 @@ where
 
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
-    window: std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
     /// What the browser or the renderer reported lost, and not yet rebuilt.
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.

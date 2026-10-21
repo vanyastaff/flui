@@ -37,8 +37,9 @@ use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHan
 use parking_lot::Mutex;
 
 use crate::shared::accessibility_bridge::BridgeShared;
-use crate::traits::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+use flui_semantics::{
+    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
+    platform::PlatformAccessibility,
 };
 
 // The state shared between the capability and the three handlers the adapter

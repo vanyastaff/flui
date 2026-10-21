@@ -311,7 +311,7 @@ pub mod linux {
                 );
                 if scheme {
                     let window = owner
-                        .open_window(flui_native::WindowOptions::default().with_visible(false))?
+                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
                         .try_ready()?;
                     assert_eq!(
                         window.appearance(),

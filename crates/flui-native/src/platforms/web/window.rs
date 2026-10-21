@@ -12,13 +12,12 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    WindowExecutionState,
-    shared::{WindowCallbacks, window_state::WindowStateCell},
-    traits::{
-        CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
-        WindowMode, WindowState,
-    },
+    shared::WindowCallbacks, shared::window_state::WindowStateCell, traits::OpenWindowError,
+};
+use flui_platform::{
+    CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
+    WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
+    WindowState,
 };
 
 use super::{
@@ -350,7 +349,7 @@ impl WebWindow {
 
     pub(super) fn install(
         &self,
-        input_latency: crate::InputLatency,
+        input_latency: flui_platform::InputLatency,
         transfer: &Arc<super::drag::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
@@ -760,7 +759,7 @@ impl PlatformWindow for WebWindow {
         })
     }
 
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(Arc::new(super::haptics::WebHaptics))
     }
 
@@ -775,7 +774,9 @@ impl PlatformWindow for WebWindow {
 
     fn on_input(
         &self,
-        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult>,
+        callback: Box<
+            dyn FnMut(flui_platform::PlatformInput) -> flui_platform::DispatchEventResult,
+        >,
     ) {
         if self.registration.borrow().is_some() {
             self.callbacks.set_input_callback(callback);
@@ -813,7 +814,7 @@ impl PlatformWindow for WebWindow {
     }
     fn on_execution_state_change(
         &self,
-        callback: Box<dyn FnMut(crate::WindowExecutionState) + Send>,
+        callback: Box<dyn FnMut(flui_platform::WindowExecutionState) + Send>,
     ) {
         let accepting = self.registration.borrow().is_some();
         crate::shared::panic_boundary::contain_owner_callback(|| {

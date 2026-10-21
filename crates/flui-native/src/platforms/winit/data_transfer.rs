@@ -44,12 +44,15 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
-use crate::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationDescriptor, RepresentationIndex, TransferActions, TransferCompleter,
-    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest, TransferUri,
+use flui_platform::{DragDropEvent, WindowId};
+use flui_platform::{
+    data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
+    data_transfer::DropFeedback, data_transfer::OfferRecord, data_transfer::OfferTable,
+    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
+    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
+    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
+    data_transfer::TransferRequest, data_transfer::TransferUri,
 };
-use crate::traits::{DragDropEvent, WindowId};
 
 /// One drag session over one window (at most one live per window).
 #[derive(Debug)]

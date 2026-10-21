@@ -1,8 +1,8 @@
 # flui-platform Architecture
 
 The contract half of the platform layer ([ADR-0082](../../docs/adr/ADR-0082-platform-api-contract-crate.md)).
-`flui-native` holds the backends and re-exports every item here at its old
-path.
+`flui-native` holds the hosts and does not re-export this crate: every item has
+this one path (ADR-0151 §9).
 
 ## Invariants
 
@@ -26,7 +26,7 @@ path.
   path: `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
   while `PlatformHaptics` and `HapticFeedback` stay at the root;
-  `data_transfer` (`flui_native::data_transfer` re-exports it whole),
+  `data_transfer`,
   `text_store`, whose four traits (`TextStore`, `TextStoreRead`,
   `TextStoreEdit`, `TextStoreObserver`) are also at the root, and `pointer` and
   `keyboard`, the input vocabulary, whose names (`PointerEvent`, `Key`,

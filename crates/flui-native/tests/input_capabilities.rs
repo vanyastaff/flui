@@ -7,16 +7,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Point;
-use flui_native::traits::{DispatchEventResult, PlatformInput};
 use flui_native::{
     HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform, HostWindow, MockWindow,
-    OwnerPlatform, Platform as _, WindowOptions,
+    OwnerPlatform, Platform as _,
 };
+use flui_platform::WindowOptions;
 use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerPress, PointerSample,
 };
+use flui_platform::{DispatchEventResult, PlatformInput};
 use flui_platform::{EventTime, ImeEvent};
 use parking_lot::Mutex;
 

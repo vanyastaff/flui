@@ -13,14 +13,14 @@ use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
 
 use crate::{
-    shared::android_motion::{
-        AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, Motion, MotionAction,
-        PointerFacts, Tool, axis, needs_device_query,
-    },
-    shared::keyboard_adapter::keyboard_input,
-    shared::pointer_assembly::NativeCancel,
-    traits::PlatformInput,
+    shared::android_motion::AndroidMotion, shared::android_motion::Axes,
+    shared::android_motion::DeviceCapabilities, shared::android_motion::DeviceDiscovery,
+    shared::android_motion::Motion, shared::android_motion::MotionAction,
+    shared::android_motion::PointerFacts, shared::android_motion::Tool,
+    shared::android_motion::axis, shared::android_motion::needs_device_query,
+    shared::keyboard_adapter::keyboard_input, shared::pointer_assembly::NativeCancel,
 };
+use flui_platform::PlatformInput;
 
 /// `AXIS_GESTURE_SCROLL_X_DISTANCE` (API 34).
 const AXIS_GESTURE_SCROLL_X_DISTANCE: u32 = 50;

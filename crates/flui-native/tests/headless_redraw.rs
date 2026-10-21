@@ -5,9 +5,8 @@
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
-use flui_native::{
-    HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _, WindowOptions,
-};
+use flui_native::{HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _};
+use flui_platform::WindowOptions;
 use parking_lot::Mutex;
 
 struct Session {

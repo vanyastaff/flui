@@ -378,8 +378,8 @@ impl SignalTransport {
 impl crate::traits::owner::ProxyTransport for SignalTransport {
     fn open_window(
         &self,
-        options: crate::WindowOptions,
-    ) -> Result<crate::PendingWindow, ProxySendError<crate::WindowOptions>> {
+        options: flui_platform::WindowOptions,
+    ) -> Result<crate::PendingWindow, ProxySendError<flui_platform::WindowOptions>> {
         Err(ProxySendError::Unsupported { rejected: options })
     }
     fn wake(&self) -> Result<(), ProxySendError<()>> {

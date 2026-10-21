@@ -26,7 +26,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::traits::Clipboard;
+use flui_platform::Clipboard;
 
 /// macOS NSPasteboard-based clipboard implementation
 ///

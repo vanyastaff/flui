@@ -22,11 +22,11 @@ fn installed_capture(
             let owner = Rc::new(owner);
             owner.on_wake(Box::new(refresh_installed_after_wake))?;
             let window = owner
-                .open_window(flui_native::WindowOptions::default())?
+                .open_window(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::new(
                 flui_runtime::presentation::PresentationWindow::new(
-                    Arc::clone(&window) as Arc<dyn flui_native::traits::PlatformWindow>,
+                    Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
                     None,
                 )
                 .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),

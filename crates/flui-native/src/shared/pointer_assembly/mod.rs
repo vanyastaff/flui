@@ -57,7 +57,7 @@ pub use registry::{ContactRegistry, DeviceRegistry, decode};
 pub use scroll::{ContactScroll, ScrollPhases, ScrollReading};
 pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};
 
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// The events one reading assembles into; two fit without allocating.
 pub type Assembled = SmallVec<[PlatformInput; 2]>;

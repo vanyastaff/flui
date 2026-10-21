@@ -10,16 +10,14 @@ use parking_lot::Mutex;
 
 use super::{display, window::MacOSWindow};
 use crate::{
-    config::WindowConfiguration,
-    data_transfer::{DataTransferSource, NullDataTransferSource},
-    error::PlatformError,
-    executor::BackgroundExecutor,
-    shared::{PlatformHandlers, system_notice::SystemNotices},
-    traits::{
-        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
-        PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
-    },
+    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
+    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::OpenWindowError,
+    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    data_transfer::DataTransferSource, data_transfer::NullDataTransferSource,
 };
 
 /// macOS platform state
@@ -264,7 +262,7 @@ impl Platform for MacOSPlatform {
         self.loop_control.session_end_released();
     }
 
-    fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         self.preferences.read()
     }
 

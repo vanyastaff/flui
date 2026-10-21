@@ -33,8 +33,9 @@ use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
 use crate::shared::accessibility_bridge::BridgeShared;
-use crate::traits::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+use flui_semantics::{
+    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
+    platform::PlatformAccessibility,
 };
 
 struct Activation(Arc<BridgeShared>);

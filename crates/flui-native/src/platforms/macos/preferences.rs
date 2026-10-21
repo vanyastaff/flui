@@ -16,9 +16,10 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSEvent, NSWorkspace};
 
 use crate::{
-    GesturePreferences, PlatformError, SystemPreferences,
-    shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback},
+    PlatformError, shared::owner_signal::OwnerSignal,
+    shared::panic_boundary::contain_owner_callback,
 };
+use flui_platform::{GesturePreferences, SystemPreferences};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 

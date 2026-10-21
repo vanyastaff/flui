@@ -39,13 +39,11 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-use super::{
-    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformExecutor,
-    WindowEvent, WindowId, WindowOptions,
-};
-use crate::data_transfer::DataTransferSource;
+use super::{HostWindow, PathPromptOptions, Platform, PlatformExecutor};
 use crate::error::PlatformError;
 use crate::task::Task;
+use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::{Clipboard, ClipboardItem, WindowEvent, WindowId, WindowOptions};
 
 // ============================================================================
 // OwnerPlatform

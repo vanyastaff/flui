@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
 
-use crate::traits::Clipboard;
+use flui_platform::Clipboard;
 
 /// iOS clipboard backed by `UIPasteboard.generalPasteboard`.
 pub struct IOSClipboard;

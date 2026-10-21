@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::{Point, Size};
 use flui_native::{
     DisplaySpec, HeadlessPlatform, HeadlessWindowPolicy, HostWindow, MockWindow, Platform as _,
+};
+use flui_platform::{
     SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowMode,
     WindowOptions, WindowState,
 };
@@ -326,7 +328,7 @@ fn a_window_without_position_reports_none() {
 fn opening_options_are_reflected_in_the_first_snapshot() {
     let platform = HeadlessPlatform::new();
     let normal =
-        flui_native::WindowGeometry::new(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
+        flui_platform::WindowGeometry::new(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
     let options = WindowOptions::default()
         .with_position(Some(Point::new(50.0, 60.0)))
         .with_mode(WindowMode::Maximized)

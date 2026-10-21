@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use flui_native::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessPlatform, MockWindow, Platform as _,
-    WindowOptions,
 };
+use flui_platform::WindowOptions;
 
 fn two_displays() -> HeadlessPlatform {
     HeadlessPlatform::new().with_displays(vec![
@@ -32,7 +32,7 @@ fn injected_displays_are_laid_out_and_the_first_is_primary() {
     );
     assert_eq!(right.scale_factor, 2.0);
     assert_eq!(
-        left.refresh_period.map(flui_native::RefreshPeriod::get),
+        left.refresh_period.map(flui_platform::RefreshPeriod::get),
         Some(Duration::from_millis(16))
     );
     assert_eq!(
@@ -64,7 +64,7 @@ fn display_change_advances_the_revision_once() {
         after
             .get(id)
             .and_then(|d| d.refresh_period)
-            .map(flui_native::RefreshPeriod::get),
+            .map(flui_platform::RefreshPeriod::get),
         Some(Duration::from_micros(8333))
     );
 
@@ -100,11 +100,11 @@ fn an_id_the_platform_never_issued_is_refused() {
     // Ids are issued per platform instance; one from another registry that
     // this platform did not issue is refused rather than aliased.
     let unissued = {
-        let registry = flui_native::DisplayRegistry::new();
-        let _ = registry.mint(&flui_native::DisplayKey::Unkeyed);
-        let _ = registry.mint(&flui_native::DisplayKey::Unkeyed);
+        let registry = flui_platform::DisplayRegistry::new();
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
         registry
-            .mint(&flui_native::DisplayKey::Unkeyed)
+            .mint(&flui_platform::DisplayKey::Unkeyed)
             .expect("third id")
     };
     assert_eq!(

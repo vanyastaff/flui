@@ -53,20 +53,15 @@ use super::{
     window::{NativeMode, WindowsWindow},
 };
 use crate::{
-    config::WindowConfiguration,
-    data_transfer::DataTransferSource,
-    error::PlatformError,
-    executor::BackgroundExecutor,
-    shared::{
-        PlatformHandlers, WindowCallbacks,
-        hwnd_affinity::{ContextLedger, UserDataRefusal},
-        window_state::WindowStateCell,
-    },
-    traits::{
-        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformExecutor, PlatformReadyCallback, SessionEndAnswer, SessionEndPhase, SystemNotice,
-        WindowAppearance, WindowEvent, WindowId, WindowOptions, owner::OwnerHooks,
-    },
+    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
+    shared::PlatformHandlers, shared::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
+    shared::hwnd_affinity::UserDataRefusal, shared::window_state::WindowStateCell,
+    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::Platform,
+    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::OwnerHooks,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance,
+    WindowEvent, WindowId, WindowOptions, data_transfer::DataTransferSource,
 };
 
 /// Ensures window class is registered exactly once (sound replacement for
@@ -2387,7 +2382,7 @@ impl WindowsPlatform {
                     // gestures for a window nothing can see.
                     context.request_frame();
                 } else {
-                    crate::traits::PlatformWindow::request_redraw(window.as_ref());
+                    flui_platform::PlatformWindow::request_redraw(window.as_ref());
                 }
             });
         }

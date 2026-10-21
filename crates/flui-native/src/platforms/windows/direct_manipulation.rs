@@ -76,7 +76,7 @@ use crate::shared::direct_manipulation::{
     TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
 };
 use crate::shared::pointer_assembly::{NativeTime, QpcTicks, ReadingTime};
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// The timer that paces a window's viewport; the value spells "DM".
 const PUMP_TIMER: usize = 0x444D;

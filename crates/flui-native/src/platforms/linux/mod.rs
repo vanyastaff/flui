@@ -95,12 +95,13 @@ pub use accessibility::UnixAccessibility;
 pub use window_ext::*;
 
 use self::display::protocol::{Environment, Protocol};
-use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::error::PlatformError;
-use crate::traits::{
-    Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, Platform, PlatformExecutor,
-    PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
+use crate::{
+    traits::HostWindow, traits::OpenWindowError, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback,
 };
+use flui_platform::{Clipboard, DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{data_transfer::DataTransferSource, data_transfer::NullDataTransferSource};
 
 /// Linux platform implementation (stub)
 ///

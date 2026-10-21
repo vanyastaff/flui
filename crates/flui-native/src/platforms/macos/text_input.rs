@@ -11,7 +11,7 @@
 //! So the winit backend's shape — a thin wrapper over a platform call — does
 //! not transfer: on macOS this module becomes the implementor.
 //!
-//! [`PlatformTextInput`]: crate::traits::PlatformTextInput
+//! [`PlatformTextInput`]: flui_platform::PlatformTextInput
 //!
 //! # The two halves meet at `keyDown:`
 //!
@@ -37,7 +37,7 @@
 //! meet, and it flips the axis before converting; without that flip the
 //! candidate window would sit mirrored about the window's vertical centre.
 //!
-//! [`WindowState`]: crate::traits::WindowState
+//! [`WindowState`]: flui_platform::WindowState
 
 use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
@@ -48,7 +48,7 @@ use flui_platform::ImeEvent;
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
-use crate::traits::PlatformTextInput;
+use flui_platform::PlatformTextInput;
 
 // ============================================================================
 // View-owned composition state
@@ -103,7 +103,7 @@ impl TextInputState {
     /// Used by `unmarkText`, by a commit (whose text supersedes it), and by
     /// `set_ime_allowed(false)`. The last of those is the trait's own documented
     /// semantics: disabling drops an in-progress composition rather than
-    /// committing it (`crate::traits::PlatformTextInput::set_ime_allowed`).
+    /// committing it (`flui_platform::PlatformTextInput::set_ime_allowed`).
     fn clear_marked_text(&mut self) {
         self.marked_text.clear();
         self.marked_range = (0, 0);
@@ -247,7 +247,7 @@ unsafe fn insert_text_argument_string(string: *mut AnyObject) -> Option<String> 
 /// event is ordered against pointer and keyboard events exactly as they are
 /// ordered against each other.
 fn emit_ime(ctx: &ViewContext, event: ImeEvent) {
-    super::view::dispatch_input_event(ctx, crate::traits::PlatformInput::Ime(event));
+    super::view::dispatch_input_event(ctx, flui_platform::PlatformInput::Ime(event));
 }
 
 /// The empty rect AppKit is answered with when no cursor area has been set.
