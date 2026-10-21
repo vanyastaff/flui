@@ -28,6 +28,13 @@
   - [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §3, in part: the sentence that the
     owner lane never carries closures. The deferred window open carries one `Send` factory
     (decision 4).
+  - [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md), the delivery shape
+    only: the appearance is a field of the window state snapshot and its change arrives through
+    the handler's state-changed obligation, not through `appearance()` and
+    `on_appearance_changed`; the observation rule stays.
+  - [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 5, the delivery shape
+    only: the window's display is a field of the snapshot and its change arrives the same way;
+    the snapshot and the refresh period stay.
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (execution
   state), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) (the owner proof and the owner
   lane), [ADR-0045](ADR-0045-raster-lane.md) (the raster thread),
@@ -37,9 +44,7 @@
   [ADR-0152](ADR-0152-capability-seam-revised.md) (`Unsupported`, shared with this contract),
   [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (deferred dispatch),
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (backend conformance),
-  [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) and
-  [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) (the rules for two of the facts the
-  snapshot now carries), [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (version gates).
+  [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (version gates).
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   winit 0.31.0-beta.3 (`rust-windowing/winit@1893565716`), GPUI (`zed-industries/zed@fae8a35482`),
   Slint (`slint-ui/slint@277e7676ce`), Masonry (`linebender/xilem@271a27a6d4`), SDL3
@@ -170,8 +175,9 @@ Chosen option: 1, because it gives each window fact one source, makes admission 
 the fourteen optional registrations with one handler that has no inert defaults, and moves the
 thread rule from documentation into the compiler.
 
-Names below are the contract's; where a type must name `OwnerPlatform` (the handlers) it lives in
-the host crate.
+Names below are the contract's, `WindowHandler` included (its obligations name contract types
+only, and `flui-runtime` implements it); `AppHandler`, which names `OwnerPlatform`, is a trait of
+the host crate (ADR-0151 section 9).
 
 ### 1. `WindowState` is the only source of window facts
 
@@ -491,9 +497,6 @@ headless and winit hosts execute in CI, and a Windows, macOS, iOS or Android row
   host in scope.
 - `native_extensions_answer_none_on_a_foreign_host`: on the headless host and on a test
   double, every `flui::native::<os>` accessor answers `None` or `Unsupported` and none panics.
-- Review only, with no test or gate named: that the `SAFETY` comment on the surface target's
-  `unsafe impl Send` names the invariant and not the operation (decision 5), and that the docs of
-  `AdmittedCommand` state the limit of the token (decision 2).
 
 ## Pros and cons of the options
 
@@ -611,6 +614,3 @@ headless and winit hosts execute in CI, and a Windows, macOS, iOS or Android row
 - **Not implemented.** The code changes land as separate changes after this record, in the order
   of the feature's `tasks.md`; a platform's row in `docs/platform-parity.md` moves only after a
   run on that platform (see Confirmation).
-- **Sources.** The projects compared are pinned in the Sources bullet of the header and cited
-  inline as `owner/repo@sha path:line`; counts and lines of FLUI's own tree are at `main`
-  `083b0f75d`.

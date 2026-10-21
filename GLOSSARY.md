@@ -11,9 +11,17 @@ more presentations. Separate runtimes remain independent even on the same host.
 _Avoid_: Realm, UI session, UI host, window
 
 **Host**:
-The environment that supplies execution and presentation facilities to UI
-runtimes. A host may serve several runtimes without merging their state.
-_Avoid_: Realm, UI runtime
+FLUI's integration with one operating environment: it supplies execution (the
+owner thread and its loop) and presentation (windows, input, text, displays and
+the rest of the core list) to UI runtimes, and may serve several runtimes
+without merging their state. In `flui-native` a host is one table of types
+(`impl Host`) and one file per feature.
+_Avoid_: Realm, UI runtime, backend
+
+**Core host**:
+The crate `flui-native` (the host crate): every native host and the headless
+host behind one `Platform` implementation; only `flui-app` depends on it.
+_Avoid_: Backend crate, platform crate
 
 **Presentation**:
 One presentation of a UI runtime, with its own lifetime. A runtime can have
@@ -52,9 +60,9 @@ notification that execution may proceed and from a frame already in progress.
 _Avoid_: Frame wake, frame execution
 
 **Native host**:
-FLUI's own integration with one operating environment (Windows, macOS, iOS,
-Android, the Web, Linux), written against that environment's native APIs; in
-`flui-native` it is one table of types and one file per feature.
+A host written against one operating environment's own APIs (Windows, macOS,
+iOS, Android, the Web, Linux). winit on Linux is a fallback host, not a native
+one.
 _Avoid_: Backend, port, platform, shell
 
 **Headless host**:
@@ -63,16 +71,23 @@ automation. It is not a native host and never stands in for one.
 _Avoid_: Mock platform, fake host, headless backend
 
 **Ready platform**:
-An operating environment whose native host provides every core integration
-and has passed its conformance checks in an executed run there. Compiling for
-an environment does not make it ready.
+An operating environment whose native host has every row of the core and
+system-service sections of `docs/platform-parity.md`, each passed in an
+executed run there. Compiling for an environment does not make it ready.
 _Avoid_: Supported platform, experimental platform
 
 **Capability**:
-An operating-system service outside the core integrations, reached by a widget
-through a typed handle and provided by a separately versioned crate. Its absence
-on an environment is a value, never an error the widget cannot inspect.
-_Avoid_: Plugin, platform feature
+An operating-system service reached by a widget or an application through a
+typed handle from the seam (ADR-0152). A built-in capability (the clipboard,
+storage) is delivered by the core host; every other one by a capability crate,
+which rides the release train (ADR-0153). Its absence on an environment is a
+value, never an error the widget cannot inspect.
+_Avoid_: Platform feature
+
+**Plugin**:
+What a capability crate registers with the seam: its providers and its
+conformance table (ADR-0152). A plugin delivers a capability; it is not one.
+_Avoid_: Extension, module
 
 **Owner retirement**:
 The permanent end of a UI execution owner's task and callback lifetime.

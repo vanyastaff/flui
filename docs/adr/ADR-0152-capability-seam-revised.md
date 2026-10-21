@@ -394,7 +394,7 @@ first capability crate. The clipboard landing contains the contract types, the r
 `flui-runtime`, the built-in clipboard provider in `flui-app` (the composition root; the marker
 sits above the core host) over the core host's owner-local clipboard, the headless host's
 clipboard (`pub(crate)` in the core host), a scripted double in `flui-testing` built on the
-contract's `testing` feature, `EditableText` acquiring the clipboard through the seam, and the
+contract's `scripted` feature, `EditableText` acquiring the clipboard through the seam, and the
 removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contract's
 `InMemoryClipboard`. The permission types are not part of it. Tests:
 
@@ -449,9 +449,10 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 - ADR-0097's gate (`cargo heli xtask globals`) keeps the single trampoline cell the only
   process-global entry of a provider in the repository (§2, item 9); every provider meets
   the rule as a conformance requirement (ADR-0154).
-- Review only, with no gate or test named: that a handle ends its OS subscription when the last
-  clone drops, and that long-lived OS work is an application service and not a widget-held handle
-  (§2, item 3).
+- `a_dropped_handle_ends_its_subscription`: the scripted provider records the subscription ending
+  when the last clone of a handle drops (§2, item 3). That long-lived OS work is an application
+  service and not a widget-held handle is a row of each capability conformance table (ADR-0154),
+  not of the seam.
 
 ## Pros and cons of the options
 
@@ -557,6 +558,4 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 - **Revisit when.** The idea of Tauri-style permission files may return for the agent protocol
   (ADR-0095), not for the seam. The spelling of a new name in §3 may change in detail at
   the first landing while the properties of §2 hold.
-- **Sources.** The ten frameworks read for this record are pinned in the Sources bullet of the
-  header and cited inline as `owner/repo@sha path:line`; the shape of 2026-10-06 was built and run
-  in a scratch workspace on rustc 1.99.0.
+- **Prototype.** The shape of 2026-10-06 was built and run in a scratch workspace on rustc 1.99.0.

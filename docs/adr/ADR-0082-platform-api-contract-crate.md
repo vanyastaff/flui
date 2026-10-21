@@ -15,8 +15,10 @@
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
   contract crate holds), §2 (the crates' names and what the core host keeps) and §5's Linux row
-  (winit as the Linux backend), and for §4 step 2 jointly with
-  [ADR-0254](ADR-0254-window-contract.md) (callbacks lose `Send`). The remaining sections are
+  (winit as the Linux host), and for §4 step 2 jointly with
+  [ADR-0254](ADR-0254-window-contract.md) (callbacks lose `Send`); ADR-0254 alone for the other
+  step of §4 (the registrations become handler methods) and for the raw-handle impls on
+  `dyn PlatformWindow` and `dyn HostWindow` in §3. The remaining sections are
   unchanged.
 - **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
   replaced by handle-derived availability and `InputCapabilities`)

@@ -31,8 +31,7 @@
   (`rust-windowing/winit@1893565716`) and MDN's browser-compat-data
   (`mdn/browser-compat-data@5da921db9`), with Apple's TN3187 and the Android developer guides named
   where used. How Java reaches the process (an in-memory dex against a dex in the APK against
-  `GameActivity`) is in
-  [`docs/research/2026-10-17-android-java-side.md`](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-17-android-java-side.md).
+  `GameActivity`) is decided in decision 1 from the sources cited there.
   Lines of FLUI's own tree are at `main` `083b0f75d`.
 
 ## Context and problem statement
@@ -465,8 +464,9 @@ attributes, the packager adds the dex and uses the pinned `targetSdk`, `xtask pl
 agrees with `platform-support.toml` for the new key, and the protocol check rejects a mismatch
 before any native is bound. The support claim for a platform is the run.
 
-- Review only, with no test, gate or run named: that no build script runs `javac`, `d8` or `swiftc`
-  (decision 21), and that generated project files are never hand-edited (decisions 6 and 21).
+- `cargo xtask android-dex`, extended to every `build.rs` (ADR-0154), fails a build script that
+  names `javac`, `d8` or `swiftc` (decision 21); a generated project file that differs from the
+  output of its generator fails the golden check of that generator (decisions 6 and 21).
 
 ## Pros and cons of the options
 
@@ -602,6 +602,3 @@ before any native is bound. The support claim for a platform is the run.
   through `define_class!`, the `accesskit_ios` objc2 skew and the Web behaviours are listed with
   the run that settles each under Confirmation; signing, entitlements, asset catalogs, IPA export
   and an AAB without Gradle are not examined.
-- **Sources.** The projects read for this record are pinned in the Sources bullet of the header and
-  cited inline as `owner/repo@sha path:line`; how Java reaches the process (an in-memory dex
-  against a dex in the APK against `GameActivity`) is in the research note linked there.

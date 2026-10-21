@@ -7,14 +7,14 @@
   mobile crates ship platform services (sources below): the carve-out for handles that framework
   widgets name, the native-code tiers, declarations, the host bridge, testing, the line between the
   core host and capability crates, and the first crate's contents.
-- **Amends:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 (a new kind,
-  `capability`) and §2 (its reach table);
-  [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (official packages keep their rules;
-  capability crates are a second kind of package with different ones).
-- **Depends on:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam),
+- **Supersedes:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 in part (the kinds
+  gain `capability`) and §2 in part (the reach table gains its row);
+  [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
+  rules; capability crates are a second kind of package with rules of their own).
+- **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
-  with the train until the contract has its own version).
-- **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §3 (the core host's
+  with the train until the contract has its own version),
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §3 (the core host's
   closed list), [ADR-0247](ADR-0247-android-java-view.md) (the embedded dex recipe),
   [ADR-0255](ADR-0255-mobile-and-web-hosts.md) (the Android and iOS hosts the bridge reaches),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md),
@@ -134,7 +134,8 @@ grows with the number of crates.
   a framework crate owns, on that crate (decision 3);
 - may reach OS crates: its reach table is the `pkg` table without the OS-crate globs, and it
   still forbids `winit`, `wgpu`, `tokio`, the core host, `flui-app` and `flui-engine`;
-- is a **leaf**: no FLUI crate and no other capability crate depends on it normally;
+- is a **leaf** below the facade: no FLUI crate other than the facade, which re-exports it behind
+  a feature (§8), and no other capability crate depends on it normally;
 - is released with the train while the contract rides it (ADR-0153), and may set its own version
   once the contract has one;
 - registers through the seam with a `Plugin` and ships a simulated provider and a conformance
@@ -311,7 +312,8 @@ crates need it:
 
 ### 10. Testing, and claimed support
 
-- **A scripting primitive in the contract crate's `testing` feature** (ADR-0243): an ordered
+- **A scripting primitive in the contract crate's `scripted` feature** (not `testing`: ADR-0243
+  keeps that name for test support, and `flui-app` uses the primitive under `driver`): an ordered
   script of responses to prompts, service toggles, revocations and injected errors, plus
   virtual-time event streams, all resolved at an owner turn boundary. It sits in the contract
   because a capability crate may not depend on `flui-testing`, and because every call the OS
@@ -390,9 +392,11 @@ first capability crate that needs them.
   otherwise "type-checked" (decision 10).
 - Checked when the generator lands: the aggregation rule for Apple's per-SDK privacy bundle, which
   is read from the references and not from Apple's text (decision 7).
-- Review only, with no gate named: that no build script runs `javac`, `d8` or `swiftc` (decision
-  5), that no capability crate claims a menu or incoming activation (decision 4), and, for a crate
-  outside the repository, the no-process-global-state requirement (decision 1).
+- `cargo xtask android-dex` extends to every `build.rs` of the workspace: a build script that names
+  `javac`, `d8` or `swiftc` fails it (decision 5); the `capability` kind rule of `cargo xtask
+  workspace` refuses a declaration that claims a menu or incoming activation (decision 4). A crate
+  outside the repository is not gated: its conformance table (decision 10) is the only check it
+  runs (decision 1).
 
 ## Pros and cons of the options
 
@@ -480,7 +484,7 @@ first capability crate that needs them.
 ### 12. A capability crate depending on `flui-testing` for its simulated provider
 
 - Bad, because it breaches the dependency rule; the scripting primitive lives in the contract's
-  `testing` feature.
+  `scripted` feature.
 
 ## More information
 
@@ -492,5 +496,3 @@ first capability crate that needs them.
   bridge until a capability has a consumer for a message hook (decision 9, item 4); each later
   crate (`flui-notify`, `flui-device`, `flui-vault`, `flui-location`) is introduced by its own ADR
   naming its permission set and its claimed platforms (decisions 2 and 11).
-- **Sources.** The projects read for this record are pinned in the Sources bullet of the header and
-  cited inline as `owner/repo@sha path:line`.

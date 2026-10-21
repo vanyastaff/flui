@@ -39,6 +39,8 @@ pull-request numbers, phases, cycles or task IDs: state the invariant, not the h
 - **Supersedes:** [ADR-MMMM](ADR-MMMM-slug.md) §N only (what exactly, in one clause)
 - **Superseded-by:** [ADR-PPPP](ADR-PPPP-slug.md) for §N only (added to this file later)
 - **Related:** [ADR-QQQQ](ADR-QQQQ-slug.md) (why it is related, in a few words)
+- **Revised:** YYYY-MM-DD — what a rewrite changed and why (only on a rewritten record)
+- **Sources:** the pinned commits of other projects, cited inline as `owner/repo@sha path:line` (only when the record cites them)
 
 ## Context and problem statement
 

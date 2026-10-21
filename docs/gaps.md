@@ -397,9 +397,9 @@ request.
 
 ### 39. Add-to-app: no FLUI view inside an existing native app
 
-> **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship, one screen at a time · **Parity:** [Windows](platform-parity.md#windows)
+> **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship · **Parity:** [Windows](platform-parity.md#windows)
 
-- FLUI owns the process: the host creates the window and runs the loop (`FluiActivity` on Android, `UIApplicationMain` on iOS, the Win32 pump, `NSApplication`, the root element it creates on the Web). A view placed into a window the app already owns — a child `HWND`, an `NSView`, a `UIView` under a foreign view controller, an Android `View` in a foreign `Activity`, an element of a page the app renders — has no host mode, so the only way in is to hand FLUI the whole window.
+- FLUI owns the process: the host creates the window and runs the loop (`NativeActivity` today and `FluiActivity` after ADR-0255 on Android, `UIApplicationMain` on iOS, the Win32 pump, `NSApplication`, the root element it creates on the Web). A view placed into a window the app already owns — a child `HWND`, an `NSView`, a `UIView` under a foreign view controller, an Android `View` in a foreign `Activity`, an element of a page the app renders — has no host mode, so the only way in is to hand FLUI the whole window.
 - What exists: the renderer draws into a `SurfaceTarget` (`HasWindowHandle + HasDisplayHandle`, [ADR-0254](adr/ADR-0254-window-contract.md)), so the surface can be foreign; input, focus, IME, accessibility and lifecycle still assume the host's own window procedure, responder chain or `Activity`.
 - Other frameworks ship it as their enterprise path: Flutter's add-to-app ([Flutter documentation](https://docs.flutter.dev/add-to-app)) with `FlutterEngine` and `FlutterViewController` or `FlutterFragment`, Compose's `ComposeView` in a View hierarchy, SwiftUI's `UIHostingController`, Qt's `QWidget::createWindowContainer`.
 - The design question is who owns the loop: an embedded view is driven by the app's loop and receives events from the app's window, so the owner thread's one call point for user code ([ADR-0151 §10](adr/ADR-0151-platform-layer-boundary-and-names.md)) has to run inside a foreign callback, and ADR-0151 names an external embedder as the first reason to reopen the crate split.
@@ -407,7 +407,7 @@ request.
 
 ### 40. No gamepad, and no D-pad run on a TV
 
-> **Environments:** all · **Who it hurts:** TV, console-style and Steam Deck users; games and media apps · **Parity:** [Input](platform-parity.md#input)
+> **Environments:** all · **Who it hurts:** TV, console-style and Steam Deck users; games · **Parity:** [Input](platform-parity.md#input)
 
 - No gamepad in the contract or on any host: no buttons, sticks, triggers or rumble from XInput or GameInput on Windows, `GCController` on macOS and iOS (and tvOS's remote), Android's `SOURCE_GAMEPAD` and `SOURCE_JOYSTICK` axes (`AXIS_X`, `AXIS_HAT_X`, `KEYCODE_BUTTON_*`), the Web Gamepad API (polled through `navigator.getGamepads()`, with only connect and disconnect events) or evdev on Linux (Wayland has no gamepad protocol; a Steam Deck under gamescope has a controller as its only input).
 - Android's D-pad arrives: the `ui_events` key table maps `KEYCODE_DPAD_UP`, `DOWN`, `LEFT` and `RIGHT` to the arrow keys and `KEYCODE_DPAD_CENTER` to Enter, and `DefaultFocusTraversal` binds unmodified arrows to `DirectionalFocusIntent`, so a remote can move focus; it never ran on Android TV or Fire OS, and a TV app also needs the `leanback` feature declaration and a banner that the Android packaging does not write.
@@ -416,7 +416,7 @@ request.
 
 ### 41. No rotary input
 
-> **Environments:** Windows, Android; Apple later · **Who it hurts:** Surface Dial and Wear OS users; visionOS and watchOS when they become hosts · **Parity:** [Input](platform-parity.md#input)
+> **Environments:** Windows, Android; Apple later · **Who it hurts:** Surface Dial and Wear OS users · **Parity:** [Input](platform-parity.md#input)
 
 - No rotary vocabulary in the contract: a rotation in detents from a device of its own arrives nowhere — the Surface Dial through `RadialController` on Windows (per window, with the tool menu the OS draws), Wear OS's bezel or crown as a `MotionEvent` with `AXIS_SCROLL` from `SOURCE_ROTARY_ENCODER` ([Android documentation](https://developer.android.com/training/wearables/user-input/rotary-input)), the Digital Crown on watchOS and visionOS.
 - Wear OS is a form factor of the Android host, not a column: its lists are expected to scroll by rotary input, so a watch app without it fails review on the first screen.

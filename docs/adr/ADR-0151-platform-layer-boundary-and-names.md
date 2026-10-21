@@ -10,9 +10,6 @@
   `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate by
   [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) (its other decisions
   stand). The boundary ADR-0082 drew between a contract crate and a host crate stands.
-- **System preferences:** [ADR-0172](ADR-0172-host-owned-system-preferences.md) owns them. The
-  Proposed text of this ADR (2026-10-06) had a section on the subject; ADR-0172 replaced it and
-  this text does not repeat it.
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (section 13:
   `AppLifecycleState` stays where it is),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (upstream types in Stable
@@ -21,6 +18,8 @@
   re-keys them), [ADR-0152](ADR-0152-capability-seam-revised.md) (capability seam),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (release train; section 5),
   [ADR-0154](ADR-0154-capability-crates.md) (capability crates; section 3),
+  [ADR-0172](ADR-0172-host-owned-system-preferences.md) (system preferences: it replaced the
+  section the Proposed text of this record had on them),
   [ADR-0213](ADR-0213-input-capabilities.md) (`Availability`; section 4),
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) (display snapshot),
   [ADR-0237](ADR-0237-window-state-and-host-notices.md) (window state; ADR-0254 completes it),
@@ -144,9 +143,6 @@ drew holds only what belongs on it?
 7. A pure `rules` crate plus FFI crates.
 8. Keep `shared/`, rename it `backend/`, or gather everything cross-OS into one `mapping/`.
 9. Everything in the core host (GPUI's 76-method `Platform`).
-23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules (`translate/`,
-    `version/`, `displays/`).
-24. Per-platform files named by API family or mechanism (`win32.rs`, `nstextinputclient.rs`).
 10. Menus and haptics as capability crates.
 11. A contract that anticipates consumers.
 12. Its own contract version at once.
@@ -160,6 +156,9 @@ drew holds only what belongs on it?
 20. `cfg` by OS version, and "latest installed SDK" for `targetSdk`.
 21. `a11y` stays a feature, off by default.
 22. Quality after the features.
+23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules (`translate/`,
+    `version/`, `displays/`).
+24. Per-platform files named by API family or mechanism (`win32.rs`, `nstextinputclient.rs`).
 
 ## Decision
 
@@ -284,7 +283,8 @@ capability crate (ADR-0154). By that rule the core host's OS integration is exac
 - **Windows:** state, commands, decorations and a custom title bar, background material, child
   and popup windows.
 - **Displays and frame rate.**
-- **Input:** pointer, keyboard and layout, IME and the text store, drag and drop.
+- **Input:** pointer, keyboard and layout, game controllers and rotary devices, IME and the text
+  store, drag and drop.
 - **Accessibility, clipboard, haptics, system chrome, system preferences.**
 - **Application menus:** the menu model, the menu bar, context menus and the Dock menu, which the
   application delegate hands out.
@@ -492,7 +492,9 @@ crates/flui-native/
     host.rs                 trait Host { type Loop; type Window; type Displays; type Input;
                             type Text; type Accessibility; type Clipboard; type Drag; type Haptics;
                             type Preferences; type Lifecycle; type Chrome; type Storage }: the closed
-                            list of section 3 as a type; Absent<F>, the one type for "not on this platform"
+                            list of section 3 as a type (the menu position joins with the menu feature);
+                            Absent<F>, the one type for "not on this platform"
+    error.rs                the core host's error types
     platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
                             implementation of Platform, and the AppHandler wiring
     host_window.rs          HostWindow (sealed), as_any
@@ -503,15 +505,19 @@ crates/flui-native/
                             call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
                             its schema is declared in flui-protocol);
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs winit.rs headless.rs
-    window/                 mod.rs state.rs visibility.rs; windows/{mod,proc,limits,backdrop}.rs;
+    window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
+                            the Chrome position, is a facet of the window and lives here);
+                            windows/{mod,proc,limits,backdrop}.rs;
                             apple/{mod,macos,ios,geometry,liquid_glass}.rs; android.rs web.rs
                             linux/{wayland,x11}.rs winit.rs headless.rs
-    input/                  mod.rs assembly/ keys.rs availability.rs regions.rs;
+    input/                  mod.rs assembly/ keys.rs availability.rs regions.rs scroll.rs;
                             windows/{mod,raw,direct_manipulation}.rs
                             apple.rs android.rs web.rs linux/ winit.rs headless.rs
-    text/                   mod.rs ime.rs; windows/{mod.rs, tsf/} apple/{macos,ios}.rs android.rs web.rs
-                            linux/{wayland,x11}.rs headless.rs
-    display/ clipboard/ drag/ accessibility/ haptics/ preferences/ lifecycle/
+    text/                   mod.rs ime.rs sizing.rs; windows/{mod.rs, tsf/} apple/{macos,ios}.rs
+                            android.rs web.rs linux/{wayland,x11}.rs headless.rs
+    drag/                   mod.rs offers.rs; windows.rs apple.rs android.rs web.rs
+                            linux/{wayland,x11}.rs winit.rs headless.rs
+    display/ clipboard/ accessibility/ haptics/ preferences/ lifecycle/
                             the same shape: the feature's model beside one file per platform
     version/                floor.rs gate.rs (ADR-0244)
     storage/                file_store.rs page_store.rs os_error.rs
@@ -554,7 +560,8 @@ crates/flui-native/
   session under `linux/`; the BSDs compile the Wayland and X11 files of `linux/` under their
   `cfg`), one file per feature and one table in `hosts/`. The table starts with `Absent<F>` in
   every position it does not fill, so the parity rows of a new platform are read off its table,
-  and it is a ready platform when no `Absent` is left and its conformance rows ran there.
+  and it is a ready platform (GLOSSARY) when every position the parity table marks applicable is
+  filled and every row of the core and system-service sections ran there.
 - **Direction is checked.** `cargo heli xtask module-dag` is extended to `flui-native`: `owner/`
   and `version/` depend on no feature; a feature's platform file depends on its feature's model, on
   `owner/`, on `version/` and on other features' models, never on another feature's platform file,
@@ -588,46 +595,23 @@ reason to exist; the reason is now the work itself.
 
 ### 12. The rename: two pull requests, core host first
 
-1. The `crates/flui-platform` directory becomes the `flui-native` crate: package, library, paths,
-   crate-qualified features (`flui-native/a11y`), `allowed-dependents`, the root `reach.tier.K.forbid` (it forbids
-   `flui-native`, and must not forbid the new `flui-platform`, which is tier C and a dependency of
-   `flui-runtime`), `globals` and the xtask paths, the nextest filter `package(flui-native)`, the
-   weekly workflow's `--exclude flui-native`, `tracing` targets and `RUST_LOG` strings, and the
-   worker-thread name `flui-native-bg`.
-2. `crates/flui-platform-api` becomes `crates/flui-platform`: `flui_platform_api` to
-   `flui_platform`, `SDK_SURFACE` in `tools/xtask`, the `key_vocabulary` generator, the nextest
-   `binary_id(flui-platform::compile_fail)` and the feature `flui-platform/serde`.
+The `crates/flui-platform` directory becomes the `flui-native` crate first and
+`crates/flui-platform-api` becomes `crates/flui-platform` second, each in its own pull request.
+Between the two no crate named `flui-platform` exists, so the compiler rejects every use of the
+retired name in code; after the second the name means the contract, so a string no compiler reads
+(a nextest filter, a CI argument, a `RUST_LOG` value, an xtask path) that a branch written before
+the first rename carries would silently aim at the contract. The second pull request therefore
+begins by checking that no `flui-platform` or `flui_platform` token remains outside the archival
+roots and this record, and a branch that merges after it applies both rename maps in order.
 
-Between the two, no crate named `flui-platform` exists, so the compiler rejects any use of the
-retired name in code and no retired-name check is needed for it. After the second, the name exists
-again and means the contract: a string no compiler reads that a branch written before the first
-rename carries (`--exclude flui-platform`, a nextest filter) silently aims at the contract. The
-second pull request therefore begins by checking that no `flui-platform` or `flui_platform` token
-remains outside the archival roots and this ADR, and a branch that merges after the second pull
-request applies both maps in order: the first pull request's, then the second's.
-
-The tool is `git mv` and `sd` on whole tokens,
-longest match first; each pull request states its exact commands so any branch can repeat them.
-Archival `docs/plans`, the deleted research notes, the text of this ADR and released entries of
-`CHANGELOG.md` are not rewritten. Documents that describe the relation between the two crates are
-rewritten by hand, not swapped.
-
-Traps (found with `rg` and `git grep` over the tree at `main` `083b0f75d`):
-
-- trybuild `.stderr` files hold column numbers; they are regenerated with `TRYBUILD=overwrite`,
-  never text-replaced. Five of them, in `crates/flui-platform/tests/ui/`, hold
-  `flui_platform::traits::` source lines with caret rows. `Cargo.lock` is regenerated by cargo.
-- The strings `flui_native_recording` (a recording header key in the 15 files of
-  `crates/flui-platform/tests/native_recording/`) and `flui-native-library-*`
-  (`crates/flui-hot-reload/tests/scene_ownership.rs:94`) already exist and are not part of the
-  rename.
-- Strings that stay valid after a missed first rename and then point at the contract:
-  `.config/nextest.toml:126` (`package(flui-platform)`), `.github/workflows/weekly.yml:96`
-  (`--exclude flui-platform`) and the tier K `forbid` list at root `Cargo.toml:135`. The contract's
-  own name sits in `tools/xtask/src/workspace/tiers.rs:53` (`SDK_SURFACE`) and
-  `.config/nextest.toml:69` (`binary_id(flui-platform-api::compile_fail)`).
-- After the first pull request the contract's names reach `flui-app` as
-  `flui_native::WindowOptions` and stay so until `flui-app` takes contract paths (section 9).
+The tool is `git mv` and `sd` on whole tokens, longest match first; each pull request states its
+exact commands so any branch can repeat them. trybuild `.stderr` files are regenerated, never
+text-replaced; `Cargo.lock` is regenerated by cargo; archival `docs/plans`, released entries of
+`CHANGELOG.md` and the text of this record are not rewritten, and documents that describe the
+relation between the two crates are rewritten by hand. The map of every token each rename touches,
+with the traps found over the tree at `main` `083b0f75d` (strings that already exist and stay,
+strings that stay valid after a missed first rename and then point at the contract), is kept by
+the feature's `tasks.md` under `docs/plans/specs/platform-layer/`, not here.
 
 One pull request would break `git blame` on paths that exist before and after
 (`crates/flui-platform/`). A `cargo xtask rename` tool would be written for one rename.
@@ -658,16 +642,18 @@ AT-SPI adapter brings a D-Bus stack (`crates/flui-app/Cargo.toml:50-56`), and th
 it again (`Cargo.toml:867`). A product that is otherwise ready therefore ships with a semantics
 tree no screen reader can see, because its author did not know a feature existed.
 
-The cost the feature avoids is paid anyway on Linux. The winit stand-in already links `zbus`
+The cost the feature avoids is paid anyway on Linux. The winit fallback already links `zbus`
 (`winit-backend` at `crates/flui-platform/Cargo.toml:441-442`, enabled by `flui-app` on Linux at
 `crates/flui-app/Cargo.toml:137`), and the native Linux host of section 11 needs D-Bus for
 logind notices (`crates/flui-platform/src/platforms/linux/host_notices/logind.rs`) and for portals.
 
 ### 16. Quality bar
 
-The qualities that `docs/platform-parity.md` lists under "Quality bar" are requirements of the
-platform layer, each with the gate or the run that proves it, not wishes. A host's rows do not
-turn ✅ while one of them fails on it.
+The lines `docs/platform-parity.md` lists under "Quality bar" are requirements of the platform
+layer, each with the gate or the run that proves it, not wishes; that table is the list, and a
+host's rows do not turn ✅ while one of them fails on it. This record decides the shape of the
+ones below; the others (no process-global state, version floors, honest absence, the splash,
+secrets in diagnostics) are decided by the records the table cites.
 
 - **Zero CPU when idle.** Every OS signal is a notification; a timer poll is a defect, not a
   fallback.
@@ -769,9 +755,10 @@ directories). They add no area to it.
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked
   done only after a run on that platform); a change to a native host shows its run in the pull
   request.
-- Review only, with no gate: the regenerated trybuild snapshots (reviewed as diffs), and a string no
-  compiler reads (a nextest filter, a CI argument, a `RUST_LOG` value, an xtask path) that a branch
-  adds after the first rename (see Consequences).
+- The trybuild suite confirms its own regenerated snapshots (a stale `.stderr` fails
+  `compile_fail`); a string no compiler reads (a nextest filter, a CI argument, a `RUST_LOG` value,
+  an xtask path) that a branch adds after the first rename is caught by the retired-name check the
+  second pull request begins with (section 12), run again on that branch after it merges.
 
 ## Pros and cons of the options
 
@@ -855,26 +842,6 @@ directories). They add no area to it.
 - Bad, because one cross-OS directory holds version gates and a display feed that translate
   nothing: `shared/` under another name.
 
-### 23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules
-
-- Good, because an OS specialist finds one directory.
-- Bad, because one object per OS still implements everything, so the 3,000-line `window.rs` and
-  `platform.rs` are cut by the file-length limit and not by meaning, and `Platform` is implemented
-  seven times with the same wiring.
-- Bad, because the halves are named after the test mechanism, two `events.rs` sit in sibling
-  directories, and "shell" already names the OS shell whose services `flui-system` holds.
-- Bad, because four rules say where shared code goes (`translate/`, `version/`, `displays/`,
-  `apple/`) instead of one.
-- Bad, because the completeness of a host is review, not a type.
-
-### 24. Per-platform files named by API family or mechanism
-
-- Good, because no two files share a name.
-- Bad, because `win32`, `appkit` and `uikit` are nobody's vocabulary for platform modules (std,
-  tokio and crossterm name platforms `windows`, `unix`, `apple`), and a file named after an
-  interface or a protocol version (`nstextinputclient.rs`) reads worse than the platform's name
-  plus a type.
-
 ### 9. Everything in the core host (GPUI's 76-method `Platform`)
 
 - Bad, because services that are permission-gated or hardware-bound would sit in one crate with
@@ -951,6 +918,26 @@ directories). They add no area to it.
   the half-built layer this series ends; the qualities of section 16 are requirements, not a later
   pass.
 
+### 23. Per-OS directories with `rules` and `ffi` halves and cross-OS modules
+
+- Good, because an OS specialist finds one directory.
+- Bad, because one object per OS still implements everything, so the 3,000-line `window.rs` and
+  `platform.rs` are cut by the file-length limit and not by meaning, and `Platform` is implemented
+  seven times with the same wiring.
+- Bad, because the halves are named after the test mechanism, two `events.rs` sit in sibling
+  directories, and "shell" already names the OS shell whose services `flui-system` holds.
+- Bad, because four rules say where shared code goes (`translate/`, `version/`, `displays/`,
+  `apple/`) instead of one.
+- Bad, because the completeness of a host is review, not a type.
+
+### 24. Per-platform files named by API family or mechanism
+
+- Good, because no two files share a name.
+- Bad, because `win32`, `appkit` and `uikit` are nobody's vocabulary for platform modules (std,
+  tokio and crossterm name platforms `windows`, `unix`, `apple`), and a file named after an
+  interface or a protocol version (`nstextinputclient.rs`) reads worse than the platform's name
+  plus a type.
+
 ## More information
 
 **Reopening.** Crate per OS is reconsidered if any of these holds: a second consumer of an OS
@@ -963,6 +950,3 @@ a licence differs. If the boundaries of section 10 hold, extraction is a move.
 **Revisit when the contract can version apart.** The contract's own version (section 5) is entered
 under ADR-0153 option 1 when `cargo-semver-checks` shows the contract stable for two trains in a
 row; ADR-0153 keeps the cases and the measurement.
-
-**Sources.** The pins for other projects are in the Sources bullet of the header and cited inline
-as `owner/repo@sha path:line`; counts and lines of FLUI's own tree are at `main` `083b0f75d`.

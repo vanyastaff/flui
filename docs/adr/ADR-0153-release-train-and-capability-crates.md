@@ -148,9 +148,9 @@ below).
   A and B with the real crates (item 3).
 - Until then `xtask workspace` keeps requiring the workspace version for every non-`evolving`
   crate (see Consequences).
-- Review only, with no gate named: that a capability crate names no `PlatformWindow` method and no
-  contract item outside the seam, which would widen the surface that decides how often option 1 is
-  tested (item 5).
+- The `capability` kind rule of `cargo xtask workspace` (ADR-0154 decision 1) scans a capability
+  crate for `PlatformWindow` and for contract paths outside the seam, which would widen the surface
+  that decides how often option 1 is tested (item 5).
 
 ## Pros and cons of the options
 
