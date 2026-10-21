@@ -56,20 +56,29 @@ pub mod view {
 }
 
 /// Platform values: brightness, locale, haptic feedback kinds, the host's
-/// system preferences (its haptics setting among them), the target platform
-/// (the one a gesture preset models), the window's state and mode, and the
-/// system notices the host delivers.
+/// system preferences (its haptics setting among them) and every type its
+/// accessors return, the target platform (the one a gesture preset models),
+/// the window's state and mode, and the system notices the host delivers.
 pub mod platform {
     pub use flui_platform::Brightness;
+    pub use flui_platform::DurationScale;
+    pub use flui_platform::GesturePreferences;
     pub use flui_platform::HapticFeedback;
     pub use flui_platform::HostNotice;
     pub use flui_platform::InvalidLocale;
+    pub use flui_platform::InvalidPreference;
     pub use flui_platform::Locale;
     pub use flui_platform::MemoryPressureLevel;
+    pub use flui_platform::MotionPreference;
+    pub use flui_platform::NativeMouseGeometry;
+    pub use flui_platform::NativeTouchGeometry;
     pub use flui_platform::SessionEndBlock;
     pub use flui_platform::SessionEndRequest;
     pub use flui_platform::SystemPreferences;
     pub use flui_platform::TargetPlatform;
+    pub use flui_platform::TextWeightPreference;
+    pub use flui_platform::WheelPreferences;
+    pub use flui_platform::WheelStep;
     pub use flui_platform::WindowCommandError;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;

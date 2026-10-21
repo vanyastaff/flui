@@ -457,6 +457,17 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   дедлайны через `checked_add` (`arm_deadline(Duration::MAX)` и долгое нажатие с `Duration::MAX`
   уже в тестах `flui-interaction`). Соседние обновления предпочтений не склеиваются вовсе, поэтому
   порядок относительно ввода и кадров сохраняется.
+- [x] **PR 2** — ветка `platform/preferences-migration`. Из `WidgetsBindingObserver` убраны
+  `did_change_{locales,text_scale_factor,platform_brightness,accessibility_features}`, из
+  `WidgetsBinding` — питавшие их `handle_*_changed`, из `RendererBinding` — пустые
+  `handle_text_scale_factor_changed` и `handle_platform_brightness_changed`: ни один хост их не
+  вызывал, предпочтения доходят до виджетов только через `MediaQuery` из снимка хоста.
+  `binding_observer_retirement` ведёт повторный вход из `Drop` через смену фокуса окна.
+  `flui_sdk::platform` экспортирует остальной словарь предпочтений (девять типов, список в
+  `the_public_surface_is_the_measured_list`, тождество с фасадом в
+  `the_re_exports_are_the_facades_types`); фасад их уже экспортировал. Фрагмент changelog
+  описывает публичные `OwnerHost::{update_preferences, preferences}` и
+  `RuntimeHostServices::with_preferences`.
 
 ## Чего нет в этой серии
 

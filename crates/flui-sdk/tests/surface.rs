@@ -108,9 +108,12 @@ mod measured {
         TranslationFraction as _,
     };
     use flui_sdk::platform::{
-        Brightness as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _, Locale as _,
-        MemoryPressureLevel as _, SessionEndBlock as _, SessionEndRequest as _,
-        SystemPreferences as _, TargetPlatform as _, WindowCommandError as _, WindowMode as _,
+        Brightness as _, DurationScale as _, GesturePreferences as _, HapticFeedback as _,
+        HostNotice as _, InvalidLocale as _, InvalidPreference as _, Locale as _,
+        MemoryPressureLevel as _, MotionPreference as _, NativeMouseGeometry as _,
+        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _,
+        SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
+        WheelPreferences as _, WheelStep as _, WindowCommandError as _, WindowMode as _,
         WindowState as _,
     };
     use flui_sdk::rendering::{
@@ -320,6 +323,18 @@ fn the_re_exports_are_the_facades_types() {
     ) -> Box<dyn flui_sdk::interaction::GestureRecognizer> = |x| x;
     let _: fn(flui::widgets::RecognizerContext) -> flui_sdk::widgets::RecognizerContext = |x| x;
     let _: fn(flui::platform::SystemPreferences) -> flui_sdk::platform::SystemPreferences = |x| x;
+    let _: fn(flui::platform::MotionPreference) -> flui_sdk::platform::MotionPreference = |x| x;
+    let _: fn(flui::platform::DurationScale) -> flui_sdk::platform::DurationScale = |x| x;
+    let _: fn(flui::platform::TextWeightPreference) -> flui_sdk::platform::TextWeightPreference =
+        |x| x;
+    let _: fn(flui::platform::GesturePreferences) -> flui_sdk::platform::GesturePreferences = |x| x;
+    let _: fn(flui::platform::NativeMouseGeometry) -> flui_sdk::platform::NativeMouseGeometry =
+        |x| x;
+    let _: fn(flui::platform::NativeTouchGeometry) -> flui_sdk::platform::NativeTouchGeometry =
+        |x| x;
+    let _: fn(flui::platform::WheelPreferences) -> flui_sdk::platform::WheelPreferences = |x| x;
+    let _: fn(flui::platform::WheelStep) -> flui_sdk::platform::WheelStep = |x| x;
+    let _: fn(flui::platform::InvalidPreference) -> flui_sdk::platform::InvalidPreference = |x| x;
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
@@ -510,16 +525,25 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
         "pub use flui_platform::Brightness;",
+        "pub use flui_platform::DurationScale;",
         "pub use flui_platform::EventTime;",
+        "pub use flui_platform::GesturePreferences;",
         "pub use flui_platform::HapticFeedback;",
         "pub use flui_platform::HostNotice;",
         "pub use flui_platform::InvalidLocale;",
+        "pub use flui_platform::InvalidPreference;",
         "pub use flui_platform::Locale;",
         "pub use flui_platform::MemoryPressureLevel;",
+        "pub use flui_platform::MotionPreference;",
+        "pub use flui_platform::NativeMouseGeometry;",
+        "pub use flui_platform::NativeTouchGeometry;",
         "pub use flui_platform::SessionEndBlock;",
         "pub use flui_platform::SessionEndRequest;",
         "pub use flui_platform::SystemPreferences;",
         "pub use flui_platform::TargetPlatform;",
+        "pub use flui_platform::TextWeightPreference;",
+        "pub use flui_platform::WheelPreferences;",
+        "pub use flui_platform::WheelStep;",
         "pub use flui_platform::WindowCommandError;",
         "pub use flui_platform::WindowMode;",
         "pub use flui_platform::WindowState;",
