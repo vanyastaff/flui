@@ -1,4 +1,4 @@
-[Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Architecture →](architecture.md)
+[Back to README](../README.md) · [Architecture →](architecture.md)
 
 # Getting Started
 
@@ -93,8 +93,9 @@ dependency in the generated `Cargo.toml`.
 Add `--hot-reload` to `flui create` to generate the host/worker/types workspace
 used by the desktop reload runner. This workspace cannot run on Android or in
 a browser; use the ordinary template for those targets. See the [CLI guide](../crates/flui-cli/README.md) for
-template and build options. Current release requirements and unverified areas
-are tracked in [Beta release criteria](BETA.md).
+template and build options. What each platform has and has not been run on is
+tracked in [`platform-parity.md`](platform-parity.md); release requirements are in the
+[release spec](plans/specs/release/requirements.md).
 
 ## Run an Example
 
@@ -199,7 +200,7 @@ RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 | `error[E0432]: unresolved import 'flui_rendering::prelude::*'` | The crate is not in the dependency graph or the `prelude` module does not exist yet. |
 | `error: linking with 'link.exe'` on Windows | Install Visual Studio Build Tools 2022 (Desktop development with C++). |
 | `wgpu` crashes or shows blank window | Update graphics drivers; `cargo update -p wgpu` to pick up any patch-level fixes. |
-| Long build times | Use `cargo build --workspace` once, then incremental `cargo check -p <crate>`. `.cargo/config.toml` does not pin an alternate linker by default — the earlier macOS `lld` requirement was removed in favor of the default Apple linker (see [Beta release criteria](BETA.md)), and the Linux `mold`/`clang` opt-in there is commented out because not every environment has `mold` installed. Uncomment it locally if you have `mold` and want faster links. |
+| Long build times | Use `cargo build --workspace` once, then incremental `cargo check -p <crate>`. `.cargo/config.toml` does not pin an alternate linker by default — the earlier macOS `lld` requirement was removed in favor of the default Apple linker, and the Linux `mold`/`clang` opt-in there is commented out because not every environment has `mold` installed. Uncomment it locally if you have `mold` and want faster links. |
 
 ## See Also
 

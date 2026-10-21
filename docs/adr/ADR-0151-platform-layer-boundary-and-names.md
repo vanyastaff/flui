@@ -86,7 +86,7 @@ crate tokens (`flui-platform` never matches inside `flui-platform-api`), takes
 the root reach tables (`reach.tier.*.forbid`), `reach-forbid`/`reach-exceptions`,
 `allowed-dependents`, the names hard-coded in `tools/xtask` and its fixtures, the crate-keyed
 allowlists, and every mention in living documents and ADRs. Old ADRs keep their decisions; their
-crate names change mechanically with this ADR as the map. Archival roots (`docs/research`,
+crate names change mechanically with this ADR as the map. Archival roots ([`docs/research`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research),
 `docs/plans`) are not rewritten. Re-running a step's own map on its output is empty.
 
 ### 2. What the contract crate holds

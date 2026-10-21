@@ -15,7 +15,7 @@
   [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the per-window
   observation shape), [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md).
-- **Spec:** [display-pacing](../plans/specs/display-pacing/design.md)
+- **Spec:** [display-pacing](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/display-pacing/design.md)
 
 ## Context
 

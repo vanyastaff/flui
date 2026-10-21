@@ -40,11 +40,11 @@
   [ADR-0076](ADR-0076-public-overlay-mutation-api.md) (the drag session is a gesture object and
   is not changed here), [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
   (graph placement, UI runtime routing, `ReadScope`)
-- **Refs:** owner decision 7 in [`design/decisions.md`](../../design/decisions.md); the panel
+- **Refs:** owner decision 7 in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the panel
   record in
-  [`report-decisions.ru.md` §7](../research/2026-09-25-architecture-review/report-decisions.ru.md)
+  [`report-decisions.ru.md` §7](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md)
   and its probes in
-  [`decisions/q7_callback_writer.md`](../research/2026-09-25-architecture-review/decisions/q7_callback_writer.md)
+  [`decisions/q7_callback_writer.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/decisions/q7_callback_writer.md)
 
 **Owner decision (2026-09-25).** The owner chose the typed form: `&mut EventCx<'_>` on framework
 event callbacks through `WriterSource`, with the pilot and the rollback trigger of §8 as written.
@@ -321,7 +321,7 @@ are already refused during `build` per §7. These boundaries follow §5 rather t
 adding an ambient graph. The inventory of what still requires `Send` on the callback path —
 the families ADR-0091 §1 flips, the edges that stay `Send` by design, and the `Send + Sync`
 values that are data rather than callbacks — is kept with the `!Send` flip's row of
-[the architecture migration plan](../plans/2026-09-25-architecture-migration-plan.md).
+[the architecture migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
 
 `FloatingActionButton::new(child).on_pressed(callback)` replaces the optional
 generic constructor callback: nested `Some(closure)` prevented higher-ranked
@@ -342,7 +342,7 @@ an element. The context is a graph capability, not a physical event identifier,
 propagation state or async lifetime. Independently opened writer bridges must
 not be treated as one transaction merely because they share a graph.
 
-The [design challenge](../research/2026-09-27-event-context-design-review.md)
+The [design challenge](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-27-event-context-design-review.md)
 records failure scenarios, rejected alternatives and remaining ownership and
 overload boundaries. The post-frame bridge does not settle the shared animation
 listener topology or promise bounded event latency.

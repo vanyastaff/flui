@@ -24,7 +24,7 @@ fn a_bad_exit_or_missing_reason_is_a_finding() {
     let mut allow = Allowlist::parse(PLANTED_ALLOWLIST).expect("parses");
     allow.reason = String::new();
     allow.exit = "ADR-9999".to_owned();
-    let exits = Exits::from_parts(Vec::new(), PLANTED_PLAN);
+    let exits = Exits::from_adrs(Vec::new());
     let labels: Vec<String> = judge(&found, &scanned, &allow, &exits)
         .iter()
         .map(|finding| finding.identity().2)
@@ -39,7 +39,7 @@ fn seed_round_trips() {
         .replace("reason = \"\"", "reason = \"planted\"")
         .replace("exit = \"\"", "exit = \"ADR-0081\"");
     let allow = Allowlist::parse(&seeded).expect("the seed parses");
-    let exits = Exits::from_parts(["0081".to_owned()], PLANTED_PLAN);
+    let exits = Exits::from_adrs(["0081".to_owned()]);
     let scanned: BTreeSet<String> = PLANTED.iter().map(|&(path, ..)| path.to_owned()).collect();
     let findings = judge(&found, &scanned, &allow, &exits);
     assert!(findings.is_empty(), "{findings:?}");
@@ -52,10 +52,7 @@ fn archival_roots_are_the_ones_agents_md_lists() {
     let agents = crate::util::read("AGENTS.md").expect("AGENTS.md");
     assert_eq!(archival_drift(&agents), Ok(()));
     // a root added to the prose alone is drift
-    let widened = agents.replace(
-        "`docs/{plans,research}`)",
-        "`docs/{plans,research}`, `docs/drafts`)",
-    );
+    let widened = agents.replace("`docs/plans`)", "`docs/plans`, `docs/drafts`)");
     assert_ne!(widened, agents, "the list's last item moved");
     let why = archival_drift(&widened).expect_err("drift is reported");
     assert!(why.contains("docs/drafts/"), "{why}");

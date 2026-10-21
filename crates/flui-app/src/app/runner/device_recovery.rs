@@ -1,5 +1,5 @@
 // ============================================================================
-// GPU device-loss recovery (App.1 device-recovery wake)
+// GPU device-loss recovery
 // ============================================================================
 //
 // The sync device-rebuild seam plus the shared retry/backoff logic the

@@ -51,7 +51,7 @@ T4 → T6. Внешние: send-flip (T2a ≤10-17, T5 ≤11-04, затем пе
 | T7 | строки Notes + consumer (W8) | R1, R3, R4, R6, R8, R23 | B | T3, T5 | — | 0,75 | — |
 | T8 | `cargo xtask device windows-ime`, шаг R22 (W9) | R7, R22, R24 (инструмент) | C (B после 11-20) | T1 (классы окон) | ‖ T6 | 1,5 | — |
 | T9 | после go/no-go (W10) | R13, R14 (Win32), R19, R20, F4, F6 | A | T6, go | — | 0,7 | — |
-| T10 | нативный прогон R24, `docs/BETA.md` (W11) | R7, R22, R24 | C (A) | все, RC | — | 0,5 | — |
+| T10 | нативный прогон R24, `docs/platform-parity.md` (W11) | R7, R22, R24 | C (A) | все, RC | — | 0,5 | — |
 
 Итого ≈ 11,85 инж.-нед. Тесты задачи — её строки в «Требование → тест»; «готово» для фикса —
 и прогон с откатом production-ханка в отдельном worktree: строка падает по названной причине.
@@ -160,8 +160,8 @@ T4 → T6. Внешние: send-flip (T2a ≤10-17, T5 ≤11-04, затем пе
 
 ### T10 — нативный прогон R24, C (A), 12-15 → 12-19
 - `device windows-ime` и `windows-notes` на SHA RC (VM ja-JP обязательно, zh-CN и «previous
-  version» желательно; хост 100 %, 150 %, второй монитор) → запись в `docs/BETA.md` (дата, SHA,
-  сборка, версия IME, вывод; «no IME» снимается). Exit 2 — «не проверено», не PASS.
+  version» желательно; хост 100 %, 150 %, второй монитор) → запись в `docs/platform-parity.md`, строка IME (дата, SHA,
+  сборка, версия IME, вывод). Exit 2 — «не проверено», не PASS.
 
 ## Требование → тест
 
@@ -216,7 +216,7 @@ T4 → T6. Внешние: send-flip (T2a ≤10-17, T5 ≤11-04, затем пе
 | `crates/flui-platform-api/src/text_store/mod.rs` | T2b | T2a трогает только `lock.rs`/файл gate |
 | `.config/nextest.toml` | не меняется | `compile_fail`-doctest вместо нового trybuild-бинаря; `#[ignore]`-зонд в конфиг не входит |
 | `changelog.d/` | T2a, T2b, T6 | Каждый — свой `<branch-slug>.md`; `CHANGELOG.md` не трогается |
-| `docs/BETA.md` | T10 | Одна датированная запись |
+| `docs/platform-parity.md` | T10 | Одна датированная запись |
 
 ## Критический путь и календарь
 

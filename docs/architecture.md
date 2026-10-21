@@ -1,10 +1,10 @@
-[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Crates →](crates.md)
+[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Crates →](crates.md)
 
 # Architecture
 
 FLUI combines two patterns: a **Layered Modular Workspace** (workspace structure) and a **tree pipeline** (runtime data flow: View → Element → RenderObject → Layer, with Semantics alongside). The first tells you *what may depend on what*; the second tells you *how a frame is built, laid out, and painted*.
 
-For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`FOUNDATIONS.md`](FOUNDATIONS.md). This page is the high-level orientation.
+The decision behind each part is an ADR in [`adr/`](adr/), and each crate's `ARCHITECTURE.md` holds its invariants. This page is the high-level orientation.
 
 Input observation belongs to the resolved presentation. Before Keyboard or IME
 dispatch, the runtime delivers that presentation's frozen measured pointer
@@ -14,7 +14,7 @@ input round ([ADR-0163](adr/ADR-0163-presentation-owned-pointer-resampling.md)).
 Keyboard keeps its admitted active presentation through callback focus changes;
 layout and paint retain their ordinary frame transaction.
 
-This page describes the architecture as it is. The target architecture and its decisions (ADR-0081 to ADR-0098) are in [`design/README.md`](../design/README.md); some of those ADRs are accepted in part and the rest are Proposed, and each ADR's `Status` line says which.
+This page describes the architecture as it is. The decisions that set the target (ADR-0081 to ADR-0098) are in [`adr/`](adr/); some of those ADRs are accepted in part and the rest are Proposed, and each ADR's `Status` line says which.
 
 ## Layered Modular Workspace
 
@@ -193,8 +193,7 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 ## See Also
 
 - [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
-- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph, full anti-pattern list
+- [ADRs](adr/) — the cross-crate decisions the code follows
 - [`AGENTS.md`](../AGENTS.md) — the current cross-tool rules
-- [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory
 - [Contributing](../CONTRIBUTING.md) — workflow and conventions

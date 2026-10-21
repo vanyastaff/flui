@@ -91,7 +91,7 @@ per UI runtime until that second real presentation consumer exists.
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
 `cargo doc -p flui-app --open`. Architecture context lives in
-[`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md).
+[`docs/architecture.md`](../../docs/architecture.md).
 
 ## License
 

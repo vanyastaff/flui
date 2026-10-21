@@ -13,7 +13,7 @@ test can drive the row.
 
 | Mark | Meaning |
 |---|---|
-| ✅ | Implemented and passed an executed run on that environment; the note or [`BETA.md`](BETA.md) names the run |
+| ✅ | Implemented and passed an executed run on that environment; the note names the run |
 | 🟡 | Implemented but never run there, or partial; the note says which |
 | ❌ | Missing: no code path, a stub, a mock, or a default that pretends to succeed |
 | — | Not applicable: the environment has no such concept |
@@ -26,12 +26,6 @@ in [`gaps.md`](gaps.md), not per row).**
 When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and bump this file's
 status line and revision history. A ✅ needs an executed run on that environment; compile-only code is
 🟡.
-
-Sources: the per-backend audit with `file:line` evidence
-([`research/2026-10-14-platform-backend-audit.md`](research/2026-10-14-platform-backend-audit.md)),
-and the checklists drawn from other frameworks, with the native API for each environment:
-[desktop](research/2026-10-14-platform-checklist-desktop.md) and
-[mobile and Web](research/2026-10-14-platform-checklist-mobile-web.md).
 
 ## Summary
 
@@ -224,7 +218,7 @@ exists yet.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
+| 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where an executed run is recorded |
 | 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
 | 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
 | 2026-10-16 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |

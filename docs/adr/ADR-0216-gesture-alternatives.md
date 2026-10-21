@@ -24,7 +24,7 @@ gestures. Today nothing makes a widget that reacts to them also publish a semant
 key or a single-pointer path. `flui-semantics` publishes custom actions to
 `accesskit::Node::custom_actions`, but no locked adapter (`accesskit_windows` 0.35.1,
 `accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0) routes them or `ShowContextMenu`
-([follow-ups](../research/2026-10-12-interaction-input-followups.md) §4). In WCAG 2.2, 2.5.1
+([follow-ups](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md) §4). In WCAG 2.2, 2.5.1
 Pointer Gestures and 2.5.7 Dragging Movements require single-pointer alternatives; this record
 also addresses the related 2.5.2 Pointer Cancellation (activation on release), 2.5.8 Target Size
 (Minimum), 2.4.11 Focus Not Obscured (Minimum) and 2.1.1 Keyboard

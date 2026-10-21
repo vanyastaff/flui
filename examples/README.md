@@ -56,7 +56,7 @@ separate crates or WASM targets with their own build step.
 
 ## Self-driving probes
 
-Used by the `cargo xtask device macos-*` acceptance gates and `docs/BETA.md`'s dated evidence rows — not
+Used by the `cargo xtask device macos-*` acceptance gates and the runs `docs/platform-parity.md` cites — not
 interactive demos. Each drives itself (synthesized input, scripted resize/lifecycle
 transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless noted.
 

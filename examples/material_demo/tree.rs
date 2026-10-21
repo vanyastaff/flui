@@ -7,12 +7,11 @@
 //!
 //! Built entirely on the `flui` facade's `flui::material` and
 //! `flui::prelude` surfaces (`flui-material`'s and `flui-widgets`' public
-//! APIs, one layer up) — no raw render objects. This is also the App.1
-//! facade proof-of-ergonomics migration: this is the one example migrated
-//! onto `flui::prelude`/`flui::material`/`flui::widgets`; the rest of the
-//! example tree still imports the layer crates directly (see
-//! `docs/ROADMAP.md`'s App.1 entry). It is also the Catalog.1 Material
-//! sample-app exit criterion: "A Material sample app (`Scaffold` +
+//! APIs, one layer up) — no raw render objects. This is also the facade
+//! proof of ergonomics: it is the one example written against
+//! `flui::prelude`/`flui::material`/`flui::widgets`; the rest of the
+//! example tree still imports the layer crates directly. It is also the
+//! Material sample app: "A Material sample app (`Scaffold` +
 //! `AppBar` + `FloatingActionButton` + a `ListView` of `Card`s + a
 //! `Dialog`) renders and is interactive."
 //!
@@ -61,7 +60,7 @@
 //! doc comment for the stateful-counter tab that demonstrates
 //! `TabBarView`'s keep-alive retention.
 //!
-//! # Honest caveats (Catalog.1 exit criterion, Material half)
+//! # Honest caveats
 //!
 //! This app proves the six named components mount, lay out, and respond to
 //! real gesture dispatch. It does **not** exercise:
@@ -78,8 +77,8 @@
 //!   `Scaffold` registered with its `ScaffoldMessenger` (both covered
 //!   directly by `packages/flui-material/tests/snack_bar.rs`).
 //!
-//! The Cupertino half of the Catalog.1 exit criterion is untouched by this
-//! app.
+//! The Cupertino sample app (`examples/cupertino_demo`) is separate from this
+//! one.
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;

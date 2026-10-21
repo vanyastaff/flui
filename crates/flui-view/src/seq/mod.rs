@@ -1,9 +1,8 @@
 //! Heterogeneous-children trait — [`ViewSeq`] — and the macro-
 //! generated tuple impls + `Vec`-of-View / `Vec<BoxedView>` impls
-//! that drive the two C2 authoring paths.
+//! that drive the two authoring paths for heterogeneous children.
 //!
-//! See `docs/FOUNDATIONS.md` §C2 ("heterogeneous children"). The two
-//! load-bearing paths are:
+//! The two load-bearing paths are:
 //!
 //! - **Static tuple path** — `(A, B, C, …): ViewSeq` for tuple
 //!   arities `0..=16`, expanded by the `impl_view_seq_for_tuple!`

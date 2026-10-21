@@ -33,8 +33,8 @@
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md)
 - **Refs:** decision D1 of the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md);
-  index in [`design/decisions.md`](../../design/decisions.md)
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
+  index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
 

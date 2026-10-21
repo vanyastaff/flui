@@ -185,9 +185,8 @@ repository = "https://github.com/vanyastaff/flui"
 tokio = { version = "1.43" }
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 # Structured cancellation for the runtime-owned execution services
-# (`CancellationToken`; adoption sanctioned by
-# docs/research/2026-08-01-runtime-dependency-adoption-guide.md with the
-# unified-executor work, issue #557). `default-features = false` and no
+# (`CancellationToken`; adopted with the unified execution services,
+# ADR-0047, issue #557). `default-features = false` and no
 # optional features requested: `CancellationToken` lives in the
 # always-compiled `sync` module, and the explicit opt-out keeps a future
 # tokio-util default from arriving silently. In particular no `rt`
@@ -965,8 +964,8 @@ name = "multi_window_demo"
 path = "examples/multi_window_demo.rs"
 required-features = ["material"]
 
-# Self-driving representative-workload probe for docs/BETA.md's "Performance
-# and resilience" row (`cargo xtask device macos-workload`); see the example's own doc.
+# Self-driving representative-workload probe for the macOS performance and
+# resilience check (`cargo xtask device macos-workload`); see the example's own doc.
 [[example]]
 name = "workload_probe"
 path = "examples/workload_probe.rs"
@@ -980,7 +979,8 @@ name = "a11y_probe"
 path = "examples/a11y_probe.rs"
 required-features = ["material", "a11y"]
 
-# Self-driving window-lifecycle probe for docs/BETA.md's lifecycle rows
+# Self-driving window-lifecycle probe for the visibility and minimize rows of
+# docs/platform-parity.md on macOS
 # (`cargo xtask device macos-lifecycle`): minimize/restore, hide/unhide, resize, with the
 # frame production observed through each transition. macOS only; see the
 # example's own doc.
@@ -1019,7 +1019,7 @@ name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"
 required-features = ["material", "cupertino"]
 
-# The "Agent workflow" acceptance test (docs/BETA.md): mounts the counter
+# The "Agent workflow" acceptance test: mounts the counter
 # template's tree through `flui::testing`, so it needs both the `testing`
 # feature (for `flui::testing` to exist at all) and `material` (the tree
 # includes an `ElevatedButton`). Without this entry a `--no-default-features

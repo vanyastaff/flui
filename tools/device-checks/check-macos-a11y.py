@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the generated counter through macOS accessibility, as VoiceOver would.
 
-The evidence collector behind docs/BETA.md's accessibility gap on macOS.
+The evidence collector behind the macOS accessibility row of docs/platform-parity.md.
 It builds `examples/a11y_probe.rs` (the CLI counter template's tree, with
 the facade's `a11y` feature so the AccessKit adapter is installed), runs it
 on a real window, and runs `tools/device-checks/macos-ax-client.swift` against the

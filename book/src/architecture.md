@@ -15,8 +15,8 @@ state, read its status and the architecture file of the owning crate.
 - [`docs/architecture.md`](https://github.com/vanyastaff/flui/blob/main/docs/architecture.md) —
   the pipeline overview (`View` → `Element` → `RenderObject` → `Layer` → `flui-engine` →
   `wgpu`).
-- [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/main/docs/FOUNDATIONS.md) — the
-  architecture contract and the locked contracts (C1–C9).
+- [`docs/adr/`](https://github.com/vanyastaff/flui/tree/main/docs/adr) — the cross-crate
+  decisions the code follows, one file per decision.
 - [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the design stance
   and the rules the compiler and gates enforce.
 - [`docs/crates.md`](https://github.com/vanyastaff/flui/blob/main/docs/crates.md) — crate

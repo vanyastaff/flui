@@ -61,7 +61,7 @@
   (`crates/flui-testing/src/realm.rs:493`). В `notes_public_input_flow_matrix`
   (`tests/fixtures/notes_flow.rs`) строк с IME нет.
 - Нативно: `device windows-notes` вводит через `VK_PACKET`, «не TSF/IME»
-  (`tools/xtask/src/device/windows_notes.rs:1-9`); `device windows-ime` нет; `docs/BETA.md`: «no IME».
+  (`tools/xtask/src/device/windows_notes.rs:1-9`); `device windows-ime` нет; `docs/platform-parity.md`: Windows TSF не запускался с настоящим методом ввода.
 
 ## Решения
 
@@ -185,7 +185,7 @@
   окна всех процессов; прямоугольник окна IME пересекает полосу ±1 строка под полем, а у нижнего
   края экрана — над полем; xcap-скриншот прикладывается. Отрицательный контроль: тот же гейт на
   `4915054c8` должен падать. На хосте — 100 %, 150 % и второй монитор с другим DPI. Запись в
-  `docs/BETA.md`: дата, SHA, сборка Windows, версия IME, выход команды. Exit 2, если язык не
+  `docs/platform-parity.md`: дата, SHA, сборка Windows, версия IME, выход команды. Exit 2, если язык не
   установлен: это «не проверено», не PASS.
 
 ## Сценарии отказа

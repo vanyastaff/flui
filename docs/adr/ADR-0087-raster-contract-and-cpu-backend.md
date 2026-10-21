@@ -24,8 +24,8 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tier, kind and reach facts for the new
   crate), [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) (one raster
   thread per `GpuContext`)
-- **Refs:** decisions D5 and D6 in [`design/decisions.md`](../../design/decisions.md); the review
-  in [`report-architecture.ru.md` §4.7](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** decisions D5 and D6 in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the review
+  in [`report-architecture.ru.md` §4.7](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 ## Context
 
@@ -169,7 +169,7 @@ blit alone 144 µs; see `flui-engine`'s `ARCHITECTURE.md`, mapping decision 18.
 
 The contract closes before H3. Partial repaint is an exit criterion of B2. The work follows the
 platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering is in
-[the migration plan](../plans/2026-09-25-architecture-migration-plan.md).
+[the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
 
 ## Alternatives considered
 

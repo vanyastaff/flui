@@ -25,7 +25,7 @@ align feedback with the frame that shows the change (AppKit's `drawCompleted`, U
 test nothing to assert. AppKit (`alignment`, `levelChange`), Android `HapticFeedbackConstants`
 (`CONFIRM`, `REJECT`, `DRAG_START`) and SwiftUI `SensoryFeedback` name kinds Flutter lacks.
 Android API 36 envelopes and Core Haptics share one model: normalized intensity and sharpness
-with control points ([followups §3.1](../research/2026-10-12-interaction-input-followups.md)).
+with control points ([followups §3.1](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md)).
 No widget can reach haptics today.
 
 ## Decision
@@ -159,7 +159,7 @@ No widget can reach haptics today.
 8. **Platform notes.** Windows `InputHapticsManager` (touchpad and mouse haptics) is in no
    published `windows` crate (0.62.2 has only `SimpleHapticsController`), so it is
    `Unavailable` until a release ships it or a narrow `windows-bindgen` binding is generated
-   ([dependency selection](../research/2026-10-13-interaction-dependency-selection.md)). It routes
+   ([dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md)). It routes
    per thread, so requests run on the owner thread of the window that received the input.
    The pen's `SimpleHapticsController` (from `PenDevice::GetFromPointerId`) plays one waveform at a
    time, so a pattern's calls are made at their times off the owner thread, a newer request

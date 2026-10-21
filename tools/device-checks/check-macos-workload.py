@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Run `examples/workload_probe.rs` in release and gate it on declared budgets.
 
-This is the evidence collector behind docs/BETA.md's "Performance and
-resilience" row: it builds the probe in release, runs it on a real window
-(RUST_LOG=warn), samples RSS every 0.5s, collects the probe's own per-phase
-JSON summary lines from stdout, and checks each against a budget declared
-below — chosen *before* the first run of this script. Changing any budget
-constant below requires a docs/BETA.md note explaining why; do not tune a
+This is the macOS performance and resilience check
+(`cargo xtask device macos-workload`): it builds the probe in release, runs it
+on a real window (RUST_LOG=warn), samples RSS every 0.5s, collects the probe's
+own per-phase JSON summary lines from stdout, and checks each against a budget
+declared below — chosen *before* the first run of this script. Changing any
+budget constant below needs its reason stated in the change; do not tune a
 budget just to make a run pass. A failing budget is reported as a finding,
 with the raw numbers, not silently loosened.
 
@@ -34,7 +34,7 @@ from pathlib import Path
 # =============================================================================
 # Budgets — declared here, before the first run of this script. Each one is a
 # claim this workload makes about the framework's real cost; a change to any
-# of these numbers needs a matching docs/BETA.md note, not a silent edit.
+# of these numbers needs a stated reason in the change, not a silent edit.
 # =============================================================================
 SCROLL_P99_MAX_PERIODS = 2.0
 SCROLL_OVER_2P_FRAC_MAX = 0.01
@@ -42,7 +42,7 @@ TYPE_P99_MAX_PERIODS = 2.0
 RSS_GROWTH_MAX_FRACTION = 0.10
 IDLE_FRAMES_MAX = 5
 # RSS growth is measured from this point in the run, not from the first
-# sample: the first run (2026-09-22, docs/BETA.md) showed RSS climbing from
+# sample: the first run (2026-09-22) showed RSS climbing from
 # 75.6 MiB at 1 s to 199.6 MiB at 2.2 s — the GPU stack, glyph atlas and
 # first laid-out screen being allocated — and then flat to within 1 % for
 # the remaining 33 s. A baseline inside that ramp measures startup, not

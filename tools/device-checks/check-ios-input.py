@@ -2,11 +2,11 @@
 """Verify that a real touch reaches a flui application on iOS, and that what it
 changed survives a real background/foreground round trip.
 
-The recorded gap this closes (`docs/BETA.md` § "iOS execution lifecycle
-foundation") is that the simulator UI automation timed out, so "real touch input
-and retained displayed counter state after Home/return" were unverified. Two
-things were missing: an instrument that can put a `UITouch` into the
-application, and an oracle that can tell whether anything reached the display.
+The gap this closes is that the simulator UI automation timed out, so "real
+touch input and retained displayed counter state after Home/return" were
+unverified. Two things were missing: an instrument that can put a `UITouch` into
+the application, and an oracle that can tell whether anything reached the
+display.
 
 The instrument is XCUITest. `xcrun simctl` has no touch subcommand, and driving
 the Simulator window through host UI automation needs the Accessibility grant —

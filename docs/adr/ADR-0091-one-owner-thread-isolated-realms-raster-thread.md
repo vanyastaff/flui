@@ -17,8 +17,8 @@
   [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
-- **Refs:** decisions D9 and D13 in the [decision index](../../design/decisions.md); target shape
-  in [architecture](../../design/architecture.md)
+- **Refs:** decisions D9 and D13 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); target shape
+  in [architecture](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md)
 
 ## Context
 

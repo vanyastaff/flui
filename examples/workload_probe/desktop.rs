@@ -1,5 +1,5 @@
-//! `workload_probe` — a self-driving representative workload for
-//! `docs/BETA.md`'s "Performance and resilience" row.
+//! `workload_probe` — a self-driving representative workload for the macOS
+//! performance and resilience check (`cargo xtask device macos-workload`).
 //!
 //! Mounts a `Scaffold` with a 2,000-row `ListView::builder` (driven by a
 //! [`ScrollController`]) and a Material [`TextField`] (driven by a
@@ -72,7 +72,7 @@
 //! - **The idle frame count is a measurement, not an assumption.** A backend
 //!   that kept redrawing with nothing dirty would show close to
 //!   `idle_seconds × refresh_rate` here; the accepted macOS run
-//!   (`docs/BETA.md`) shows 1 — the frame the controller's `stop()` lands
+//!   shows 1 — the frame the controller's `stop()` lands
 //!   on — and `tools/device-checks/check-macos-workload.py` budgets it at 5, reporting
 //!   anything above as a finding rather than budgeting around it.
 

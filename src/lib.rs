@@ -127,7 +127,7 @@ fn main() {
 //! # Layers
 //!
 //! Each re-exported module is one workspace crate; the layering (no upward
-//! edges) is documented in `docs/FOUNDATIONS.md`:
+//! edges) is documented in `docs/architecture.md`:
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|

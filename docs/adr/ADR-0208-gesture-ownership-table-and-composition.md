@@ -147,7 +147,7 @@ axis; `TransformLock` locks rotation or scale in a gesture that begins as a pan.
 
 ## Alternatives rejected
 
-- **`Simultaneous`** (SwiftUI `simultaneously(with:)`; [research](../research/2026-10-12-interaction-input-best-practices.md)
+- **`Simultaneous`** (SwiftUI `simultaneously(with:)`; [research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md)
   §1): it duplicates what the channel shares by delta; UIKit's pairwise predicate is non-local.
 - **Flutter `GestureArenaTeam`, axis races, imperative intercept** (Android
   `requestDisallowInterceptTouchEvent`, eager winner): replaced by `PanClaim` and rule 3.

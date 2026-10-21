@@ -6,9 +6,9 @@
 //! tree, so the acceptance test proves the tree the example actually runs.
 //!
 //! Built entirely on `flui-cupertino`'s and `flui-widgets`' public APIs — no
-//! raw render objects. This is the Catalog.1 Cupertino sample-app exit
-//! criterion: "`CupertinoTabScaffold` + `CupertinoNavigationBar` + a
-//! `CupertinoPageRoute` swipe-back renders and is interactive."
+//! raw render objects. This is the Cupertino sample app:
+//! "`CupertinoTabScaffold` + `CupertinoNavigationBar` + a `CupertinoPageRoute`
+//! swipe-back renders and is interactive."
 //!
 //! # Composition
 //!
@@ -32,7 +32,7 @@
 //!   `CupertinoTabScaffold`'s own `Offstage`-not-unmount mechanic, that
 //!   switching to Home and back does not reset it.
 //!
-//! # Honest caveats (Catalog.1 exit criterion, Cupertino half)
+//! # Honest caveats
 //!
 //! This app proves `CupertinoTabScaffold`/`CupertinoNavigationBar`/
 //! `cupertino_page_route` mount, lay out, and respond to real gesture

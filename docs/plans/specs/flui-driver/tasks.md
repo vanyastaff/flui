@@ -339,7 +339,7 @@ graph LR
     desktop without a guard;
   - the scenario window-size rule and splitting moves into single steps.
 
-  Update `docs/crates.md` and `FOUNDATIONS.md` Part IV.
+  Update `docs/crates.md` and the layer diagram in `docs/architecture.md`.
 - **Done when:**
   - the headless failure matrix F1–F11 runs on a counter and on `interaction_gallery` (or a local
     fixture until it lands). F11 runs through a scripted fake lane whose guard reports a foreign
@@ -494,8 +494,7 @@ graph LR
     `tools/device-checks/`;
   - docs: `docs/testing.md` (a driver section replaces the live-test sections), `docs/crates.md`,
     `docs/platform-parity.md` and `docs/gaps.md` (no Android/iOS/web accessibility tree; the iOS
-    private HID), `docs/ROADMAP.md` B3, the AGENTS.md command table, and
-    `docs/research/desktop-mcp-flui-testing.ru.md` marked historical.
+    private HID), and the AGENTS.md command table.
 - **Done when:**
   - the suite runs on every target the owner can reach;
   - each target has a parity row with the run date;

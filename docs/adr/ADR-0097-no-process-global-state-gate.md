@@ -28,8 +28,8 @@
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md)
-- **Refs:** principle P3 and its gate in the [decision index](../../design/decisions.md); the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** principle P3 and its gate in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 The gate is `tools/xtask/src/globals.rs`; the entries live in the crate manifests. The gate
 itself removes no global; each removal lands with its own change. The Context table below is the
@@ -203,7 +203,7 @@ runs on the pinned stable toolchain, which dylint does not.
 - `const` items, which are not places; clippy's `declare_interior_mutable_const` covers the
   interior-mutable ones.
 - Determinism: an exempt counter is isolated from configuration, but an ID that reaches a
-  snapshot is still process-ordered (`design/architecture.md`, "Process-global state").
+  snapshot is still process-ordered ([`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md), "Process-global state").
 
 ## Alternatives considered
 

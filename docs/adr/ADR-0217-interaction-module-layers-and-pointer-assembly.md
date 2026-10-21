@@ -16,8 +16,8 @@
   (the `Scroll` and `PanZoom` vocabulary), [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
   (logical geometry of input regions), [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md);
   spec [docs/plans/specs/flui-interaction/completeness/](../plans/specs/flui-interaction/completeness/design.md);
-  research [best practices](../research/2026-10-12-interaction-input-best-practices.md),
-  [dependency selection](../research/2026-10-13-interaction-dependency-selection.md).
+  research [best practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md),
+  [dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md).
 
 ## Context
 

@@ -1,5 +1,5 @@
 // ============================================================================
-// Desktop frame-pacing gate (App.1 vsync pacing)
+// Desktop frame-pacing gate
 // ============================================================================
 //
 // Extracted as free functions — pure, no ui_runtime/window/GPU state — so the
@@ -466,7 +466,7 @@ impl FallbackWake {
     }
 }
 
-/// App.1 vsync-pacing gate tests.
+/// Frame-pacing gate tests.
 ///
 /// `run_desktop` itself opens a real window and GPU device, so it cannot
 /// run headlessly; `wake_action` and `FallbackWake` were pulled

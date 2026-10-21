@@ -2,7 +2,7 @@
 # Counts are exact and only go down: a file whose count of a class grows past its
 # entry, or falls below it, is a finding. `reason` and `exit` apply to every entry.
 reason = "written before the markers gate; each is to be restated as the invariant it stands for"
-exit = "W1-A14"
+exit = "ADR-0078"
 
 [[allow]]
 path = "CHANGELOG.md"
@@ -252,14 +252,4 @@ count = 1
 [[allow]]
 path = "crates/flui-widgets/src/lib.rs"
 class = "wave"
-count = 1
-
-[[allow]]
-path = "docs/designs/2026-06-28-hot-reload-runtime-protocol.md"
-class = "phase-letter"
-count = 4
-
-[[allow]]
-path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"
-class = "slice"
 count = 1

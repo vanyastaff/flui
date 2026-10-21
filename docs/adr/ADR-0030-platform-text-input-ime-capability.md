@@ -21,7 +21,7 @@
 
 Flutter bundles IME, system chrome and haptics behind one `services` layer
 (`TextInputConnection` over a method channel). FLUI does not port that layer:
-each becomes a capability trait on `flui-platform` (`docs/FOUNDATIONS.md`, "No
+each becomes a capability trait on `flui-platform` ([`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md), "No
 `flui-services`"). This record fixes the IME vocabulary, the platform
 capability, the client contract a text field implements, how the composing
 region renders, and how the candidate window follows it.

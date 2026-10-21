@@ -1,6 +1,6 @@
 //! Haptics: the platform capability and its two tiers (ADR-0210).
 //!
-//! FLUI has no standalone `services` layer (`docs/FOUNDATIONS.md`); haptics
+//! FLUI has no standalone `services` layer (ADR-0031); haptics
 //! is a capability trait, [`PlatformHaptics`], reached through
 //! [`PlatformWindow::haptics`](crate::PlatformWindow::haptics), a fallible
 //! accessor returning `Option<Arc<dyn _>>`. A backend with no haptic hardware
