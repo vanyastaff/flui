@@ -49,7 +49,7 @@ use x11rb::{
 };
 
 use super::lifecycle_model::x11_window_mode::{NetWmState, NetWmStateAtoms, WmState, window_mode};
-use crate::shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback};
+use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 
 /// `_NET_WM_STATE` is read this far (in 4-byte units).
 const PROPERTY_READ_LENGTH: u32 = 64;

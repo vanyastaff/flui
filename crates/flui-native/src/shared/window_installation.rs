@@ -67,7 +67,7 @@ impl Drop for WindowInstallation {
             drop(sender);
             // Drop can run during another failure. The committed cancellation
             // remains observable even if the platform cannot post this wake.
-            super::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 let _ = self.wake.wake();
             });
         }

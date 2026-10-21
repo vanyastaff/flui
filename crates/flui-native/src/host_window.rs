@@ -4,9 +4,9 @@
 //! [`PlatformWindow`] is the per-window contract the framework programs
 //! against, and it names no AccessKit type (ADR-0082 §1). The accessibility
 //! bridge speaks AccessKit, so it is reached through this subtrait instead:
-//! [`Platform::open_window`](crate::traits::Platform::open_window),
-//! [`WindowOpen::Ready`](crate::traits::WindowOpen::Ready) and
-//! [`PendingWindow`](crate::traits::PendingWindow) hand the runner an
+//! [`Platform::open_window`](crate::Platform::open_window),
+//! [`WindowOpen::Ready`](crate::WindowOpen::Ready) and
+//! [`PendingWindow`](crate::PendingWindow) hand the runner an
 //! `Arc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
 //! and passes the window on as an `Arc<dyn PlatformWindow>` (an upcast).
 //!
@@ -99,14 +99,14 @@ pub trait HostWindow: PlatformWindow {
     /// beside this trait. `trybuild_ui::ui_tests` pins both the private-import
     /// and missing-`Default` diagnostics and a valid owner-capability caller:
     ///
-    /// ```compile_fail,E0603
-    /// use flui_native::traits::OwnerThreadToken;
+    /// ```compile_fail,E0432
+    /// use flui_native::OwnerThreadToken;
     /// ```
     ///
     /// nor conjured:
     ///
     /// ```compile_fail,E0277
-    /// fn read(window: &dyn flui_native::traits::HostWindow) {
+    /// fn read(window: &dyn flui_native::HostWindow) {
     ///     let _ = window.text_store_host(Default::default());
     /// }
     /// ```

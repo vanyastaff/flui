@@ -7,7 +7,7 @@ use web_sys::{Event, EventTarget};
 /// Log a failed browser call; a tracing subscriber is application code, so a
 /// panic in it is contained.
 pub(super) fn warn_failure(what: &str, error: &JsValue) {
-    crate::shared::panic_boundary::contain_owner_callback(|| {
+    crate::owner::panic_boundary::contain_owner_callback(|| {
         tracing::warn!(?error, "{what}");
     });
 }

@@ -32,7 +32,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     executor::BackgroundExecutor,
-    shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback},
+    owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
 };
 
 mod logind;

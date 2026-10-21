@@ -16,10 +16,7 @@ use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{Proxy, zvariant::OwnedValue};
 
-use crate::{
-    executor::BackgroundExecutor,
-    shared::{owner_signal::OwnerSignal, preferred_locales},
-};
+use crate::{executor::BackgroundExecutor, owner::signal::OwnerSignal, shared::preferred_locales};
 
 const APPEARANCE: &str = "org.freedesktop.appearance";
 const GNOME: &str = "org.gnome.desktop.interface";

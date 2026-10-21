@@ -21,8 +21,11 @@ consumed by path (not published to crates.io).
 ## Surfaces
 
 ```text
-traits/          Platform, PlatformWindow, PlatformExecutor,
-                 input (PlatformInput, InputCapabilities per window)
+platform.rs      Platform, PlatformExecutor, and HostPlatform<H>, its one implementation
+host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
+host.rs, hosts/  a host's table of positions, one table per host
+owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
+                 signal, the owner-thread slot and the panic boundary
 shared/          PlatformHandlers / WindowCallbacks — callback registries
 platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)
 executor.rs      BackgroundExecutor (tokio pool)

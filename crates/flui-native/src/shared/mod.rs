@@ -101,8 +101,6 @@ pub(crate) mod dispatch_memory_pressure;
 pub(crate) mod display_link_rate;
 pub mod events;
 mod handlers;
-pub(crate) mod owner_signal;
-pub(crate) mod owner_slot;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
 pub(crate) mod system_notice;
@@ -138,9 +136,6 @@ pub mod keys_macos;
 // Rule module; consumer: the Win32 OLE drag and drop.
 #[doc(hidden)]
 pub mod ole_drag_drop;
-// Rule module: owner-callback containment, used by every native backend.
-#[doc(hidden)]
-pub mod panic_boundary;
 // Rule module: every native backend assembles pointers through it.
 #[doc(hidden)]
 pub mod pointer_assembly;

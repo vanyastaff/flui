@@ -17,8 +17,8 @@ use windows::{
 
 use super::Invalidation;
 use crate::{
-    platforms::windows::host_events::HostEvents,
-    shared::{panic_boundary::contain_owner_callback, windows_host_messages::WM_QUERYENDSESSION},
+    owner::panic_boundary::contain_owner_callback, platforms::windows::host_events::HostEvents,
+    shared::windows_host_messages::WM_QUERYENDSESSION,
 };
 
 struct Context {

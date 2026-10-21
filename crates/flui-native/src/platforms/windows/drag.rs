@@ -68,12 +68,12 @@ use windows_core::{ComObject, HSTRING};
 
 use super::platform::WindowRef;
 
+use crate::owner::panic_boundary::{contain_owner_callback, owner_callback_panicked};
+use crate::owner::slot::OwnerSlot;
 use crate::shared::ole_drag_drop::{
     HTML_FORMAT_NAME, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, decode, effect_bits,
     offer_representations, os_loop_buttons,
 };
-use crate::shared::owner_slot::OwnerSlot;
-use crate::shared::panic_boundary::{contain_owner_callback, owner_callback_panicked};
 use flui_platform::pointer::PointerKind;
 
 pub(super) use com::WindowDropTarget;

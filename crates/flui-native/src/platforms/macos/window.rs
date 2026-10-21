@@ -50,8 +50,8 @@ const NO: Bool = Bool::NO;
 
 use super::{display::MacosDisplays, view};
 use crate::{
-    config::WindowConfiguration, shared::WindowCallbacks, shared::window_state::WindowStateCell,
-    traits::OpenWindowError,
+    config::WindowConfiguration, owner::OpenWindowError, shared::WindowCallbacks,
+    shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, WindowId, WindowOptions, WindowReveal,
@@ -962,7 +962,7 @@ impl MacOSWindow {
 /// as long as the nested loop runs.
 const MAX_DEFER_HOPS: u8 = 4;
 
-impl crate::traits::HostWindow for MacOSWindow {
+impl crate::host_window::HostWindow for MacOSWindow {
     /// The window's own NSAccessibility bridge — the capability the
     /// composition root's accessibility wire discovers. Without this
     /// override the trait default (`None`) leaves every real macOS window
@@ -1823,7 +1823,7 @@ impl MacOSWindowExtTrait for MacOSWindow {
         });
     }
 
-    fn add_tab_to_window(&mut self, other: &dyn crate::traits::HostWindow) -> bool {
+    fn add_tab_to_window(&mut self, other: &dyn crate::host_window::HostWindow) -> bool {
         let Some(other) = other.as_any().downcast_ref::<Self>() else {
             return false;
         };

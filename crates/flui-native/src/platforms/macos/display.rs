@@ -37,11 +37,11 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 use crate::error::PlatformError;
+use crate::owner::signal::OwnerSignal;
 use crate::shared::appkit_window_geometry::device_bounds_of_screen;
 use crate::shared::apple_display_identity::{macos_display_key, macos_display_persistent_key};
 use crate::shared::display_period::core_graphics_refresh_period;
 use crate::shared::display_source::DisplaySource;
-use crate::shared::owner_signal::OwnerSignal;
 
 // `CGDisplayCreateUUIDFromDisplayID` is declared by CoreGraphics but exported
 // by the ColorSync framework, which is why winit links the same one.
@@ -234,7 +234,7 @@ impl ScreenObserver {
                 // notification and never reads the notification. Dropping the
                 // upgraded leases can release the last owner, so the whole
                 // body runs inside the owner-callback panic boundary.
-                crate::shared::panic_boundary::contain_owner_callback(|| {
+                crate::owner::panic_boundary::contain_owner_callback(|| {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }

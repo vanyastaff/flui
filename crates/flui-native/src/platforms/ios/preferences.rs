@@ -25,10 +25,7 @@ use objc2_ui_kit::{
     UIContentSizeCategoryDidChangeNotification,
 };
 
-use crate::{
-    PlatformError,
-    shared::{owner_signal::OwnerSignal, preferred_locales},
-};
+use crate::{PlatformError, owner::signal::OwnerSignal, shared::preferred_locales};
 
 type ObserverToken = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
@@ -57,7 +54,7 @@ impl IOSPreferences {
             // reads nor UI callbacks enter it; OwnerSignal retains wake debt.
             // The temporary signal lease can be its final strong owner. Retire
             // any callback captures inside the existing owner panic boundary.
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 if callback_active.load(Ordering::Acquire)
                     && let Some(signal) = signal.upgrade()
                 {

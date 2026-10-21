@@ -30,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, RuntimeName};
 
 use crate::PlatformError;
-use crate::shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback};
+use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 
 mod languages;
 mod receiver;

@@ -53,8 +53,8 @@ pub(super) const REQUEST_FRAME: u32 = WM_APP + 1;
 pub(super) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 use crate::shared::window_state::WindowStateCell;
 use crate::{
-    shared::PlatformHandlers, shared::WindowCallbacks, shared::hwnd_affinity::UserDataRefusal,
-    traits::OpenWindowError,
+    owner::OpenWindowError, shared::PlatformHandlers, shared::WindowCallbacks,
+    shared::hwnd_affinity::UserDataRefusal,
 };
 use flui_platform::{
     CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
@@ -1727,7 +1727,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
     fn open(
         owner: &WindowsLoop,
         options: WindowOptions,
-    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+    ) -> Result<Arc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         if !owner.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
@@ -1756,14 +1756,12 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         )?;
         let hwnd_value = window.hwnd().0 as isize;
         let this = WindowRef::new(window.hwnd(), window.identity);
-        let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
-            &owner.owner_control.signal,
-            move || {
+        let wake =
+            crate::owner::signal::OwnerSignal::input_wake(&owner.owner_control.signal, move || {
                 let _ = this.with_context("resume_input_delivery", |context| {
                     context.callbacks.resume_input_delivery();
                 });
-            },
-        );
+            });
         let _ =
             with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
                 context.callbacks.set_input_capabilities(
@@ -1809,7 +1807,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
     }
 }
 
-impl crate::traits::HostWindow for WindowsWindow {
+impl crate::host_window::HostWindow for WindowsWindow {
     /// The window's own UIA bridge — the capability the composition root's
     /// accessibility wire discovers. Without this override the trait
     /// default (`None`) leaves every real Windows window silently invisible
@@ -1832,7 +1830,7 @@ impl crate::traits::HostWindow for WindowsWindow {
     /// [`TextStoreHostError::Unavailable`]: flui_platform::text_store::TextStoreHostError::Unavailable
     fn text_store_host(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         super::platform::with_window_context(self.hwnd, "text_store_host", |context| {
             let services = context.text_services.borrow().clone();
@@ -2993,7 +2991,7 @@ mod open_tests {
     };
 
     use super::open_spot;
-    use crate::traits::Platform as _;
+    use crate::platform::Platform as _;
 
     const FRAME: (i32, i32) = (16, 39);
 

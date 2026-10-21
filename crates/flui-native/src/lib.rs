@@ -13,11 +13,12 @@
 //!                             (re-exported here)
 //!
 //! flui-native
-//!   ├─ traits/              - Host-facing abstractions
-//!   │   ├─ platform.rs      - Central Platform trait
-//!   │   ├─ host_window.rs   - HostWindow: PlatformWindow + accessibility
-//!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
-//!   │   └─ capabilities.rs  - Platform capabilities
+//!   ├─ platform.rs          - Central Platform trait and HostPlatform<H>,
+//!   │                         its one implementation
+//!   ├─ host_window.rs       - HostWindow: PlatformWindow + accessibility
+//!   ├─ host.rs, hosts/      - A host's table of positions, one per host
+//!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
+//!   │                         and slot, the panic boundary
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │   └─ handlers.rs      - Callback registry
@@ -176,7 +177,9 @@ pub mod executor;
 // API: nothing outside the crate can build a `HostPlatform`.
 #[doc(hidden)]
 pub mod host;
+mod host_window;
 mod hosts;
+mod owner;
 mod platform;
 pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
@@ -186,7 +189,6 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
-pub mod traits;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
@@ -194,7 +196,7 @@ pub mod traits;
 pub use config::{FullscreenMonitor, WindowConfiguration};
 // The typed lifecycle/service error taxonomy — `anyhow` is retired from
 // this crate's public API (the window-open family lives with its
-// capability types in `traits`).
+// capability types in `owner`).
 pub use error::{BootstrapError, PlatformError, PlatformResult};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,12 +237,12 @@ pub use shared::{PlatformHandlers, WindowCallbacks};
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from
 // `flui_platform`, the accessibility capability from `flui_semantics::platform`.
-pub use traits::{
-    HostWindow, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
-};
+// Each has this one path (ADR-0151 §9).
+pub use host_window::HostWindow;
+pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
-pub use traits::{
+pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };

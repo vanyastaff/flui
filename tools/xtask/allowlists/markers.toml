@@ -155,24 +155,24 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-native/src/platforms/headless/platform.rs"
-class = "spec-task"
-count = 3
-
-[[allow]]
-path = "crates/flui-native/src/traits/owner.rs"
+path = "crates/flui-native/src/owner/mod.rs"
 class = "slice"
 count = 4
 
 [[allow]]
-path = "crates/flui-native/src/traits/platform.rs"
+path = "crates/flui-native/src/platform.rs"
 class = "slice"
 count = 1
 
 [[allow]]
-path = "crates/flui-native/src/traits/platform.rs"
+path = "crates/flui-native/src/platform.rs"
 class = "spec-task"
 count = 4
+
+[[allow]]
+path = "crates/flui-native/src/platforms/headless/platform.rs"
+class = "spec-task"
+count = 3
 
 [[allow]]
 path = "crates/flui-rendering/src/lib.rs"

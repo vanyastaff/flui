@@ -35,6 +35,8 @@ use jni::objects::{JObject, JObjectArray, JString};
 use jni::{Env, JValue, jni_sig, jni_str};
 use parking_lot::Mutex;
 
+use crate::owner::panic_boundary::contain_owner_callback;
+use crate::owner::slot::OwnerSlot;
 use crate::shared::android_drag::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_EXITED, ACTION_DRAG_LOCATION,
     ACTION_DRAG_STARTED, ClipSource, DroppedClip, Held, clip_parts, held, incoming_allowed,
@@ -42,8 +44,6 @@ use crate::shared::android_drag::{
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, DragSource};
-use crate::shared::owner_slot::OwnerSlot;
-use crate::shared::panic_boundary::contain_owner_callback;
 
 use super::java_view::{JavaView, ViewEvent};
 

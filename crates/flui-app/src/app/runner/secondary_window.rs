@@ -243,7 +243,7 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     reply: Option<Arc<crate::app::application_control::Reply>>,
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_native::traits::HostWindow>,
+    window: Arc<dyn flui_native::HostWindow>,
     stage: CompletionStage,
 }
 
@@ -279,7 +279,7 @@ pub(super) type OpenedWindow = (
 ))]
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
-        Arc<dyn flui_native::traits::HostWindow>,
+        Arc<dyn flui_native::HostWindow>,
     ) -> Result<super::installed_host::Installation, AppWindowError>,
 >;
 
@@ -1045,7 +1045,7 @@ fn spawn_pending_secondary_window_completion(
 ))]
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
-    host: Arc<dyn flui_native::traits::HostWindow>,
+    host: Arc<dyn flui_native::HostWindow>,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
     let window: Arc<dyn flui_platform::PlatformWindow> = Arc::clone(&host) as _;
     struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);

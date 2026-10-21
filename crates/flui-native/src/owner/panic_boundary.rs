@@ -23,25 +23,31 @@
 //! visible-window WNDPROC transaction described above.
 //!
 //! The payload-to-message rule is the pure, decidable part; it lives here,
-//! cfg-free, so the Linux-executed suite pins it (the Win32 shell that
-//! applies it is lint-only in CI).
-
-use std::any::Any;
-
-use flui_foundation::panic::payload_text;
+//! compiled under `test` on every host, so the Linux-executed suite pins it
+//! (the Win32 shell that applies it is lint-only in CI).
 
 /// Fallback text for a panic payload that is neither a `&'static str` nor a
 /// `String` (someone used `std::panic::panic_any` with an arbitrary type).
-pub const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
+    test
+))]
+pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 
 /// Extracts the human-readable message from a caught panic payload.
 ///
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{x}")`
 /// and every formatted variant produce a `String`; anything else (via
 /// `panic_any`) is opaque and reported as [`OPAQUE_PANIC_PAYLOAD`].
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
+    test
+))]
 #[must_use]
-pub fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
-    payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    flui_foundation::panic::payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
 }
 
 /// Contain owner callback and capture cleanup panics without dropping hostile payloads.
@@ -71,7 +77,8 @@ pub(crate) fn owner_callback_panicked(body: impl FnOnce()) -> bool {
 /// contained like any owner callback, and its payload is then retained
 /// rather than dropped, since a payload's destructor is user code that would
 /// unwind into the OS (ADR-0127 §2).
-pub fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(value) => Some(value),
         Err(payload) => {
@@ -106,4 +113,45 @@ pub(crate) fn invoke_and_drop_owner_callback(mut callback: Box<dyn FnMut() + Sen
 pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
     std::mem::forget(resource);
     contain_owner_callback(report);
+}
+
+// A panic on wasm32 aborts instead of unwinding, so there is nothing to catch.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::contain_os_entry;
+
+    /// A panic payload whose destructor is user code: it records that it ran.
+    struct Payload(Arc<AtomicBool>);
+
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// An entry's answer passes through; a panic is `None` and an opaque
+    /// payload is retained, never destroyed inside the OS's call. Red-check:
+    /// drop the payload instead of retaining it.
+    #[test]
+    fn an_os_entry_contains_its_panic_and_retains_its_payload() {
+        assert_eq!(contain_os_entry("a healthy entry", || 7), Some(7));
+        assert_eq!(
+            contain_os_entry("a formatted panic", || -> u8 { panic!("entry {}", 7) }),
+            None
+        );
+
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let payload = Payload(Arc::clone(&destroyed));
+        let answered = contain_os_entry("an opaque panic", move || -> u8 {
+            std::panic::panic_any(payload)
+        });
+        assert_eq!(answered, None);
+        assert!(
+            !destroyed.load(Ordering::SeqCst),
+            "the payload's destructor ran inside the entry"
+        );
+    }
 }

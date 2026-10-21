@@ -170,7 +170,7 @@ impl PlatformSystemChrome for IOSSystemChrome {
         let status_bar = Arc::clone(&self.0);
         DispatchQueue::main().exec_async(move || {
             let mtm = MainThreadMarker::new().expect("BUG: the main queue runs on the main thread");
-            crate::shared::panic_boundary::contain_owner_callback(|| status_bar.refresh(mtm));
+            crate::owner::panic_boundary::contain_owner_callback(|| status_bar.refresh(mtm));
         });
     }
 

@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::{traits::HostWindow, traits::owner::OpenWindowError};
+use crate::{host_window::HostWindow, owner::OpenWindowError};
 use flui_platform::{WindowId, WindowOptions};
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
@@ -405,7 +405,7 @@ mod tests {
     /// reply payload without depending on a real winit window.
     struct StubWindow;
 
-    impl crate::traits::HostWindow for StubWindow {}
+    impl crate::host_window::HostWindow for StubWindow {}
 
     impl flui_platform::PlatformWindow for StubWindow {
         fn id(&self) -> flui_platform::WindowId {

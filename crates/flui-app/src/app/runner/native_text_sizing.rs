@@ -8,7 +8,7 @@ use std::{
 };
 
 use flui_foundation::PresentationAddress;
-use flui_native::traits::HostWindow;
+use flui_native::HostWindow;
 use flui_native::{CapturedTextSizing, OwnerPlatform, TextSizingCaptureState};
 #[cfg(any(
     target_os = "android",

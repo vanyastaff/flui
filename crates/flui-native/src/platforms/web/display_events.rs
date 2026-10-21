@@ -24,8 +24,8 @@ use web_sys::{Event, MediaQueryList};
 
 use super::display::{WebDisplays, event_target, get};
 use super::listener::{Listener, warn_failure};
+use crate::owner::signal::OwnerSignal;
 use crate::shared::dppx_query::DppxWatch;
-use crate::shared::owner_signal::OwnerSignal;
 use crate::shared::web_feature::{GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
 
 /// The listeners that keep the display snapshot current; dropping it removes

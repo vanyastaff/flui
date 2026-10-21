@@ -53,10 +53,10 @@ use super::{
 };
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
-    shared::PlatformHandlers, shared::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
-    shared::hwnd_affinity::UserDataRefusal, shared::window_state::WindowStateCell,
-    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
-    traits::PlatformReadyCallback, traits::owner::OwnerHooks,
+    owner::OwnerHooks, owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
+    shared::hwnd_affinity::ContextLedger, shared::hwnd_affinity::UserDataRefusal,
+    shared::window_state::WindowStateCell,
 };
 use flui_platform::{WindowAppearance, WindowEvent, WindowId};
 
@@ -1095,7 +1095,7 @@ impl WindowsLoop {
                 tracing::error!(
                     msg,
                     hwnd = ?hwnd,
-                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                    panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
                     "panic in a window-procedure callback; aborting — it must not \
                      unwind across the extern \"system\" boundary, and the framework \
                      state behind this message may be torn"
@@ -2450,7 +2450,7 @@ impl WindowsLoop {
                 let previous = slot(&mut shares.handlers.borrow_mut()).replace(callback);
                 // The replaced callback is retired in a boundary of its own: a
                 // capture that panics in `Drop` must not unwind into the host.
-                crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+                crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
             }
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
@@ -2498,7 +2498,7 @@ impl host::Loop for WindowsLoop {
                 };
                 self.0.owner_control.close();
                 if let Some(callback) = callback {
-                    crate::shared::panic_boundary::invoke_and_drop_owner_callback(callback);
+                    crate::owner::panic_boundary::invoke_and_drop_owner_callback(callback);
                 }
             }
         }
@@ -2653,7 +2653,7 @@ impl host::Services for WindowsLoop {
 
     fn prompt_for_paths(
         &self,
-        options: crate::traits::PathPromptOptions,
+        options: crate::platform::PathPromptOptions,
     ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
         let executor = self.background_executor.clone();
         executor.spawn(async move {

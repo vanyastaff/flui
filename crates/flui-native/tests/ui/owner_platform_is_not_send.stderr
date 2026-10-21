@@ -11,7 +11,7 @@ note: required because it appears within the type `PhantomData<*const ()>`
   | pub struct PhantomData<T: PointeeSized>;
   |            ^^^^^^^^^^^
 note: required because it appears within the type `OwnerPlatform`
- --> src/traits/owner.rs
+ --> src/owner/mod.rs
   |
   | pub struct OwnerPlatform {
   |            ^^^^^^^^^^^^^

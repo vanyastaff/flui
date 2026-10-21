@@ -40,12 +40,12 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::host;
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::WindowCallbacks;
 use crate::shared::html_drag_drop::{
     DomSource, FILES_TYPE, action_of, allowed_of, drop_effect, effect_allowed_of, offered,
     payload_of, payload_of_bytes, serve_stored,
 };
-use crate::shared::panic_boundary::contain_owner_callback;
 use flui_platform::PlatformInput;
 
 use super::events::{answer, pointer_position};

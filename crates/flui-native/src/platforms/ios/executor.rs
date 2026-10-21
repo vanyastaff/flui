@@ -7,7 +7,7 @@
 
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, GlobalQueueIdentifier};
 
-use crate::traits::PlatformExecutor;
+use crate::platform::PlatformExecutor;
 
 /// Runs background tasks on a global GCD queue.
 pub struct IOSExecutor;

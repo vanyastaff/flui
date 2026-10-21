@@ -247,7 +247,7 @@ unsafe extern "system" fn cloak_changed(
     if let Err(payload) = outcome {
         tracing::error!(
             hwnd = ?hwnd,
-            panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+            panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
             "panic in a cloak-change callback; aborting — it must not unwind across \
              the extern \"system\" boundary"
         );

@@ -19,11 +19,12 @@ use super::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
 use crate::{
     error::PlatformError,
     host,
+    host_window::HostWindow,
+    owner::OpenWindowError,
     platforms::winit::{
         ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
         control::ControlSendError,
     },
-    traits::{HostWindow, OpenWindowError},
 };
 use flui_foundation::{ClaimOutcome, geometry::Size};
 

@@ -1,7 +1,7 @@
-error[E0432]: unresolved import `flui_native::traits::PlatformEmbedder`
+error[E0432]: unresolved import `flui_native::PlatformEmbedder`
  --> tests/ui/platform_embedder_is_retired.rs:1:5
   |
-1 | use flui_native::traits::PlatformEmbedder;
-  |     ^^^^^^^^^^^^^^^^^^^^^----------------
-  |                          |
-  |                          no `PlatformEmbedder` in `traits`
+1 | use flui_native::PlatformEmbedder;
+  |     ^^^^^^^^^^^^^----------------
+  |                  |
+  |                  no `PlatformEmbedder` in the root

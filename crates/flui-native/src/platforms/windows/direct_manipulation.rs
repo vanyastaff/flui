@@ -110,8 +110,8 @@ mod handler {
     };
     use windows_core::{Ref, implement};
 
+    use crate::owner::panic_boundary::contain_os_entry;
     use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
-    use crate::shared::panic_boundary::contain_os_entry;
 
     /// Readings the viewport reported during one `Update`.
     pub(in super::super) type ReadingQueue = Rc<RefCell<Vec<ViewportReading>>>;

@@ -2,7 +2,7 @@
 
 use crate::{
     CapturedTextSizing, TextSizingCaptureError as Error, TextSizingCaptureState as Capture,
-    shared::owner_signal::OwnerSignal, text_sizing::NativeSizing,
+    owner::signal::OwnerSignal, text_sizing::NativeSizing,
 };
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
@@ -234,7 +234,7 @@ impl Receipt {
 impl Drop for Receipt {
     fn drop(&mut self) {
         if let Some(completion) = self.completion.take() {
-            crate::shared::panic_boundary::contain_owner_callback(|| self.deliver(completion));
+            crate::owner::panic_boundary::contain_owner_callback(|| self.deliver(completion));
         }
     }
 }
@@ -389,7 +389,7 @@ impl Acquisition {
                         })
                     }
                 };
-                crate::shared::panic_boundary::contain_owner_callback(|| receipt.complete(result));
+                crate::owner::panic_boundary::contain_owner_callback(|| receipt.complete(result));
             }));
         }));
         if let Err(payload) = posted {

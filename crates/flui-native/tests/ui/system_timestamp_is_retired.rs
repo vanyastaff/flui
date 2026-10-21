@@ -1,3 +1,3 @@
-use flui_native::traits::SystemTimestamp;
+use flui_native::SystemTimestamp;
 
 fn main() {}

@@ -1,15 +1,7 @@
-error[E0603]: struct `OwnerThreadToken` is private
- --> tests/ui/owner_thread_token_is_private.rs:1:26
+error[E0432]: unresolved import `flui_native::OwnerThreadToken`
+ --> tests/ui/owner_thread_token_is_private.rs:1:5
   |
-1 | use flui_native::traits::OwnerThreadToken;
-  |                          ^^^^^^^^^^^^^^^^ private struct
-  |
-note: the struct `OwnerThreadToken` is defined here
- --> src/traits/mod.rs
-  |
-  | pub(crate) use host_window::OwnerThreadToken;
-  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: import `OwnerThreadToken` directly
-  |
-1 | use flui_native::traits::host_window::sealed::OwnerThreadToken;
-  |                          +++++++++++++++++++++
+1 | use flui_native::OwnerThreadToken;
+  |     ^^^^^^^^^^^^^----------------
+  |                  |
+  |                  no `OwnerThreadToken` in the root

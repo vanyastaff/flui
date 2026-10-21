@@ -41,6 +41,17 @@ trait depends on `flui-platform` instead.
   whose loop it is. The executor, the application path, URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
+- **The owner thread's machinery lives in `owner/`, which names no feature
+  (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
+  `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
+  crate-private `OwnerHooks` and `ProxyTransport` a host implements),
+  `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
+  the owner-thread storage for a value that is not `Send`, and
+  `owner::panic_boundary` the containment a panic in user code meets before it
+  reaches the operating system. `owner` is the `base` of
+  `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
+  import from it into a feature's directory. Its public items are named at the
+  crate root only.
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
   Linux under `winit-backend`. The `desktop` compatibility selector enables no
@@ -1797,7 +1808,7 @@ through the production launch path; the five real-`NSPasteboard` tests and the
 
 ### Window-independent owner turns
 
-`shared::owner_signal` owns coalescing, callback leases and quit admission for
+`owner::signal` owns coalescing, callback leases and quit admission for
 native desktop and headless. Physical posting is serialized with queued-state
 acknowledgement: a concurrent sender cannot receive success for another sender's
 failed post. Callbacks and capture drops execute outside locks; active delivery
@@ -2142,8 +2153,10 @@ platform type-checking.
 ADR-0082 §5's helper retirement removes the zero-consumer `PlatformEmbedder`
 abstraction and platform velocity/timestamp helper types. Backends retain their
 actual event clocks and translation paths; interaction owns velocity tracking.
-The compile-fail example on `flui_native::traits` checks that retired imports
-are unavailable through the consumer surface. This does not adopt the ADR's
+The compile-fail cases `basic_velocity_tracker_is_retired`,
+`platform_embedder_is_retired`, `system_timestamp_is_retired` and
+`timestamp_provider_is_retired` check, one name each, that the retired types
+are unavailable at the crate root. This does not adopt the ADR's
 remaining backend consolidation or capability removals.
 
 ### Android has no separate page-aligned container

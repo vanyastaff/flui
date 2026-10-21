@@ -4,13 +4,13 @@
 //! in this workspace surface `thiserror` taxonomies and leave `anyhow` to
 //! application crates (the same migration `flui-engine` completed for its
 //! `EngineResult`). The window-open family ([`OpenWindowError`],
-//! [`ProxySendError`], [`WaitError`]) lives in the `traits::owner` module
+//! [`ProxySendError`], [`WaitError`]) lives in the `owner` module
 //! beside the capability types it serves; this module carries the
 //! platform-lifecycle taxonomy shared by every backend.
 //!
-//! [`OpenWindowError`]: crate::traits::OpenWindowError
-//! [`ProxySendError`]: crate::traits::ProxySendError
-//! [`WaitError`]: crate::traits::WaitError
+//! [`OpenWindowError`]: crate::OpenWindowError
+//! [`ProxySendError`]: crate::ProxySendError
+//! [`WaitError`]: crate::WaitError
 
 /// The boxed error an embedder's bootstrap (`on_ready`) may return.
 ///

@@ -17,7 +17,7 @@ use crate::app::{
     dev_agent::DevAgent,
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
-use flui_native::{PendingWindow, PlatformProxy, WindowOpen, traits::HostWindow};
+use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
 use flui_runtime::dev_agent::DevAgentAttachment;
 use flui_view::View;
 use std::{
@@ -599,7 +599,7 @@ where
 #[cfg(test)]
 fn run_with_platform<V, F>(
     application: Application<V, F>,
-    platform: Box<dyn flui_native::traits::Platform>,
+    platform: Box<dyn flui_native::Platform>,
 ) -> Result<(), AppRunError>
 where
     V: View + Clone + 'static,
@@ -610,7 +610,7 @@ where
 
 fn run_with_platform_factory<V, F>(
     application: Application<V, F>,
-    platform: impl FnOnce() -> Result<Box<dyn flui_native::traits::Platform>, AppRunError>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
 ) -> Result<(), AppRunError>
 where
     V: View + Clone + 'static,

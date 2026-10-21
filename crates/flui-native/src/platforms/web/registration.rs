@@ -9,7 +9,7 @@ use std::{
 use wasm_bindgen::{JsCast, prelude::*};
 
 use super::window::DeviceSize;
-use crate::traits::OpenWindowError;
+use crate::owner::OpenWindowError;
 
 #[wasm_bindgen(inline_js = "
 const ownerKey = Symbol.for('flui.canvas.input-owner');
@@ -130,7 +130,7 @@ fn backend(error: JsValue) -> OpenWindowError {
 }
 
 fn report(error: JsValue) {
-    crate::shared::panic_boundary::contain_owner_callback(|| {
+    crate::owner::panic_boundary::contain_owner_callback(|| {
         tracing::warn!(
             ?error,
             "DOM subscription retirement failed; delivery remains fenced"
@@ -456,7 +456,7 @@ impl Registration {
         let observer = match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
             Ok(observer) => observer,
             Err(error) => {
-                crate::shared::panic_boundary::contain_owner_callback(|| {
+                crate::owner::panic_boundary::contain_owner_callback(|| {
                     tracing::warn!(
                         ?error,
                         "ResizeObserver unavailable; using window resize subscription"
@@ -516,7 +516,7 @@ impl Drop for Registration {
         }
         // Admission ends before release, which can synchronously dispatch loss.
         for id in pointers.into_keys() {
-            crate::shared::panic_boundary::contain_owner_callback(|| owner.release(id));
+            crate::owner::panic_boundary::contain_owner_callback(|| owner.release(id));
         }
         let observers = std::mem::take(&mut self.observers);
         let listeners = std::mem::take(&mut self.listeners);

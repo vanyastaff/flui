@@ -121,11 +121,11 @@ use super::{
 };
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
-    platform::HostPlatform, shared::PlatformHandlers, shared::system_notice::SystemNotices,
-    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::PendingWindow,
-    traits::Platform, traits::PlatformExecutor, traits::PlatformReadyCallback,
-    traits::ProxySendError, traits::WindowOpen, traits::owner::OwnerHooks,
-    traits::owner::ProxyTransport,
+    host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
+    platform::HostPlatform, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::PlatformHandlers,
+    shared::system_notice::SystemNotices,
 };
 use flui_platform::{
     PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode, WindowOptions,
@@ -190,7 +190,7 @@ impl WinitRunState {
 /// and the state every position of the host's table reads.
 /// [`WinitPlatform`](crate::WinitPlatform) is its platform.
 pub struct WinitLoop {
-    owner_signal: Mutex<Option<Arc<crate::shared::owner_signal::OwnerSignal>>>,
+    owner_signal: Mutex<Option<Arc<crate::owner::signal::OwnerSignal>>>,
     /// The monitors last sampled and the snapshot built from them. Shared with
     /// every window so each can name its display; outside the state lock so a
     /// window's `display_id()` never contends with the platform state.
@@ -452,7 +452,7 @@ impl WinitLoop {
                 })?;
         let event_loop_proxy = event_loop.create_proxy();
         let owner_proxy = event_loop_proxy.clone();
-        let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+        let signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
             owner_proxy
                 .send_event(())
                 .map_err(|error| PlatformError::EventLoop {
@@ -633,13 +633,16 @@ impl WinitLoop {
         let signal = self.owner_signal.lock().clone();
         if let Some(signal) = signal {
             let window = Arc::downgrade(&winit_window);
-            winit_window.callbacks().set_input_wake(
-                crate::shared::owner_signal::OwnerSignal::input_wake(&signal, move || {
-                    if let Some(window) = window.upgrade() {
-                        window.callbacks().resume_input_delivery();
-                    }
-                }),
-            );
+            winit_window
+                .callbacks()
+                .set_input_wake(crate::owner::signal::OwnerSignal::input_wake(
+                    &signal,
+                    move || {
+                        if let Some(window) = window.upgrade() {
+                            window.callbacks().resume_input_delivery();
+                        }
+                    },
+                ));
         }
 
         self.with_state(|state| {
@@ -2740,7 +2743,7 @@ impl OwnerHooks for WinitOwnerHooks {
 /// lane exactly as the pre-ADR-0039 cross-thread `Platform::open_window`
 /// path already did — enqueue-and-wake, claim-slot reply.
 struct WinitProxyTransport {
-    signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+    signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
     platform: Arc<WinitLoop>,
     owner_thread: ThreadId,
 }
@@ -2826,7 +2829,7 @@ mod tests {
     };
 
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
-    use crate::{WinitPlatform, platforms::winit::control::control_lane, traits::Platform};
+    use crate::{WinitPlatform, platform::Platform, platforms::winit::control::control_lane};
     use flui_platform::WindowOptions;
 
     // ========================================================================

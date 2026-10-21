@@ -1,3 +1,3 @@
-use flui_native::traits::BasicVelocityTracker;
+use flui_native::BasicVelocityTracker;
 
 fn main() {}

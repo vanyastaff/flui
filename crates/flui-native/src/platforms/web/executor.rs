@@ -6,7 +6,7 @@
 //! scheduling on a single thread, executing the task inline is equivalent to
 //! posting it to the microtask queue — no other code can interleave.
 
-use crate::traits::PlatformExecutor;
+use crate::platform::PlatformExecutor;
 
 pub struct WebExecutor;
 

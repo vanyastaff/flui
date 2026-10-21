@@ -26,7 +26,7 @@ autotests = false
 # the seam.
 accesskit = { workspace = true }
 # `PlatformAccessibility` and its listener types, which the backends implement
-# and `traits` re-exports at their old paths. The trait lives there so the
+# and `HostWindow` hands out. The trait lives there so the
 # frame runtime can hold a window's bridge without linking a backend
 # (ADR-0082 §2).
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
@@ -78,7 +78,7 @@ raw-window-handle = "0.6"
 
 # Compile-time auto-trait fences for `OwnerPlatform`/`PlatformProxy`/
 # `PendingWindow` (ADR-0039 §6-8): item-position `assert_not_impl_any!`/
-# `assert_impl_all!` in `traits/owner.rs`, expanded unconditionally by every
+# `assert_impl_all!` in `owner/mod.rs`, expanded unconditionally by every
 # `cargo check` (including cross-typecheck on win/mac) — not gated behind
 # `#[cfg(test)]` — so this must be a real dependency, not dev-only, or the
 # assertions never expand outside this crate's own test builds.
@@ -570,8 +570,8 @@ allowed-dependents = ["flui-app"]
 globals = [
     { item = "platforms::windows::platform::WindowIdentity::source::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
     { item = "platforms::android::AndroidLoop::process_input_events::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
-    { item = "shared::owner_slot::LAST_SLOT_KEY", grant = "ADR-0097", class = "counter", reason = "owner-slot keys, advanced by `try_update` so exhaustion refuses the slot instead of reissuing a key" },
-    { item = "shared::owner_slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
+    { item = "owner::slot::LAST_SLOT_KEY", grant = "ADR-0097", class = "counter", reason = "owner-slot keys, advanced by `try_update` so exhaustion refuses the slot instead of reissuing a key" },
+    { item = "owner::slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
     { item = "platforms::headless::platform::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
     { item = "platforms::ios::platform::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
     { item = "platforms::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
@@ -593,10 +593,10 @@ globals = [
 [package.metadata.flui.modules]
 # Import directions between the core host's modules (ADR-0151 §10), checked by
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
-# feature directory and `owner`/`version` join `features` and `base` when the
+# feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
 features = []
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
-base = []
+base = ["owner"]
 hosts = "hosts"

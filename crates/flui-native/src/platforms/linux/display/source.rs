@@ -44,9 +44,9 @@ use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, connect};
 use super::view::{FreshIds, NativeIds, OutputView, display_of_native_number};
 use crate::error::PlatformError;
+use crate::owner::panic_boundary::contain_owner_callback;
+use crate::owner::signal::OwnerSignal;
 use crate::shared::display_source::DisplaySource;
-use crate::shared::owner_signal::OwnerSignal;
-use crate::shared::panic_boundary::contain_owner_callback;
 
 /// The displays of one platform instance.
 pub(crate) struct LinuxDisplays {
@@ -287,7 +287,7 @@ fn run(
         Ok(failure) => failure,
         Err(payload) => {
             let message =
-                crate::shared::panic_boundary::panic_payload_message(payload.as_ref()).to_owned();
+                crate::owner::panic_boundary::panic_payload_message(payload.as_ref()).to_owned();
             // The payload may own anything; it is kept rather than dropped
             // here, where a panicking `Drop` would end the thread twice over.
             std::mem::forget(payload);

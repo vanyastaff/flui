@@ -25,10 +25,8 @@ use objc2_foundation::{NSCurrentLocaleDidChangeNotification, NSLocale, NSNotific
 use super::observation::Observation;
 use crate::{
     PlatformError,
-    shared::{
-        owner_signal::OwnerSignal, panic_boundary::contain_owner_callback,
-        preference_read::ReadAdmission, preferred_locales,
-    },
+    owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
+    shared::{preference_read::ReadAdmission, preferred_locales},
 };
 
 /// The macOS host's preferences: what AppKit reports, sampled on the owner lane.

@@ -137,7 +137,7 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
 /// exit_policy` carries this to `run_desktop`'s bootstrap, which installs a
 /// hook (`runner.rs`'s `install_exit_policy_hook`) into
-/// `flui_native::traits::Platform::set_exit_policy_hook`. The winit
+/// `flui_native::Platform::set_exit_policy_hook`. The winit
 /// backend's `CloseRequested` handling and the headless backend's window
 /// `close()`/`simulate_close()` both consult that hook — via the shared
 /// `flui_native::shared::PlatformHandlers::exit_policy` slot — instead of

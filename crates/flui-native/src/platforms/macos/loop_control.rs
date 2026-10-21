@@ -64,7 +64,7 @@ struct State {
 
 /// Contains only thread-safe Rust state. AppKit objects never cross the queue.
 pub(super) struct LoopControl {
-    pub(super) owner_signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    pub(super) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Mutex<State>,
     windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -80,7 +80,7 @@ impl LoopControl {
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
             let weak = weak.clone();
-            let owner_signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+            let owner_signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
                 let weak = weak.clone();
                 exec_async_guarded(owner_queue(), move || {
                     cleanup_step(|| {

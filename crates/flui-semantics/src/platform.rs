@@ -2,8 +2,8 @@
 //!
 //! [`PlatformAccessibility`] is defined here, beside the AccessKit translation
 //! that produces what it carries, and implemented by the backends in
-//! `flui-native`, which re-exports it at `flui_native::traits`. A window
-//! offers it through `flui_native::traits::HostWindow::accessibility`, the
+//! `flui-native`. A window offers it through
+//! `flui_native::HostWindow::accessibility`, the
 //! same fallible `Option<Arc<dyn _>>` discovery used for text input
 //! (ADR-0030) and haptics (ADR-0031): a backend with no accessibility
 //! integration returns `None` rather than every window inheriting methods it

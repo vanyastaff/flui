@@ -211,7 +211,7 @@ fn log_failure(payload: Box<dyn Any + Send>) {
     calls.run(|| {
         tracing::error!(
             target: "flui_native::tsf",
-            panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+            panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
             "application code a TSF document's teardown reached panicked"
         );
     });

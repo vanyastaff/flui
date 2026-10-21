@@ -648,7 +648,7 @@ pub(crate) fn install_owner_platform(
 /// immediately after [`install_owner_platform`], from every backend that
 /// wants this: today, that is `run_desktop` only — Android/web bootstraps
 /// never call this (their platforms don't override
-/// [`flui_native::traits::Platform::set_exit_policy_hook`] either, so it
+/// [`flui_native::Platform::set_exit_policy_hook`] either, so it
 /// would be inert there anyway; wiring the hook itself into those backends
 /// is unrelated to whether flui-app installs it).
 ///
@@ -757,7 +757,7 @@ pub(super) fn install_platform_quit_hook() {
 /// Installs the wall-clock-wake hook this thread's platform
 /// backend consults, once per idle iteration, for the earliest instant it
 /// should wake at instead of blocking forever — see
-/// [`flui_native::traits::Platform::set_wake_deadline_hook`]'s doc for the
+/// [`flui_native::Platform::set_wake_deadline_hook`]'s doc for the
 /// full contract. Installed once with the desktop owner platform.
 /// `AppRuntime::next_wake` folds every live runtime and presentation's
 /// deadlines. A window install never replaces this hook; closing a window

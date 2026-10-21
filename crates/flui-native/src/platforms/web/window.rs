@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    host, shared::WindowCallbacks, shared::owner_signal::OwnerSignal,
-    shared::window_state::WindowStateCell, traits::HostWindow, traits::OpenWindowError,
+    host, host_window::HostWindow, owner::OpenWindowError, owner::signal::OwnerSignal,
+    shared::WindowCallbacks, shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
@@ -445,7 +445,7 @@ impl WebWindow {
         } else {
             Some(callback)
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(old));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
     }
 }
 
@@ -612,12 +612,12 @@ impl LayoutSync {
     }
 }
 
-impl crate::traits::HostWindow for WebWindow {
+impl crate::host_window::HostWindow for WebWindow {
     /// The canvas's `EditContext` or hidden textarea, serving the focused
     /// field's store; `None` once the window closed.
     fn text_store_host(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         self.text
             .borrow()
@@ -864,7 +864,7 @@ impl PlatformWindow for WebWindow {
         if self.registration.borrow().is_some() {
             self.callbacks.set_input_callback(callback);
         } else {
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
         }
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
@@ -887,7 +887,7 @@ impl PlatformWindow for WebWindow {
         callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
     ) {
         let accepting = self.registration.borrow().is_some();
-        crate::shared::panic_boundary::contain_owner_callback(|| {
+        crate::owner::panic_boundary::contain_owner_callback(|| {
             if accepting {
                 self.callbacks.set_safe_area_callback(callback);
             } else {
@@ -900,7 +900,7 @@ impl PlatformWindow for WebWindow {
         callback: Box<dyn FnMut(flui_platform::WindowExecutionState) + Send>,
     ) {
         let accepting = self.registration.borrow().is_some();
-        crate::shared::panic_boundary::contain_owner_callback(|| {
+        crate::owner::panic_boundary::contain_owner_callback(|| {
             if accepting {
                 self.callbacks.set_execution_state_callback(callback);
             } else {

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]
-use flui_native::traits::HostWindow;
+use flui_native::HostWindow;
 #[cfg(not(target_os = "android"))]
 use flui_platform::PlatformWindow;
 pub(crate) use flui_runtime::testing::TestWindow;

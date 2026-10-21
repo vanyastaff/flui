@@ -105,7 +105,7 @@ impl Drop for ApartmentHold {
             // SAFETY: taken once, here, and never read again.
             drop(unsafe { ManuallyDrop::take(&mut self.apartment) });
         } else {
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 tracing::error!(
                     "COM apartment hold dropped off its thread; the apartment stays entered there"
                 );

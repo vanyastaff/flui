@@ -131,7 +131,7 @@ pub trait MacOSWindowExt {
     ///     window.add_tab_to_window(other)
     /// }
     /// ```
-    fn add_tab_to_window(&mut self, other: &dyn crate::traits::HostWindow) -> bool;
+    fn add_tab_to_window(&mut self, other: &dyn crate::host_window::HostWindow) -> bool;
 
     /// Toggle native fullscreen mode with macOS animation.
     ///
