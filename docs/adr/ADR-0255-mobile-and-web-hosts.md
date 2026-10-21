@@ -34,7 +34,6 @@
   `GameActivity`) is in
   [`docs/research/2026-10-17-android-java-side.md`](https://github.com/vanyastaff/flui/blob/083b0f75d/docs/research/2026-10-17-android-java-side.md).
   Lines of FLUI's own tree are at `main` `083b0f75d`.
-- **Spec:** [platform-layer](../plans/specs/platform-layer/design.md)
 
 ## Context and problem statement
 
@@ -50,17 +49,17 @@ permissions and warm deep links. Everything on that list except results, permiss
 deep links can be done from the injected view. Those three cannot: `NativeActivity` forwards none
 of `onNewIntent`, `onActivityResult`, `onRequestPermissionsResult`, `onTrimMemory`,
 `onMultiWindowModeChanged`, `onTopResumedActivityChanged` and `onUserLeaveHint`
-(`aosp-mirror/platform_frameworks_base@1cdfff555f core/java/android/app/NativeActivity.java:126-301`;
-android-activity's README says the same of the class of problem, `rust-mobile/android-activity@b4ddf059b
-README.md:266-283`), and a class that exists only in an in-memory dex cannot be named by the
+([aosp-mirror/platform_frameworks_base@1cdfff555f core/java/android/app/NativeActivity.java:126-301](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/core/java/android/app/NativeActivity.java#L126-L301);
+android-activity's README says the same of the class of problem, [rust-mobile/android-activity@b4ddf059b
+README.md:266-283](https://github.com/rust-mobile/android-activity/blob/b4ddf059b/README.md#L266-L283)), and a class that exists only in an in-memory dex cannot be named by the
 manifest, so no share target, receiver or `FileProvider` either. ADR-0247 item 9 named this switch
 as the escalation, to take "when FLUI needs a callback only a manifest-declared class receives".
 That need is now the owner's list.
 The manifest and the packager are behind the framework as well: the template declares three of
 the eleven `configChanges` values Flutter's declares
 (`crates/flui-cli/templates/platforms/android/AndroidManifest.xml:5-22`;
-`flutter/flutter@6597889f57
-packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:12`), and
+[flutter/flutter@6597889f57
+packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:12](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L12)), and
 an Activity the system recreates is a new `android_main` and a whole new Rust runtime
 (`crates/flui-app/src/app/runner/android.rs:441-447`); the SDK-tools packager sets `targetSdk` to
 the newest installed platform (`crates/flui-cli/src/build/android_package.rs:70-97,147-148`), so
@@ -81,8 +80,8 @@ page is a static scaffold copied once; there is no accessibility tree, no routin
 host, and the dev server answers 404 to any path that is not a file
 (`crates/flui-cli/src/serve.rs:262-301`). The textarea sets no `font-size` (iOS Safari zooms the
 page on focus below 16 px, which Flutter documents and guards against:
-`flutter/flutter@6597889f57
-engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:12-46`) and no
+[flutter/flutter@6597889f57
+engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:12-46](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L12-L46)) and no
 `enterkeyhint` (`crates/flui-platform/src/platforms/web/text_input.rs:559-590`).
 
 The question this record answers: how do Android, iOS and the Web host FLUI, so that accessibility,
@@ -169,18 +168,18 @@ text-input paths its platform requires.
      publish, is-active and activation and action listeners:
      `crates/flui-semantics/src/platform.rs:66-95`). FLUI writes the delegate and its
      provider in `FluiView`, about 70 lines. TalkBack's touch exploration arrives as hover events
-     (`aosp-mirror/platform_frameworks_base@1cdfff555f
-     services/accessibility/java/com/android/server/accessibility/gestures/TouchExplorer.java`),
+     ([aosp-mirror/platform_frameworks_base@1cdfff555f
+     services/accessibility/java/com/android/server/accessibility/gestures/TouchExplorer.java](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/services/accessibility/java/com/android/server/accessibility/gestures/TouchExplorer.java)),
      and under `NativeActivity` they reach the native queue before the view
-     (`core/java/android/view/ViewRootImpl.java:7836-7860`), so the owner feeds them
+     ([core/java/android/view/ViewRootImpl.java:7836-7860](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/core/java/android/view/ViewRootImpl.java#L7836-L7860)), so the owner feeds them
      to `Adapter::on_hover_event` and reports the event handled when it returns events. The first
      request for the tree must be answered no later than the next display refresh
-     (`AccessKit/accesskit@a39329d28 accesskit/src/lib.rs:3335-3348`), so a request on
+     ([AccessKit/accesskit@a39329d28 accesskit/src/lib.rs:3335-3348](https://github.com/AccessKit/accesskit/blob/a39329d28/accesskit/src/lib.rs#L3335-L3348)), so a request on
      the Java main thread is a producer that wakes the owner (ADR-0249). The adapter's update,
      action and hover calls may come from any thread with the caller providing exclusion
-     (`adapters/android/src/adapter.rs:284-286,801-803,864-866`); raising
+     ([adapters/android/src/adapter.rs:284-286,801-803,864-866](https://github.com/AccessKit/accesskit/blob/a39329d28/adapters/android/src/adapter.rs#L284-L286)); raising
      queued events happens on the Java main thread holding none of the locks the view's callbacks
-     take (`adapters/android/src/event.rs:338-347`). That is ADR-0247 item 5 again.
+     take ([adapters/android/src/event.rs:338-347](https://github.com/AccessKit/accesskit/blob/a39329d28/adapters/android/src/event.rs#L338-L347)). That is ADR-0247 item 5 again.
    - **Back.** An `OnBackInvokedCallback` (API 33; `OnBackAnimationCallback` from API 34), registered
      through the Activity's `getOnBackInvokedDispatcher()` from a per-API nested holder, as the class
      already does for other APIs, and registered **only while the framework can pop**. A
@@ -188,15 +187,15 @@ text-input paths its platform requires.
      nothing to pop must not hold one ([Android's predictive back
      guide](https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture));
      Flutter registers only while the framework can pop
-     (`flutter/flutter@6597889f57
-     engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java:728-737`).
+     ([flutter/flutter@6597889f57
+     engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java:728-737](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java#L728-L737)).
      "Can the app pop" is a bit the owner publishes like the other
      state the view answers from, and the same contract serves iOS (decision 14) and the Web
      (decision 19). Each API above the floor is a gate under ADR-0244 decision 4.
    - **Insets.** `setOnApplyWindowInsetsListener` and a `WindowInsetsAnimation.Callback` (API 30) on
      the view, as Slint wires them from its injected view
-     (`slint-ui/slint@277e7676ce
-     internal/backends/android-activity/java/SlintAndroidJavaHelper.java:465-482`), replace the
+     ([slint-ui/slint@277e7676ce
+     internal/backends/android-activity/java/SlintAndroidJavaHelper.java:465-482](https://github.com/slint-ui/slint/blob/277e7676ce/internal/backends/android-activity/java/SlintAndroidJavaHelper.java#L465-L482)), replace the
      polled `safe_area::sample` (one `getRootWindowInsets` read after a resize,
      system bars and cutout only: `crates/flui-platform/src/platforms/android/safe_area.rs:69-73`)
      and add the IME inset, which exists nowhere in the pipeline today.
@@ -225,8 +224,8 @@ text-input paths its platform requires.
    the Activity name or `configChanges`. It declares at least:
    - `android:name="dev.flui.platform.FluiActivity"` and `android:hasCode="true"`;
    - `android:enableOnBackInvokedCallback="true"`, without which registration below targetSdk 36 is
-     refused (decision 3; `aosp-mirror/platform_frameworks_base@1cdfff555f
-     core/java/android/window/WindowOnBackInvokedDispatcher.java:696-705`);
+     refused (decision 3; [aosp-mirror/platform_frameworks_base@1cdfff555f
+     core/java/android/window/WindowOnBackInvokedDispatcher.java:696-705](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/core/java/android/window/WindowOnBackInvokedDispatcher.java#L696-L705));
    - `configChanges` of at least Flutter's list, `orientation|keyboardHidden|keyboard|screenSize|
      smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode`, so a change of
      night mode, font scale, locale or window size reaches `ConfigChanged` instead of recreating the
@@ -255,7 +254,10 @@ text-input paths its platform requires.
    `FluiActivity` and its queue, and it offers:
    - `launch_for_result`, which starts an intent and returns a `Completion<_>` completed by the
      result entry the owner drains;
-   - `request_permissions`, which returns a `Completion<_>` completed by the permission-result entry.
+   - `request_permissions`, which returns a `Completion<_>` completed by the permission-result
+     entry; it is added with the first capability that needs a permission (ADR-0152), while
+     `launch_for_result` arrives with `flui-system`'s file picker (the Storage Access Framework
+     answers through an activity result).
 
    The raw `JavaVM` and Activity pointers are held in the provider context, never in a `static`
    (ADR-0097). On Apple the bridge is events in FLUI's own types (URL, reopen, scene) delivered from
@@ -265,7 +267,7 @@ text-input paths its platform requires.
 
 9. **Triggers to leave `NativeActivity`.** The taken surface means Views never paint in the window
    (`ViewRootImpl` returns before drawing when the app owns the surface:
-   `aosp-mirror/platform_frameworks_base@1cdfff555f core/java/android/view/ViewRootImpl.java:5652-5659`), and `NativeActivity` takes
+   [aosp-mirror/platform_frameworks_base@1cdfff555f core/java/android/view/ViewRootImpl.java:5652-5659](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/core/java/android/view/ViewRootImpl.java#L5652-L5659)), and `NativeActivity` takes
    touch from the native queue. Two requirements end that:
    - native views (a web view, a map, video) inside the UI, which cannot be inline children;
    - `InputLatency::Low` on Android, which needs a Java touch path.
@@ -286,13 +288,13 @@ text-input paths its platform requires.
 11. **Text input is a separate invisible responder view.** A Rust-defined view conforming to
     `UITextInput`, with `UITextInteraction` for the system selection UI, backed by the shared
     `TextStore` host (ADR-0090, ADR-0135). It is separate from `FluiView`, which does not become the
-    first responder; Flutter and Compose make the same split (`flutter/flutter@6597889f57
-    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm:140-141`;
-    `JetBrains/compose-multiplatform-core@13b7599795
-    compose/ui/ui-uikit/src/iosMain/objc/CMPUIKitUtils/CMPUIKitObjcUtils/CMPTextInputView.h:20`).
+    first responder; Flutter and Compose make the same split ([flutter/flutter@6597889f57
+    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm:140-141](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm#L140-L141);
+    [JetBrains/compose-multiplatform-core@13b7599795
+    compose/ui/ui-uikit/src/iosMain/objc/CMPUIKitUtils/CMPUIKitObjcUtils/CMPTextInputView.h:20](https://github.com/JetBrains/compose-multiplatform-core/blob/13b7599795/compose/ui/ui-uikit/src/iosMain/objc/CMPUIKitUtils/CMPUIKitObjcUtils/CMPTextInputView.h#L20)).
     `UITextInput` carries marked text,
     which CJK composition requires; a `UIKeyInput` implementation cannot, which is all winit
-    implements (`rust-windowing/winit@1893565716 winit-uikit/src/view.rs:333-353`). Enabling
+    implements ([rust-windowing/winit@1893565716 winit-uikit/src/view.rs:333-353](https://github.com/rust-windowing/winit/blob/1893565716/winit-uikit/src/view.rs#L333-L353)). Enabling
     `objc2-ui-kit`'s `UITextInput`, `UITextInputTraits` and `UITextInteraction` features is part of
     the change. Whether a full `UITextInput` conformance (about thirty methods, a tokenizer, an input
     delegate) composes through `define_class!` is **unproven** (Confirmation).
@@ -300,9 +302,9 @@ text-input paths its platform requires.
 12. **Accessibility is `accesskit_ios::Adapter`**, the low-level one, forwarded from `FluiView`'s
     `isAccessibilityElement`, `accessibilityElements` and `accessibilityHitTest:`. All its methods run
     on the main thread, which is the owner thread on iOS, so the Android cross-thread problem does not
-    arise (`AccessKit/accesskit@a39329d28 adapters/ios/src/adapter.rs:318`, "all adapter methods must
+    arise ([AccessKit/accesskit@a39329d28 adapters/ios/src/adapter.rs:318](https://github.com/AccessKit/accesskit/blob/a39329d28/adapters/ios/src/adapter.rs#L318), "all adapter methods must
     be called on the main thread"). The adapter is on objc2 0.5 beside FLUI's 0.6
-    (`adapters/ios/Cargo.toml:21-31`); its entry points take and return raw
+    ([adapters/ios/Cargo.toml:21-31](https://github.com/AccessKit/accesskit/blob/a39329d28/adapters/ios/Cargo.toml#L21-L31)); its entry points take and return raw
     pointers, which makes the skew a build-size cost, not a blocker (Confirmation).
 
 13. **Scene callbacks carry links and activities.** `FluiSceneDelegate` gains
@@ -310,8 +312,8 @@ text-input paths its platform requires.
     `scene:openURLContexts:`, `scene:continueUserActivity:` and
     `windowScene:performActionForShortcutItem:`. They reach the app as events in FLUI's types
     (decision 8). Flutter's scene delegate forwards the same four
-    (`flutter/flutter@6597889f57
-    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101`);
+    ([flutter/flutter@6597889f57
+    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm#L32-L101));
     FLUI's has none of them (`crates/flui-platform/src/platforms/ios/platform.rs:1192-1219`).
 
 14. **Keyboard, back and the plist.**
@@ -340,8 +342,8 @@ text-input paths its platform requires.
     it does today, and owns its layout.
 
 17. **Text input: the `<textarea>` is the contract; `EditContext` is a Chrome refinement.**
-    `EditContext` ships in Chrome 121 and its derivatives only (`mdn/browser-compat-data@5da921db9
-    api/EditContext.json`), so Firefox and every iOS browser need
+    `EditContext` ships in Chrome 121 and its derivatives only ([mdn/browser-compat-data@5da921db9
+    api/EditContext.json](https://github.com/mdn/browser-compat-data/blob/5da921db9/api/EditContext.json)), so Firefox and every iOS browser need
     the textarea, and it is the path that must be correct everywhere; neither Flutter's web engine
     nor Compose Multiplatform's web target relies on `EditContext`. It gains: a font-size floor of
     16 px on iOS Safari; `enterkeyhint` from the field's purpose; and an autofill policy in place of
@@ -350,10 +352,10 @@ text-input paths its platform requires.
     text of a canvas field is reachable to assistive technology whichever path edits it.
 
 18. **Accessibility is a parallel ARIA DOM written in Rust.** AccessKit lists its web adapter as
-    planned (`AccessKit/accesskit@a39329d28 README.md:45-48`); Flutter builds a parallel DOM with a
-    lazy placeholder and its semantics host last (`flutter/flutter@6597889f57
-    engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart:16-46`,
-    `.../semantics/semantics_helper.dart:238`). A `PlatformAccessibility` implementation for the Web
+    planned ([AccessKit/accesskit@a39329d28 README.md:45-48](https://github.com/AccessKit/accesskit/blob/a39329d28/README.md#L45-L48)); Flutter builds a parallel DOM with a
+    lazy placeholder and its semantics host last ([flutter/flutter@6597889f57
+    engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart:16-46](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart#L16-L46),
+    [.../semantics/semantics_helper.dart:238](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/semantics_helper.dart#L238)). A `PlatformAccessibility` implementation for the Web
     consumes `TreeUpdate` through
     `accesskit_consumer` and maintains one element per node with its role and ARIA attributes, in the
     semantics host. It is enabled lazily, from a hidden focusable placeholder control that
@@ -361,11 +363,11 @@ text-input paths its platform requires.
 
 19. **Routing is the History API, with a single entry.** `pushState`, `replaceState` and `popstate` are
     the baseline. A single-entry strategy keeps a fake entry so that Back always produces a `popstate`
-    and never leaves the app unasked (Flutter's `SingleEntryBrowserHistory`: `flutter/flutter@6597889f57
-    engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart:17-25,124`); this feeds the
+    and never leaves the app unasked (Flutter's `SingleEntryBrowserHistory`: [flutter/flutter@6597889f57
+    engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart:17-25,124](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart#L17-L25)); this feeds the
     same "can the app pop" contract (decision 3).
-    The Navigation API (Chrome 102, Firefox 147, Safari 26.2; `mdn/browser-compat-data@5da921db9
-    api/Navigation.json`) is a refinement. `flui run`'s server
+    The Navigation API (Chrome 102, Firefox 147, Safari 26.2; [mdn/browser-compat-data@5da921db9
+    api/Navigation.json](https://github.com/mdn/browser-compat-data/blob/5da921db9/api/Navigation.json)) is a refinement. `flui run`'s server
     answers any path that is not a file with the page, before path routes are enabled.
 
 20. **Safe area and the keyboard.** `env(safe-area-inset-*)` gives the safe area, which needs
@@ -380,7 +382,7 @@ text-input paths its platform requires.
 
     | Concern | Rule |
     |---|---|
-    | Android host sources | `crates/flui-platform/android/` (`crates/flui-native/android/` after the crate rename the platform-layer design plans): `java/`, `classes.dex`, `classes.dex.toml`, the `cargo xtask android-dex` gate, `FluiHost.PROTOCOL` |
+    | Android host sources | `crates/flui-platform/android/` (the `android` directory of the `flui-native` crate after the crate rename the platform-layer design plans): `java/`, `classes.dex`, `classes.dex.toml`, the `cargo xtask android-dex` gate, `FluiHost.PROTOCOL` |
     | Why a checked-in dex, not `build.rs` | As in ADR-0247: no JDK or build-tools version in a user's build. The cost, one binary under review, is already accepted |
     | Android build, SDK-tools path | `aapt2 link` the generated manifest, add the native libraries and `classes.dex` from the resolved crate directory, `zipalign`, `apksigner`. No `javac` or `d8` |
     | Android build, Gradle path | The CLI writes the host sources into a generated, git-ignored source directory with a generated-file header on every build, or points a `sourceSets` entry at the crate; R8 keep rules for `dev.flui.**`, whose classes only native code names |
@@ -519,7 +521,7 @@ before any native is bound. The support claim for a platform is the run.
 
 - Bad, because it costs Gradle, AppCompat and a games-activity AAR whose version the crate must
   pin (android-activity's README pins 4.4.0 and warns that the next 4.x may not be compatible:
-  `rust-mobile/android-activity@b4ddf059b README.md:228-241`), and removes `flui build`'s
+  [rust-mobile/android-activity@b4ddf059b README.md:228-241](https://github.com/rust-mobile/android-activity/blob/b4ddf059b/README.md#L228-L241)), and removes `flui build`'s
   Gradle-free path.
 - Bad, because its IME is weaker than `FluiView`'s: one `Editable`, `requestCursorUpdates` that
   only calls `super`, no `commitContent` or handwriting override, and no room for the generation
@@ -538,7 +540,7 @@ before any native is bound. The support claim for a platform is the run.
 ### 5. Android: `accesskit_android::InjectingAdapter`
 
 - Bad, because it loads a second dex through its own `InMemoryDexClassLoader`
-  (`AccessKit/accesskit@a39329d28 adapters/android/src/inject.rs:225-241`), keeps process-global
+  ([AccessKit/accesskit@a39329d28 adapters/android/src/inject.rs:225-241](https://github.com/AccessKit/accesskit/blob/a39329d28/adapters/android/src/inject.rs#L225-L241)), keeps process-global
   handle maps and `unwrap`s on JNI paths (`:88-105`, `:118-134`), and panics if the host view
   already has an accessibility delegate (`:359-363`); its reasons are also in decision 3.
 
@@ -546,7 +548,7 @@ before any native is bound. The support claim for a platform is the run.
 
 - Bad, because every Android build would depend on a JDK and a build-tools version, as ADR-0247
   already found (Slint's build script warns of a JDK 21 failure of exactly this:
-  `slint-ui/slint@277e7676ce internal/backends/android-activity/build.rs:67-79`).
+  [slint-ui/slint@277e7676ce internal/backends/android-activity/build.rs:67-79](https://github.com/slint-ui/slint/blob/277e7676ce/internal/backends/android-activity/build.rs#L67-L79)).
 
 ### 7. iOS: a Swift or Objective-C shim (Flutter's, Compose's and Tauri's shape)
 

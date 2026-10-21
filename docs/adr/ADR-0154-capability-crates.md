@@ -53,26 +53,26 @@ The references also show where this goes wrong, and each point below answers one
 
 - Declarations left to documentation, so apps ship with a missing usage string: Flutter's
   permission handler requires the `Info.plist` keys to be added by hand
-  (`Baseflow/flutter-permission-handler@0684469188 permission_handler/README.md:60-83`), and
+  ([Baseflow/flutter-permission-handler@0684469188 permission_handler/README.md:60-83](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler/README.md#L60-L83)), and
   Project Robius documents the manifest keys in a doc comment
-  (`project-robius/robius-location@1974355613 src/lib.rs:3-16`).
+  ([project-robius/robius-location@1974355613 src/lib.rs:3-16](https://github.com/project-robius/robius-location/blob/1974355613/src/lib.rs#L3-L16)).
 - Manifests patched from build scripts, which is environment-dependent and reaches direct
-  dependencies only (`tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:121`,
-  `crates/tauri-plugin/src/build/mobile.rs:38-96`; the Cargo book: "metadata is only passed to
-  immediate dependents", `rust-lang/cargo@d4a2c5853b
-  doc/book/src/reference/build-scripts.md:482`).
+  dependencies only ([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:121](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/build.rs#L121),
+  [crates/tauri-plugin/src/build/mobile.rs:38-96](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-plugin/src/build/mobile.rs#L38-L96); the Cargo book: "metadata is only passed to
+  immediate dependents", [rust-lang/cargo@d4a2c5853b
+  doc/book/src/reference/build-scripts.md:482](https://github.com/rust-lang/cargo/blob/d4a2c5853b/doc/book/src/reference/build-scripts.md#L482)).
 - `javac` or `swiftc` run from `build.rs`, which puts a JDK or Xcode on every consumer's machine
-  (`project-robius/robius-location@1974355613 build.rs:15-50`; Tauri's Swift build,
-  `crates/tauri-utils/src/build.rs:22-36`).
-- Process statics at the OS-callback boundary (`tauri-apps/tauri@9318ab84b8
-  crates/tauri/src/plugin/mobile.rs:32-35`; `rust-mobile/ndk-context@0eb252bf23
-  ndk-context/src/lib.rs:28`).
+  ([project-robius/robius-location@1974355613 build.rs:15-50](https://github.com/project-robius/robius-location/blob/1974355613/build.rs#L15-L50); Tauri's Swift build,
+  [crates/tauri-utils/src/build.rs:22-36](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/build.rs#L22-L36)).
+- Process statics at the OS-callback boundary ([tauri-apps/tauri@9318ab84b8
+  crates/tauri/src/plugin/mobile.rs:32-35](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L32-L35); [rust-mobile/ndk-context@0eb252bf23
+  ndk-context/src/lib.rs:28](https://github.com/rust-mobile/ndk-context/blob/0eb252bf23/ndk-context/src/lib.rs#L28)).
 - A desktop fallback that returns zeros while the support table says `none`
-  (`tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/src/desktop.rs:25-31`,
-  `plugins/geolocation/Cargo.toml:16-21`).
+  ([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/src/desktop.rs:25-31](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/src/desktop.rs#L25-L31),
+  [plugins/geolocation/Cargo.toml:16-21](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/Cargo.toml#L16-L21)).
 - Monolithic permission plugins that cannot strip the code they do not use: Flutter's must
   translate `Info.plist` keys into compile flags, and merged flavours risk an App Store rejection
-  (`Baseflow/flutter-permission-handler@0684469188 permission_handler/README.md:119`, `ITMS-90683`).
+  ([Baseflow/flutter-permission-handler@0684469188 permission_handler/README.md:119](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler/README.md#L119), `ITMS-90683`).
 
 The question this record answers: where does the OS code of an optional platform service live, and
 how does an application declare and build it, so that the core host stays bounded and a third party
@@ -179,11 +179,11 @@ lacks, and everything else the rule leaves out.
 - **The application menu is core**: the menu model, the menu bar, context menus, and the Dock menu,
   which the application delegate hands out. A macOS application without a menu bar has no Quit or
   Edit menu (the App menu bar row of `docs/platform-parity.md`), and the references keep it in
-  core: Tauri through `muda` (`tauri-apps/tauri@9318ab84b8 crates/tauri/Cargo.toml`), Flutter's
-  `PlatformMenuBar` (`flutter/flutter@6597889f57
-  packages/flutter/lib/src/widgets/platform_menu_bar.dart`), GPUI's `Platform::set_menus`
-  (`zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:488`) and Electron's `Menu`
-  (`electron/electron@30db518815 docs/api/menu.md`).
+  core: Tauri through `muda` ([tauri-apps/tauri@9318ab84b8 crates/tauri/Cargo.toml](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/Cargo.toml)), Flutter's
+  `PlatformMenuBar` ([flutter/flutter@6597889f57
+  packages/flutter/lib/src/widgets/platform_menu_bar.dart](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter/lib/src/widgets/platform_menu_bar.dart)), GPUI's `Platform::set_menus`
+  ([zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:488](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L488)) and Electron's `Menu`
+  ([electron/electron@30db518815 docs/api/menu.md](https://github.com/electron/electron/blob/30db518815/docs/api/menu.md)).
 - **The Windows jump list is not core**: `ICustomDestinationList` needs no object the host owns.
   It lives in `flui-system`.
 - **Incoming URL and file activation is core**: delivery at cold and warm start, reopen, and
@@ -213,7 +213,7 @@ No capability crate claims a menu or incoming activation.
 Never `javac`, `d8` or `swiftc` from a `build.rs`. It puts a JDK and Android build tools, or Xcode,
 on every consumer's machine and makes the build depend on their versions (ADR-0247 rejected it for
 the same reason); Tauri's own Swift build carries a comment that its environment handling can be
-accessed from multiple threads (`tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:22-36`).
+accessed from multiple threads ([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:22-36](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/build.rs#L22-L36)).
 
 ### 6. The linked set comes from `cargo metadata`
 
@@ -263,21 +263,21 @@ background-modes = ["location"]
   and lists the keys it lacks.
 - **The application overrides.** An application-side table replaces a usage string or turns a
   capability's part off, as Expo's config plugins do (typed props with defaults, and `false`
-  removes the key and the code behind it: `expo/expo@0937842df7
-  packages/expo-location/plugin/src/withLocation.ts:183-193`); the default is the crate's.
+  removes the key and the code behind it: [expo/expo@0937842df7
+  packages/expo-location/plugin/src/withLocation.ts:183-193](https://github.com/expo/expo/blob/0937842df7/packages/expo-location/plugin/src/withLocation.ts#L183-L193)); the default is the crate's.
 
 Build-script patching (Tauri) works only when the CLI sets a variable, only on a macOS host for
 iOS and only for direct dependencies, so its output differs by environment
-(`tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:121`,
-`crates/tauri-plugin/src/build/mobile.rs:38,81`); documentation-only declaration (Flutter's iOS
+([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/build.rs:121](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/build.rs#L121),
+[crates/tauri-plugin/src/build/mobile.rs:38,81](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-plugin/src/build/mobile.rs#L38)); documentation-only declaration (Flutter's iOS
 keys, Electron, Robius) is how applications ship without a usage string.
 
 ### 8. `flui add <capability>`
 
 Capability crates are not part of the facade; they are found through the documentation and the
 command-line tool. `flui add <capability>` runs `cargo add`, writes the declarations (decision 7)
-and shows the registration snippet, as `tauri add` does (`tauri-apps/tauri@9318ab84b8
-crates/tauri-cli/src/add.rs`).
+and shows the registration snippet, as `tauri add` does ([tauri-apps/tauri@9318ab84b8
+crates/tauri-cli/src/add.rs](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-cli/src/add.rs)).
 
 ### 9. The host bridge
 
@@ -289,9 +289,10 @@ crates need it:
 
 1. **`owner()` and `WindowRef`**: a poster to the owner thread and a window's id, scale and raw
    handles.
-2. **Android**: the host's `FluiActivity` queue (ADR-0255) provides `launch_for_result` and
-   `request_permissions`, each returning a `Completion` and routed by a token per call, not by an
-   integer shared by every crate. The `JavaVM` and the current Activity are raw pointers in the
+2. **Android**: the host's `FluiActivity` queue (ADR-0255) provides `launch_for_result` (with
+   `flui-system`, whose file picker needs an activity result) and `request_permissions` (with the
+   first capability that needs a permission, ADR-0152), each returning a `Completion` and routed
+   by a token per call, not by an integer shared by every crate. The `JavaVM` and the current Activity are raw pointers in the
    context, not a `static`, so each crate picks its own `jni` version; the Activity is not stable
    (Android recreates it), so the bridge reports its replacement.
 3. **Apple**: events in FLUI's types for what the core host already receives (URL open, reopen,
@@ -300,8 +301,8 @@ crates need it:
    versions into every capability crate.
 4. **Win32**: nothing until a capability has a consumer for a message hook.
 5. **Linux**: nothing; portals take the raw window handle (`parent_window` as `x11:<XID>` or
-   `wayland:<HANDLE>`, `flatpak/xdg-desktop-portal@49075617ff doc/window-identifiers.rst:11-21`;
-   `bilelmoussaoui/ashpd@c9b9ddcf4a client/src/window_identifier/mod.rs:87` builds it from
+   `wayland:<HANDLE>`, [flatpak/xdg-desktop-portal@49075617ff doc/window-identifiers.rst:11-21](https://github.com/flatpak/xdg-desktop-portal/blob/49075617ff/doc/window-identifiers.rst#L11-L21);
+   [bilelmoussaoui/ashpd@c9b9ddcf4a client/src/window_identifier/mod.rs:87](https://github.com/bilelmoussaoui/ashpd/blob/c9b9ddcf4a/client/src/window_identifier/mod.rs#L87) builds it from
    `raw-window-handle`).
 
 ### 10. Testing, and claimed support
@@ -442,7 +443,7 @@ first capability crate that needs them.
 - Bad, because the runtime and every macOS application need them from the first window, and the
   Dock menu needs the application delegate.
 - Bad, because Tauri, Flutter, GPUI and Electron keep menus in core, and Tauri delivers activation
-  as `RunEvent::Opened` (`tauri-apps/tauri@9318ab84b8 crates/tauri/src/app.rs:220-295`).
+  as `RunEvent::Opened` ([tauri-apps/tauri@9318ab84b8 crates/tauri/src/app.rs:220-295](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/app.rs#L220-L295)).
 
 ### 7. Patching manifests from a build script (Tauri)
 
@@ -459,7 +460,7 @@ first capability crate that needs them.
 
 - Bad, because it puts a JDK, build tools or Xcode on every consumer's machine, for bytes that
   change only with the sources
-  (`slint-ui/slint@277e7676ce internal/backends/android-activity/build.rs:30-79`).
+  ([slint-ui/slint@277e7676ce internal/backends/android-activity/build.rs:30-79](https://github.com/slint-ui/slint/blob/277e7676ce/internal/backends/android-activity/build.rs#L30-L79)).
 
 ### 10. Autolinking through `links` and `DEP_*` variables (Tauri)
 

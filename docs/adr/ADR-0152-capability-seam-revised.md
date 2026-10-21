@@ -59,34 +59,34 @@ shapes for one fact.
 Reading the references showed what the first design did not yet say:
 
 - Every Rust framework with a typed seam keys it by type and scopes it to the application (GPUI
-  globals, `zed-industries/zed@fae8a35482 crates/gpui/src/global.rs:22`; Bevy resources; Tauri
-  managed state, `tauri-apps/tauri@9318ab84b8 crates/tauri/src/lib.rs:752-771`). The defects sit in
+  globals, [zed-industries/zed@fae8a35482 crates/gpui/src/global.rs:22](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/global.rs#L22); Bevy resources; Tauri
+  managed state, [tauri-apps/tauri@9318ab84b8 crates/tauri/src/lib.rs:752-771](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/lib.rs#L752-L771)). The defects sit in
   the designs with a process singleton (Flutter's static `_instance`,
-  `flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:27-41`;
+  [flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:27-41](https://github.com/flutter/packages/blob/1383427519/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart#L27-L41);
   Capacitor's registry; `ndk-context`'s `static mut ANDROID_CONTEXT`,
-  `rust-mobile/ndk-context@0eb252bf23 ndk-context/src/lib.rs:28`).
+  [rust-mobile/ndk-context@0eb252bf23 ndk-context/src/lib.rs:28](https://github.com/rust-mobile/ndk-context/blob/0eb252bf23/ndk-context/src/lib.rs#L28)).
 - Tauri ships a blocking and an asynchronous twin of each mobile call
-  (`run_mobile_plugin` and `run_mobile_plugin_async`, `tauri-apps/tauri@9318ab84b8
-  crates/tauri/src/plugin/mobile.rs:293-360`) and fixed deadlocks in the response path, where a
-  lock was held while the response was delivered (`mobile.rs:98-100`, `:121-123`, `:420-422`);
+  (`run_mobile_plugin` and `run_mobile_plugin_async`, [tauri-apps/tauri@9318ab84b8
+  crates/tauri/src/plugin/mobile.rs:293-360](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L293-L360)) and fixed deadlocks in the response path, where a
+  lock was held while the response was delivered ([mobile.rs:98-100](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L98-L100), [:121-123](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L121-L123), [:420-422](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L420-L422));
   FLUI's drafts had a callback clipboard and a boxed-future permission request, so three shapes for
   "the OS answers later".
 - OS callbacks arrive off the owner thread on every platform the first crates target, and an
   owner-local handle gives the provider no way back to the owner. Project Robius requires its
   Apple manager to be created on the main thread and takes a `Send + Sync` handler
-  (`project-robius/robius-location@1974355613 src/lib.rs:28,76`).
+  ([project-robius/robius-location@1974355613 src/lib.rs:28,76](https://github.com/project-robius/robius-location/blob/1974355613/src/lib.rs#L28)).
 - Real permissions have scopes (precise or coarse, when-in-use or always) and reduced grants
   (limited, provisional, approximate); a three-way state cannot say what was granted. Tauri's
   geolocation status is `{ location, coarse_location }`
-  (`tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/src/models.rs:12-27`), the
+  ([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/src/models.rs:12-27](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/src/models.rs#L12-L27)), the
   permission handler for Flutter splits `locationWhenInUse` from `locationAlways`
-  (`Baseflow/flutter-permission-handler@0684469188
-  permission_handler_platform_interface/lib/src/permissions.dart:64-78`) and its statuses include
-  `limited` and `provisional` (`.../permission_status.dart:4-60`).
+  ([Baseflow/flutter-permission-handler@0684469188
+  permission_handler_platform_interface/lib/src/permissions.dart:64-78](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler_platform_interface/lib/src/permissions.dart#L64-L78)) and its statuses include
+  `limited` and `provisional` ([.../permission_status.dart:4-60](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler_platform_interface/lib/src/permission_status.dart#L4-L60)).
 - Tauri's geolocation plugin shipped the bug that acquisition in lifecycle hooks and a handle that
   ends its subscription on drop rule out: its 2.5.0 release fixed `watchPosition` stopping updates
   for every other active watch and `clearWatch` leaving location updates running until the last
-  watch was cleared (`tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/CHANGELOG.md`).
+  watch was cleared ([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/CHANGELOG.md](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/CHANGELOG.md)).
 
 The question this record answers: how does a platform capability reach a widget so that the
 framework, a capability crate and a package built on `flui-sdk` add one through the same seam,
@@ -128,7 +128,7 @@ without editing `flui-runtime`, `flui-view` and `flui-app` and without process-g
 6. Twin blocking and asynchronous APIs (Tauri).
 7. `async fn` in handle traits as the base.
 8. Callbacks only.
-9. Effects as data (Crux; `redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12`).
+9. Effects as data (Crux; [redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12](https://github.com/redbadger/crux/blob/1ef0f547e6/crux_core/src/testing.rs#L8-L12)).
 10. The whole `PlatformWindow` in `ProviderContext`.
 11. One `LifecycleContext` method per capability.
 12. Capabilities as inherited views, readable anywhere (Compose, GPUI).
@@ -161,7 +161,7 @@ ADR-0084 also rested on a premise that no longer holds: that Flutter's federated
 application no way to replace an endorsed implementation
 ([flutter/flutter#80374](https://github.com/flutter/flutter/issues/80374)). The issue closed on
 2024-07-11, and the Flutter tool now resolves a direct dependency over the default package
-(`flutter/flutter@6597889f57 packages/flutter_tools/lib/src/flutter_plugins.dart:1950-1993`). Nothing
+([flutter/flutter@6597889f57 packages/flutter_tools/lib/src/flutter_plugins.dart:1950-1993](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter_tools/lib/src/flutter_plugins.dart#L1950-L1993)). Nothing
 in this ADR depends on that claim. Substitution in FLUI is a provider override because the registry
 is keyed by the marker, not by the implementation.
 
@@ -265,10 +265,10 @@ is keyed by the marker, not by the implementation.
     Haptics is not one: it is a facet of the window (ADR-0210, ADR-0254), reached through the
     window, and does not travel through the seam. This is item 1 applied, not an exception to it:
     Flutter's `Link` and `LinkDelegate` sit in the platform-interface package
-    (`flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:9,44`)
+    ([flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:9,44](https://github.com/flutter/packages/blob/1383427519/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart#L9))
     and Compose keeps its clipboard and URI locals in `ui`
-    (`JetBrains/compose-multiplatform-core@13b7599795
-    compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt:74-269`)
+    ([JetBrains/compose-multiplatform-core@13b7599795
+    compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt:74-269](https://github.com/JetBrains/compose-multiplatform-core/blob/13b7599795/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt#L74-L269))
     for the same reason. ADR-0154 states the matching rule for capability crates.
 
     The clipboard and storage are services the framework needs before any capability crate exists,
@@ -522,7 +522,7 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 
 - Bad, because they are poor for the multi-step permission flow.
 
-### 9. Effects as data (Crux; `redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12`)
+### 9. Effects as data (Crux; [redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12](https://github.com/redbadger/crux/blob/1ef0f547e6/crux_core/src/testing.rs#L8-L12))
 
 - Bad, because it needs the application to be a pure function.
 
@@ -543,7 +543,7 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 ### 13. Tauri-style permission files in the seam
 
 - Bad, because they isolate access to a webview's IPC layer
-  (`tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/acl/capability.rs:77`), FLUI has no
+  ([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/acl/capability.rs:77](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/acl/capability.rs#L77)), FLUI has no
   untrusted code inside the app, and OS permission is per capability and per run.
 
 ## More information

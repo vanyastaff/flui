@@ -35,6 +35,8 @@ extend-ignore-identifiers-re = [
 # Project-specific spelling overrides + third-party identifiers typos
 # would otherwise flag.
 flui = "flui"
+# Apple App Store Connect rejection codes (`ITMS-90683`), cited in ADR-0154.
+ITMS = "ITMS"
 # Shepperd's method (S. W. Shepperd 1978): quaternion from a rotation matrix.
 shepperd = "shepperd"
 # Win32 `FORMATETC::ptd`, the target-device pointer of an OLE data format.

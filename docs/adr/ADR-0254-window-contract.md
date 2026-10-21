@@ -58,16 +58,16 @@ ADR-0237 gave a window a revisioned `WindowState`, a `WindowCommand` set and the
 winit, GPUI, Slint, Masonry, SDL3, Flutter's embedder and raw-window-handle: none of them has a
 snapshot with commands checked against capabilities, and none makes "unsupported" a typed,
 queryable answer. winit's setters are silent no-ops with a doc line per platform
-(`rust-windowing/winit@1893565716 winit-core/src/window.rs:874-877,1155-1185`); GPUI's default to
-no-ops (`zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:1332-1342`); Slint hands the
+([rust-windowing/winit@1893565716 winit-core/src/window.rs:874-877,1155-1185](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/window.rs#L874-L877)); GPUI's default to
+no-ops ([zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:1332-1342](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L1332-L1342)); Slint hands the
 backend desired properties and warns that an incomplete two-way protocol misbehaves
-(`slint-ui/slint@277e7676ce internal/core/window.rs:60-76`); Masonry's signals return nothing and
-include a non-idempotent `ToggleMaximized` (`linebender/xilem@271a27a6d4
-masonry_core/src/app/render_root.rs:228-306`); SDL3 returns a `bool` and a thread-local error
-string (`libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_video.h`, `SDL_GetError` throughout) and
+([slint-ui/slint@277e7676ce internal/core/window.rs:60-76](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/window.rs#L60-L76)); Masonry's signals return nothing and
+include a non-idempotent `ToggleMaximized` ([linebender/xilem@271a27a6d4
+masonry_core/src/app/render_root.rs:228-306](https://github.com/linebender/xilem/blob/271a27a6d4/masonry_core/src/app/render_root.rs#L228-L306)); SDL3 returns a `bool` and a thread-local error
+string ([libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_video.h](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_video.h), `SDL_GetError` throughout) and
 makes size and mode changes requests that `SDL_SyncWindow` waits for (`:1041-1046`); Flutter's
 embedder has no window commands and takes a metrics snapshot instead
-(`flutter/flutter@6597889f57 engine/src/flutter/shell/platform/embedder/embedder.h:1098-1148`).
+([flutter/flutter@6597889f57 engine/src/flutter/shell/platform/embedder/embedder.h:1098-1148](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/embedder/embedder.h#L1098-L1148)).
 The triad is the best shape of the group. `PlatformWindow` around it is not finished:
 
 - **Three sources per fact.** `is_focused`, `is_visible`, `physical_size`, `logical_size`,
@@ -89,7 +89,7 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
   (`crates/flui-app/src/app/runner/host.rs:431-441`).
 - **A `Send + Sync` window for one consumer.** The raster thread needs a surface target (ADR-0063
   decision 1), which needs `HasWindowHandle + HasDisplayHandle + Send + Sync`
-  (`gfx-rs/wgpu@3050396df2 wgpu/src/api/surface.rs:266`), not 51 methods.
+  ([gfx-rs/wgpu@3050396df2 wgpu/src/api/surface.rs:266](https://github.com/gfx-rs/wgpu/blob/3050396df2/wgpu/src/api/surface.rs#L266)), not 51 methods.
   The price is a wrong-thread `request_redraw` that compiles and is unsound on macOS, and about
   50 lines of doc stating the rule instead of a type stating it
   (`crates/flui-platform-api/src/platform_window.rs:247-298`).
@@ -102,14 +102,14 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
 - **An escape hatch nobody can reach.** `as_any` is a required method of the open window trait
   (`platform_window.rs:899`); the per-OS extension traits sit in the host crate, which the facade
   does not publish (`crates/flui-platform/src/platforms/windows/window.rs:2518`,
-  `platforms/macos/window.rs:1657`; `src/lib.rs:147`).
+  `crates/flui-platform/src/platforms/macos/window.rs:1657`; `src/lib.rs:147`).
   `WindowEvent` and `Platform::on_window_event` have no production caller above the backend.
 
 winit pairs a `Send + Sync` window with a single handler trait and pays with blocking
-cross-thread marshalling (`rust-windowing/winit@1893565716 winit-core/src/window.rs:620-631`,
-`winit-core/src/application/mod.rs:10`). GPUI and Slint keep the window `!Send`. Slint also keeps a
+cross-thread marshalling ([rust-windowing/winit@1893565716 winit-core/src/window.rs:620-631](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/window.rs#L620-L631),
+[winit-core/src/application/mod.rs:10](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/application/mod.rs#L10)). GPUI and Slint keep the window `!Send`. Slint also keeps a
 richer hidden tier for its own backends, and a third-party backend is second class there
-(`slint-ui/slint@277e7676ce internal/core/window.rs:225-341`, `internal/core/platform.rs:564-575`).
+([slint-ui/slint@277e7676ce internal/core/window.rs:225-341](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/window.rs#L225-L341), [internal/core/platform.rs:564-575](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/platform.rs#L564-L575)).
 
 The question this record answers: what shape should a window and its host have so that each window
 fact has one source, a command is admitted by type, user code is called through one handler, and
@@ -355,7 +355,7 @@ seam.
 ### 7. Sealing
 
 - `Platform` and `HostWindow` are sealed with a private supertrait, as Slint seals its `Renderer`
-  (`slint-ui/slint@277e7676ce internal/core/renderer.rs:43-52`).
+  ([slint-ui/slint@277e7676ce internal/core/renderer.rs:43-52](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/renderer.rs#L43-L52)).
   An outside `impl` is a compile error that says what the types already enforce
   (`OwnerPlatform::new` is `pub(crate)`, so an outside `Platform` could not run). Sealing is
   reversible; opening is not.
@@ -374,8 +374,8 @@ seam.
 - Per-OS extension modules are published by the facade as `flui::native::<os>`, behind `cfg` and a
   `native` feature, as an Evolving surface (ADR-0089 decision 5). Their methods take and return
   FLUI types only, answer `Option` or `Unsupported`, and never panic on a window of a foreign
-  backend (winit `unwrap`s its downcast: `rust-windowing/winit@1893565716
-  winit-win32/src/lib.rs:355-358`). Raw window and display handles leave only through the
+  backend (winit `unwrap`s its downcast: [rust-windowing/winit@1893565716
+  winit-win32/src/lib.rs:355-358](https://github.com/rust-windowing/winit/blob/1893565716/winit-win32/src/lib.rs#L355-L358)). Raw window and display handles leave only through the
   `raw-window-handle` traits. OS types that are public in the host crate's paths become
   `pub(crate)`.
 - Creation-time options that exist for one OS are a typed value for that OS inside
@@ -392,12 +392,12 @@ seam.
   Sync`; GPUI and Slint get the effect by leaving `Send` off but have no proof type for the loop
   thread.
 - **`DispatchEventResult` and its deferred forms.** The references return a plain answer: Masonry a
-  synchronous `Handled`, Slint a two-value `Accepted` or `Rejected` (`linebender/xilem@271a27a6d4
-  masonry_core/src/app/render_root.rs:548`; `slint-ui/slint@277e7676ce
-  internal/core/platform.rs:324-333`).
+  synchronous `Handled`, Slint a two-value `Accepted` or `Rejected` ([linebender/xilem@271a27a6d4
+  masonry_core/src/app/render_root.rs:548](https://github.com/linebender/xilem/blob/271a27a6d4/masonry_core/src/app/render_root.rs#L548); [slint-ui/slint@277e7676ce
+  internal/core/platform.rs:324-333](https://github.com/slint-ui/slint/blob/277e7676ce/internal/core/platform.rs#L324-L333)).
 - **`Since<F>` gates inside the backend** (ADR-0244). winit has no version mechanism and GPUI
-  writes "iOS 26+" in a comment and returns zero where it cannot say (`zed-industries/zed@fae8a35482
-  crates/gpui/src/platform.rs:1169-1173`).
+  writes "iOS 26+" in a comment and returns zero where it cannot say ([zed-industries/zed@fae8a35482
+  crates/gpui/src/platform.rs:1169-1173](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L1169-L1173)).
 - **`HasWindowHandle` and `HasDisplayHandle` as the only upstream traits in the contract**, and the
   `Unavailable` obligation (ADR-0089).
 
@@ -565,8 +565,8 @@ headless and winit backends execute in CI, and a Windows, macOS, iOS or Android 
 ### 10. winit's cross-thread marshalling
 
 - Good, because any thread can call any window method without an owner proof
-  (`rust-windowing/winit@1893565716 winit-core/src/window.rs:620-631`,
-  `winit-core/src/application/mod.rs:10`).
+  ([rust-windowing/winit@1893565716 winit-core/src/window.rs:620-631](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/window.rs#L620-L631),
+  [winit-core/src/application/mod.rs:10](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/application/mod.rs#L10)).
 - Bad, because it hides a blocking cross-thread call behind a method that looks cheap, and a
   deadlock is one owner-thread wait away; FLUI's lanes are bounded and typed (ADR-0039).
 

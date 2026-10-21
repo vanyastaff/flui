@@ -87,7 +87,7 @@
 | D10 | Только для бэкенда — в ядро: `OfferTable`, `OfferRecord`, `TransferCompleter`, `TransferUri`, `TransferImage`, `device_to_logical`, `logical_to_device`, `offset_from_coords`, `delta_offset_from_coords`, `DeviceInputRegion`, `ProjectedInputRegions`. Удаляются: `WindowEvent`, `Platform::on_window_event`, `KeyText`, `WindowBackgroundAppearance` (её заменяет команда материала фона с возможностью). `WindowOptions::input_latency` сегодня никто выше бэкенда не задаёт: опция проводится из конфигурации окна приложения (это её потребитель) в этой же серии. Контракт без `tracing` (логирует вызывающий) и на `std::sync::Mutex` вместо `parking_lot` | оставить мёртвую опцию «на будущее» | ADR-0151 §7 |
 | D11 | Escape hatch: `as_any` переезжает в `HostWindow`; модули расширений ОС публикуются фасадом как `flui::native::<os>` за `cfg` и фичей `native` (Evolving); их методы принимают и возвращают только типы FLUI (прогресс на панели задач, материал, вкладки macOS) и отвечают `Option` или `Unsupported`, не паникуют; сырые handle окна и дисплея — только через трейты `raw-window-handle` (ADR-0089 §2); опции создания для одной ОС — типизированное значение этой ОС в `WindowOptions`; все OS-типы в путях ядра становятся `pub(crate)` | публичные `HWND`/`NSApplication`/`AndroidApp`; `unwrap` при downcast (winit) | ADR-0151 §8; ADR-0254 §8 |
 | D12 | `Platform` худеет: удаляются `background_executor`, `BackgroundExecutor`, `Task`, `active_window`, `write_to_clipboard`, `read_from_clipboard`, `on_window_event`, `compositor_name`; в `flui-system` уходят `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path`. `keyboard_layout` и его событие выше бэкенда никто не читает — они становятся `pub(crate)` ядра (их используют раскладка клавиш и TSF); публичными их сделает фича меню, когда появится потребитель (подписи сочетаний). Все регистрации уровня приложения (`on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`, `on_preferences_changed`) заменяет один `AppHandler`, переданный в `run`, по той же причине, что `WindowHandler`. `AppHandler` — трейт ядра (`flui-native`), не контракта: его реализует только `flui-app`, поэтому обязательство `opened(urls, files)` добавится к нему вместе с фичей активации, а не как инертное умолчание сейчас. Ядро перестаёт реэкспортировать имена контракта: у каждого элемента один путь | оставить `keyboard_layout` публичным без потребителя; `opened` в трейте сейчас с пустой реализацией в `flui-app` (инертное умолчание, правило 4) | ADR-0151 §9; ADR-0254 §4 |
-| D13 | Устройство `flui-native` (§6): `platforms/<os>/{rules,shell}`, семейство `platforms/apple/`, общий код двух и более семейств — модули верхнего уровня `owner/` и `mapping/`; `shared/` и `traits/` исчезают; тесты правил — рядом с правилами; `module-dag` проверяет направления; одна точка вызова пользовательского кода вместо шести аренд | крейт на ОС; общий `shared/`; `backend/` (слово уже занято GPU-бэкендом и самими `platforms/<os>`) | ADR-0151 §10 |
+| D13 | Устройство `flui-native` (§6): `platforms/<os>/{rules,ffi}`, семейство `platforms/apple/`, общий код двух и более семейств — модули верхнего уровня, названные по содержимому: `owner/` (owner-поток), `translate/` (перевод фактов ОС в словарь контракта), `version/` (пороги и гейты версий), `displays/` (лента реестра дисплеев); `shared/` и `traits/` исчезают; тесты правил — рядом с правилами; `module-dag` проверяет направления; одна точка вызова пользовательского кода вместо шести аренд | крейт на ОС; общий `shared/`; `backend/` (слово уже занято GPU-бэкендом и самими `platforms/<os>`); `shell/` для FFI-половины (слово занято «OS shell» — сервисами Explorer и Finder в `flui-system`); один `mapping/` для всего общего (grab-bag: гейты версий и лента дисплеев ничего не отображают) | ADR-0151 §10 |
 | D14 | Android: `FluiActivity extends NativeActivity` в APK (готовый dex, `hasCode="true"`) с очередью Java → Rust; `FluiView` остаётся; a11y через низкоуровневый `accesskit_android::Adapter`; «назад» через `OnBackInvokedCallback`; insets и анимация IME через слушатели; dex грузится загрузчиком Activity; рукопожатие протокола; `targetSdk` закреплён в `platform-support.toml`; манифест генерируется | `hasCode="false"` и устаревший `Fragment`; GameActivity (Gradle, слабее IME); своя Activity со своей склейкой (заменяет android-activity без нужды) | ADR-0255 |
 | D15 | iOS: чистый Rust на objc2, без Swift и Objective-C; `UITextInput` в отдельном невидимом responder-view; `accesskit_ios::Adapter`; колбэки сцены для URL, user activity и shortcut; клавиатура через уведомления (граница iOS 13); «назад» — краевой свайп по тому же контракту «можно ли вернуться», что Android | Swift-прослойка (второй тулчейн); iOS-бэкенд winit (нет UIScene) | ADR-0255 |
 | D16 | Web: Rust владеет DOM (корень: canvas, хост ввода текста, хост семантики); `<textarea>` — контракт, `EditContext` — улучшение для Chrome; ARIA DOM через `accesskit_consumer`, включение лениво; маршруты через History API; страницу генерирует `flui-cli` | только `EditContext` (нет Firefox и iOS); ждать web-адаптер AccessKit (только в планах) | ADR-0255 |
@@ -100,6 +100,7 @@
 | D23 | Версии ОС: решение ADR-0244 верно и остаётся; добавляется закреплённый `targetSdk` Android в `platform-support.toml` | `cfg` по версии; «последний установленный SDK» | ADR-0151 §14; ADR-0255 |
 | D24 | Доступность не опциональна: фича `a11y` удаляется из ядра, `flui-app` и фасада; адаптеры AccessKit компилируются всегда на каждой ОС. Довод «на Linux это тянет D-Bus» снимается нативным Linux-бэкендом, которому D-Bus нужен и так (logind, порталы) | фича, выключенная по умолчанию (продукт, который «готов», выходит без доступности, если автор не знал про фичу) | ADR-0151 §15; `crates/flui-app/Cargo.toml:50-56` |
 | D25 | **Планка качества — требования с гейтами, а не пожелания** (раздел «Quality bar» в platform-parity.md): ноль CPU в простое (каждый сигнал ОС — уведомление; опрос по таймеру — дефект, а не fallback); паника пользовательского кода никогда не разматывается в C — гейт проверяет, что каждая `extern "C"` проходит через `panic_boundary`; один монотонный таймлайн для ввода, кадров и показа; обратная связь о времени показа кадра (DXGI statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines, rAF) питает frame clock; HDR, широкий охват и цветовой профиль дисплея — словарь контракта (`SurfaceColorSpace`, headroom, смена профиля); sandbox-aware доступ к файлам (порталы, security-scoped bookmarks, SAF, AppContainer) — слой никогда не отдаёт путь, которым процесс не может пользоваться; защищённый ввод пароля и скрытые записи буфера; активация по правилам ОС (`xdg-activation`, передача права на передний план); conformance каждой ОС исполняется с настоящей ассистивной технологией (Narrator, VoiceOver, Orca, TalkBack) через `cargo heli xtask device`; записи нативного ввода воспроизводятся на headless детерминированно и покрывают IME, lifecycle, предпочтения и дисплеи, а не только указатель. Эти пункты входят в закрытый список D2 как свойства существующих областей (дисплеи, ввод, текст, lifecycle, каталоги данных) | «качество потом» (слой, который компилируется на шести ОС и опрашивает ОС по таймеру, — это и есть «полуходячий») | ADR-0151 §16; platform-parity.md «Quality bar» |
+| D26 | Контракт `flui-platform` группируется по областям вместо 28 плоских модулей: `window/` (опции, состояние, команды, возможности, размещение, трейт окна, обработчик, яркость), `input/` (`PlatformInput`, указатель, клавиатура, возможности и регионы ввода, `EventTime`), `text/` (`PlatformTextInput`, `ImeEvent`, `text_store`), `display/`, `preferences/` (предпочтения, локаль), `transfer/` (data transfer, drag), `haptics/`, `capability/`, `menu/`, `unsupported`, `notice` (host notices), `system_chrome`, `storage`, `target_platform`. Корневые реэкспорты имён, которыми пользуются фасад и `flui-sdk`, остаются: путь `flui::platform::WindowOptions` не меняется; меняются пути модулей, что до публикации бесплатно | оставить плоский корень (дерево модулей Stable-крейта — публичный API, и 32-строчные модули верхнего уровня его замусоривают) | опись §A1; `crates/flui-platform-api/src/lib.rs` (24 корневых `pub use`) |
 
 ## 5. Контракт `flui-platform`: судьба модулей
 
@@ -127,25 +128,28 @@ crates/flui-native/
     host_window.rs         HostWindow (запечатан), as_any
     owner/                 OwnerPlatform, SharedPlatform, PlatformProxy, сигнал и слот owner-потока,
                            граница паники, единая точка вызова пользовательского кода
-    mapping/               то, чем пользуются два и более семейств ОС: pointer_assembly, keys,
-                           haptic_degradation, display_source, window_state, input_availability,
-                           system_notice, os_version
+    translate/             перевод фактов ОС в словарь контракта, общий для двух и более семейств:
+                           pointer_assembly, keys, window_state (режим из флагов), system_notice,
+                           haptic_degradation, input_availability
+    version/               пороги версий ОС и гейты Since<F> (ADR-0244)
+    displays/              лента реестра дисплеев (display_source)
     storage/               FileStore, страничное хранилище Web
     platforms/
       mod.rs               один гейт на бэкенд
-      windows/{rules,shell}  rules: cfg(any(windows, test)), forbid(unsafe_code); shell: cfg(windows)
-      apple/{rules,shell}    общее для macOS и iOS
+      windows/{rules,ffi}    rules: cfg(any(windows, test)), forbid(unsafe_code); ffi: cfg(windows), unsafe
+      apple/{rules,ffi}      общее для macOS и iOS
       macos/ ios/ android/ web/ linux/   та же пара
       winit/               заменитель Linux до нативного бэкенда
       headless/            компилируется всегда, выбирается во время работы
 ```
 
 - Код одной ОС живёт в её каталоге; код одного семейства — в семействе; только код двух и более
-  семейств попадает в `owner/` или `mapping/`.
-- `rules` не называет `shell`, крейты привязок и соседние ОС; это проверяет компилятор на хосте CI
-  и `cargo xtask module-dag`, расширенный на `flui-native`: `owner` и `mapping` не зависят от
-  `platforms`, `platforms/<a>` не зависит от `platforms/<b>` (кроме `macos`/`ios` → `apple`),
-  `rules` не зависит от `shell`.
+  семейств попадает в `owner/`, `translate/`, `version/` или `displays/` — в тот, что называет его
+  содержимое; нового общего каталога «для всего» нет.
+- `rules` не называет `ffi`, крейты привязок и соседние ОС; это проверяет компилятор на хосте CI
+  и `cargo xtask module-dag`, расширенный на `flui-native`: `owner`, `translate`, `version` и
+  `displays` не зависят от `platforms`, `platforms/<a>` не зависит от `platforms/<b>` (кроме
+  `macos`/`ios` → `apple`), `rules` не зависит от `ffi`.
 - Тесты правил — модулями рядом с правилами (`pub(crate)`); `tests/` хранит conformance и записи
   нативных трасс. Определение готовности в AGENTS.md получает это исключение.
 - Пользовательский код (обработчики приложения и окна) вызывается через одну точку, которая

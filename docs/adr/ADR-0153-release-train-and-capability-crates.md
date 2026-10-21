@@ -197,18 +197,18 @@ below).
 Independence holds where the plugin-facing surface is stable for a major, and only there.
 Tauri's plugins carry their own versions (geolocation 2.5.0, haptics 2.4.2) against one `tauri`
 2.x because the plugin API has stayed additive through 2.0–2.12
-(`tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/Cargo.toml`, `plugins/haptics/Cargo.toml`;
-`tauri-apps/tauri@9318ab84b8 crates/tauri/Cargo.toml:6`, `links = "Tauri"`, forces one `tauri`).
+([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/Cargo.toml](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/Cargo.toml), [plugins/haptics/Cargo.toml](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/haptics/Cargo.toml);
+[tauri-apps/tauri@9318ab84b8 crates/tauri/Cargo.toml:6](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/Cargo.toml#L6), `links = "Tauri"`, forces one `tauri`).
 Flutter's platform interface is add-only: a new method has a default body, and
 `PlatformInterface.verify` rejects an implementation that uses `implements` where it should
-`extend` (`flutter/packages@1383427519
-packages/plugin_platform_interface/lib/plugin_platform_interface.dart:105`). The pre-1.0
+`extend` ([flutter/packages@1383427519
+packages/plugin_platform_interface/lib/plugin_platform_interface.dart:105](https://github.com/flutter/packages/blob/1383427519/packages/plugin_platform_interface/lib/plugin_platform_interface.dart#L105)). The pre-1.0
 ecosystems are in lockstep whatever their manifests say: `bevy_egui` publishes a table from each
-Bevy minor to its own minor (`mvlabat/bevy_egui@c6d5cdb9b1 README.md:141-154`),
-`dioxus-sdk-geolocation` 0.7.0 goes with Dioxus 0.7 (`DioxusLabs/sdk@551cd80082
-packages/geolocation/Cargo.toml:3`), and Crux's capability crates are minor-locked to the core
-(`redbadger/crux@1ef0f547e6 crux_time/Cargo.toml:3,16`). Capacitor's official plugins follow the
-core's major (`ionic-team/capacitor-plugins@87c0bb8045 share/package.json:3,65`). A second reason
+Bevy minor to its own minor ([mvlabat/bevy_egui@c6d5cdb9b1 README.md:141-154](https://github.com/mvlabat/bevy_egui/blob/c6d5cdb9b1/README.md#L141-L154)),
+`dioxus-sdk-geolocation` 0.7.0 goes with Dioxus 0.7 ([DioxusLabs/sdk@551cd80082
+packages/geolocation/Cargo.toml:3](https://github.com/DioxusLabs/sdk/blob/551cd80082/packages/geolocation/Cargo.toml#L3)), and Crux's capability crates are minor-locked to the core
+([redbadger/crux@1ef0f547e6 crux_time/Cargo.toml:3,16](https://github.com/redbadger/crux/blob/1ef0f547e6/crux_time/Cargo.toml#L3)). Capacitor's official plugins follow the
+core's major ([ionic-team/capacitor-plugins@87c0bb8045 share/package.json:3,65](https://github.com/ionic-team/capacitor-plugins/blob/87c0bb8045/share/package.json#L3)). A second reason
 to version a capability crate apart is native toolchain churn: a Tauri plugin release absorbed a
-new Xcode without a core release (`tauri-apps/plugins-workspace@11211c30e7
-plugins/geolocation/CHANGELOG.md`, 2.4.2).
+new Xcode without a core release ([tauri-apps/plugins-workspace@11211c30e7
+plugins/geolocation/CHANGELOG.md](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/CHANGELOG.md), 2.4.2).

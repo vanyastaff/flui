@@ -88,7 +88,7 @@
 
 **Контрибьютор FLUI:** по имени крейта видит, где контракт, где OS-код ядра, где необязательная
 возможность; по каталогу — где правила ОС (`rules`, тестируются на Linux CI), где её FFI
-(`shell`), где код семейства Apple и где код, нужный двум семействам; знает закрытый список того,
+(`ffi`), где код семейства Apple и где код, нужный двум семействам; знает закрытый список того,
 что ядро делает с ОС само, и маршрут добавления новой ОС из `docs/extending.md`.
 
 ## Требования
@@ -138,13 +138,13 @@
 
 | ID | Требование | Проверка |
 |---|---|---|
-| R4.1 | Дерево `flui-native/src`: `platforms/<os>/{rules,shell}` для windows, macos, ios, android, web, linux; `platforms/apple/{rules,shell}` для общего macOS и iOS; `platforms/headless` (всегда собирается, выбирается во время работы) и, до нативного Linux, `platforms/winit`; `owner/`; `mapping/`; `storage/`; `shared/` и `traits/` нет | `ls`; `cargo xtask module-dag`; ревью |
-| R4.2 | `rules` компилируется под `cfg(any(<os>, test))` с `#![forbid(unsafe_code)]`; `shell` — под `cfg(<os>)` с `#![expect(unsafe_code)]`; `rules` не называет `shell`, крейты привязок и соседние ОС | сборка и тесты на Linux CI; доказательство посаженным `unsafe` в `rules` (PR механизма); `cross-typecheck` вычисляет `const _` утверждения в `shell` |
-| R4.3 | Направления зависимостей модулей: `owner` и `mapping` не зависят от `platforms`; `platforms/<a>` не зависит от `platforms/<b>`, кроме `macos`/`ios` → `apple`; `rules` не зависит от `shell` | `cargo xtask module-dag` (расширен на `flui-native`) с `--self-test` |
-| R4.4 | Код одной ОС живёт в её каталоге, код одного семейства — в семействе, только код двух и более семейств — в `owner/` или `mapping/`; в `mapping/` нет модуля, который называет одно семейство | `module-dag`; fan-out сверка (`rg` по `mapping::<модуль>` из каждого поддерева `platforms/`) в PR перемещений |
+| R4.1 | Дерево `flui-native/src`: `platforms/<os>/{rules,ffi}` для windows, macos, ios, android, web, linux; `platforms/apple/{rules,ffi}` для общего macOS и iOS; `platforms/headless` (всегда собирается, выбирается во время работы) и, до нативного Linux, `platforms/winit`; `owner/`; `translate/`; `version/`; `displays/`; `storage/`; `shared/` и `traits/` нет | `ls`; `cargo xtask module-dag`; ревью |
+| R4.2 | `rules` компилируется под `cfg(any(<os>, test))` с `#![forbid(unsafe_code)]`; `ffi` — под `cfg(<os>)` с `#![expect(unsafe_code)]`; `rules` не называет `ffi`, крейты привязок и соседние ОС | сборка и тесты на Linux CI; доказательство посаженным `unsafe` в `rules` (PR механизма); `cross-typecheck` вычисляет `const _` утверждения в `ffi` |
+| R4.3 | Направления зависимостей модулей: `owner`, `translate`, `version` и `displays` не зависят от `platforms`; `platforms/<a>` не зависит от `platforms/<b>`, кроме `macos`/`ios` → `apple`; `rules` не зависит от `ffi` | `cargo xtask module-dag` (расширен на `flui-native`) с `--self-test` |
+| R4.4 | Код одной ОС живёт в её каталоге, код одного семейства — в семействе, только код двух и более семейств — в `owner/`, `translate/`, `version/` или `displays/`, в тот, что называет его содержимое; ни в одном из них нет модуля, который называет одно семейство | `module-dag`; fan-out сверка (`rg` по `translate::<модуль>`, `version::`, `displays::` и `owner::` из каждого поддерева `platforms/`) в PR перемещений |
 | R4.5 | Тесты правил — модулями рядом с правилами (`pub(crate)`); `tests/` хранит conformance и записи нативных трасс и не называет `flui_native::shared` и `flui_native::platforms`; в AGENTS.md «Definition of Done» это исключение записано | `rg` по `tests/`; текст AGENTS.md; тесты правил идут в Linux-сборке `cargo nextest run -p flui-native` |
 | R4.6 | Пользовательский код (обработчики приложения и окна, `Drop` заменённого обработчика) вызывается через одну точку, которая отпускает локи и заёмы до вызова; шести аренд и ручных take/restore нет; ни один бэкенд не вызывает пользовательский код под локом (Android `invoke_quit`, headless `Created`, замена обработчика на Android, iOS, headless) | на каждом бэкенде тест повторного входа (обработчик вызывает платформу изнутри вызова; `Drop` обработчика вызывает платформу), падающий без исправления; `rg` по именам аренд |
-| R4.7 | Общий код не размножен: режим окна из флагов, период обновления, `Location` клавиши, шаг колеса и видимость — по одному определению в `mapping/` | `rg` по сигнатурам (одно определение); табличные тесты |
+| R4.7 | Общий код не размножен: режим окна из флагов, период обновления, `Location` клавиши, шаг колеса и видимость — по одному определению в `translate/` | `rg` по сигнатурам (одно определение); табличные тесты |
 | R4.8 | Каждый файл бэкенда укладывается в предел `file-length` (3 000 производственных строк), allowlist пуст | `cargo xtask file-length` |
 | R4.9 | Нет заглушек `unimplemented!()` в бэкендах: `LinuxPlatform` и `LinuxWindowExt` удалены, живой слой Linux (дисплеи, logind и memory pressure, жизненный цикл, AT-SPI) сохранён | `rg 'unimplemented!'` по `platforms/`; тесты слоя Linux |
 | R4.10 | Ни один публичный путь ядра-хоста не называет OS-тип (`HWND`, `NSApplication`, `AndroidApp`, `web_sys::HtmlCanvasElement`, типы `accesskit`, `tokio`) и не открывает тестовые двойники | rustdoc-JSON с `--document-hidden-items` (расширение гейта API-замыкания); allowlist пуст |
