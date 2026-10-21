@@ -323,6 +323,22 @@ graph LR
   --all-targets -D warnings` — зелёные; nextest по контракту и девяти зависимым — 759 из 760 до
   исправления снимка, trybuild `flui-interaction` после него — зелёный; doctest'ы десяти крейтов — 321
   прошли. Повтор команд ничего не меняет.
+- [x] **LY24** — ветка `platform/dead-linux`. Удалены `LinuxPlatform` (заглушка с
+  `unimplemented!()` в конструкторе и большинстве методов) и `LinuxWindowExt` (`window_ext.rs`, без
+  реализаций) с экспортами из `lib.rs` и `platforms/mod.rs`. Живой слой `platforms/linux`
+  (`display`, `host_notices`, `lifecycle_model`, `x11_window_probe`, `accessibility`) остался; его
+  модуль описывает, что в нём и кто им пользуется. `is_wayland` стал `Protocol::current()` в
+  `linux/display/protocol.rs`, им пользуется `winit/display_linux.rs`; `is_x11` не звал никто.
+  Строка про `LinuxPlatform` ушла из незавершённого фрагмента changelog дисплеев Linux. Проверки на
+  Windows: `rg 'unimplemented!'` по `platforms/` — ноль; `xtask checks`, `workspace` — зелёные;
+  clippy `-p flui-native -p flui-app --all-targets -D warnings` — зелёный; nextest `-p flui-native`
+  — 213 прошли. Сборка под Linux на этой машине недоступна (C-сборка `psm` без кросс-компилятора);
+  её доказательство — Linux CI.
+
+## Отступление от порядка, решённое владельцем
+
+- 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
+  держит их файлы; первыми идут LY24 и LY23.
 
 ## Работа вне серии: LY8 и LY9
 
