@@ -197,15 +197,15 @@ pub use error::{BootstrapError, PlatformError, PlatformResult};
 pub use executor::BackgroundExecutor;
 // Each host's platform: the one implementation of `Platform` over its table.
 pub use hosts::HeadlessPlatform;
+#[cfg(target_os = "ios")]
+pub use hosts::IOSPlatform;
+#[cfg(target_os = "macos")]
+pub use hosts::MacOSPlatform;
 pub use platform::HostPlatform;
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub use platforms::AndroidPlatform;
 // Re-export platform implementations
-#[cfg(target_os = "ios")]
-pub use platforms::IOSPlatform;
-#[cfg(target_os = "macos")]
-pub use platforms::MacOSPlatform;
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,

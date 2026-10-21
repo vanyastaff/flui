@@ -152,7 +152,13 @@ impl StatusBar {
 }
 
 /// `PlatformSystemChrome` for one iOS window.
-pub(super) struct IOSSystemChrome(pub(super) Arc<StatusBar>);
+pub struct IOSSystemChrome(pub(super) Arc<StatusBar>);
+
+impl std::fmt::Debug for IOSSystemChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IOSSystemChrome").finish_non_exhaustive()
+    }
+}
 
 impl PlatformSystemChrome for IOSSystemChrome {
     fn set_overlay_style(&self, style: SystemUiOverlayStyle) {

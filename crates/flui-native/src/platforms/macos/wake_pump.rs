@@ -56,7 +56,7 @@ const FOLLOW_UP: Duration = Duration::from_millis(8);
 
 /// The AppKit landing place for the platform's wake deadline.
 ///
-/// Held as `Arc` by [`super::MacOSPlatform`] and as `Weak` by each
+/// Held as `Arc` by [`super::MacOSLoop`] and as `Weak` by each
 /// [`super::MacOSWindow`], which arms it from `request_redraw`.
 pub(crate) struct WakePump {
     /// Consulted through [`Self::consult`], which clones the hook out of the
@@ -106,7 +106,7 @@ fn micros_since_base(instant: web_time::Instant) -> u64 {
 impl WakePump {
     /// Build the pump. `wake` is invoked on the owner thread when a deadline
     /// has come due; it must be safe to call from there (see
-    /// [`super::MacOSPlatform`]'s construction site).
+    /// [`super::MacOSLoop`]'s construction site).
     pub(crate) fn new(
         handlers: Arc<Mutex<PlatformHandlers>>,
         wake: Box<dyn Fn() + Send + Sync>,

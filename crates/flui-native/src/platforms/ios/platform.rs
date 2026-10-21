@@ -1,7 +1,7 @@
-//! iOS platform implementation (UIKit).
+//! The iOS host's loop (UIKit) and its table's bindings to it.
 //!
 //! `UIApplicationMain` owns the main thread for the process's life, so this
-//! backend is built around it: [`IOSPlatform::run`] stashes the bootstrap
+//! backend is built around it: [`IOSLoop`]'s `run` stashes the bootstrap
 //! callback and enters `UIApplicationMain`, and the `AppDelegate` this module
 //! declares runs it from `application:didFinishLaunchingWithOptions:` — the
 //! process bootstrap. The scene delegate owns subsequent window attachments.
@@ -54,17 +54,24 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
+use crate::host::{self, Host};
+use crate::platform::HostPlatform;
 use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
 use crate::{
-    traits::OpenWindowError, traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
-    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::Platform,
+    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
+    traits::owner::OwnerHooks,
 };
+use flui_foundation::geometry::Size;
 use flui_platform::{
-    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    Clipboard, DisplaySnapshot, PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
 };
 
 use super::clipboard::IOSClipboard;
+use super::display::IosDisplays;
 use super::executor::IOSExecutor;
+use super::preferences::IOSPreferences;
 use super::window::{IOSWindow, LifecycleObservation};
 
 #[derive(Clone)]
@@ -91,7 +98,7 @@ struct PendingSceneInstallation {
 }
 
 struct SceneInstallationGuard<'a> {
-    platform: &'a IOSPlatform,
+    platform: &'a IOSLoop,
     origin: Option<SceneOrigin>,
 }
 impl Drop for SceneInstallationGuard<'_> {
@@ -123,12 +130,14 @@ struct SceneState {
     next_attachment: u64,
 }
 
-/// iOS platform implementation.
-pub struct IOSPlatform {
+/// The iOS host's loop: the state every position of its table reads.
+///
+/// [`IOSPlatform`](crate::IOSPlatform) is its platform.
+pub struct IOSLoop {
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
     scenes: NativeOwner<RefCell<SceneState>>,
-    preferences: NativeOwner<super::preferences::Preferences>,
+    preferences: NativeOwner<IOSPreferences>,
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
@@ -142,20 +151,14 @@ pub struct IOSPlatform {
     notices: Arc<SystemNotices>,
 }
 
-impl std::fmt::Debug for IOSPlatform {
+impl std::fmt::Debug for IOSLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IOSPlatform").finish_non_exhaustive()
+        f.debug_struct("IOSLoop").finish_non_exhaustive()
     }
 }
 
-impl IOSPlatform {
-    /// Create a new iOS platform.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlatformError::Init`] if called off the main thread, which is
-    /// where UIKit requires every window and view operation to run.
-    pub fn new() -> Result<Self, PlatformError> {
+impl IOSLoop {
+    pub(crate) fn new() -> Result<Self, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Init {
                 message: "IOSPlatform::new must run on the main thread (UIKit is \
@@ -204,10 +207,7 @@ impl IOSPlatform {
                 }),
                 marker,
             ),
-            preferences: NativeOwner::new(
-                super::preferences::Preferences::new(&signal, marker),
-                marker,
-            ),
+            preferences: NativeOwner::new(IOSPreferences::new(&signal, marker), marker),
             signal,
             identity,
             deadline: Mutex::new(None),
@@ -224,12 +224,7 @@ impl IOSPlatform {
             .get(MainThreadMarker::new().expect("BUG: UIKit scene owner is main-thread-only"))
     }
 
-    /// Register the session consumer before entering UIKit. Native connection
-    /// invokes it on the owner thread, outside storage borrows. An initial
-    /// installation failure retires that session rather than publishing it.
-    /// The accepted consumer is invoked and retired on main and may capture
-    /// owner-local state such as `Rc`; no `Send` bound is required.
-    pub fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
+    fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
         if MainThreadMarker::new().is_none() || !self.signal.accepting() {
             return Err(PlatformError::Init {
                 message: "scene registration requires a live main-thread owner".into(),
@@ -401,6 +396,7 @@ thread_local! {
     static DELEGATE_STATE: RefCell<DelegateState> = const { RefCell::new(DelegateState {
         on_ready: None,
         platform: None,
+        owner_platform: None,
     }) };
 }
 
@@ -408,19 +404,18 @@ struct DelegateState {
     /// Taken exactly once, by `didFinishLaunching`.
     on_ready: Option<PlatformReadyCallback>,
     /// Live for the whole session; read by every lifecycle callback.
-    platform: Option<Arc<IOSPlatform>>,
+    platform: Option<Arc<IOSLoop>>,
+    /// The platform over `platform` that the owner capability is built on,
+    /// handed in by `run`.
+    owner_platform: Option<Arc<dyn Platform>>,
 }
 
-impl Platform for IOSPlatform {
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.background_executor.clone()
-    }
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for IOSLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "IOSPlatform::run must be called on the main thread".to_string(),
         })?;
@@ -432,12 +427,12 @@ impl Platform for IOSPlatform {
         }
         tracing::info!("Starting iOS platform event loop (UIApplicationMain)");
 
-        let platform = Arc::new(*self);
-        platform.running.store(true, Ordering::Relaxed);
+        self.running.store(true, Ordering::Relaxed);
 
         DELEGATE_STATE.with(|state| {
             let mut state = state.borrow_mut();
-            state.platform = Some(Arc::clone(&platform));
+            state.platform = Some(self);
+            state.owner_platform = Some(platform);
             state.on_ready = Some(on_ready);
         });
 
@@ -460,63 +455,17 @@ impl Platform for IOSPlatform {
         let _ = self.signal.request_quit();
     }
 
-    fn open_window(
-        &self,
-        _options: WindowOptions,
-    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        MainThreadMarker::new().and_then(|_| self.active().map(|window| window.id()))
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
-            message: "UIKit preference sampling must run on the main thread".into(),
-        })?;
-        self.preferences.get(marker).sample(marker)
-    }
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "UIKit display sampling must run on the main thread".into(),
-        })?;
-        self.displays.snapshot(marker)
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.clipboard.clone()
-    }
-
-    fn data_transfer(&self) -> Arc<dyn flui_platform::data_transfer::DataTransferSource> {
-        Arc::new(flui_platform::data_transfer::NullDataTransferSource)
-    }
-
-    fn name(&self) -> &'static str {
-        "iOS (UIKit)"
-    }
-
-    fn on_session_end(
-        &self,
-        callback: Box<
-            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
-        >,
-    ) {
-        let previous = self.handlers.lock().session_end.replace(callback);
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>) {
-        self.notices.set_hook(callback);
-    }
-
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.handlers.lock().quit = Some(callback);
     }
 
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.handlers.lock().window_event = Some(callback);
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        // UIKit decides when the app exits; there is no exit policy to consult.
+        drop(hook);
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        // With no exit policy there is nothing to consult again.
     }
 
     /// iOS has no `ControlFlow::WaitUntil` — like Android, its loop actuates
@@ -528,6 +477,12 @@ impl Platform for IOSPlatform {
     ) {
         self.handlers.lock().wake_deadline = Some(Arc::from(hook));
         let _ = self.signal.wake();
+    }
+}
+
+impl host::Services for IOSLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.background_executor.clone()
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
@@ -543,18 +498,122 @@ impl Platform for IOSPlatform {
     }
 }
 
-/// Run the bootstrap stashed by [`IOSPlatform::run`], on the main thread,
+impl host::Window<IOSLoop> for IOSWindow {
+    fn open(_: &IOSLoop, _options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
+    }
+
+    fn active(owner: &IOSLoop) -> Option<WindowId> {
+        MainThreadMarker::new().and_then(|_| owner.active().map(|window| window.id()))
+    }
+
+    fn capabilities(_: &IOSLoop) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn frame_inset(_: &IOSLoop, _: f64) -> Size<f64> {
+        // A UIKit window has no non-client area.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &IOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        owner.handlers.lock().window_event = Some(callback);
+    }
+}
+
+impl host::Displays<IOSLoop> for IosDisplays {
+    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        owner.displays.snapshot(marker)
+    }
+}
+
+impl host::Input<IOSLoop> for IOSLoop {
+    fn keyboard_layout(_: &IOSLoop) -> String {
+        // The host does not read the active keyboard: the layout is unknown.
+        String::new()
+    }
+
+    fn on_keyboard_layout_change(_: &IOSLoop, callback: Box<dyn FnMut() + Send>) {
+        // No layout is read, so no change is ever reported.
+        drop(callback);
+    }
+}
+
+impl host::Clipboard<IOSLoop> for IOSClipboard {
+    fn clipboard(owner: &IOSLoop) -> Arc<dyn Clipboard> {
+        owner.clipboard.clone()
+    }
+}
+
+impl host::Preferences<IOSLoop> for IOSPreferences {
+    fn sample(owner: &IOSLoop) -> Result<SystemPreferences, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
+            message: "UIKit preference sampling must run on the main thread".into(),
+        })?;
+        owner.preferences.get(marker).sample(marker)
+    }
+}
+
+impl host::Lifecycle<IOSLoop> for IOSLoop {
+    fn on_session_end(
+        owner: &IOSLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        let previous = owner.handlers.lock().session_end.replace(callback);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+    }
+
+    fn on_host_notice(owner: &IOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        owner.notices.set_hook(callback);
+    }
+
+    fn release_session_end(_: &IOSLoop) {
+        // The answer to the session-end hook is not read (UIKit cannot be asked
+        // to wait), so no session end is held open.
+    }
+
+    fn on_reopen(_: &IOSLoop, callback: Box<dyn FnMut() + Send>) {
+        // UIKit has no reopen signal.
+        drop(callback);
+    }
+
+    fn activate(_: &IOSLoop, _: bool) {
+        // An iOS application cannot bring itself to the front.
+    }
+}
+
+/// What the iOS platform offers beyond [`Platform`].
+impl<H: Host<Loop = IOSLoop>> HostPlatform<H> {
+    /// Register the session consumer before entering UIKit. Native connection
+    /// invokes it on the owner thread, outside storage borrows. An initial
+    /// installation failure retires that session rather than publishing it.
+    /// The accepted consumer is invoked and retired on main and may capture
+    /// owner-local state such as `Rc`; no `Send` bound is required.
+    pub fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
+        self.owner().on_scene_event(callback)
+    }
+}
+
+/// Run the bootstrap stashed by [`IOSLoop`]'s `run`, on the main thread,
 /// from `didFinishLaunching`. Returns `true` if a bootstrap ran.
 fn run_pending_bootstrap() -> bool {
-    let (platform, on_ready) = DELEGATE_STATE.with(|state| {
+    let (platform, owner_platform, on_ready) = DELEGATE_STATE.with(|state| {
         let mut state = state.borrow_mut();
-        (state.platform.clone(), state.on_ready.take())
+        (
+            state.platform.clone(),
+            state.owner_platform.clone(),
+            state.on_ready.take(),
+        )
     });
-    let (Some(platform), Some(on_ready)) = (platform, on_ready) else {
+    let (Some(platform), Some(owner_platform), Some(on_ready)) =
+        (platform, owner_platform, on_ready)
+    else {
         return false;
     };
 
-    let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
     let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
         Arc::clone(&owner_platform),
         Arc::clone(&platform.signal),
@@ -642,15 +701,15 @@ define_class!(
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _application: &UIApplication) {
             crate::shared::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — ending the session, then firing the quit handler"));
-            Self::with_platform(IOSPlatform::announce_session_end);
-            Self::with_platform(IOSPlatform::finish_quit);
+            Self::with_platform(IOSLoop::announce_session_end);
+            Self::with_platform(IOSLoop::finish_quit);
         }
 
         /// UIKit asks the application to free memory it can rebuild: the
         /// system is close to terminating it.
         #[unsafe(method(applicationDidReceiveMemoryWarning:))]
         fn did_receive_memory_warning(&self, _application: &UIApplication) {
-            Self::with_platform(IOSPlatform::warn_of_memory_pressure);
+            Self::with_platform(IOSLoop::warn_of_memory_pressure);
         }
     }
 
@@ -663,7 +722,7 @@ define_class!(
 pub struct FluiDelegateIvars;
 
 impl FluiAppDelegate {
-    fn with_platform(body: impl FnOnce(&IOSPlatform)) {
+    fn with_platform(body: impl FnOnce(&IOSLoop)) {
         // Reached through the session slot, which `run` installs before
         // `UIApplicationMain` and which outlives the one-shot `on_ready`
         // take: the lifecycle callbacks keep arriving for the whole session.
@@ -674,7 +733,7 @@ impl FluiAppDelegate {
     }
 }
 
-impl IOSPlatform {
+impl IOSLoop {
     fn connect(&self, scene: &UIWindowScene) -> Option<SceneOrigin> {
         if !self.signal.accepting() {
             return None;

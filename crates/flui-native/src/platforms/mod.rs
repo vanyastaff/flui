@@ -53,10 +53,6 @@ pub use headless::{
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
     HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
-#[cfg(target_os = "ios")]
-pub use ios::IOSPlatform;
-#[cfg(target_os = "macos")]
-pub use macos::MacOSPlatform;
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
 #[cfg(all(

@@ -84,8 +84,12 @@ mod window_tiling;
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
+pub(crate) use display::MacosDisplays;
+pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
-pub use platform::MacOSPlatform;
+pub(crate) use platform::MacOSLoop;
+pub(crate) use preferences::PreferenceSource;
+pub(crate) use text_input::MacOSTextInput;
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
 pub use window_tiling::{

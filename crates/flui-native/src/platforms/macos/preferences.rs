@@ -31,9 +31,16 @@ use crate::{
     },
 };
 
-pub(in crate::platforms) struct PreferenceSource {
+/// The macOS host's preferences: what AppKit reports, sampled on the owner lane.
+pub struct PreferenceSource {
     signal: Weak<OwnerSignal>,
     admission: ReadAdmission,
+}
+
+impl std::fmt::Debug for PreferenceSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreferenceSource").finish_non_exhaustive()
+    }
 }
 
 /// The notifications that invalidate a [`PreferenceSource`]. Owned on the main

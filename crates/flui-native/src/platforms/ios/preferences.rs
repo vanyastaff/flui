@@ -32,13 +32,21 @@ use crate::{
 
 type ObserverToken = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
-pub(super) struct Preferences {
+/// The iOS host's preferences: the notifications that wake the owner when UIKit
+/// reports a change, and the sample read on the main thread.
+pub struct IOSPreferences {
     center: Retained<NSNotificationCenter>,
     observers: RefCell<Vec<ObserverToken>>,
     active: Arc<AtomicBool>,
 }
 
-impl Preferences {
+impl std::fmt::Debug for IOSPreferences {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IOSPreferences").finish_non_exhaustive()
+    }
+}
+
+impl IOSPreferences {
     pub(super) fn new(signal: &Arc<OwnerSignal>, _marker: MainThreadMarker) -> Self {
         let center = NSNotificationCenter::defaultCenter();
         let active = Arc::new(AtomicBool::new(true));
@@ -146,7 +154,7 @@ impl Preferences {
     }
 }
 
-impl Drop for Preferences {
+impl Drop for IOSPreferences {
     fn drop(&mut self) {
         self.close();
     }

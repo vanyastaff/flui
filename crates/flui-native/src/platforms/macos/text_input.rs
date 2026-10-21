@@ -637,7 +637,7 @@ pub(super) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
 /// through [`route_on_owner`] (the standing rule for every AppKit-messaging
 /// window site) even though the state they touch is main-thread-only by AppKit's
 /// delivery contract.
-pub(super) struct MacOSTextInput {
+pub struct MacOSTextInput {
     /// The window's `FLUIContentView`, which owns the composition state.
     ///
     /// Not retained: the capability borrows the window it was discovered from,
@@ -754,6 +754,8 @@ impl PlatformTextInput for MacOSTextInput {
         }
     }
 }
+
+impl crate::host::Text for MacOSTextInput {}
 
 impl std::fmt::Debug for MacOSTextInput {
     // Hand-written for the same reason `MacOSWindow`'s is: the NSView pointer
