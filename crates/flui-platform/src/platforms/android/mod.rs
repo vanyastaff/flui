@@ -1031,8 +1031,15 @@ impl Platform for AndroidPlatform {
 
     fn open_window(
         &self,
-        _options: WindowOptions,
+        options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+        if options.input_latency == flui_platform_api::InputLatency::Low {
+            // NativeActivity takes touch from the native input queue, which
+            // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
+            tracing::warn!(
+                "InputLatency::Low is not supported on Android yet; input stays batched"
+            );
+        }
         let cancelled = self
             .input_state
             .lock()
