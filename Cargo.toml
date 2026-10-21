@@ -399,7 +399,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
 # flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
 # floating-point types with std math; each crate adds its own integrations.
-glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
+glam = { version = "0.34", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
