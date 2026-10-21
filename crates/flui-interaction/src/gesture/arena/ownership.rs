@@ -119,9 +119,16 @@ impl MotionFrame {
     /// The frame of a target whose events the root-to-local `transform` maps,
     /// at the root-space point `at`.
     fn from_root_to_local(transform: &Matrix4, at: Offset<f64>) -> Self {
-        let (ox, oy) = transform.transform_point(at.dx, at.dy);
-        let (x_x, x_y) = transform.transform_point(at.dx + 1.0, at.dy);
-        let (y_x, y_y) = transform.transform_point(at.dx, at.dy + 1.0);
+        // The chords go through the plane unprojection that localizes every
+        // delivered position, so a perspective route is differentiated by
+        // the mapping the recognizer actually sees.
+        let (Some((ox, oy)), Some((x_x, x_y)), Some((y_x, y_y))) = (
+            transform.unproject_to_plane(at.dx, at.dy),
+            transform.unproject_to_plane(at.dx + 1.0, at.dy),
+            transform.unproject_to_plane(at.dx, at.dy + 1.0),
+        ) else {
+            return Self::IDENTITY;
+        };
         let linear = [x_x - ox, y_x - ox, x_y - oy, y_y - oy];
         if linear.iter().all(|value| value.is_finite()) {
             Self { linear }
