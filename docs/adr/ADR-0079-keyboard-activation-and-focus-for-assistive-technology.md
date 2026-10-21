@@ -13,7 +13,7 @@
 
 ## Context
 
-The first run of real OS input on a Windows window (`cargo xtask device windows-input`: a
+The first run of real OS input on a Windows window ([`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs): a
 `SendInput` click, then Tab and Enter, read back through UI Automation) found that no FLUI
 control could be used from the keyboard, and that a screen reader could not follow the focus.
 Four gaps stacked:
@@ -125,4 +125,4 @@ Handlers for `BackIntent` and `DismissIntent` (the navigator and modal routes) a
 - Each behavior has a test that fails without it: `activation_tests` in `shortcuts.rs`, the
   `InkWell` Enter tests, `generic_containers_are_lifted_and_hidden_subtrees_dropped` (the
   window root is published as a `Window`, which AccessKit's filter keeps), and the
-  live `cargo xtask device windows-input`.
+  live [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).

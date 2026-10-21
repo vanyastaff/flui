@@ -632,12 +632,7 @@ interactive, unobscured desktop and successful activation; `CANNOT_VERIFY`
 must remain an unavailable result, never be reported as a passed input check.
 Synthetic pen/touch execution does not certify a physical pen or touch sensor.
 
-`cargo xtask device windows-input` drives a real counter through OS mouse and
-keyboard input and UI Automation, with foreground and hit-target checks. It
-requires Windows with an interactive desktop and does not exercise pen/touch.
-`cargo xtask live-smoke` uses XTEST under Xvfb on Linux; its `--wayland` variant
-uses headless weston for teardown. Both variants are Linux-only; an explicit
-skip on another host is not execution evidence. Cross-typecheck and wasm-check
+An explicit skip on another host is not execution evidence. Cross-typecheck and wasm-check
 are compilation evidence only.
 
 Retain the exact revision, command, exit status, verdict and output outside the

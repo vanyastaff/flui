@@ -70,25 +70,6 @@ cargo test -p flui-engine --features testing <substring> -- --nocapture
 cargo nextest run -p flui-engine --features testing -E 'test(<substring>)'
 ```
 
-## See what it renders
-
-A green harness test is necessary but not sufficient — pixels can be wrong in
-ways the test never looks at. When a change affects appearance, capture it:
-
-```bash
-cargo run -p flui --example screenshot --features material,cupertino -- material 900 760 /tmp/out.png
-```
-
-Demos: `material`, `cupertino`, `vertical-slice` (alias `vslice`), `gallery`,
-`animated-box`, `colored-box`, `text`, `telemetry-overlay`, `sliver`,
-`sliver-mid`, `sliver-collapsed`. Width and height default to 900×760 and the
-output path to `<demo>.png`.
-
-This mounts the tree through `HeadlessBinding`, extracts the `LayerTree`, and
-rasterizes it offscreen on the same GPU path as an on-screen frame. It is the
-fastest way to check shadows, blends, and clip edges. To cover a tree it does
-not list yet, add a match arm in `examples/screenshot.rs`.
-
 ## Debugging a readback failure
 
 The GPU readback oracles compare rendered pixels against a CPU model of the

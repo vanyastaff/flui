@@ -2,7 +2,7 @@
 //! (`shared::android_ime`, ADR-0247): how `FluiView`'s mirror reports become
 //! ordered edits of the field's store, which edits a newer owner snapshot
 //! drops, and what a key, an editor action and a stylus press become. The JNI
-//! side runs on a device (`cargo xtask device android-input`).
+//! side runs on a device.
 
 use std::rc::Rc;
 

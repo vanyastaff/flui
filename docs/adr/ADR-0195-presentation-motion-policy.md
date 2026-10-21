@@ -125,5 +125,5 @@ opacity layer before and after a policy change. Material's
 `press_highlight_lasts_its_delay_under_reduced_motion` and
 `snack_bar_keeps_its_display_duration_under_reduced_motion` exercise preserved
 timers through the headless application's override, ordinary frames and input.
-`motion_lab_buttons_drive_independent_property_deadlines_and_reduce` drives the
+[`motion_lab_buttons_drive_independent_property_deadlines_and_reduce`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/motion_lab.rs) drives the
 interactive example's exact tree and observes its committed painted geometry.

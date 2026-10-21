@@ -71,7 +71,7 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
 /// from what an assistive technology sees, so a labelled text that resolved to
 /// it was invisible to VoiceOver — observed on 2026-09-22 through
-/// `cargo xtask device macos-a11y`, where the counter's two `Text`s were absent from the
+/// a macOS accessibility client, where the counter's two `Text`s were absent from the
 /// `AXUIElement` tree while its button was present.
 #[must_use]
 pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
@@ -762,7 +762,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
 /// Automation element is the root node. With a container root, the first Tab
 /// that moved the focus off the root took the root out of the tree a screen
 /// reader walks, and navigation from the window stopped at its first child —
-/// found through `cargo xtask device windows-input`. The AppKit adapter reads
+/// found through a UI Automation client. The AppKit adapter reads
 /// a `Window` root the same way (`accesskit_macos`, `NodeWrapper::title`).
 ///
 /// The root also carries the window's device pixel ratio as a scale

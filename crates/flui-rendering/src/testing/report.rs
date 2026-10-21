@@ -2,8 +2,7 @@
 //!
 //! [`FrameReport`] is what [`crate::testing::FrameRun::report`] /
 //! [`crate::testing::FrameRun::pump`] return. It is pure data plus a
-//! [`Display`](std::fmt::Display) impl so callers (e.g. the
-//! `render_inspector` example) can print it; the harness itself never
+//! [`Display`](std::fmt::Display) impl so callers can print it; the harness itself never
 //! writes to stdout.
 
 use std::fmt;

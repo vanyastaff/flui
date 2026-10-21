@@ -271,8 +271,8 @@ fn write_sample(out: &mut String, sample: &PointerSample) {
     }
 }
 
-/// The browser sessions `cargo xtask device web-input` drives in Chrome have
-/// no file system to write to (the probe page reports its recordings to the
+/// The browser sessions a driver runs in Chrome have
+/// no file system to write to (the page reports its recordings to the
 /// driver), so the driver writes them to `FLUI_NATIVE_RECORDING_FRESH` and
 /// this row holds each against its golden on the host; without that
 /// directory there is nothing fresh to hold.
@@ -280,7 +280,7 @@ fn write_sample(out: &mut String, sample: &PointerSample) {
 #[test]
 fn browser_sessions_hold_against_their_goldens() {
     let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_FRESH") else {
-        eprintln!("no fresh browser recordings: cargo xtask device web-input writes them");
+        eprintln!("no fresh browser recordings: a browser driver writes them");
         return;
     };
     let name = "web_bidi_mouse_pen_touch";
@@ -489,8 +489,8 @@ fn outline(text: &str) -> Vec<String> {
     lines
 }
 
-/// Captured on a Samsung Galaxy S21 (Android 15) by
-/// `cargo xtask device android-input`: `adb shell input` touches, a stylus
+/// Captured on a Samsung Galaxy S21 (Android 15) on a device run:
+/// `adb shell input` touches, a stylus
 /// and a mouse from the system's one virtual device; a `uinput` pen that
 /// keeps one identity from hover through contact and back; a `uinput`
 /// touchpad whose pinch is `PanZoom` about its cursor and whose two-finger
@@ -600,7 +600,7 @@ fn web_recordings_decode_to_their_host_input() {
 }
 
 /// Trusted input Chrome delivered to the web backend over WebDriver BiDi
-/// (`cargo xtask device web-input`): a click, a double click, a drag and a
+/// (over a browser driver): a click, a double click, a drag and a
 /// secondary click of the mouse, a pen stroke with pressure, angles and
 /// twist, and two touches moving and lifting one at a time.
 fn web_bidi_recording_decodes_to_its_host_input() {
@@ -862,8 +862,8 @@ fn native_recording_contracts() {
     crate::run_table("native_recording_contracts", &cases);
 }
 
-/// The recordings a device run pulled (`cargo xtask device android-input`
-/// sets `FLUI_DEVICE_RECORDING_DIR`) replay to what the device delivered and
+/// The recordings a device run pulled
+/// into `FLUI_DEVICE_RECORDING_DIR` replay to what the device delivered and
 /// hold against their goldens; without a pull there is nothing to hold.
 #[test]
 fn pulled_device_recordings_replay_to_what_they_delivered() {

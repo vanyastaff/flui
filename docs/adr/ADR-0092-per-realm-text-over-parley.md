@@ -1042,7 +1042,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `crates/flui-painting/src/text_layout/context.rs`, `a_host_copy_of_a_bundled_family_is_not_fed`
   and `a_missing_path_is_skipped_and_the_feed_completes`, which fail if the feed adds a host copy
   of a held family or rebinds a bound generic; `swash_matches_the_recorded_reference`; the demo
-  layer snapshots (`cargo xtask demo-snapshots`) and the perf counts, unchanged with the font
+  layer snapshots ([`cargo xtask demo-snapshots`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/tasks.rs)) and the perf counts, unchanged with the font
   pin removed.
 - Startup cost and retained memory (gate 6): `crates/flui-painting/benches/text_startup.rs`, run
   with `cargo bench -p flui-painting --bench text_startup`; its figures are in Context.

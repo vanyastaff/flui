@@ -12,7 +12,6 @@ The module is **off by default** so it never lands in release builds.
 |----------|----------------|
 | This crate's own tests / benches / examples | Automatic via the self `dev-dependency` with `features = ["testing"]` |
 | Downstream crates | `flui-rendering = { features = ["testing"] }` |
-| `render_inspector` example | `cargo run -p flui-rendering --example render_inspector --features testing` |
 
 ```bash
 cargo test -p flui-rendering
@@ -168,8 +167,7 @@ assert_eq!(
 ### `FrameReport`
 
 Snapshot returned by `pump` / `advance_*` / `simulate`: `painted`, `structure`
-(with depth), `picture_bounds`, `dirty`. Implements `Display` for examples and
-[`render_inspector`](../examples/render_inspector.rs).
+(with depth), `picture_bounds`, `dirty`. Implements `Display`.
 
 ## Examples
 
@@ -446,5 +444,4 @@ pins this.
 ## See also
 
 - Workspace overview: [`docs/testing.md`](../../../docs/testing.md)
-- Example binary: [`examples/render_inspector.rs`](../examples/render_inspector.rs)
 - Production animation tests: [`tests/animation_pipeline.rs`](../tests/animation_pipeline.rs)

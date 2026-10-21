@@ -37,10 +37,9 @@ target dispatches to the set; supply that target in the binding's hit-test route
 The binding owns exact-contact closure, sweeping and cancellation after the
 full route. Drive idle time by scheduling `binding.next_deadline()`, calling
 `binding.tick_deadlines()` and draining deferred arena resolutions in the active
-lane without waiting for a Move; flush pending motion on frames. The runnable
-[custom recognizer example](../examples/custom_recognizer.rs) uses public event
-constructors and a manual clock to demonstrate both terminal and idle delivery;
-it does not require the `testing` feature.
+lane without waiting for a Move; flush pending motion on frames. Public event
+constructors and a manual clock drive both terminal and idle delivery without
+the `testing` feature.
 
 Mounted recognizers acquire `flui_widgets::GestureArenaScope::of(ctx)` during
 lifecycle setup, retain their owners in state and attach through
@@ -391,9 +390,8 @@ Measure with `dispatch.local` and report root coordinates from `dispatch.global`
 Keep strong ownership in widget state, and attach through
 `Listener::recognizer` or `RecognizerSet`. Attachments hold weak identities.
 `recognizer_when` / `attach_when` filter new Down admission only; they cannot
-erase the Move/Up/Cancel tail of a contact admitted earlier. The
-[custom recognizer example](../examples/custom_recognizer.rs) demonstrates the
-open extension point without a parallel marker trait.
+erase the Move/Up/Cancel tail of a contact admitted earlier. A custom
+recognizer is the open extension point, with no parallel marker trait.
 
 A mounted custom recognizer goes through `flui_widgets::RawGestureDetector`.
 Its `GestureRecognizerFactory` builds the recognizer once in `create` from a

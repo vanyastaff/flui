@@ -14,7 +14,7 @@ mutate with `.update(...)`/`.set(...)`:
 count.update(|n| n + 1);
 ```
 
-*(from `examples/a11y_probe.rs` — copied verbatim.)* This replaces the older pattern of a raw
+This replaces the older pattern of a raw
 `Rc<Cell<T>>` field plus a hand-threaded rebuild handle with one field.
 
 ## Signals

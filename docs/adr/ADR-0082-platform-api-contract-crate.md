@@ -321,7 +321,7 @@ goes with ADR-0047's consolidation, not here.
   `Platform::clipboard()` stays on `Platform` in `flui-platform`. ADR-0039 §2's "registration
   writes a `Send` callback" is replaced by §4 above once step 2 lands.
 - Win32, AppKit, UIKit and Android are clippy-only in CI (AGENTS.md). Each backend change in §4
-  is unverified unless its PR shows a live run (`cargo xtask device windows-input` on Windows, the
+  is unverified unless its PR shows a live run ([`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) on Windows, the
   macOS smoke path on AppKit).
 - Downstream code that imported the deleted items has none in this workspace; the re-exports at
   old paths are removed in the minor after the first change, with a CHANGELOG note.
@@ -348,7 +348,7 @@ For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`
 - `cargo xtask cross-typecheck` for Android and iOS (the `android` and `ios` backends, the
   `android.rs`/`ios.rs` runners and `session_controller`), and a wasm32 check of the web
   backend and the `web.rs` runner;
-- a recorded live run on Windows (`cargo xtask device windows-input`), and a UIA check that a
+- a recorded live run on Windows ([`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)), and a UIA check that a
   real Win32 window still publishes its tree now that its `accessibility` override lives in
   `impl HostWindow`.
 

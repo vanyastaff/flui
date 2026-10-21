@@ -116,7 +116,7 @@ frozen. That belongs to a wall-clock timer service, not to pacing.
   timer.
 - The pacing path is traced: `flui.gpu`'s `surface_acquired` (with the acquire duration),
   `pre_present_notified`, and `flui.pace`'s `fallback_armed` / `fallback_abandoned` /
-  `segment_poll`. The live-smoke harness asserts one `pre_present_notified` per
+  `segment_poll`. The [live-smoke harness](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) asserts one `pre_present_notified` per
   `present_submitted`.
 
 ## Alternatives rejected

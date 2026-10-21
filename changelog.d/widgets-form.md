@@ -5,8 +5,7 @@
   traversal between fields, driven through `FormHandle`/`FormFieldHandle` (or `Form::of`)
   instead of a `GlobalKey<FormState>`. `flui_material::TextFormField` puts the field's error on
   its `InputDecoration`; `flui_widgets::RawTextFormField` is the theme-free sibling. The form is
-  a semantics node with the form role, and a text field's error line is a live region. New
-  example: `cargo run --example form --features material`.
+  a semantics node with the form role, and a text field's error line is a live region.
 - **Copy, cut and paste in text fields**: `CopySelectionTextIntent` and `PasteTextIntent`, bound
   to Ctrl/Cmd+C, X and V by `DefaultFocusTraversal` and answered by `EditableText` over the
   presentation's clipboard. An obscured field copies nothing; a paste into a single-line field

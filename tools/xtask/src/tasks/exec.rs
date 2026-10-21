@@ -327,16 +327,6 @@ fn target_dir_with(root: &Path, target_dir: Option<&OsStr>) -> anyhow::Result<Pa
     Ok(metadata.target_directory.into_std_path_buf())
 }
 
-/// A binary cargo built for the host: `target_dir` joined with `dirs` (the
-/// profile, then `examples` for an example) and `name` plus the host's
-/// executable suffix.
-pub(super) fn host_binary(target_dir: &Path, dirs: &[&str], name: &str) -> PathBuf {
-    let mut path = target_dir.to_path_buf();
-    path.extend(dirs);
-    path.push(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    path
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

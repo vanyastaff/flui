@@ -198,7 +198,7 @@ No widget can reach haptics today.
   set per backend over its pure mapping functions; haptics rows in `assert_backend_conforms`.
 - CI executes the headless backend, the queue, the builder and every backend's mapping table
   (pure functions). Actual vibration runs on a native host only: Windows pen, iOS Core Haptics
-  (including reset), Android, macOS and Web, each through `cargo xtask device <os>-input`, and a
+  (including reset), Android, macOS and Web, each through [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), and a
   PR touching them shows that run.
 - `FakeHaptics` records requests and the outcomes it returned.
 

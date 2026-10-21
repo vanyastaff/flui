@@ -2,7 +2,7 @@
 //! (`shared::android_keys`): the Menu key arrives named, and a key's
 //! character is looked up without Control and Meta, so Ctrl+X reaches a
 //! shortcut as `x` with Control held. The JNI
-//! side runs on a device (`cargo xtask device android-gallery`).
+//! side runs on a device.
 
 use flui_platform::shared::android_keys::{KEYCODE_MENU, character_meta_state, unnamed_key};
 use flui_platform_api::keyboard::NamedKey;

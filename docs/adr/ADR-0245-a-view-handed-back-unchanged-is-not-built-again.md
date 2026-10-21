@@ -20,7 +20,7 @@ exactly that). The first focus gain of an app, which a `Scrollable`'s drag
 start causes by focusing the scroll view, flips `has_focus` on every enclosing
 focus node, and each rebuilt the app's whole subtree. A root that made a
 `ScrollController` in `build` handed its `Scrollable` a different position in
-the middle of the drag, which cancelled the contact: `examples/sliver_demo.rs`
+the middle of the drag, which cancelled the contact: [`examples/sliver_demo.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/sliver_demo.rs)
 froze in the live smoke. The same cascade rebuilds everything under any
 `Navigator`, `Theme`, `MediaQuery` or animation wrapper that rebuilds for its
 own reasons.

@@ -57,8 +57,6 @@ cache lookup is private and no public aggregated registry statistics API exists.
 ```bash
 cargo test -p flui-assets --all-features
 cargo doc -p flui-assets --all-features --open
-cargo run -p flui-assets --example assets_basic_usage
-cargo run -p flui-assets --features network --example network_loader
 ```
 
 ## Project information

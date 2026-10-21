@@ -498,7 +498,7 @@ mod tests {
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
             a.test_args,
-            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
+            "-p flui -p flui-material -p flui-sdk --lib --bins --tests"
         );
     }
 
@@ -522,7 +522,7 @@ mod tests {
         // facade's dependents that have features of their own
         assert_eq!(
             args(&["packages/flui-material/Cargo.toml"]).hack_args,
-            "-p flui -p flui-interaction-gallery -p flui-material"
+            "-p flui -p flui-material"
         );
     }
 
@@ -570,7 +570,7 @@ mod tests {
         // compile that edge, which the facade's default build never does
         assert_eq!(
             args(&["packages/flui-material/src/lib.rs"]).hack_args,
-            "-p flui -p flui-interaction-gallery"
+            "-p flui"
         );
     }
 
@@ -586,11 +586,8 @@ mod tests {
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(
             a.doctest_args,
-            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
+            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
         );
-        // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
-        assert!(a.packages.contains("flui-web-counter"));
-        assert!(!a.doctest_args.contains("flui-web-counter"));
         // an included README is doctest source
         assert!(
             args(&["crates/flui-animation/README.md"])
@@ -602,10 +599,7 @@ mod tests {
 
     fn rustdoc_covers_the_scope_with_its_testing_features() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
-        assert!(
-            a.doc_args
-                .starts_with("-p flui -p flui-interaction-gallery -p flui-material")
-        );
+        assert!(a.doc_args.starts_with("-p flui -p flui-material"));
         assert!(a.doc_args.contains("--features flui/testing"));
         // a testing feature of a package outside the scope would be rejected by cargo
         assert!(!a.doc_args.contains("flui-rendering/testing"));

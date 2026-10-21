@@ -222,7 +222,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   the owner window's next turn, since the host's quiescent point is still inside the window's
   callback, and paces frames from a thread, since `DoDragDrop`'s loop dispatches no timer or paint
   while the pointer rests. AppKit, UIKit, Android, Wayland and Web sessions run only on native
-  hosts or the browser through `cargo xtask device`; CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
+  hosts or the browser through [`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs); CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
   (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
   session that starts at lift and never escalates, and, on Web and iOS,
   `start_decision_includes_sibling_presentation_with_identity_only_offer`.

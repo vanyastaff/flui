@@ -450,7 +450,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         doctor.check_bin(
             Scope::Info,
             "xvfb-run",
-            "apt-get install xvfb   (flui-platform tests, live-smoke)",
+            "apt-get install xvfb   (flui-platform tests)",
             &["-h"],
         );
     }

@@ -2556,9 +2556,8 @@ fn build_key_handler(
                 // temporary) and the outer `controller` `Ref` are both
                 // live at this point, and the callback is arbitrary user
                 // code that may itself call back into this same
-                // `EditableText` (`examples/todo.rs`'s `add_item` calls
-                // `TextEditingController::clear()` from inside its
-                // `on_submitted` callback). Calling it while either guard
+                // `EditableText` (an `on_submitted` callback that calls
+                // `TextEditingController::clear()`). Calling it while either guard
                 // is still held is the same drop-under-guard hazard as for a
                 // `Mutex`/`RwLock`, applied here to a `RefCell`.
                 let Some(callback) = on_submitted.borrow().clone() else {

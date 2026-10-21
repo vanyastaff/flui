@@ -4,9 +4,6 @@
   `DevAgentHook` as the desktop and iOS runners do: attached for the loop and handed the window
   once it is installed. An Android app builds its `AgentEndpoint` itself, since no launch
   environment reaches its process.
-- **`cargo xtask device android-gallery`**: the interaction gallery on an attached Android device,
-  every screen driven by `uinput` touches, stylus, mouse and hardware key events and the device's
-  soft keyboard, each outcome read through the development agent and the screen's pixels.
 
 ### Fixed
 

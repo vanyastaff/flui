@@ -8,10 +8,6 @@
   phase (`ContactRegistry::scroll`), so Android wheel and touchpad scrolling replay through the
   shared decoders on any host
   ([ADR-0215](/docs/adr/ADR-0215-input-recording-and-backend-conformance.md) §4).
-- **`xtask`**: `cargo xtask device android-input` installs a probe on an attached Android
-  device, injects touch, stylus, mouse, a `uinput` pen and a `uinput` touchpad, holds the
-  recordings of what the backend delivered against checked-in goldens, and checks the system
-  gesture exclusion, the haptics and long-press settings and haptics on the device.
 
 ### Changed
 

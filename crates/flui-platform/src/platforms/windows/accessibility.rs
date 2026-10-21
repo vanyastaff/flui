@@ -19,10 +19,9 @@
 //!
 //! # What executes it
 //!
-//! `cargo xtask device windows-a11y` runs the generated counter on a real
-//! window and drives it as a UIA client: it reads this adapter's tree,
-//! invokes the button and reads the new count back. That is a manual check
-//! on a Windows desktop, not a CI job; CI only type-checks this module. The
+//! A UIA client driving the generated counter on a real window reads this
+//! adapter's tree, invokes the button and reads the new count back. That is a
+//! manual check on a Windows desktop, not a CI job; CI only type-checks this module. The
 //! retention and dispatch rules it relies on are executed on every host via
 //! [`BridgeShared`]'s own tests.
 

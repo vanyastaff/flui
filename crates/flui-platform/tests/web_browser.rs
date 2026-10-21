@@ -1,11 +1,11 @@
-//! The web backend's producer in a real browser (`cargo xtask device
-//! web-input` runs it in headless Chrome): DOM events dispatched at the real
+//! The web backend's producer in a real browser (headless Chrome):
+//! DOM events dispatched at the real
 //! window's canvas, observed through the public input callback and the
 //! event's own `defaultPrevented` and propagation.
 //!
 //! The events are constructed (untrusted), so they exercise the backend's
 //! listeners and translation, not the browser's own input routing or its
-//! default actions; `web-input`'s WebDriver BiDi session drives trusted input.
+//! default actions.
 #![cfg(target_arch = "wasm32")]
 
 use std::cell::{Cell, RefCell};
@@ -122,8 +122,8 @@ export function beginDrag(strings, files, effectAllowed) {
     for (const [type, data] of JSON.parse(strings)) drag.setData(type, data);
     for (const [name, type, content] of JSON.parse(files)) drag.items.add(new File([content], name, { type }));
     // A constructed DataTransfer ignores both effects outside a real drag;
-    // they are supplied as plain properties (the trusted drag of
-    // `device web-input` checks the browser's own).
+    // they are supplied as plain properties (a trusted drag
+    // checks the browser's own).
     Object.defineProperty(drag, 'effectAllowed', { value: effectAllowed, writable: true });
     Object.defineProperty(drag, 'dropEffect', { value: 'none', writable: true });
 }

@@ -102,5 +102,5 @@ the terminal boundary); `text_runs_follow_edits_incrementally` (including an ins
 existing runs and an overlong grapheme cluster) and
 `obscured_fields_publish_only_the_mask` through the owner's public API;
 `published_word_starts_match_editor_word_stops`; `assistive_edits_use_the_keyboard_path` in the
-widget suite; a `TextPattern` fixture in `cargo xtask device windows-a11y` reading a field by
+widget suite; a `TextPattern` fixture in [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) reading a field by
 character and word and moving the selection; `announcements_reach_the_live_region_value`.

@@ -1,6 +1,6 @@
 //! Public Linux owner acceptance. Run inside dbus-run-session and xvfb-run.
 //!
-//! `cargo run -p flui-platform --features winit-backend --example linux_preferences_probe`.
+//! `cargo run -p flui-platform --features winit-backend --test linux_preferences` runs it.
 
 pub mod linux {
     use flui_platform::{Platform, PlatformProxy, WinitPlatform};

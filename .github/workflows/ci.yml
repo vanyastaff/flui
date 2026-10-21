@@ -55,7 +55,7 @@ env:
   # (see the `test` job). Cache sharing: rust-cache hashes CARGO_* env
   # into its key, and the artifacts themselves carry the profile, so
   # every job's cache key and contents depend on it. Set per job it had
-  # drifted (clippy had none, live-smoke half of it); set once here, it
+  # drifted (clippy had none); set once here, it
   # cannot, and a change to it is visibly a change to every key at once.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -547,9 +547,8 @@ jobs:
       - name: cargo nextest run (flui-widgets images only, Image tests)
         run: cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image
 
-      # The facade's non-default catalogs (`tests/cupertino_demo.rs`, the
-      # smoke test's localizations assertions) need no run here: the `test`
-      # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
+      # The facade's non-default catalogs and localizations need no run here:
+      # the `test` job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.
@@ -561,77 +560,6 @@ jobs:
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # live-smoke — the real-window smoke suites, split out of `test` for the
-  # same reason: they need only the demo example and the harness binary, not
-  # the workspace's test targets, so they were serialising ~100 s behind a
-  # build they do not use. Both variants stay in ONE job because the Wayland
-  # run reuses the binaries the X11 run builds.
-  # ─────────────────────────────────────────────────────────────────────────
-  live-smoke:
-    name: live-smoke
-    needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-
-      # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
-      # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
-      # the demo dies before a window exists — the first run of this split
-      # job proved it). Same pair the `test` job installs for flui-platform.
-      - name: Ensure Xvfb + xkbcommon are available
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
-
-      # The hosted runner has no GPU: mesa-vulkan-drivers provides the
-      # lavapipe software Vulkan adapter the demo's wgpu init needs (without
-      # it the app panics before a window ever exists). Weston is installed
-      # explicitly so the Wayland harness's weston-absent SKIP path can never
-      # silently fire here.
-      - name: Install lavapipe and weston
-        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers weston
-
-      # A REAL windowed demo binary driven by REAL X11 input (XTEST fake
-      # pointer), asserting on captured pixels and the process's exit code:
-      # the only place the band ABOVE synthetic event dispatch is executed at
-      # all. The winit translation layer, the event-loop wake chain, and
-      # window-close teardown each shipped broken while every synthetic
-      # gesture test stayed green. `cargo xtask live-smoke` builds the demo
-      # and the harness and runs it under Xvfb (tools/xtask/src/tasks.rs,
-      # `live_smoke_plan`).
-      - name: live-smoke (real window, real input, real teardown)
-        run: cargo xtask live-smoke
-
-      # Wayland variant of the live smoke: the ONLY executing coverage of
-      # the Wayland close-path teardown ordering, which segfaulted post-quit
-      # (a wgpu swapchain destroyed after its wl_surface — issue #713) while
-      # the X11 close check above stayed green, because Xlib tolerates the
-      # same out-of-order teardown that is a use-after-free on Wayland's
-      # client-side proxies. Runs the demo under a headless weston
-      # compositor; the app closes itself via the platform's harness
-      # self-close hook (FLUI_SELF_CLOSE_AFTER_MS): five cycles on the
-      # compositor route (the exact CloseRequested arm a compositor close
-      # takes) and two on the programmatic PlatformWindow::close route
-      # (FLUI_SELF_CLOSE_ROUTE=programmatic, issue #919); each must exit 0
-      # AND log the route it took. Reuses the demo and harness binaries the
-      # X11 step built (the same build commands, already fresh).
-      - name: live-smoke-wayland (teardown ordering under headless weston)
-        run: cargo xtask live-smoke --wayland
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
@@ -1030,7 +958,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1074,7 +1002,6 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features
-            live-smoke
           FULL_JOBS: >-
             feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}
