@@ -5,18 +5,7 @@ use std::any::TypeId;
 use flui_foundation::panic::payload_text;
 
 use super::*;
-use crate::view::{
-    FrameworkError, clear_error_view_builder, isolate_error_view_builder_test,
-    set_error_view_builder,
-};
-
-struct ResetErrorViewBuilder;
-
-impl Drop for ResetErrorViewBuilder {
-    fn drop(&mut self) {
-        clear_error_view_builder();
-    }
-}
+use crate::view::FrameworkError;
 
 fn recovery_factory_panics(_error: &FrameworkError) -> Box<dyn View> {
     panic!("activation recovery factory panic");
@@ -95,15 +84,9 @@ fn assert_failed_activation_diagnostic(
 
 #[test]
 fn activation_factory_panic_drops_staged_record_and_preserves_prior_record() {
-    const TEST_NAME: &str = "tree::element_tree::tests::activation_recovery_tests::activation_factory_panic_drops_staged_record_and_preserves_prior_record";
-    if isolate_error_view_builder_test(TEST_NAME) {
-        return;
-    }
-    clear_error_view_builder();
-    let _reset = ResetErrorViewBuilder;
     let (mut tree, mut owner, keyed, destination, prior) = active_retake_fixture();
     seed_prior_record(&mut owner, prior);
-    set_error_view_builder(recovery_factory_panics);
+    owner.set_error_view_builder(Some(recovery_factory_panics));
 
     let (payload, captured_log) = flui_testing::log_capture::capture(|| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

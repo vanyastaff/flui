@@ -165,7 +165,6 @@ fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
 }
 
 fn run_child(kind: &str) {
-    flui_view::clear_error_view_builder();
     let aggregate = kind.contains("payload") || kind == "factory";
     let telemetry = kind.contains("report") || kind == "staged";
     let captured = kind == "captured_report";
@@ -173,14 +172,16 @@ fn run_child(kind: &str) {
     let report_drops = Arc::new(AtomicUsize::new(0));
     let capture_drops = Arc::new(AtomicUsize::new(0));
     let report_calls = Arc::new(AtomicUsize::new(0));
-    if captured {
+    let factory: Option<flui_view::ErrorViewBuilder> = if captured {
         CAPTURE_DROPS
             .set(Arc::clone(&capture_drops))
             .expect("fresh child factory slot");
-        flui_view::set_error_view_builder(captured_error_leaf);
+        Some(captured_error_leaf)
     } else if kind == "factory" {
-        flui_view::set_error_view_builder(failing_factory);
-    }
+        Some(failing_factory)
+    } else {
+        None
+    };
     let fail = Rc::new(Cell::new(true));
     let calls = Rc::new(Cell::new(0));
     let host = Host {
@@ -195,6 +196,7 @@ fn run_child(kind: &str) {
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
+    owner.set_error_view_builder(factory);
     let parent = tree.mount_root_with_pipeline_owner(
         &super::Row {
             children: vec![host.clone().boxed()],
@@ -216,8 +218,6 @@ fn run_child(kind: &str) {
             owner.build_scope(&mut tree);
         }))
     });
-    // Clear before any failing assertion can leave process-global factory obligations.
-    flui_view::clear_error_view_builder();
     let root = tree
         .get(parent)
         .expect("render parent remains live")

@@ -438,6 +438,13 @@ pub struct BuildOwner {
     /// returning or resuming the unwind. `pub(crate)` for the split-borrow.
     pub(crate) lifecycle_panic_handoff: Cell<LifecyclePanicHandoff>,
 
+    /// The factory that renders a recovered failure for this presentation, or
+    /// `None` for the default [`ErrorView`](crate::ErrorView). Configured by the
+    /// UI runtime that assembles the owner; copied into every
+    /// [`ElementOwner`](super::ElementOwner) so the recovery windows read it
+    /// without reaching a process global.
+    pub(crate) error_view_builder: Option<crate::view::ErrorViewBuilder>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -748,6 +755,7 @@ impl BuildOwner {
             tree_observer: OwnerTreeObserverSlot(None),
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
+            error_view_builder: None,
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -1324,6 +1332,7 @@ impl BuildOwner {
             build_recovered: None,
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+            error_view_builder: self.error_view_builder,
         }
     }
 
@@ -1589,7 +1598,7 @@ impl BuildOwner {
             "running a stateful lifecycle hook during rebuild",
         );
         let recovery_view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::view::recovery_view_for(&error)
+            crate::view::recovery_view_for(&error, self.error_view_builder)
         })) {
             Ok(view) => view,
             Err(factory_payload) => {
@@ -1865,6 +1874,7 @@ impl BuildOwner {
                     build_recovered: Some(&build_recovered),
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+                    error_view_builder: self.error_view_builder,
                 };
                 if needs_did_change {
                     if replacement_location.is_some() {
@@ -2090,6 +2100,7 @@ impl BuildOwner {
                     build_recovered: None,
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+                    error_view_builder: self.error_view_builder,
                 };
                 crate::tree::id_reconcile::reconcile_children_by_id(
                     tree,
@@ -2520,6 +2531,7 @@ impl BuildOwner {
                 build_recovered: None,
                 reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+                error_view_builder: self.error_view_builder,
             };
 
             let did_work = manager_arc.lock().service(
@@ -2734,6 +2746,7 @@ impl BuildOwner {
             build_recovered: None,
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
+            error_view_builder: self.error_view_builder,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

@@ -192,6 +192,12 @@ pub struct AppConfig {
     /// The serialiser for these records lives in test and tool builds only.
     pub input_tap: Option<InputTapFactory>,
 
+    /// The factory that renders a view whose build, mount or update failed,
+    /// for every window of this app. `None` (the default): the framework's
+    /// `ErrorView`. Held per UI runtime, never in a process global, so two apps
+    /// in one process (or one test process) keep their own.
+    pub error_view_builder: Option<flui_view::ErrorViewBuilder>,
+
     /// Controls whether typed panic reports retain string payloads, and whether
     /// FLUI-owned pipeline tracing materializes error text. Debug builds default
     /// to [`FrameFailureDetail::Verbatim`];
@@ -292,6 +298,7 @@ impl Default for AppConfig {
             executors: None,
             frame_failure_handler: None,
             input_tap: None,
+            error_view_builder: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
             close_request_handler: None,
@@ -310,6 +317,12 @@ impl AppConfig {
     pub fn with_motion_override(mut self, preference: MotionOverride) -> Self {
         self.motion_override = preference;
         self
+    }
+
+    /// Give a runtime just built the app's error view factory, before its
+    /// first root is mounted.
+    pub(crate) fn install_error_view_builder(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
+        runtime.set_error_view_builder(self.error_view_builder);
     }
 
     /// Install a tap from [`Self::input_tap`] on a runtime just built, before
@@ -472,6 +485,14 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_input_tap(mut self, factory: InputTapFactory) -> Self {
         self.input_tap = Some(factory);
+        self
+    }
+
+    /// Render a view whose build, mount or update failed with `builder`. See
+    /// [`Self::error_view_builder`]'s doc.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_error_view_builder(mut self, builder: flui_view::ErrorViewBuilder) -> Self {
+        self.error_view_builder = Some(builder);
         self
     }
 

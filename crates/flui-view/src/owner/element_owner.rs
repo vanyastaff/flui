@@ -209,6 +209,10 @@ pub struct ElementOwner<'a> {
     /// the handoff and therefore neither record nor leave state behind.
     pub(crate) lifecycle_panic_handoff: &'a Cell<LifecyclePanicHandoff>,
 
+    /// `BuildOwner::error_view_builder`: the factory the recovery windows
+    /// substitute failed children with, `None` for the default `ErrorView`.
+    pub(crate) error_view_builder: Option<crate::view::ErrorViewBuilder>,
+
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
     /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a

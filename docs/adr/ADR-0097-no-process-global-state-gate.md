@@ -8,10 +8,12 @@
   `TIME_DILATION` is removed: ADR-0176 places playback on presentation clocks.
   The decoded-image `CACHE` is removed: each `flui_assets::AssetRegistry` keeps the decoded
   images of the loads it bridges, which the application owns and registers for memory
-  reclaim. Removal of `ERROR_VIEW_BUILDER` remains Proposed.
+  reclaim. `ERROR_VIEW_BUILDER` is removed: the error view factory is UI runtime configuration
+  (`AppConfig::with_error_view_builder`), applied to every presentation's `BuildOwner`.
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
 - **Amended:** 2026-10-19 — the decoded-image cache moved into the asset registry.
+- **Amended:** 2026-10-21 — the error view builder moved into UI runtime configuration.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),

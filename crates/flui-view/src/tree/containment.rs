@@ -136,7 +136,7 @@ impl ElementTree {
                 // record too (`RecoveredPanic::with_error`), never
                 // re-derived from the payload a second time.
                 let error = crate::view::FrameworkError::from_panic(payload.as_ref(), context);
-                let substitute_view = recovery_view_for(&error);
+                let substitute_view = recovery_view_for(&error, owner.error_view_builder);
                 // Deliberately unbounded: if the registered error-view
                 // factory panics on mount too, there is nothing left to
                 // substitute, and the crash names a broken factory instead
@@ -245,7 +245,7 @@ impl ElementTree {
         self.remove_subtree(id, owner, SubtreeRemoval::Finalize);
 
         let error = crate::view::FrameworkError::from_panic(payload.as_ref(), context);
-        let substitute_view = recovery_view_for(&error);
+        let substitute_view = recovery_view_for(&error, owner.error_view_builder);
         let substitute_id = self
             .try_insert_with_provisional_order(
                 &substitute_view,

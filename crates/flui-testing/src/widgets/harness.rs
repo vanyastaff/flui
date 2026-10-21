@@ -132,6 +132,19 @@ impl Harness {
         self.host.ui_runtime().enter(|_| callback())
     }
 
+    /// Run `f` over the tree's `BuildOwner`, for a test that sets a per-owner
+    /// knob (the error-view factory) the public widget surface does not expose.
+    pub fn with_build_owner_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
+    ) -> R {
+        self.host
+            .ui_runtime()
+            .ui_runtime()
+            .widgets()
+            .with_build_owner_mut(f)
+    }
+
     /// Turn semantics on, as a platform adapter does when assistive
     /// technology attaches; the next frame assembles the tree.
     pub fn enable_semantics(&mut self) {

@@ -151,6 +151,11 @@ pub struct UiRuntime {
     id: UiRuntimeId,
     preferences: RefCell<Option<crate::owner::SystemPreferencesSnapshot>>,
     motion_override: Cell<flui_animation::MotionOverride>,
+    /// The factory that renders a recovered failure in every presentation of
+    /// this UI runtime, `None` for the default `ErrorView`. Applied to a
+    /// presentation's `BuildOwner` when it is installed, and to every
+    /// installed one when it changes.
+    error_view_builder: Cell<Option<flui_view::ErrorViewBuilder>>,
     geometry_turn: std::rc::Rc<RefCell<Option<Vec<flui_foundation::PresentationId>>>>,
     /// The UI runtime's owner-local frame state — its post-frame queue and its
     /// async tasks — of which the UI runtime is the only strong owner (ADR-0136

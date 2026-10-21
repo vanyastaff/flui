@@ -31,33 +31,7 @@ use std::{
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, FrameworkError, IntoView, Lifecycle,
     LifecycleContext, StatefulView, StatelessView, View, ViewExt, ViewState,
-    clear_error_view_builder, set_error_view_builder,
 };
-
-/// Serializes the tests in this file.
-///
-/// `set_error_view_builder` / `clear_error_view_builder` mutate a
-/// process-global `RwLock<Option<ErrorViewBuilder>>` in `flui-view`, so this
-/// file's tests serialize among themselves behind one mutex — and the whole
-/// file deliberately stays its OWN [[test]] binary (excluded from view_it):
-/// process isolation is what keeps other tests' induced panics from ever
-/// seeing an installed counting builder. Poison-tolerant via into_inner.
-static GLOBAL_BUILDER_GUARD: Mutex<()> = Mutex::new(());
-
-fn acquire_builder_guard() -> std::sync::MutexGuard<'static, ()> {
-    match GLOBAL_BUILDER_GUARD.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-struct ErrorViewBuilderReset;
-
-impl Drop for ErrorViewBuilderReset {
-    fn drop(&mut self) {
-        clear_error_view_builder();
-    }
-}
 
 // ============================================================================
 // Test fixtures
@@ -153,8 +127,16 @@ impl View for InitPanicView {
 // ----------------------------------------------------------------------------
 
 fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+    mount_and_build_with(view, None)
+}
+
+fn mount_and_build_with(
+    view: &dyn View,
+    error_view_builder: Option<flui_view::ErrorViewBuilder>,
+) -> (ElementTree, BuildOwner, flui_view::ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
+    owner.set_error_view_builder(error_view_builder);
     let root_id = tree.mount_root(view, &mut owner.element_owner_mut());
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
@@ -181,7 +163,6 @@ fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view:
 // ============================================================================
 
 fn stateless_build_panic_substitutes_registered_error_view() {
-    let _guard = acquire_builder_guard();
     // A custom builder records that it ran and returns a plain ErrorView
     // with a "custom: " prefix so we can identify which builder produced
     // the rendered child even under parallel cargo-test runs.
@@ -191,14 +172,13 @@ fn stateless_build_panic_substitutes_registered_error_view() {
         BUILDER_HITS.fetch_add(1, Ordering::SeqCst);
         Box::new(ErrorView::new(format!("custom: {}", error.message)))
     }
-    set_error_view_builder(builder);
 
     let view = PanickingView {
         message: "boom in stateless build",
     };
     // The frame must NOT unwind here — build_scope catches the panic and the
     // reconciler materializes the substituted ErrorView as a child element.
-    let (tree, _owner, root_id) = mount_and_build(&view);
+    let (tree, _owner, root_id) = mount_and_build_with(&view, Some(builder));
 
     assert_eq!(
         BUILDER_HITS.load(Ordering::SeqCst),
@@ -215,8 +195,6 @@ fn stateless_build_panic_substitutes_registered_error_view() {
         Lifecycle::Active,
         "the element itself stays Active after recovering"
     );
-
-    clear_error_view_builder();
 }
 
 // ============================================================================
@@ -228,9 +206,6 @@ fn stateless_build_panic_substitutes_registered_error_view() {
 // ============================================================================
 
 fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-    let _reset = ErrorViewBuilderReset;
     let failed_ids = std::sync::Arc::new(Mutex::new(Vec::new()));
 
     let mut tree = ElementTree::new();
@@ -247,7 +222,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     owner.build_scope(&mut tree);
     let prior_failed = failed_ids.lock().unwrap()[0];
 
-    set_error_view_builder(|_| panic!("configured recovery factory panic"));
+    owner.set_error_view_builder(Some(|_| panic!("configured recovery factory panic")));
     tree.update(
         root,
         &WrapperView {
@@ -325,9 +300,6 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
 // ============================================================================
 
 fn nested_child_build_panic_replaces_only_that_subtree() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-
     // Parent is a well-behaved wrapper; its child is a PanickingView.
     // E3: the parent's build returns its child view, and the slab
     // id-reconciler builds that child as its own drain entry, where the
@@ -374,9 +346,6 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
 // ============================================================================
 
 fn repeated_build_after_panic_stays_stable() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-
     let view = PanickingView {
         message: "boom — repeated",
     };
