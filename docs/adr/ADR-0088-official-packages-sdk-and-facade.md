@@ -14,6 +14,7 @@
   module `flui_view::__runtime` (ADR-0081 §4), which `flui_sdk::view` shadows; that does not
   unblock the hot-reload move (move 4).
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) in part: official packages keep their rules; capability crates are a second kind of package with rules of their own.
 - **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted, so the duplicate-guard list below names two crates that no longer
   exist.

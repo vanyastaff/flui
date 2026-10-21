@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) for the last sentence of §1
+  only: a platform capability is reached through the seam, not as a method on `LifecycleContext`.
 - **Amended:** 2026-10-11 — the lifecycle example uses the single owner-local post-frame handle; geometry checks name the current trybuild suite.
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
   §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also

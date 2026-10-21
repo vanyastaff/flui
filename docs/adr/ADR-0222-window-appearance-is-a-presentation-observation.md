@@ -4,6 +4,10 @@
 - **Date:** 2026-10-17
 - **Supersedes:** [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1, the
   `window_appearance` entry of `OwnerPlatform`'s operation list only.
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) for the delivery shape only: the
+  appearance is a field of the window state snapshot and its change arrives through the window
+  handler's state-changed obligation, not through `appearance()` and `on_appearance_changed`. The
+  observation itself (per window, the user's choice, owner-thread delivery) stands.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md) (brightness is
   presentation-specific).
 

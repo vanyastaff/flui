@@ -4,6 +4,15 @@
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 3's delivery rules
+  that exist because `on_input` is registered after `open_window` returns (the snapshot retained
+  and coalesced until a callback is installed, "never emitted into an absent callback", the
+  commit-then-drain installation, bounded retries per registration, and the retirement of a
+  replaced callback) and decision 6 (`on_input` is a method of the window's handler, so there is
+  no registration signature to free of `+ Send`). The snapshot still arrives first as
+  `PlatformInput::Capabilities`, later changes are still ordered with the input around them, the
+  reentrancy and panic-containment rules for queued entries still hold, and decisions 1, 2, 4
+  and 5 stand.
 - **Related:** [ADR-0210](ADR-0210-two-tier-haptics.md) (haptics availability through its
   handle), [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (IME through its handle),
   [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md),

@@ -6,6 +6,9 @@
   ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), and
   the field's commit on blur, on a pointer-down on it and on a paste are in the code.
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md), for the placement
+  of `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate only (they move
+  to `flui-interaction::text_input`); every decision of this ADR stands.
 - **Supersedes:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md), in part: §1's rule that
   a read-write session is one change notification to the widget (the owner now hears only of a
   change to the committed text, after the lock is released, items 1 and 2); §2's reporting of a

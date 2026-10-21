@@ -230,7 +230,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   5. `acronym` — идентификатор типа или варианта с двумя заглавными подряд, за которыми идёт строчная, либо начало с
      строчной перед заглавной (`iOS`). Однобуквенный префикс (`RRect`) — тоже находка до решения В4.
   6. `case-expect` — `#[expect|allow(non_camel_case_types|non_upper_case_globals|non_snake_case)]` вне `generated.rs`.
-  7. `dup-name` — одно имя у двух `pub`-определений одного крейта, кроме взаимоисключающих `platforms/<os>/`.
+  7. `dup-name` — одно имя у двух `pub`-определений одного крейта, кроме взаимоисключающих файлов платформ одной фичи (`<feature>/windows.rs`, `apple.rs`, …; ADR-0151 §10).
   8. `ctx-spelling` — имена типов и модулей на `Ctx`/`Cx`/`Context` не в выбранном по В5 написании.
   9. `feature` — фича в `[features]` с `util`, `helper`, `support`, `use-`, `with-`; тестовая фича не названа `testing`.
   10. `test-name` — функция под `#[test]` начинается с `test_` или состоит из одного слова.

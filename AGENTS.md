@@ -73,7 +73,7 @@ Cargo runs through heli: `cargo heli <cargo arguments>`, repository tasks as
 Before a PR: `cargo fmt --all`, then heli's clippy (`--all-targets -- -D warnings`) and nextest
 on the changed crates, and their dependents when a public API changed. A docs-only change needs
 only `cargo heli xtask checks`. `flui-platform`'s suite runs only on Linux, so a Windows or macOS
-backend change needs `cargo heli nextest run -p flui-platform` by hand.
+host change needs `cargo heli nextest run -p flui-platform` by hand.
 
 - Each worktree keeps its own `target/`: a shared `CARGO_TARGET_DIR` links another worktree's
   sources.
@@ -97,9 +97,11 @@ backend change needs `cargo heli nextest run -p flui-platform` by hand.
 
 ## ADR Policy
 
-ADRs (`docs/adr/`) record the cross-crate decisions the code follows. A change of decision is a
-new ADR with `Supersedes:`, and `Superseded-by:` on the old one; code that disagrees with an
-accepted ADR is a defect in one of them.
+ADRs (`docs/adr/`) record the cross-crate decisions the code follows, in the MADR shape
+[`docs/adr/README.md`](docs/adr/README.md) gives: drivers, every option with its pros and cons,
+the decision as a Rust shape, and how compliance is confirmed. A change of decision is a new ADR
+with `Supersedes:`, and `Superseded-by:` on the old one; code that disagrees with an accepted ADR
+is a defect in one of them.
 
 ## Extending FLUI
 

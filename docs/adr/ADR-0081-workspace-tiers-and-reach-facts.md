@@ -17,6 +17,7 @@
   2026-09-26. §4.2 is implemented (2026-09-29): `runtime-internals` is gone and its items are
   at `flui_view::__runtime`; the facade and the SDK shadow it.
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3 in part (the kinds gain `capability`) and §2 in part (the reach table gains its row).
 - **Amended:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
 - **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners
