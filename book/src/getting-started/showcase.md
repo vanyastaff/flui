@@ -1,7 +1,6 @@
-# Notes: from Todo to a showcase
+# Notes showcase
 
-[Counter → Todo](tutorial-todo.md) introduces state, input and a list in one screen.
-Notes combines those ideas across Home, Note and Settings. It extends the existing
+Notes combines state, input and a list across Home, Note and Settings. It extends the existing
 two-screen Router example: the application tree is
 [`examples/two_screens/tree.rs`](https://github.com/vanyastaff/flui/blob/main/examples/two_screens/tree.rs),
 and its [README](https://github.com/vanyastaff/flui/blob/main/examples/two_screens/README.md)
@@ -15,8 +14,8 @@ From the checkout root:
 cargo run --example two_screens --features material
 ```
 
-Notes uses Material's `TextFormField` and `TextButton`, so the `material` feature is required. Counter and
-Todo use the theme-free catalog and do not need it. See [Themes](../cookbook/themes.md)
+Notes uses Material's `TextFormField` and `TextButton`, so the `material` feature is required. The counter
+uses the theme-free catalog and does not need it. See [Themes](../cookbook/themes.md)
 for how a theme surrounds the tree.
 
 ## Follow the flow
@@ -49,9 +48,9 @@ A draft is retained for the currently selected note. Opening a different note re
 shared draft with that note's saved title; save before switching notes if you want to keep
 an edit. Here "retained state" means state across navigation within the running app.
 
-## Read the changes from Todo
+## Read the changes from a single screen
 
-| Todo idea | Notes extension | Where to look in the shared tree |
+| Single-screen idea | Notes extension | Where to look in the shared tree |
 |---|---|---|
 | One screen owns its item signal | A root owns the titles, selected draft, scroll and preferences, and passes handles into screens | `Shared`, `NotesRoot`, `NotesState` |
 | Callbacks change a list | Save validates the form before updating the saved title | `editor` |
@@ -60,7 +59,7 @@ an edit. Here "retained state" means state across navigation within the running 
 | No navigation | Typed routes select Home, Note and Settings; a lifecycle hook acquires the router handle | `Route`, `ScreenState::init_state` |
 | Immediate in-memory data | A replaceable readiness service exposes loading, error, retry and reload states | `NotesApp::with_loader`, `home`, `FutureBuilder::keyed` |
 
-The tree uses `StateHandle` bound in the root's lifecycle hook rather than Todo's `Signal`.
+The tree uses `StateHandle` bound in the root's lifecycle hook rather than a screen-local `Signal`.
 Read [State](../concepts/state.md) for those APIs; this change is not a prerequisite for adding
 navigation to your own signal-based application. Keeping the owners above the router lets
 screens share application data and controllers. It does not prove that a page's element

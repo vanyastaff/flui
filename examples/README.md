@@ -10,13 +10,10 @@ separate crates or WASM targets with their own build step.
 | Example | Run |
 |---|---|
 | **counter** — the minimal FLUI app: one `Signal` and a `RawButton` whose press writes it (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
-| **todo** — the step past `counter`: a list in `Signal<Vec<Item>>`, with add/toggle/delete through `RawButton` presses and a `RawTextField`. See the book's [Tutorial: counter → todo](../book/src/getting-started/tutorial-todo.md) | `cargo run --example todo` |
 | **two_screens** — the Notes showcase: navigation as a value (a `#[derive(Routable)]` route enum, `WidgetsApp::router`, pages that push and pop through the `RouterHandle` they take in `init_state`), state kept above the router, loading/error/retry, a lazy 10,000-row list and validated editing. See its [README](two_screens/README.md) | `cargo run --example two_screens --features material` |
 | **widgets_gallery** — a tour of the wider `flui-widgets` catalog through `flui::prelude` + `run_app` | `cargo run --example widgets_gallery` |
 | **interaction_gallery** — one screen per interaction widget (swipe actions, dismissible rows, pull to refresh, a collapsing header, a pager, a bottom sheet, zoom and pan, drag and drop, a context menu, a gesture pad, keyboard focus), each with a readout of its last outcome; one widget tree for desktop, Android (`android_main`) and the web (`start`). `cargo xtask device windows-gallery` drives every screen with real input on Windows | `cargo run -p flui-interaction-gallery --features a11y` |
-| **platform_window** — the platform layer *without* widgets: a raw window and event loop, no `View`/`Element`/render tree. Useful for debugging platform integration itself, not as a first example of the framework | `cargo run --example platform_window` |
 | **colored_box_app** — the first FLUI application through the real pipeline, at the low-level `flui-view`/`flui-objects` layer (no facade) | `cargo run --example colored_box_app` |
-| **direct_render** — first working FLUI application | `cargo run --example direct_render` |
 | **text_app** — the text pipeline end-to-end through the real framework | `cargo run --example text_app` |
 
 ## Widget catalogs (Material / Cupertino)
@@ -26,27 +23,14 @@ separate crates or WASM targets with their own build step.
 | **material_demo** | `cargo run --example material_demo --features material` |
 | **cupertino_demo** | `cargo run --example cupertino_demo --features cupertino` |
 | **sliver_demo** — a pinned `SliverAppBar` collapsing demo | `cargo run --example sliver_demo --features material` |
-| **multi_window_demo** — a secondary window opened from a Material button | `cargo run --example multi_window_demo --features material` |
 | **screenshot** — headless screenshot of a demo widget tree, no window | `cargo run --example screenshot --features material,cupertino` |
 
 ## Rendering / engine internals
 
 | Example | Run |
 |---|---|
-| **aa_showcase** — visual check for the engine's anti-aliasing paths | `cargo run --example aa_showcase` |
 | **animated_box_app** — the animation engine driving the real pipeline on GPU | `cargo run --example animated_box_app` |
-| **color_filter_demo** — `ColorFilter` live via `SceneBuilder` | `cargo run --example color_filter_demo` |
-| **filter_demo** — GPU Gaussian blur via `SceneBuilder` + `ImageFilterLayer` | `cargo run --example filter_demo` |
 | **scene_render** — end-to-end GPU compositor proof | `cargo run --example scene_render` |
-| **wgpu_window** — platform-driven GPU rendering integration test | `cargo run --example wgpu_window` |
-| **image_demo** — interactive visual check of `RenderImage` | `cargo run --example image_demo` |
-| **window_features** — cross-platform window API demo | `cargo run --example window_features` |
-
-## Windows-specific
-
-| Example | Run |
-|---|---|
-| **windows11_demo** — Mica backdrop, dark title bar, rounded corners, Snap Layouts | `cargo run --example windows11_demo` (Windows 11 Build 22000+; dark mode needs Windows 10 Build 17763+) |
 
 ## iOS
 
@@ -91,7 +75,6 @@ FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
 | Example | Run |
 |---|---|
 | **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/web_demo/` over HTTP |
-| **web_counter** — the counter template through `flui::run_app`, plain `cargo` + `wasm-bindgen` (no `wasm-pack`) | `cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown`, then `wasm-bindgen --target web --out-dir examples/web_counter/pkg ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/flui_web_counter.wasm`; serve `examples/web_counter/` over HTTP |
 | **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
 
 The `painting_demo` crate contains browser code only and targets
@@ -122,7 +105,6 @@ cargo run --example <name>      # run one by name
 
 ## Notes
 
-- Windows-specific examples (`windows11_*`) only compile on Windows.
 - macOS-only probes (`lifecycle_probe`, `workload_probe`, `a11y_probe`, `resize_jitter_probe`)
   skip with a message on other hosts, and so do the `cargo xtask device macos-*` checks that
   drive them (exit 0; `macos-hot-reload-loop` refuses with exit 1).

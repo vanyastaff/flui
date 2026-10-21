@@ -81,8 +81,8 @@ const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 /// Windows cannot replace its running executable, and so does this build.
 /// flui-platform's examples link in its own suite on Linux and Windows,
 /// which builds them under `--all-features` ([`platform_suite`]). Cargo skips
-/// a target whose `required-features` the test features leave off (devtools'
-/// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
+/// a target whose `required-features` the test features leave off (the
+/// engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
 fn build_all_targets(host: Host) -> Cmd {
     let command = Cmd::cargo([

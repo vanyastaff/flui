@@ -22,8 +22,8 @@ source for the exact API and required features.
 ## Where to start
 
 - New to FLUI and want to build an application: [Getting Started](getting-started/installation.md).
-- Ready to change a working example: [Counter → Todo](getting-started/tutorial-todo.md), then
-  the [Cookbook](cookbook/overview.md) for forms, async work, themes, animation, and testing.
+- Ready to change a working example: the [Cookbook](cookbook/overview.md) for forms, async work,
+  themes, animation, and testing.
 - Ready for an application with several screens: the [Notes showcase](getting-started/showcase.md)
   runs with `cargo run --example two_screens --features material` and has a headless flow test.
 - Choosing a state model or learning how a view becomes a frame:

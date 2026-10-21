@@ -120,44 +120,13 @@ A window titled "FLUI App" (the `AppConfig` default) should open, showing a
 dark padded surface with a title, a row of circular avatars, and a centred
 card. Close it to terminate the process.
 
-### Platform layer without widgets (advanced)
-
-`examples/platform_window.rs` drives the platform layer directly — a raw
-window and event loop, with no `View`/`Element`/render tree involved. It is
-useful when debugging platform integration itself, not as a first example of
-application code:
-
-```bash
-cargo run --example platform_window
-```
-
-Expected output (truncated; the platform name and display details reflect
-your own OS and hardware, not the values below):
-
-```
-INFO FLUI platform window example
-INFO Platform: <platform, e.g. macos / windows / linux>
-INFO Platform initialized: "<Platform>"
-INFO Found 1 display(s):
-INFO   Display 1: <adapter name> (<width>x<height> @ <scale>x scale)
-INFO Creating window...
-```
-
-A window titled "FLUI Platform Window" should open. Close it to terminate
-the process.
-
 ### Other bundled examples
 
 | Example | Command | Purpose |
 |---------|---------|---------|
 | `counter` | `cargo run --example counter` | Minimal stateful app — one `Signal` and a `RawButton` that writes it (start here) |
 | `widgets_gallery` | `cargo run --example widgets_gallery` | Widget catalog through `flui::prelude` + `run_app` |
-| `platform_window` | `cargo run --example platform_window` | Platform-layer smoke test (raw window, no widgets) |
-| `direct_render` | `cargo run --example direct_render` | Manual GPU pipeline driving |
 | `scene_render` | `cargo run --example scene_render` | Scene graph rendering |
-| `wgpu_window` | `cargo run --example wgpu_window` | Raw `wgpu` window setup |
-| `window_features` | `cargo run --example window_features` | Window option matrix |
-| `windows11_demo` | `cargo run --example windows11_demo` | Windows 11 platform features |
 | `desktop_scene` | `cargo build -p flui-desktop-scene` | Build the hot-reload scene library; this plugin is loaded by a host, not run as an executable |
 
 ### Web (WASM) examples
@@ -188,7 +157,7 @@ If any of these fail, the toolchain or environment is misconfigured before any f
 All FLUI code logs through `tracing`. Set `RUST_LOG` to control verbosity:
 
 ```bash
-RUST_LOG=debug cargo run --example platform_window
+RUST_LOG=debug cargo run --example counter
 RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 ```
 

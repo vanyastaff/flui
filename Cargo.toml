@@ -56,7 +56,6 @@ members = [
     "examples/hot_reload_lifecycle_fixture", # app_plugin! fixture flui-hot-reload's reload-lifecycle test loads
     "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
     "examples/painting_demo",
-    "examples/web_counter",
     "examples/interaction_gallery",          # One screen per interaction widget: desktop, Android, web
     "tools/live-smoke",                      # Live end-to-end harness: real window, X11 input, teardown
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
@@ -779,15 +778,7 @@ trybuild = { workspace = true }
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
-wgpu = { workspace = true }
-winit.workspace = true
-reqwest = { workspace = true, features = ["json"] }
-tokio = { workspace = true, features = ["sync", "time"] }
-
-# === Error Handling (for examples) ===
-anyhow.workspace = true
-
-# === Image decoding (image_demo example) ===
+# === Image encoding (scene_render / screenshot examples) ===
 image.workspace = true
 
 # === Logging ===
@@ -909,10 +900,6 @@ name = "counter"
 path = "examples/counter.rs"
 
 [[example]]
-name = "todo"
-path = "examples/todo.rs"
-
-[[example]]
 name = "two_screens"
 path = "examples/two_screens.rs"
 required-features = ["material"]
@@ -957,12 +944,6 @@ required-features = ["material"]
 name = "screenshot"
 path = "examples/screenshot.rs"
 required-features = ["material", "cupertino"]
-
-# Secondary window opened from a Material button; see the example's own doc.
-[[example]]
-name = "multi_window_demo"
-path = "examples/multi_window_demo.rs"
-required-features = ["material"]
 
 # Self-driving representative-workload probe for the macOS performance and
 # resilience check (`cargo xtask device macos-workload`); see the example's own doc.

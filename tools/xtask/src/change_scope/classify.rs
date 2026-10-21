@@ -968,10 +968,10 @@ pub(super) mod tests {
         let s = scope(&["examples/material_demo/tree.rs"]); // an [[example]] whose main.rs is in a subdirectory
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned()));
-        let s = scope(&["examples/web_counter/src/lib.rs"]); // a separate package under examples/
+        let s = scope(&["examples/web_demo/src/lib.rs"]); // a separate package under examples/
         assert_eq!(
             (s.mode, s.packages),
-            (Mode::Packages, vec!["flui-web-counter".to_owned()])
+            (Mode::Packages, vec!["flui-web-demo".to_owned()])
         );
     }
 

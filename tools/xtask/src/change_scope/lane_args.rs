@@ -498,7 +498,7 @@ mod tests {
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
             a.test_args,
-            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
+            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --lib --bins --tests"
         );
     }
 
@@ -588,9 +588,6 @@ mod tests {
             a.doctest_args,
             "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
         );
-        // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
-        assert!(a.packages.contains("flui-web-counter"));
-        assert!(!a.doctest_args.contains("flui-web-counter"));
         // an included README is doctest source
         assert!(
             args(&["crates/flui-animation/README.md"])

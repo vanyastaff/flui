@@ -183,14 +183,10 @@ replayed. An opaque FnOnce environment that double-panics during invocation
 before reaching the containment boundary cannot be rescued. These checks do
 not establish wasm panic-abort recovery.
 
-The `browser_input_probe` canvas-ownership control and existing vocabulary,
-pointer/wheel and getter-reentry controls exercise real registered DOM delivery
-through retained public handles. Their README gives execution instructions;
-browser compilation alone does not prove these manual contracts. Headless
+Browser compilation alone does not prove the DOM delivery contracts. Headless
 source-focus controls are distinct from real system/page focus transitions.
-The document-visibility control supplies a controlled `Document.hidden`
-source rather than claiming a real background-tab transition. Constructor
-events do not establish physical keyboard layouts or OS IME.
+A controlled `Document.hidden` source is not a real background-tab transition.
+Constructor events do not establish physical keyboard layouts or OS IME.
 
 ### Apple displays are resampled on events and keyed by display, not by connection
 
@@ -390,11 +386,10 @@ fractional origins. A transformed canvas retains the browser's local offsets;
 its wheel precision remains browser-limited rather than applying an incorrect
 bounding-rectangle inversion.
 
-`examples/browser_input_probe` checks browser cancellation, duplicate capture
-loss and recovery, fractional pointer/wheel positions, and a trusted drag whose
-release occurs outside the canvas. Its README describes execution. These are
-browser smoke contracts, not automatically executed CI tests; a wasm compile
-does not prove that they pass. Browser touch-action policy remains page-owned.
+Browser cancellation, duplicate capture loss and recovery, fractional
+pointer/wheel positions, and a trusted drag whose release occurs outside the
+canvas are not covered by automatically executed CI tests; a wasm compile does
+not prove them. Browser touch-action policy remains page-owned.
 
 ### Web events are answered while the browser waits on them
 
@@ -1807,10 +1802,8 @@ and focus are unsupported there. Closed retained windows return `Closed`.
 
 Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
 [Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
-Headless tests model minimized independently from maximized/fullscreen. Native
-macOS `window_show_probe` covers visible, hidden, minimized, maximized,
-minimized-after-maximized and observed fullscreen transitions; Windows evidence
-is strict cross-compilation, not a native runtime claim.
+Headless tests model minimized independently from maximized/fullscreen.
+Windows evidence is strict cross-compilation, not a native runtime claim.
 
 Win32 show verifies retained callback-Arc identity under the owner context guard
 before reveal and again after callback-capable show/foreground calls. Recycled
@@ -1842,8 +1835,7 @@ secondary window, through `runner::desktop::rendered_window_options`), whose
 frame closure performs the reveal. Its shared `From<&AppConfig> for
 WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
 bare `open_secondary_window` use it and have no frame loop that would reveal.
-A direct consumer of this crate — `examples/platform_window.rs`, `wgpu_window.rs`,
-the platform probes — likewise has no first frame to report, and a window
+A direct consumer of this crate — the platform probes — likewise has no first frame to report, and a window
 whose reveal waits for a call that never comes is a window nobody sees. The
 default `WindowReveal::AtOpen` therefore leaves alpha untouched and those
 windows appear at open, as they always did. A backend that cannot defer treats
@@ -1949,8 +1941,7 @@ Browser screen dimensions are CSS pixels; display bounds expose rounded device
 pixels after applying the device pixel ratio. Pointer coordinates retain the
 platform input contract of logical pixels, including the upstream
 `PhysicalPosition` storage name. DOM button masks preserve X1/X2 on down, up,
-move and wheel events. The `browser_input_probe` example records translated
-public input and display results for real DOM dispatch at a non-unit DPR.
+move and wheel events.
 
 Platform window-event handlers are leased outside the state mutex and restored
 unless the callback installed a replacement. Setter retirement also occurs
@@ -2095,11 +2086,9 @@ The private Web conversion uses ICU4X `icu_properties` and `icu_normalizer`
 2.3 compiled data. General categories, canonical combining classes and NFC
 therefore come from one library cohort; combining classes reuse normalization
 data. Dependencies are wasm-target-only, and admission adds no owning service,
-mutable cache or public parser. The `browser_input_probe` example's
-`owned-keyboard-check` exercises registered DOM events through public on_input,
-including multi-scalar text, refused-value recovery, complete event metadata
-and JSON-sensitive values. Browser execution establishes constructor-driven
-translation; it does not establish physical layouts or IME text commits.
+mutable cache or public parser. Browser execution establishes
+constructor-driven translation; it does not establish physical layouts or IME
+text commits.
 
 ### Off-owner accessibility adapter retention precedes diagnostics
 

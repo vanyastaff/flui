@@ -636,7 +636,6 @@ properties should be omitted.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
 
 ```bash
-cargo run -p flui-rendering --example render_inspector --features testing
 cargo test -p flui-rendering --test render_object_harness
 ```
 

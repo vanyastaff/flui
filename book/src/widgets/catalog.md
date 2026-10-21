@@ -26,7 +26,7 @@ rebuilds with the new value. Without a callback, the control is disabled.
 This illustrative excerpt belongs inside a `ViewState::build` method receiving `ctx`.
 Assume `self.volume: Signal<f64>` and `self.expansion: Signal<ExpansionState>` were created
 in `init_state`, initially `50.0` and `ExpansionState::Collapsed`. Read them in `build` and
-write from the event callback, as in [Counter → Todo](../getting-started/tutorial-todo.md).
+write from the event callback, as in the [first run](../getting-started/installation.md) counter.
 It is not a complete application:
 
 ```rust,ignore

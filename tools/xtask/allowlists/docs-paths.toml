@@ -98,9 +98,3 @@ path = "docs/testing.md"
 kind = "path"
 count = 1
 reason = "trybuild's directory under the target directory, a build output"
-
-[[allow]]
-path = "examples/README.md"
-kind = "path"
-count = 1
-reason = "`wasm-bindgen`'s output directory, a build output"

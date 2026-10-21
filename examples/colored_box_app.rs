@@ -1,7 +1,6 @@
 //! Colored Box — the first FLUI application through the REAL pipeline.
 //!
-//! Unlike `direct_render` (which bypasses the framework and hand-builds a
-//! Scene), this example goes the whole way:
+//! This example goes the whole way through the framework:
 //!
 //! ```text
 //! View (ColoredSquare) → Element tree → RenderColoredBox

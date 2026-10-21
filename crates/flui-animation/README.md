@@ -888,5 +888,3 @@ Each implemented from the canonical published source:
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `Tween<Color>`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
-
-See `examples/oklab_gradient.rs`.
