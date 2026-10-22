@@ -5,9 +5,9 @@
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 //!
 //! Every one of them is called through the call point
-//! ([`call`](super::call_point::call)), which holds no lock or borrow while
+//! (`call_point::call`), which holds no lock or borrow while
 //! it runs, and every replaced one is retired outside the locks
-//! ([`install`](super::call_point::install)).
+//! (`call_point::install`).
 
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
@@ -163,7 +163,7 @@ enum HeldEntry {
 /// (quit, a window event, the session ending, …).
 ///
 /// A host keeps this set behind its own lock or `RefCell` and reaches each
-/// field as a [`Field`](super::call_point::Field) slot: a handler is called
+/// field as a `call_point::Field` slot: a handler is called
 /// through the call point with that lock released, and one being replaced is
 /// dropped after it.
 ///
@@ -217,7 +217,7 @@ pub struct PlatformHandlers {
     /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
     /// every hosted UI runtime and takes gesture-arena locks) and may be
     /// asked again from inside that walk, so the call point calls a clone
-    /// ([`SharedField`](super::call_point::SharedField)) with the lock
+    /// (`call_point::SharedField`) with the lock
     /// released (ADR-0038 §5) and the hook stays installed while it runs.
     pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
@@ -274,7 +274,7 @@ impl std::fmt::Debug for PlatformHandlers {
 /// 1. enqueue the typed event in the window FIFO;
 /// 2. one caller becomes the drain owner;
 /// 3. call the callback through the call point
-///    ([`call`](super::call_point::call)): taken out, called with its slot
+///    (`call_point::call`): taken out, called with its slot
 ///    unlocked, put back;
 /// 4. drain all nested window events in causal order, including transitions
 ///    between kinds such as input → resize → frame.
@@ -729,7 +729,7 @@ impl WindowCallbacks {
     ///
     /// **The `cleared` latch never resets once set, but that does not make
     /// every slot permanently inert.** The ten slots called through a
-    /// [`Latched`] slot (every one except `on_close`) still accept a fresh
+    /// `Latched` slot (every one except `on_close`) still accept a fresh
     /// registration after this call returns: that callback runs exactly once,
     /// the next time its event is dispatched, and only then does its slot
     /// see `cleared` set and hand it back to be dropped instead of restoring

@@ -140,7 +140,7 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// `flui_native::Platform::set_exit_policy_hook`. The winit
 /// backend's `CloseRequested` handling and the headless backend's window
 /// `close()`/`simulate_close()` both consult that hook — via the shared
-/// `flui_native::shared::PlatformHandlers::exit_policy` slot — instead of
+/// `flui_native::PlatformHandlers::exit_policy` slot — instead of
 /// deciding from their own native window count alone; see
 /// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
 /// (`owner_dispatch/tests.rs`), which closes the last window through the

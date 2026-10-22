@@ -7,9 +7,10 @@
 //! window's own `Mutex<Option<_>>`. [`call`] takes it out under the slot's
 //! lock or borrow, releases them, runs it inside a panic boundary, and then
 //! puts it back, unless a handler was installed while it ran: the newer one
-//! stays and the one that ran is retired. A handler is therefore never called,
-//! and a handler's captures never dropped, while a lock or borrow of the
-//! platform is held, so a handler may install another, quit, or open a window.
+//! stays and the one that ran is retired. Every caller holds no lock or borrow
+//! of its own across the call, so a handler is never called, and a handler's
+//! captures never dropped, while the platform holds one: a handler may install
+//! another, quit, or open a window.
 //! [`install`] replaces a handler and retires the one it displaces the same
 //! way, and [`retire`] drops any other user-owned value outside the locks.
 //!
