@@ -23,8 +23,8 @@ use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::preferences::android::AndroidPreferences;
-use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
+use crate::version::gate::android::AndroidApi;
 use crate::window::android::{AndroidWindow, system_chrome::AndroidSystemChrome};
 
 /// The Android host's table.

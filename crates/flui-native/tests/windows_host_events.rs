@@ -362,7 +362,7 @@ fn a_block_is_registered_on_the_visible_window() {
         .expect("a window");
     let window_hwnd = window
         .as_any()
-        .downcast_ref::<flui_native::platforms::windows::WindowsWindow>()
+        .downcast_ref::<flui_native::WindowsWindow>()
         .expect("the Win32 backend")
         .hwnd();
     assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);

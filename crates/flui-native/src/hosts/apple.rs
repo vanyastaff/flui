@@ -123,10 +123,40 @@ impl Host for Apple {
 
 /// The macOS platform: AppKit windows, the `NSPasteboard` clipboard and the
 /// `NSApplication` run loop.
+///
+/// The windows are AppKit's (`window::apple::macos`), their input comes through
+/// the content view (`input::apple::macos`), and the IME through its
+/// `NSTextInputClient` conformance (`text::apple::macos`, ADR-0069):
+/// `keyDown:` is a gate, so one press reaches the application exactly once,
+/// either as a composition or commit or as a key event. The displays are read
+/// from `NSScreen.screens`, each keyed by its UUID with the refresh period of
+/// its current mode, and read again after
+/// `NSApplicationDidChangeScreenParametersNotification`. AppKit has no
+/// `ControlFlow::WaitUntil`, so the loop's wake pump actuates the registered
+/// wake deadline (`owner::apple::macos`).
+///
+/// ```rust,ignore
+/// use flui_native::{MacOSPlatform, Platform};
+///
+/// let platform = MacOSPlatform::new()?;
+/// Box::new(platform).run(Box::new(|_owner| Ok(())))?;
+/// ```
 #[cfg(target_os = "macos")]
 pub type MacOSPlatform = HostPlatform<Apple>;
 
 /// The iOS platform: UIKit scenes and `UIApplicationMain`.
+///
+/// `UIApplicationMain` owns the main thread for the process's life, and UIKit
+/// is main-thread-only, so every window, view and pasteboard access happens on
+/// that thread; the only background work is Grand Central Dispatch's
+/// ([`IOSExecutor`](crate::IOSExecutor)). The loop runs the bootstrap from the
+/// application delegate and attaches each scene's window from the scene
+/// delegate (`owner::apple::ios`); a `CADisplayLink` paces the frames.
+///
+/// The target is iOS 13. `objc2`'s bindings span later releases, so a call
+/// the SDK marks newer than 13 takes the proof a version gate hands out
+/// (`version::gate`, ADR-0244): `CADisplayLink.preferredFrameRateRange` (iOS
+/// 15) is one, and before iOS 15 the link gets `preferredFramesPerSecond`.
 #[cfg(target_os = "ios")]
 pub type IOSPlatform = HostPlatform<Apple>;
 

@@ -34,11 +34,11 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::{Field, install};
 use crate::owner::handlers::{OpenWindows, WindowCallbacks};
+use crate::owner::headless::TextStoreHostFactory;
 use crate::owner::headless::{
     HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
 };
 use crate::platform::HostPlatform;
-use crate::platforms::headless::TextStoreHostFactory;
 use crate::text::headless::FakeTextInput;
 use crate::window::state::WindowStateCell;
 
@@ -165,7 +165,7 @@ impl TrackedWindows for HeadlessWindows {
     /// Builds a fresh mock window under an already-locked `state`, threading
     /// it through the same register/activate bookkeeping for the synchronous
     /// `Platform::open_window` and the deferred-open resolution
-    /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::platforms::headless::HeadlessDeferredWindowOpens::resolve_next)),
+    /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::HeadlessDeferredWindowOpens::resolve_next)),
     /// so the two stay byte-for-byte consistent.
     fn open(
         self: Arc<Self>,

@@ -1211,6 +1211,11 @@ impl host::Window<WinitLoop> for WinitWindow {
     }
 }
 
+// The window's tests on a real winit event loop, which open, unwind and close
+// windows through the loop.
+#[cfg(test)]
+mod real_loop_tests;
+
 pub(crate) mod plan {
     //! What the winit backend decides about a window before and while it
     //! exists, kept apart from winit so a table of inputs checks it.

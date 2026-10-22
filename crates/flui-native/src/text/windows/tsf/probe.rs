@@ -421,7 +421,7 @@ fn text_services_probe() {
     let window = platform.open_window(options).expect("window");
     let hwnd = window
         .as_any()
-        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+        .downcast_ref::<crate::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
     println!("PROBE foreground: {}", bring_to_front(hwnd));
@@ -447,7 +447,7 @@ fn text_services_probe() {
         use crate::host_window::{HostWindow as _, OwnerThreadToken};
         window
             .as_any()
-            .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+            .downcast_ref::<crate::WindowsWindow>()
             .expect("Win32 window")
             .text_store_host(OwnerThreadToken::new())
             .expect("(1) the window offers its text-store host")

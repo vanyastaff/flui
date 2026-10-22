@@ -88,8 +88,8 @@ use crate::{
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
-    shared::os_version::android::AndroidApi,
-    shared::os_version::android::StylusHandwriting,
+    version::gate::android::AndroidApi,
+    version::gate::android::StylusHandwriting,
 };
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop

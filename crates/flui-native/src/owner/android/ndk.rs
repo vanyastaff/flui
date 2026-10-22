@@ -28,8 +28,8 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::shared::os_version::Gate;
-use crate::shared::os_version::android::AndroidApi;
+use crate::version::gate::Gate;
+use crate::version::gate::android::AndroidApi;
 
 /// The size of the buffer `__system_property_get` fills (`PROP_VALUE_MAX`).
 const PROPERTY_VALUE_MAX: usize = 92;
@@ -49,7 +49,7 @@ pub(crate) trait SymbolSource: Send + Sync {
 }
 
 /// The reading of the level; the type and its gates are in
-/// [`os_version::android`](crate::shared::os_version::android).
+/// [`version::gate::android`](crate::version::gate::android).
 impl AndroidApi {
     /// Read the level of the running system through `source`: the NDK function
     /// when the system exports it, otherwise the system property. `None` when
@@ -472,6 +472,42 @@ mod tests {
         let symbols =
             FakeSymbols::default().with(c"__system_property_get", property_garbage as *const ());
         assert_eq!(AndroidApi::detect(&symbols), None);
+    }
+
+    /// The NDK functions' gates, the rows of `version::gate`'s table for the
+    /// markers declared here.
+    #[test]
+    fn ndk_gate_table() {
+        use crate::version::gate::testing::row;
+
+        let api = AndroidApi::from_level;
+        let unknown = AndroidApi::UNKNOWN;
+        let mut failures = Vec::new();
+        failures.extend(row::<SetFrameRate>(
+            "SetFrameRate",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<ChoreographerInstance>(
+            "ChoreographerInstance",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<RegisterRefreshRate>(
+            "RegisterRefreshRate",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<UnregisterRefreshRate>(
+            "UnregisterRefreshRate",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]

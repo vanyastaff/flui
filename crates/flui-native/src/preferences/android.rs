@@ -40,7 +40,7 @@ mod configuration {
     use crate::owner::signal::OwnerSignal;
     use crate::owner::sources::SystemPreferenceSource;
     use crate::preferences::{locales, read::ReadAdmission};
-    use crate::shared::os_version::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
+    use crate::version::gate::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
     use flui_platform::{
         GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
         SystemPreferences,
@@ -644,7 +644,7 @@ pub(crate) mod text_weight {
 
     use flui_platform::TextWeightPreference;
 
-    use crate::shared::os_version::{Since, android::TextWeight};
+    use crate::version::gate::{Since, android::TextWeight};
 
     /// The native field is absent without [`TextWeight`], and is then never queried. A failed
     /// available query remains an error; Android's undefined sentinel remains an unavailable
@@ -665,9 +665,9 @@ pub(crate) mod text_weight {
         use std::{cell::Cell, num::NonZeroI32};
 
         use super::{TextWeightPreference, observe};
-        use crate::shared::os_version::android::{AndroidApi, TextWeight};
+        use crate::version::gate::android::{AndroidApi, TextWeight};
 
-        fn field(sdk: u32) -> Option<crate::shared::os_version::Since<TextWeight>> {
+        fn field(sdk: u32) -> Option<crate::version::gate::Since<TextWeight>> {
             AndroidApi::from_level(sdk).since::<TextWeight>()
         }
 

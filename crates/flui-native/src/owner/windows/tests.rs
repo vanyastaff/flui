@@ -1,4 +1,5 @@
-//! The window class's dispatch rule, through a hook set of the tests' own.
+//! The window class's dispatch rule, through a hook set of the tests' own
+//! over the quiet host's sources.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,26 +12,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
-use flui_foundation::DataTransferId;
-use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, NullDataTransferSource,
-    RepresentationIndex, TransferLimits, TransferRequest,
-};
-use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-
 use super::broadcast::Subscriber;
-use super::control::{
-    OwnerControl, OwnerLifecycle, OwnerMessages, OwnerObjects, OwnerPost, OwnerPreferences,
-    OwnerSeeds, OwnerWindow,
-};
+use super::control::{OwnerControl, OwnerMessages, OwnerPost, OwnerWindow};
+use super::testing::{ClassHooks, NoDisplays, NoPreferences, NoWindows, QuietHost};
 use super::{
-    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowGone, WindowHooks,
-    WindowIdentity, WindowInputs, WindowMessages, WindowRef, WindowsHost, WindowsLoop,
-    dispatch_window_message, window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
+    WindowsLoop, dispatch_window_message, window_created,
 };
-use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
-use crate::owner::handlers::OpenWindows;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -96,142 +85,21 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks, the Windows host's sources, no
-/// broadcast subscriber and a drag position that takes no drags.
-pub(super) struct TestHost;
+/// The tests' two hooks, in order.
+struct FirstThenSecond;
+
+impl ClassHooks for FirstThenSecond {
+    fn hooks() -> WindowHooks {
+        test_hooks()
+    }
+}
+
+/// A host of the tests' own: the quiet host with the two hooks.
+type TestHost = QuietHost<FirstThenSecond>;
 
 /// The test host's hooks, in order.
 fn test_hooks() -> WindowHooks {
     Rc::new([Rc::new(First) as Rc<dyn WindowMessages>, Rc::new(Second)])
-}
-
-/// An input that holds no window.
-struct NoInputs;
-
-impl WindowInputs for NoInputs {
-    fn hovered(&self, _window: WindowRef) -> Option<bool> {
-        None
-    }
-
-    fn modifiers(&self, _window: WindowRef) -> Option<flui_platform::Modifiers> {
-        None
-    }
-
-    fn press_kind(
-        &self,
-        _window: WindowRef,
-        _pointer: flui_platform::PointerId,
-    ) -> Option<flui_platform::pointer::PointerKind> {
-        None
-    }
-
-    fn pen_in_range(
-        &self,
-        _window: WindowRef,
-        _device: Option<flui_platform::pointer::DeviceId>,
-    ) -> Option<u64> {
-        None
-    }
-}
-
-impl WindowsHost for TestHost {
-    fn window_class() -> WindowClass {
-        WindowClass {
-            hooks: test_hooks(),
-            input: Rc::new(NoInputs),
-        }
-    }
-
-    fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-        <crate::hosts::windows::Windows as WindowsHost>::preferences(owner)
-    }
-
-    fn notices() -> std::sync::Arc<dyn crate::owner::notices::NoticeChannel> {
-        <crate::hosts::windows::Windows as WindowsHost>::notices()
-    }
-
-    fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
-        <crate::hosts::windows::Windows as WindowsHost>::lifecycle(owner)
-    }
-
-    fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
-        Vec::new()
-    }
-
-    fn displays() -> Arc<dyn HostDisplays> {
-        Arc::new(WindowsDisplays::new())
-    }
-
-    fn drag() -> Arc<dyn HostDrag> {
-        Arc::new(NoDrag)
-    }
-}
-
-/// A transport that takes and starts no drags, and leaves the owner window's
-/// messages to the rest.
-struct NoDrag;
-
-impl OwnerMessages for NoDrag {
-    fn attach(&self, _owner: OwnerPost) {}
-
-    fn message(&self, _owner: &OwnerWindow, _message: u32) -> Option<LRESULT> {
-        None
-    }
-
-    fn destroyed(&self) {}
-}
-
-impl DataTransferSource for NoDrag {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
-    fn request(
-        &self,
-        id: DataTransferId,
-        representation: RepresentationIndex,
-        limits: TransferLimits,
-    ) -> TransferRequest {
-        NullDataTransferSource.request(id, representation, limits)
-    }
-
-    fn update_drop_feedback(&self, _id: DataTransferId, _feedback: DropFeedback) {}
-
-    fn conclude_drop(&self, _id: DataTransferId) {}
-}
-
-impl PlatformDragSource for NoDrag {
-    fn start_timing(&self) -> OsDragStart {
-        OsDragStart::OnLeavingWindow
-    }
-
-    fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
-        Err(DragError::Unavailable)
-    }
-}
-
-impl HostDrag for NoDrag {
-    fn drag_source(self: Arc<Self>, _window: WindowRef) -> Arc<dyn PlatformDragSource> {
-        self
-    }
-
-    fn register_target(self: Arc<Self>, _window: WindowRef) {}
-}
-
-/// No window, for a loop the tests build only to see it refused.
-#[derive(Debug)]
-pub(super) struct NoWindows;
-
-impl OpenWindows for NoWindows {
-    fn is_empty(&self) -> bool {
-        true
-    }
-}
-
-impl ClassWindows for NoWindows {
-    fn redraw_for_deadline(&self) {}
-
-    fn paint_invalid(&self) {}
 }
 
 /// The class's procedure offers a message to the hooks in order: the first
@@ -312,44 +180,6 @@ fn created(hwnd: HWND) -> CreatedWindow {
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),
         apartment: None,
-    }
-}
-
-/// System preferences that are never read: the tests' hooks measure nothing.
-struct NoPreferences;
-
-impl crate::owner::sources::SystemPreferenceSource for NoPreferences {
-    fn sample(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        Ok(flui_platform::SystemPreferences::default())
-    }
-}
-
-impl Subscriber for NoPreferences {
-    fn message(&self, _: HWND, _: u32, _: WPARAM, _: LPARAM) -> Option<LRESULT> {
-        None
-    }
-}
-
-impl OwnerPreferences for NoPreferences {
-    fn pending(&self) -> bool {
-        false
-    }
-
-    fn retry_deadline(&self) -> Option<web_time::Instant> {
-        None
-    }
-
-    fn retry_if_due(&self) {}
-
-    fn broadcasts(&self) -> Rc<dyn Subscriber> {
-        Rc::new(Self)
-    }
-
-    fn mouse_gestures(
-        &self,
-        _: u32,
-    ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError> {
-        Err(flui_platform::PreferenceQueryError::Unavailable)
     }
 }
 
@@ -530,7 +360,7 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
                 panics: false,
             }),
         ],
-        Arc::new(WindowsDisplays::new()),
+        Arc::new(NoDisplays),
         TestHost::notices(),
     )
     .expect("the owner control");
@@ -539,12 +369,16 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
     assert_eq!(HEARD.with(RefCell::take), ["first", "second"]);
 }
 
-/// Windows holds one window class of a name per process: a loop for a second
-/// host is refused, not handed a class that dispatches to the first host's
-/// hooks.
+/// Windows holds one window class of a name per process: once a loop of one
+/// host registered it, a loop for another host is refused, not handed a class
+/// that dispatches to the first host's hooks. The hosts are told apart by type:
+/// the quiet host and the quiet host with the tests' hooks are two. The class
+/// stays registered for the quiet host in this process, which nextest runs
+/// this test alone in, as it runs every test.
 #[test]
 fn a_second_host_is_refused_the_window_class() {
-    let _platform = crate::WindowsPlatform::new().expect("native platform");
+    let _first = WindowsLoop::new::<QuietHost>(Arc::new(NoWindows))
+        .expect("the first host registers the class");
     match WindowsLoop::new::<TestHost>(Arc::new(NoWindows)) {
         Err(PlatformError::Init { message }) => assert!(
             message.contains("another host"),

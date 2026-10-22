@@ -19,6 +19,8 @@
   trampoline may sit in its loop's module there as well as in its backend module (§2, "OS-callback
   trampolines"), still one per platform, and none in a group's own module (`owner/apple.rs`); the
   context's cited files name their current places.
+- **Amended:** 2026-10-22 — `flui-native`'s backend modules (its `platforms` module) are gone
+  (ADR-0151 §10): a platform's one trampoline sits in its loop's module under `owner/` only.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),
@@ -130,9 +132,8 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   invoked by the OS without a user-data pointer (a Win32 window procedure, an AppKit or UIKit
   delegate method, a JNI entry point, winit's event-loop borrow) reads to find its owner. The
   host has **exactly one**: `APP_RUNTIME`. Each platform may hold at most one of its own, in its
-  backend module under `crates/flui-native/src/platforms/` or in its loop's module under
-  `crates/flui-native/src/owner/` (ADR-0151 §10; a group's own module, `owner/apple.rs`, is no
-  platform's). The entry is declared
+  loop's module under `crates/flui-native/src/owner/` (ADR-0151 §10; a group's own module,
+  `owner/apple.rs`, is no platform's). The entry is declared
   with class `trampoline`, and the gate fails if a crate other than `flui-app` and
   `flui-native`, or a second cell in the host or in one platform, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.

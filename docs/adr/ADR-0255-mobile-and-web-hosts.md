@@ -408,7 +408,7 @@ text-input paths its platform requires.
   | `crates/flui-native/src/window/android.rs` (`safe_area`) | Event-driven, and includes the IME inset |
   | `crates/flui-native/src/accessibility/` | An Android `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
   | `platform-support.toml` and the generated floors | `targetSdk` |
-  | `crates/flui-native/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
+  | `crates/flui-native/src/owner/apple/ios.rs` and the `ios` files of `text/`, `accessibility/`, `window/` and `input/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
   | `crates/flui-native/src/text/web.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
   | `crates/flui-native/src/accessibility/`, `crates/flui-native/src/window/web.rs` | The semantics host and ARIA DOM; the history strategy, ownership of the root element |

@@ -15,11 +15,10 @@ platforms = ["windows", "apple", "web", "winit", "linux"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version"]
 hosts = "hosts"
-retiring = ["legacy"]
+crate-level = ["platform"]
 transparent = ["prelude"]
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0001", since = "2026-10-21", reason = "admitted" },
-    { from = "display::windows", to = "legacy::backend", exit = "ADR-0001", since = "2026-10-22", reason = "admitted" },
     { from = "text", to = "text::windows", exit = "ADR-0001", since = "2026-10-21", reason = "the rules allow a model its own platform file" },
     { from = "window::winit", to = "window::windows", exit = "ADR-0001", since = "2026-10-21", reason = "the code no longer has the edge" },
     { from = "display::wasm", to = "display::linux", exit = "ADR-0001", since = "2026-10-21", reason = "no such module" },
@@ -37,22 +36,18 @@ pub mod version;
 pub mod hosts;
 pub mod platform;
 pub mod prelude;
-pub mod legacy;
+pub mod shared;
 #[cfg(test)]
 mod root_tests;
 pub use hosts::Host;
 ",
             ),
-            // A retiring module: unchecked as a source; a feature names a module
-            // under it only through an exception, a base module freely.
-            (
-                "legacy/mod.rs",
-                "pub mod backend;\nuse crate::window::windows::WinWindow;\n",
-            ),
-            ("legacy/backend.rs", "pub fn helper() {}\n"),
             // The root is no source: it names `hosts` to pick a host.
-            // Test code is exempt.
+            // Test code is exempt, and a test-only module needs no role.
             ("root_tests.rs", "use crate::hosts::Host;\n"),
+            // A top-level module with no role: a finding however little it
+            // names.
+            ("shared.rs", "pub struct Leftover;\n"),
             // A crate-level module: unchecked as a source, except that
             // nothing outside `hosts` names it.
             (
@@ -79,7 +74,6 @@ use crate::version::Version;
 use crate::platform::Platform;
 use crate::window::Window;
 use crate::hosts::Host;
-use crate::legacy::backend::helper;
 ",
             ),
             (
@@ -155,7 +149,6 @@ use crate::display::windows::DisplayWin;
 use crate::display::Display;
 use super::apple::ios::IosWindow;
 use crate::prelude::DisplayWin;
-use crate::legacy::backend::helper;
 ",
             ),
             (
@@ -195,10 +188,7 @@ use crate::window::Window;
                 "display/source.rs",
                 "use crate::window::State;\nuse super::windows::DisplayWin;\n",
             ),
-            (
-                "display/windows.rs",
-                "pub struct DisplayWin;\nuse crate::legacy::backend::helper;\n",
-            ),
+            ("display/windows.rs", "pub struct DisplayWin;\n"),
             (
                 "display/winit.rs",
                 "pub struct DisplayWinit;\nuse super::linux::DisplayLinux;\n",
@@ -238,7 +228,7 @@ platforms = ["windows", "apple", "apple", "a::b"]
 groups = { apple = ["macos", "windows"], mac = ["m"] }
 base = ["owner", "window", "x::y"]
 hosts = "hosts"
-retiring = ["gone"]
+crate-level = ["gone"]
 "#,
         files: &[
             (
@@ -324,17 +314,13 @@ pub(in crate::module_dag) const EXPECTED: [(&str, &str, &str); 30] = [
         "window::apple::ios",
         "names another platform's file",
     ),
-    (
-        "window::winit",
-        "legacy::backend",
-        "names a retiring module",
-    ),
     ("platform", "crate::Nowhere", "unattributed"),
     ("text", "text::windows", "stale exception"),
     ("window::winit", "window::windows", "stale exception"),
     ("display::wasm", "display::linux", "exception module"),
     ("ghost", "", "unknown"),
     ("gone", "", "unknown"),
+    ("shared", "", "undeclared"),
     ("window", "", "duplicate"),
     ("x::y", "", "nested"),
     ("apple", "", "duplicate"),

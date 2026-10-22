@@ -55,7 +55,7 @@ mod hooks {
     use crate::owner::signal::OwnerSignal;
     use crate::owner::sources::SystemPreferenceSource;
     use crate::owner::watch::Watch;
-    use crate::shared::os_version::android::AndroidApi;
+    use crate::version::gate::android::AndroidApi;
 
     /// What an Android host's table names for its owner thread (ADR-0151
     /// §10): the displays, the preference source, the notice channel, the

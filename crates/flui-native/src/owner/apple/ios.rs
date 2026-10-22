@@ -8,7 +8,7 @@
 //! process bootstrap. The scene delegate owns subsequent window attachments.
 //! The loop makes and drives each scene's window as a [`SceneWindow`], the
 //! window feature's, without naming it; the clipboard and the other features
-//! keep their code under `platforms::ios` and reach the owner thread through
+//! keep their code in their own directories and reach the owner thread through
 //! what this module re-exports. The loop holds the displays, the preference
 //! source and the notice channel through the hooks the table makes
 //! ([`IosHost`]), and is the table's displays, preference and lifecycle

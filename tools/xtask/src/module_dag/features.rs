@@ -15,15 +15,14 @@
 //!   everything under it, or, below a group (`apple`), a child the group lists
 //!   (`macos`) and everything under it; the group module itself is a platform
 //!   node of its own, what the children share;
-//! - a `retiring` module is a top-level module the layout is taking apart
-//!   (`platforms`, whose code moves into the features): unchecked as a source,
-//!   and each module under it is a node of its own, which a feature names only
-//!   through a dated exception, so every such edge is listed until it goes;
-//! - any other top-level module is crate-level: unchecked as a source, free as
-//!   a target.
+//! - a `crate-level` module (the table, the platform trait, the error
+//!   vocabulary) is unchecked as a source and free as a target.
 //!
-//! The platform words and the groups are vocabulary, not modules the crate
-//! must have: the directories arrive one task at a time.
+//! Every top-level module compiled outside tests has one of those roles or is
+//! `transparent`; one that has none is a finding, so a directory the layout
+//! does not name (a `shared/` or a `platforms/` coming back) cannot appear
+//! unchecked. The platform words and the groups are vocabulary, not modules
+//! the crate must have: a feature has a file only for the platforms it fills.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -47,7 +46,7 @@ pub(super) const KEYS: [&str; 6] = [
     "groups",
     "base",
     "hosts",
-    "retiring",
+    "crate-level",
 ];
 
 /// `features` and the keys beside it.
@@ -64,8 +63,9 @@ pub(super) struct FeatureAxis {
     base: Vec<String>,
     /// The module that picks and wires a host.
     hosts: String,
-    /// The top-level modules the layout is taking apart.
-    retiring: Vec<String>,
+    /// The top-level modules that belong to no feature and are no base: what
+    /// every part of the crate may name.
+    crate_level: Vec<String>,
 }
 
 impl FeatureAxis {
@@ -109,7 +109,7 @@ impl FeatureAxis {
             groups,
             base: list("base")?,
             hosts,
-            retiring: list("retiring")?,
+            crate_level: list("crate-level")?,
         })
     }
 }
@@ -123,8 +123,6 @@ enum Node {
     Base(String),
     /// A top-level module of none of the roles.
     Crate(String),
-    /// A module under a retiring top-level module, by its whole path.
-    Retiring(String),
     /// A feature's model.
     Model(String),
     /// A platform file of a feature, or the group module `platform` opens
@@ -139,11 +137,9 @@ enum Node {
 impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Hosts(name)
-            | Self::Base(name)
-            | Self::Crate(name)
-            | Self::Retiring(name)
-            | Self::Model(name) => f.write_str(name),
+            Self::Hosts(name) | Self::Base(name) | Self::Crate(name) | Self::Model(name) => {
+                f.write_str(name)
+            }
             Self::Platform {
                 feature,
                 platform,
@@ -170,9 +166,6 @@ impl FeatureAxis {
         }
         if self.base.contains(top) {
             return Node::Base(top.clone());
-        }
-        if self.retiring.contains(top) {
-            return Node::Retiring(module.join("::"));
         }
         if !self.features.contains(top) {
             return Node::Crate(top.clone());
@@ -207,8 +200,6 @@ pub(super) enum Rule {
     ForeignPlatform,
     /// A platform file names no other platform's file.
     OtherPlatform,
-    /// A feature names a retiring module only through an exception.
-    Retiring,
 }
 
 impl Rule {
@@ -219,7 +210,6 @@ impl Rule {
             Self::Base => "base names a feature",
             Self::ForeignPlatform => "names another feature's platform file",
             Self::OtherPlatform => "names another platform's file",
-            Self::Retiring => "names a retiring module",
         }
     }
 }
@@ -233,10 +223,6 @@ impl fmt::Display for Rule {
                 "a feature names another feature's model, never its platform files"
             }
             Self::OtherPlatform => "a platform file names no other platform's file",
-            Self::Retiring => {
-                "a feature names a module the layout is taking apart only through a named \
-                 exception"
-            }
         })
     }
 }
@@ -247,7 +233,6 @@ fn rule(from: &Node, to: &Node) -> Option<Rule> {
         (Node::Hosts(_), _) => None,
         (_, Node::Hosts(_)) => Some(Rule::Hosts),
         (Node::Base(_), Node::Model(_) | Node::Platform { .. }) => Some(Rule::Base),
-        (Node::Model(_) | Node::Platform { .. }, Node::Retiring(_)) => Some(Rule::Retiring),
         (
             Node::Model(feature) | Node::Platform { feature, .. },
             Node::Platform { feature: other, .. },
@@ -362,7 +347,8 @@ pub(super) fn check(
 }
 
 /// The findings about the top-level names the declaration gives roles: each is
-/// a top-level module of the crate, in one role only.
+/// a top-level module of the crate, in one role only, and every top-level
+/// module compiled outside tests has one.
 fn declared_names(
     declaration: &Declaration,
     spec: &FeatureAxis,
@@ -376,7 +362,7 @@ fn declared_names(
         .iter()
         .chain(&spec.base)
         .chain(std::iter::once(&spec.hosts))
-        .chain(&spec.retiring)
+        .chain(&spec.crate_level)
         .chain(&declaration.transparent);
     for name in declared {
         if !seen.insert(name.as_str()) {
@@ -387,6 +373,13 @@ fn declared_names(
             findings.push(Finding::Nested { name: name.clone() });
         } else if !scan.modules.contains_key(name) {
             findings.push(Finding::Unknown { name: name.clone() });
+        }
+    }
+    for module in scan.modules.keys() {
+        if !seen.contains(module.as_str()) {
+            findings.push(Finding::Undeclared {
+                module: module.clone(),
+            });
         }
     }
 }

@@ -413,7 +413,7 @@ pub(crate) mod link_rate {
 
     use flui_platform::RefreshPeriod;
 
-    use crate::shared::os_version::{Gate, Since, apple::AppleVersion};
+    use crate::version::gate::{Gate, Since, apple::AppleVersion};
 
     /// The floor of the requested range: an adaptive ProMotion panel may drop to
     /// 60 Hz when nothing moves, never lower while a frame source is running.
@@ -636,6 +636,19 @@ pub(crate) mod link_rate {
                     "{version:?} max {maximum}"
                 );
             }
+        }
+
+        /// The display link's gate, the row of `version::gate`'s table for the
+        /// marker declared here.
+        #[test]
+        fn frame_rate_range_gate_table() {
+            let failures = crate::version::gate::testing::row::<super::FrameRateRangeProperty>(
+                "FrameRateRangeProperty",
+                AppleVersion::new(14, 99, 99),
+                AppleVersion::new(15, 0, 0),
+                AppleVersion::UNKNOWN,
+            );
+            assert!(failures.is_empty(), "{failures:#?}");
         }
 
         #[test]

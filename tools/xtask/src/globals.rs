@@ -24,7 +24,7 @@
 //! `diagnostic`), and the gate checks what it can of each class. A global
 //! with no entry, an entry with no global (or for an exempt one), a class the
 //! global does not fit, and a second trampoline in the host or in one
-//! platform backend are findings.
+//! platform are findings.
 //!
 //! The gate sees source, not expansions: environment-variable selection,
 //! `include!` of build-script output, state inside dependencies, statics that
@@ -70,13 +70,11 @@ pub(crate) struct GlobalsArgs {
 /// ADR-0083 moves the host, and this constant with it.
 const HOST: &str = "flui-app";
 
-/// The crate whose backend directories may each hold one trampoline.
+/// The crate whose platforms may each hold one trampoline.
 const PLATFORM: &str = "flui-native";
 
-/// The backend directories, one per platform.
-const BACKENDS: &str = "crates/flui-native/src/platforms/";
-
-/// The owner thread's directory, which holds a module per platform: its loop.
+/// The owner thread's directory, which holds a module per platform: its loop,
+/// where that platform's one trampoline lives.
 const OWNER: &str = "crates/flui-native/src/owner/";
 
 /// `cargo xtask globals`.
@@ -444,8 +442,8 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
             None => report.problems.push(problem(
                 PLACEMENT,
                 format!(
-                    "a trampoline lives only in the host ({HOST}), in a backend directory under \
-                     {BACKENDS} or in a platform's module under {OWNER}"
+                    "a trampoline lives only in the host ({HOST}) or in a platform's module \
+                     under {OWNER}"
                 ),
             )),
             Some(slot) => match holders.get(&slot) {
@@ -463,12 +461,11 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
 }
 
 /// Which one-trampoline slot a global occupies: the host, or one platform of
-/// the platform crate — its backend directory under [`BACKENDS`], or its
-/// module under [`OWNER`], which a platform word of the crate's
-/// `[package.metadata.flui.modules]` names (`owner/winit.rs` and what is under
-/// `owner/winit/`); below a group's module the child the group lists is the
-/// platform (`owner/apple/ios.rs` is iOS's, as `platforms/ios/` is), and the
-/// group's own module, which its children share, is no platform's.
+/// the platform crate — its loop's module under [`OWNER`], which a platform
+/// word of the crate's `[package.metadata.flui.modules]` names
+/// (`owner/winit.rs` and what is under `owner/winit/`); below a group's module
+/// the child the group lists is the platform (`owner/apple/ios.rs` is iOS's),
+/// and the group's own module, which its children share, is no platform's.
 fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
     if krate.name == HOST {
         return Some(format!("the host ({HOST})"));
@@ -481,11 +478,7 @@ fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
         list.as_array()
             .is_some_and(|names| names.iter().any(|listed| listed.as_str() == Some(name)))
     };
-    let backend = |def: &Def| {
-        if let Some(rest) = def.file.strip_prefix(BACKENDS) {
-            let (backend, _) = rest.split_once('/')?;
-            return Some(backend.to_owned());
-        }
+    let platform = |def: &Def| {
         let mut names = def
             .file
             .strip_prefix(OWNER)?
@@ -503,10 +496,10 @@ fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
             _ => Some(word.to_owned()),
         }
     };
-    let first = backend(&defs[0])?;
+    let first = platform(&defs[0])?;
     defs.iter()
-        .all(|def| backend(def).as_deref() == Some(first.as_str()))
-        .then(|| format!("the {first} backend"))
+        .all(|def| platform(def).as_deref() == Some(first.as_str()))
+        .then(|| format!("the {first} platform"))
 }
 
 // ---------------------------------------------------------------------------

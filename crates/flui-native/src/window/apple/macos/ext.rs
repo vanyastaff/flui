@@ -3,7 +3,7 @@
 //! collection behavior and level — and its implementation for the window.
 //!
 //! ```rust,ignore
-//! use flui_native::platforms::macos::MacOSWindowExt;
+//! use flui_native::MacOSWindowExt;
 //!
 //! window.set_liquid_glass(LiquidGlassMaterial::Standard);
 //! window.enable_tiling(TilingConfiguration::new());
@@ -115,7 +115,7 @@ pub trait MacOSWindowExt {
     /// Numeric IDs cannot establish that ownership:
     ///
     /// ```compile_fail,E0308
-    /// use flui_native::{HostWindow, platforms::macos::MacOSWindowExt};
+    /// use flui_native::{HostWindow, MacOSWindowExt};
     ///
     /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
     ///     window.add_tab_to_window(1)
@@ -123,7 +123,7 @@ pub trait MacOSWindowExt {
     /// ```
     ///
     /// ```no_run
-    /// use flui_native::{HostWindow, platforms::macos::MacOSWindowExt};
+    /// use flui_native::{HostWindow, MacOSWindowExt};
     ///
     /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
     ///     window.add_tab_to_window(other)

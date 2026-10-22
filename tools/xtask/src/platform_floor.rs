@@ -20,7 +20,7 @@ use crate::util::{read, repo_root};
 pub(crate) const SOURCE: &str = "platform-support.toml";
 
 /// The Rust source holding the floors `flui-native` compiles in.
-const PLATFORM_OUTPUT: &str = "crates/flui-native/src/shared/platform_floor.rs";
+const PLATFORM_OUTPUT: &str = "crates/flui-native/src/version/floor.rs";
 /// The Rust source holding the floors `flui-cli` packages with.
 const CLI_OUTPUT: &str = "crates/flui-cli/src/build/platform_floor.rs";
 /// The version map.
@@ -201,11 +201,11 @@ fn platform_source(floors: &Floors) -> String {
     let (major, minor, patch) = dotted(&floors.ios.version);
     format!(
         "{GENERATED_HEADER}\n\
-         //! The floors this crate compiles in (ADR-0244); `shared::os_version` refuses a gate at or\n\
-         //! below them.\n\
+         //! The floors this crate compiles in (ADR-0244); `version::gate` refuses a gate at or below\n\
+         //! them.\n\
          \n\
          /// The lowest Windows build FLUI supports, as `RtlGetVersion` reports it.\n\
-         #[cfg(windows)]\n\
+         #[cfg(any(windows, test))]\n\
          pub(crate) const WINDOWS_BUILD: u32 = {};\n\
          \n\
          /// The lowest iOS version FLUI supports, as (major, minor, patch).\n\

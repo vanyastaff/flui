@@ -31,9 +31,10 @@ use flui_platform::drag::{
 use flui_platform::{DragDropEvent, PlatformInput, WindowId};
 use parking_lot::Mutex;
 
-use crate::host;
+use crate::host::{self, Host};
 use crate::owner::headless::{DragOver, HeadlessLoop, HeadlessState, OsDragSession, OsDrags};
 use crate::owner::slot::OwnerSlot;
+use crate::platform::HostPlatform;
 
 /// The headless host's drag-and-drop transport: the platform's one
 /// data-transfer source, over the drag state of the simulated system, which
@@ -191,6 +192,34 @@ impl PlatformDragSource for HeadlessDragSource {
             over: None,
         });
         Ok(())
+    }
+}
+
+/// The headless platform's drag and drop: whether its windows start OS drag
+/// sessions, and the test's side of the simulated system.
+impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
+    /// Let this backend's windows start OS drag sessions, starting them at
+    /// `timing` (desktop: `OnLeavingWindow`; iOS and the web: `AtStart`), and
+    /// report outgoing drags `Native`. Without it its windows have no drag
+    /// source, as a Linux/X11 window has none. The test plays the OS through
+    /// [`drag_and_drop`](Self::drag_and_drop).
+    #[must_use]
+    pub fn with_os_drag(self, timing: OsDragStart) -> Self {
+        self.owner().with_state(|state| {
+            state.os_drag_start = Some(timing);
+            state.input_availability = state
+                .input_availability
+                .to_builder()
+                .outgoing_drag(flui_platform::input_capabilities::Availability::Native)
+                .build();
+        });
+        self
+    }
+
+    /// The simulated OS side of drag-and-drop, valid across [`Platform::run`](crate::Platform::run).
+    #[must_use]
+    pub fn drag_and_drop(&self) -> HeadlessDragAndDrop {
+        HeadlessDragAndDrop::of(&self.owner().state)
     }
 }
 

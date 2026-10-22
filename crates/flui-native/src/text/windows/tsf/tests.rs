@@ -732,7 +732,7 @@ fn a_window_offers_its_text_services_as_its_host() {
         .expect("window");
     let win32 = window
         .as_any()
-        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+        .downcast_ref::<crate::WindowsWindow>()
         .expect("Win32 window");
     let hwnd = win32.hwnd();
     let host = win32
@@ -840,7 +840,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         .expect("window");
     let win32 = window
         .as_any()
-        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+        .downcast_ref::<crate::WindowsWindow>()
         .expect("Win32 window");
     let hwnd = win32.hwnd();
     let host = win32
@@ -951,7 +951,7 @@ fn the_text_services_answer_a_completion_for_its_store() {
         .expect("window");
     let hwnd = window
         .as_any()
-        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+        .downcast_ref::<crate::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
     let cases: &[Row] = &[
@@ -1206,7 +1206,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
         Ok(Ok(window)) => {
             let hwnd = window
                 .as_any()
-                .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+                .downcast_ref::<crate::WindowsWindow>()
                 .expect("Win32 window")
                 .hwnd();
             assert!(
@@ -1300,7 +1300,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         .expect("window");
     let hwnd = window
         .as_any()
-        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
+        .downcast_ref::<crate::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
     #[expect(

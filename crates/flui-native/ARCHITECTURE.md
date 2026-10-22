@@ -20,6 +20,43 @@ trait depends on `flui-platform` instead.
 
 ## Invariants
 
+- **The crate is laid out by feature, and its module graph is checked
+  (ADR-0151 §10).** `src/` holds, at its top, the crate root (`lib.rs`, which
+  picks a host), the table (`host.rs`), `Platform` and its one implementation
+  (`platform.rs`), `HostWindow` (`host_window.rs`), the error vocabulary
+  (`error.rs`), the table-test runner (`table_test.rs`) and, until `Platform`
+  loses its executor, `executor.rs` and `task.rs`. Its directories are the
+  tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
+  OS versions (`version/`), the storage position's vocabulary (`storage/`) and
+  one directory per feature of the closed list: `window`, `input`, `text`,
+  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `preferences`,
+  `lifecycle`. There is no directory of code shared across features and no
+  directory per platform: what two platforms of a feature share is that
+  feature's model, and each platform is a file (or, where one OS object or the
+  3 000-line limit needs it, a directory) in every feature it fills, named in
+  std's words (`windows`, `apple` with `macos`/`ios`, `android`, `web`,
+  `linux` with `wayland`/`x11`, `winit`, `headless`). A public name a host
+  offers beyond `Platform` (a window and its extensions, the headless test
+  controls, the UIKit scene events) is named at the crate root.
+  `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
+  checks: the ten features; `owner`, `version` and `storage` as `base`, which
+  names no feature; `hosts`, which nothing names; and the crate-level files
+  (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
+  `task`). A top-level module with none of these roles is a finding, so a
+  directory the layout does not name cannot come back unchecked
+  (`table_test`, built for tests only, needs none). A platform file names its
+  model, a base and other features' models; every other edge is a
+  named, dated exception whose `reason` says what removes it: the winit host's
+  displays on Linux reading `display::linux` (until the native Linux host,
+  ADR-0151 §11), and edges between the window's file and another feature's of
+  one platform. Each of those goes one of three ways: a window that builds
+  another feature's window-level object gets it through the host table; a
+  feature that reaches into the window, or whose state of a window the window
+  keeps, keeps that state itself, keyed by the window's identity and set up
+  and dropped by its own window hooks; a window that reads a display,
+  preference or lifecycle fact with another feature's code gets the fact
+  through an owner hook. The features that share one AppKit or UIKit view
+  keep theirs until that view is an owner multiplexer they join.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
@@ -56,10 +93,19 @@ trait depends on `flui-platform` instead.
   first) and the lifecycle hooks a loop keeps (`LifecycleHooks`),
   `owner::sources` what a loop keeps of a feature's source
   (`SystemPreferenceSource`), and `owner::watch` an observation a feature
-  started for a loop. `owner` is the `base` of
+  started for a loop. `owner` is a `base` of
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
-  crate root only.
+  crate root only. Its tests name no feature or host either: they run over
+  stand-ins of the owner's own (`owner::windows::testing::QuietHost<C>`, a
+  Win32 host with the window hooks `C` gives, none by default;
+  `owner::winit::testing::{QuietHost<D>, QuietTable, quiet_platform}`, a winit
+  loop whose hooks report nothing but the displays `D` gives, under a table
+  whose window position opens no window; `owner::notices::testing::NoNotices`),
+  and a test that needs a host's real windows is that feature's. A feature's
+  test that runs the winit loop by hand reaches it through
+  `owner::winit::testing` (`install_control_lane`, `WinitApp::for_test` and
+  accessors marked `_for_test`), and the loop keeps its state private.
 - **Each platform's loop is a module of `owner/` (ADR-0151 §10).**
   `owner::windows` is the Win32 message loop and its wake deadlines, the
   owner's message-only window (`control`), the thread's COM apartment, FLUI's
@@ -139,7 +185,8 @@ trait depends on `flui-platform` instead.
     own keys, the fullscreen hotkey. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
-    `a_second_host_is_refused_the_window_class`,
+    `a_second_host_is_refused_the_window_class` (two instances of the owner's
+    quiet host, told apart by type),
     `two_windows_keep_their_own_input`,
     `a_windows_input_is_gone_once_it_is_destroyed`,
     `a_window_the_input_never_saw_has_no_input`, and
@@ -167,7 +214,8 @@ trait depends on `flui-platform` instead.
     displays subscribed. Tests: `broadcast_subscribers_hear_a_message_in_order`,
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
     `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`,
-    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
+    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`,
+    `the_winit_loop_s_displays_hear_a_display_change`.
   - The owner's message-only window answers its own messages (the wake, the
     exit policy) and offers any other, in order, to the `OwnerMessages` hooks
     of the objects the loop holds: today the drag transport the table makes
@@ -238,12 +286,12 @@ trait depends on `flui-platform` instead.
   `windows/mod.rs` (the pure `geometry`, the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
   `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
-  xtask module-dag` lists each feature directory in `features` and
-  `platforms` as `retiring`: a platform module names its model, `owner/` and
-  other features' models, never another platform's module; `owner/` names no
-  feature's item; each edge into a module under `platforms/`, or into another
-  feature's platform file, is a named exception that goes when that module
-  becomes a feature's or the feature keeps its own per-window state. The
+  xtask module-dag` lists each feature directory in `features`: a platform
+  module names its model, `owner/`, `version/` and other features' models,
+  never another platform's module; `owner/` and `version/` name no feature's
+  item; each edge into another feature's platform file is a named exception
+  that goes when the feature keeps its own per-window state or the position
+  reaches the window through the table. The
   pure halves are built for their target and for tests on every host; which
   key belongs to the input method is the input feature's
   (`input::android::keys`, `input::web::keys`), and a window's text input
@@ -320,10 +368,10 @@ trait depends on `flui-platform` instead.
   loop's hook; on Linux `display::winit` reads `display::linux`, the one edge
   between platform files `module-dag` admits, by name, until winit goes
   (ADR-0151 §11). The Android loop's poll rule is the loop's
-  (`owner::android::poll`).
-  `platforms` is `retiring` in `[package.metadata.flui.modules]`: a feature
-  reaches a module under it only through a named exception, and the display
-  feature has one, the iOS source's version read (`platforms::ios::os_version`).
+  (`owner::android::poll`). The iOS source reads the OS version as it is built
+  (`version::gate::apple::AppleVersion::read`). Which windows the winit loop
+  looks at again on Linux, because winit may have moved them to another output
+  without an event, is the loop's (`WinitApp::sync_unannounced_displays`).
 - **The preferences and the lifecycle are feature directories,
   `preferences/` and `lifecycle/` (ADR-0151 §10).**
   - `preferences`: the model is `read` (the bounded read admission the Android
@@ -435,8 +483,8 @@ trait depends on `flui-platform` instead.
     names the other.
   - What a window file still names of another feature, and what another
     feature's code names of the window, are the edges
-    `[package.metadata.flui.modules] exceptions` lists: into `platforms/`,
-    into the accessibility, haptics and drag files, and between the text and
+    `[package.metadata.flui.modules] exceptions` lists: into the
+    accessibility, haptics and drag files, and between the text and
     window files of one platform (a window builds its text input and
     captures its text sizing; the text input reaches the window that holds
     it). A window that builds or keeps another feature's object of a
@@ -584,18 +632,31 @@ trait depends on `flui-platform` instead.
   maximized or fullscreen is created unmapped, gets its mode written into
   `_NET_WM_STATE`, and is mapped afterwards, because a window manager reads
   the mode from the property when it maps a window.
-- **An OS version is compared only inside `shared::os_version` (ADR-0244).**
+- **An OS version is compared only inside `version::gate` (ADR-0244).**
   Windows, iOS and Android each have one version type (`WindowsBuild`,
-  `AppleVersion`, `AndroidApi`), read once when the platform is built and kept
-  in it, with its number private. An API newer than the floor in
-  `platform-support.toml` is a marker type implementing `Gate`, whose doc says
-  what the code does without it; `version.since::<F>()` returns a `Since<F>` proof
-  or `None`, and the gated call takes the proof. A gate at or below the floor fails
-  to compile, so raising a floor turns the gates it makes dead into errors, and an
-  unreadable version unlocks nothing. Clippy refuses `objc2::available!` and
-  `AndroidApp::sdk_version`. The
-  table `os_version_gate_table` checks every marker at the version before its
-  `SINCE`, at `SINCE` and at an unknown version.
+  `AppleVersion`, `AndroidApi`), each in a module of `version/gate.rs` built
+  for its target and for tests and forbidding `unsafe`, read once when the
+  platform is built and kept in it, with its number private; reading it is the
+  one part that needs the system, under `cfg(<os>)` (`read_build`, the
+  `RtlGetVersion` call behind `WindowsBuild::read`; `AppleVersion::read`; the
+  Android level is read where the NDK is looked up, `owner::android::ndk`).
+  What a version unlocks lives with the code that uses it: the virtual-mode
+  display query's gate and its flags are the Windows display source's
+  (`display::windows`). The floors are
+  `version/floor.rs`, generated from `platform-support.toml` by `cargo xtask
+  platform-floor`. An API newer than the floor is a marker type implementing
+  `Gate`, whose doc says what the code does without it; `version.since::<F>()`
+  returns a `Since<F>` proof or `None`, and the gated call takes the proof. A
+  gate at or below the floor fails to compile, so raising a floor turns the
+  gates it makes dead into errors, and an unreadable version unlocks nothing.
+  Clippy refuses `objc2::available!` and `AndroidApp::sdk_version`. `version`
+  is a `base` of `module-dag`: it names no feature, in its tests too. Each
+  module that declares markers checks them, at the version before `SINCE`, at
+  `SINCE` and at an unknown version: `os_version_gate_table` the markers of
+  `version::gate`, `ndk_gate_table` the NDK functions' (`owner::android::ndk`)
+  and `frame_rate_range_gate_table` the display link's
+  (`display::apple::link_rate`), through `version::gate::testing::row`, and
+  `virtual_mode_gate_table` the display query's (`display::windows::sample`).
 
 ---
 
@@ -733,8 +794,9 @@ floor and the 5% band are choices to confirm on a device; no Apple code runs in 
 macOS has no version-gated call here, so it reads no version.
 
 The rules (UUID keying, screen ledger, version proof, frame-rate request, band)
-are plain functions in `shared/` so Linux CI runs them; the UIKit and AppKit
-glue around them is only type-checked: no Apple code runs in CI.
+are pure modules of `display::apple` and `version::gate` built for tests on
+every host, so Linux CI runs them; the UIKit and AppKit glue around them is only
+type-checked: no Apple code runs in CI.
 
 ### Native text sizing captures conversion inputs on the owner lane
 
@@ -2189,7 +2251,8 @@ or a CJK source) remains **not driven**.
 
 ### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
 
-**Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
+**Decision.** The iOS host (`owner::apple::ios` and the `ios` files of its
+features) binds UIKit through `objc2`
 0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `block2` /
 `dispatch2`, and takes its framework loop-exit signal from
 `applicationWillTerminate:`. ADR-0071 carries the full record.

@@ -1882,8 +1882,42 @@ enum DragPath {
     Dropped,
 }
 
+/// Whether a Linux window can move to another display without winit saying
+/// so: any Wayland window (see `WinitApp::sync_unannounced_displays`), and an
+/// X11 window only before its first display is known.
+#[cfg(target_os = "linux")]
+fn moves_unannounced(wayland: bool, awaiting_display: bool) -> bool {
+    wayland || awaiting_display
+}
+
 // Helper methods for WinitApp
 impl WinitApp {
+    /// Look again at the display of every window winit may have moved without
+    /// an event.
+    ///
+    /// A Wayland surface enters an output with no winit event: none for its
+    /// first one, and only a `ScaleFactorChanged` for a later one whose scale
+    /// differs, so a window dragged to an output of another refresh rate at
+    /// the same scale would keep the old display. The loop goes idle once the
+    /// compositor's `enter` has been handled, so every Wayland window is
+    /// looked at there, at one monitor lookup each. An X11 window reports a
+    /// move with `Moved`, and only one with no display yet is looked at.
+    #[cfg(target_os = "linux")]
+    fn sync_unannounced_displays(&self, event_loop: &ActiveEventLoop) {
+        let wayland = self.platform.displays.is_wayland();
+        let unannounced: Vec<_> = self.platform.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| moves_unannounced(wayland, window.awaiting_display()))
+                .cloned()
+                .collect()
+        });
+        for window in unannounced {
+            self.sync_window_display(event_loop, &window, false);
+        }
+    }
+
     /// Raise the window's display hint when it may be on another display.
     ///
     /// `forced` is a scale-factor change, which alters the display's snapshot
@@ -2757,7 +2791,7 @@ impl OwnerHooks for WinitOwnerHooks {
 
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             // SAFETY: identical justification to `Platform::open_window`'s
-            // same-thread fast path (`platforms/winit/positions.rs`) — this
+            // same-thread fast path (the winit window position's `open`) — this
             // call is reached only from inside the same nested `on_ready`
             // invocation that publishes `ACTIVE_EVENT_LOOP`.
             let event_loop = unsafe { event_loop_ptr.as_ref() };
@@ -2878,14 +2912,14 @@ impl ProxyTransport for WinitProxyTransport {
     }
 }
 
-// The real-event-loop test family lives in its own file: every test in it
-// runs `event_loop.run_app` on an ordinary test thread, and together with the
-// four helpers nothing else uses it outgrew this file's budget (issue #923).
-// A sibling module rather than a nested one, so its tests sit beside `tests`
-// rather than two segments below it.
+// The loop's test on a real winit event loop, which runs `event_loop.run_app`
+// on an ordinary test thread with no window; the real-loop tests that open
+// windows are the window feature's. A sibling module rather than a nested one,
+// so its test sits beside `tests` rather than two segments below it.
 #[cfg(test)]
 mod real_loop_tests;
-// The real loop the tests here and the window's tests run on.
+// The real loop the tests here and the window's tests run on, and the quiet
+// host and table they run over.
 #[cfg(test)]
 pub(crate) mod testing;
 
@@ -2899,8 +2933,10 @@ mod tests {
         },
     };
 
+    use super::testing::{QuietTable, quiet_platform};
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
-    use crate::{WinitPlatform, owner::winit::control::control_lane, platform::Platform};
+    use crate::owner::winit::control::control_lane;
+    use crate::platform::{HostPlatform, Platform};
     use flui_platform::WindowOptions;
 
     /// Runs its action when dropped: a capture whose destructor calls back
@@ -2926,7 +2962,10 @@ mod tests {
         use flui_platform::{WindowEvent, WindowId};
         use std::sync::atomic::AtomicBool;
 
-        fn calls_back(platform: &Arc<WinitPlatform>, reached: &Arc<AtomicBool>) -> OnDrop {
+        fn calls_back(
+            platform: &Arc<HostPlatform<QuietTable>>,
+            reached: &Arc<AtomicBool>,
+        ) -> OnDrop {
             let (weak, reached) = (Arc::downgrade(platform), Arc::clone(reached));
             OnDrop(Some(Box::new(move || {
                 if let Some(platform) = weak.upgrade() {
@@ -2939,7 +2978,7 @@ mod tests {
         let (done, finished) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             let event = || WindowEvent::Closed(WindowId(1));
-            let host = Arc::new(WinitPlatform::new());
+            let host = Arc::new(quiet_platform());
             let platform = host.shared_owner();
 
             // A window-event handler replaces itself.
@@ -3032,7 +3071,7 @@ mod tests {
 
     #[test]
     fn winit_panicking_quit_callback_runs_after_idempotent_owner_close() {
-        let host = Arc::new(WinitPlatform::new());
+        let host = Arc::new(quiet_platform());
         let platform = host.shared_owner();
         let (sender, receiver) = control_lane(Arc::new(|| {}));
         platform.with_state(|state| {
@@ -3107,9 +3146,61 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_display_change_reaches_the_displays_when_the_preferences_cannot_open() {
+        use std::rc::Rc;
+
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::WM_DISPLAYCHANGE;
 
-        let host = Arc::new(WinitPlatform::new());
+        use super::HostDisplays;
+        use super::testing::{QuietHost, quiet_platform_over};
+        use crate::owner::notices::StaleOnWake;
+        use crate::owner::signal::OwnerSignal;
+        use crate::owner::windows::broadcast::Subscriber;
+
+        /// Displays whose part of the system's broadcasts wakes the owner on
+        /// a display change, as the Win32 source's does.
+        #[derive(Default)]
+        struct ChangingDisplays;
+
+        impl StaleOnWake for ChangingDisplays {
+            fn mark_stale(&self) {}
+        }
+
+        impl HostDisplays for ChangingDisplays {
+            fn snapshot(&self) -> Result<flui_platform::DisplaySnapshot, crate::PlatformError> {
+                Ok(flui_platform::DisplaySnapshot::empty())
+            }
+
+            fn id_of_window(&self, _: &winit::window::Window) -> Option<flui_platform::DisplayId> {
+                None
+            }
+
+            fn resample(
+                &self,
+                _: &winit::event_loop::ActiveEventLoop,
+                _: Option<&Arc<OwnerSignal>>,
+            ) -> bool {
+                false
+            }
+
+            fn broadcasts(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Rc<dyn Subscriber> {
+                Rc::new(DisplayChanges(Arc::clone(signal)))
+            }
+        }
+
+        /// The displays' subscriber: a display change wakes the owner.
+        struct DisplayChanges(Arc<OwnerSignal>);
+
+        impl Subscriber for DisplayChanges {
+            fn message(&self, _: HWND, message: u32, _: WPARAM, _: LPARAM) -> Option<LRESULT> {
+                if message == WM_DISPLAYCHANGE {
+                    let _ = self.0.wake();
+                }
+                None
+            }
+        }
+
+        let host = Arc::new(quiet_platform_over::<QuietHost<ChangingDisplays>>());
         let platform = host.shared_owner();
         let wakes = Arc::new(AtomicUsize::new(0));
         let signal = crate::owner::signal::OwnerSignal::new({
@@ -3168,7 +3259,7 @@ mod tests {
             (false, false, false),
         ] {
             assert_eq!(
-                crate::platforms::winit::linux_unreported::moves_unannounced(wayland, awaiting),
+                super::moves_unannounced(wayland, awaiting),
                 looked_at,
                 "wayland {wayland}, awaiting a display {awaiting}"
             );

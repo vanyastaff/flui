@@ -18,16 +18,15 @@
 //! directory per feature holds the feature's model beside one file per
 //! platform. `features` are those directories, `platforms` the file names,
 //! `groups` the platforms that open into children where code differs, `base`
-//! the modules every feature builds on and `hosts` the one module that wires a
-//! host together. A platform file's submodules belong to it; any other
-//! top-level module is crate-level and unchecked as a source. Nothing outside
+//! the modules every feature builds on, `hosts` the one module that wires a
+//! host together and `crate-level` the rest, which is unchecked as a source; a
+//! top-level module with none of those roles is a finding. A platform file's
+//! submodules belong to it. Nothing outside
 //! `hosts` names it, a base module names no feature, a feature names another
 //! feature's model and never its platform files, and a platform file names no
 //! other platform's file (a model names its own platform files, a group module
-//! its children, a child its group module). `retiring` lists top-level modules
-//! the layout is taking apart: a feature names a module under one only through
-//! an exception, so each such edge is listed by name until it goes. `layers`
-//! and the feature keys exclude each other.
+//! its children, a child its group module). `layers` and the feature keys
+//! exclude each other.
 //!
 //! Why a scan (ADR-0078 §4, condition 1): no type or stock lint states the
 //! rule. Visibility (`pub(crate)`, `pub(in ...)`) says who may name an item,
@@ -384,7 +383,7 @@ enum Finding {
         why: String,
     },
     /// A top-level module neither `layers` nor `transparent` names, with no
-    /// `"*"` layer to cover it.
+    /// `"*"` layer to cover it; or, on the feature axis, one with no role.
     Undeclared { module: String },
     /// A declared name that is not a top-level module of the crate.
     Unknown { name: String },
@@ -513,7 +512,8 @@ impl fmt::Display for Finding {
             ),
             Self::Undeclared { module } => write!(
                 f,
-                "the top-level module `{module}` is in no layer and not `transparent`; declare \
+                "the top-level module `{module}` has no role in the declaration (a layer, or a \
+                 feature, `base`, `hosts` or `crate-level`) and is not `transparent`; declare \
                  it"
             ),
             Self::Unknown { name } => write!(

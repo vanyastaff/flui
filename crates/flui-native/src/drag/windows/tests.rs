@@ -55,10 +55,10 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
+use crate::WindowsWindow;
 use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
 use crate::owner::windows::{HostDrag, WindowsLoop};
-use crate::platforms::windows::WindowsWindow;
 use crate::window::config::WindowConfiguration;
 use crate::window::windows::proc::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};

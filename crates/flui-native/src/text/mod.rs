@@ -1,7 +1,7 @@
 //! Text input and the system text size: the feature's model beside one module
 //! per platform (ADR-0151 §10).
 //!
-//! The model is what more than one platform uses: [`ime`], what the Android
+//! The model is what more than one platform uses: `ime`, what the Android
 //! and web hosts mirror of a focused field (its text with a protected field
 //! masked, and the one edit between two versions of it), `sizing`, the native
 //! text size an owner captures for a presentation, and [`TextInput`], the
@@ -11,20 +11,19 @@
 //!   field's store, and the screen geometry its input methods are placed by;
 //! - `apple`: AppKit's `NSTextInputClient` (`macos`) and UIKit's Dynamic Type
 //!   sizing (`ios`);
-//! - [`android`]: `FluiView`'s editor, which mirrors the focused field, and
+//! - `android`: `FluiView`'s editor, which mirrors the focused field, and
 //!   the system font scale;
-//! - [`web`]: the browser's `EditContext` or a hidden textarea, which mirrors
+//! - `web`: the browser's `EditContext` or a hidden textarea, which mirrors
 //!   the focused field;
 //! - `winit`: winit's IME enablement and cursor area;
 //! - `headless`: the recording double of IME requests.
 //!
-//! Two pure parts are built on every target and public, hidden from the
-//! documentation, because the backend conformance table in `tests/` decodes a
-//! key the input method owns with them until that table reaches the hosts
-//! through the public API: Android's `keys` and the web's `ime`. Every other
-//! platform module is built for its own target; Android's `ime` and `sizing`
-//! and the whole of `windows` for tests too, which check their pure halves on
-//! every host.
+//! The model's `ime` is built for the two hosts that mirror a field and for
+//! tests. The key a backend's input method owns is the input feature's
+//! (`input::android::keys`, `input::web::keys`), which the backend conformance
+//! table in `tests/` decodes with. Each platform module is built for its own
+//! target; Android's `ime` and `sizing`, the web's `ime` and the whole of
+//! `windows` for tests too, which check their pure halves on every host.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -34,16 +33,14 @@ use flui_platform::text_store::TextStoreHost;
 
 use crate::host::{Absent, position};
 
-#[doc(hidden)]
-pub mod android;
+pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 pub(crate) mod headless;
-#[doc(hidden)]
-pub mod ime;
+#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+pub(crate) mod ime;
 pub(crate) mod sizing;
-#[doc(hidden)]
-pub mod web;
+pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
 #[cfg(all(

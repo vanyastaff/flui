@@ -55,7 +55,8 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::*;
-    use crate::{WinitPlatform, platform::Platform};
+    use crate::owner::winit::testing::quiet_platform;
+    use crate::platform::Platform;
 
     type Phases = Arc<Mutex<Vec<SessionEndPhase>>>;
 
@@ -71,7 +72,7 @@ mod tests {
 
     #[test]
     fn session_end_without_a_hook_proceeds() {
-        let platform = WinitPlatform::new();
+        let platform = quiet_platform();
         assert_eq!(
             platform.owner().session_end(SessionEndPhase::Query),
             SessionEndAnswer::Proceed
@@ -80,7 +81,7 @@ mod tests {
 
     #[test]
     fn session_end_asks_the_hook_each_phase_and_returns_its_answer() {
-        let platform = WinitPlatform::new();
+        let platform = quiet_platform();
         let (phases, hook) = recording_hook();
         platform.on_session_end(Box::new(hook));
         for phase in [
@@ -102,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_session_end_hook_that_panics_stays_installed() {
-        let platform = WinitPlatform::new();
+        let platform = quiet_platform();
         let calls = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&calls);
         platform.on_session_end(Box::new(move |_| {
@@ -128,7 +129,7 @@ mod tests {
 
     #[test]
     fn a_hook_registered_during_a_phase_is_not_overwritten() {
-        let platform = Arc::new(WinitPlatform::new());
+        let platform = Arc::new(quiet_platform());
         let (phases, newer) = recording_hook();
         let newer = Mutex::new(Some(newer));
         let during = Arc::clone(&platform);

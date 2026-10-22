@@ -16,31 +16,25 @@
 //!   ├─ platform.rs          - Central Platform trait and HostPlatform<H>,
 //!   │                         its one implementation
 //!   ├─ host_window.rs       - HostWindow: PlatformWindow + accessibility
-//!   ├─ host.rs, hosts/      - A host's table of positions, one per host
-//!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
-//!   │                         and slot, the panic boundary, the one call
-//!   │                         point for handlers and the handler registry
-//!   ├─ display/             - The displays: the registry and snapshot model
-//!   │                         beside one file per platform
-//!   ├─ input/               - Pointer, touch, pen and keyboard input: the
-//!   │                         pointer assembly and key rules beside one
-//!   │                         file per platform
-//!   ├─ text/                - Text input and the system text size: the
-//!   │                         model and one module per platform
-//!   ├─ preferences/         - System preferences: the model and one source
-//!   │                         per platform
-//!   ├─ lifecycle/           - Session end and system notices, one source per
-//!   │                         platform
+//!   ├─ host.rs              - A host's table: one type per position, and
+//!   │                         Absent<F> for a position a platform lacks
+//!   ├─ hosts/               - One table per host and its constructor
+//!   ├─ owner/               - The owner thread (ADR-0039) and each platform's
+//!   │                         loop: the capability, its signal and slot, the
+//!   │                         panic boundary, the one call point for handlers
+//!   ├─ version/             - The OS version floors and gates (ADR-0244)
 //!   │
-//!   ├─ clipboard/, drag/,   - A feature each: its model beside one file per
-//!   │  accessibility/,        platform
-//!   │  haptics/
+//!   ├─ window/              - A feature each (ADR-0151 §10): its model beside
+//!   ├─ input/                 one file per platform (windows, apple,
+//!   ├─ text/                  android, web, linux, winit, headless)
+//!   ├─ display/
+//!   ├─ clipboard/, drag/
+//!   ├─ accessibility/
+//!   ├─ haptics/
+//!   ├─ preferences/
+//!   ├─ lifecycle/
 //!   │
-//!   ├─ shared/              - The OS version gates and floors (ADR-0244)
-//!   │
-//!   └─ platforms/           - Concrete implementations
-//!       ├─ winit/           - Cross-platform (Windows/macOS/Linux)
-//!       └─ headless/        - Testing implementation
+//!   └─ storage/             - Where an application keeps its data
 //! ```
 //!
 //! # Key Concepts
@@ -164,24 +158,21 @@
 //! installed, then as changes in order with the input around them.
 
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
-// AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
-// crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
-// FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, the loops `owner::windows`, `owner::apple`, `owner::web`,
-// `owner::winit`, and the platform files of the features that call the OS
-// directly (the display sources `display::windows::source`,
-// `display::apple::{macos, ios}`, the text services `text::windows::tsf`,
-// `text::apple::macos`, `text::apple::ios`, and a preference or lifecycle file
-// such as `preferences::windows` among them) carries its own module-level
-// `#![expect(unsafe_code)]` where it is declared, and the two small
-// marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
-// `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
-// `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
-// a `# Safety` rustdoc section) stating the invariant that makes it sound.
-// `platforms::macos`/`android`/`web` are NOT yet at that bar; see the
-// per-crate documentation coverage tracked in the root `Cargo.toml`'s
-// `undocumented_unsafe_blocks` note — do not restate "every block" as a
-// crate-wide claim until that note says so too.
+// AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
+// crate does not opt the whole tree out of `unsafe_code = "warn"`: each FFI
+// island carries its own `expect(unsafe_code)` where it is declared — the
+// loops `owner::windows`, `owner::apple`, `owner::web`, `owner::winit` and
+// `owner::android::java_view`, and the platform files of the features that
+// call the OS directly (`window::windows`, `input::windows`,
+// `text::windows::tsf`, `display::apple::{macos, ios}`, `preferences::windows`
+// and the like) — and the reading of the Windows build in `version::gate` is
+// one item-level `expect`. A platform file's pure half forbids it. The Win32
+// files are fully SAFETY-documented — every `unsafe` block there carries a
+// `// SAFETY:` comment (or, for `unsafe fn`, a `# Safety` rustdoc section)
+// stating the invariant that makes it sound. The AppKit, Android and web files
+// are NOT yet at that bar; see the per-crate documentation coverage tracked in
+// the root `Cargo.toml`'s `undocumented_unsafe_blocks` note — do not restate
+// "every block" as a crate-wide claim until that note says so too.
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
@@ -214,9 +205,7 @@ pub use input::event_timestamp_ns;
 mod lifecycle;
 mod owner;
 mod platform;
-pub mod platforms;
 mod preferences;
-mod shared;
 pub mod storage;
 #[cfg(test)]
 mod table_test;
@@ -228,6 +217,7 @@ pub mod text;
 pub use text::sizing::{
     CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState, capture_text_sizing,
 };
+mod version;
 mod window;
 
 // Re-export configuration types
@@ -256,16 +246,6 @@ pub use platform::HostPlatform;
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub use hosts::AndroidPlatform;
-// Re-export platform implementations
-pub use accessibility::headless::FakeAccessibility;
-pub use drag::headless::HeadlessDragAndDrop;
-pub use haptics::headless::FakeHaptics;
-pub use platforms::{
-    DisplayChange, DisplayChangeError, DisplaySpec, FakeSystemChrome, FakeTextInput,
-    HeadlessDeferredWindowOpens, HeadlessDisplayControls, HeadlessExitReevaluation,
-    HeadlessHostEvents, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPreferences,
-    HeadlessWindowPolicy, MockWindow,
-};
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use hosts::WebPlatform;
@@ -279,6 +259,44 @@ pub use hosts::WindowsPlatform;
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 pub use hosts::WinitPlatform;
+// The headless host's test controls and doubles, each its feature's.
+pub use accessibility::headless::FakeAccessibility;
+pub use display::headless::{
+    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
+};
+pub use drag::headless::HeadlessDragAndDrop;
+pub use haptics::headless::FakeHaptics;
+pub use input::headless::HeadlessInputDevices;
+pub use lifecycle::headless::HeadlessHostEvents;
+pub use owner::headless::{
+    HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
+};
+pub use preferences::headless::HeadlessPreferences;
+pub use text::headless::FakeTextInput;
+pub use window::headless::{FakeSystemChrome, HeadlessWindowPolicy, MockWindow};
+// Each native host's window and the extensions an application reaches it by.
+#[cfg(target_os = "ios")]
+pub use owner::apple::ios::{IOSExecutor, IOSSceneAttachmentId, IOSSceneSessionId};
+#[cfg(target_os = "ios")]
+pub use window::apple::ios::{IOSSceneEvent, IOSWindow};
+#[cfg(target_os = "macos")]
+pub use window::apple::liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
+#[cfg(target_os = "macos")]
+pub use window::apple::macos::{
+    MacOSCollectionBehavior, MacOSWindow, MacOSWindowExt, MacOSWindowLevel, TilePosition,
+    TilingConfiguration, TilingError, TilingLayout, TilingState,
+};
+#[cfg(windows)]
+pub use window::windows::backdrop::{
+    TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
+};
+#[cfg(windows)]
+pub use window::windows::{WindowsWindow, win32};
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+pub use window::winit::WinitWindow;
 // The application's handler set and a window's callbacks (`owner/handlers.rs`).
 pub use owner::handlers::{InputCallback, InputWake, WindowCallbacks};
 // Re-export task types

@@ -29,7 +29,7 @@ const KEYS: [&str; 5] = ["item", "exit", "grant", "class", "reason"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Class {
     /// The one thread-local an OS callback without a user-data pointer reads
-    /// to find its owner: one in the host, one per platform backend.
+    /// to find its owner: one in the host, one per platform.
     Trampoline,
     /// An atomic ID counter advanced through a reference (`try_update`
     /// behind `&NAME`), never stored, loaded or decremented directly.

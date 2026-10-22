@@ -1209,6 +1209,7 @@ platforms = ["windows", "apple", "winit"]
 groups = { apple = ["macos", "ios"] }
 base = ["owner"]
 hosts = "hosts"
+crate-level = ["platform"]
 "#;
 
 /// The files of a feature crate in which every module only declares its
@@ -1619,12 +1620,6 @@ fn the_legal_edges_of_the_planted_feature_crate_are_scanned_not_only_silent() {
         ("platform", "window::windows"),
         // the edge an exception admits is still an edge
         ("display::winit", "display::linux"),
-        // a retiring module is a node per module, which an exception admits a
-        // feature to and a base module names freely; as a source it is
-        // unchecked
-        ("display::windows", "legacy::backend"),
-        ("owner", "legacy::backend"),
-        ("legacy", "window::windows"),
     ] {
         assert!(edges.contains(&legal), "{legal:?} is not among {edges:?}");
     }

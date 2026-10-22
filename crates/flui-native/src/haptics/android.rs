@@ -28,7 +28,7 @@ use crate::haptics::degradation::{
     AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswers,
     ComposedPrimitive, EnvelopeStep, android_feedback, android_pattern, android_vibration_usage,
 };
-use crate::shared::os_version::android::{
+use crate::version::gate::android::{
     AndroidApi, EnvelopeEffects, HapticComposition, RoundPrimitives, SegmentFeedback,
     VibrationTouchUsage,
 };

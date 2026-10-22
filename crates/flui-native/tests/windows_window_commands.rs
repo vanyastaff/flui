@@ -19,7 +19,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
-use flui_native::{HostWindow, Platform as _, WindowsPlatform, platforms::windows::WindowsWindow};
+use flui_native::{HostWindow, Platform as _, WindowsPlatform, WindowsWindow};
 use flui_platform::{
     DispatchEventResult, SizeConstraints, WindowCommand, WindowCommandError, WindowGeometry,
     WindowMode, WindowOptions, WindowReveal, WindowState,
