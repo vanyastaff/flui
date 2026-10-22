@@ -9,7 +9,7 @@ use crate::display::headless::{DisplaySpec, laid_out};
 use crate::drag::headless::DragDouble;
 use crate::haptics::headless::FakeHaptics;
 use crate::host::Host;
-use crate::input::headless::{Devices, HeadlessInputDevices};
+use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::headless::{HeadlessHost, HeadlessLoop, SimulatedDevices};
@@ -53,7 +53,7 @@ impl HeadlessHost for Headless {
     }
 
     fn devices() -> Box<dyn SimulatedDevices> {
-        Box::new(Devices::default())
+        Box::new(AttachedDevices::default())
     }
 }
 

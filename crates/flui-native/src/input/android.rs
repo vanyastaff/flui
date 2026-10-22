@@ -119,6 +119,8 @@ pub(crate) mod motion {
     //!   (`AXIS_GESTURE_*`, API 34) rather than `getClassification`, which the
     //!   NDK event wrapper does not expose.
 
+    #![forbid(unsafe_code)]
+
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1028,6 +1030,8 @@ pub(crate) mod motion {
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod scroll {
     //! Portable failure-policy seam for Android's owner-local scroll-factor cache.
+
+    #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::pointer::{ScrollDelta, ScrollUnit};

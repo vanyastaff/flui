@@ -16,7 +16,7 @@
 //!   it, not when the OS measured it, so the moves a late loop turn
 //!   dispatches back to back sit microseconds apart with real displacement.
 //!   A move is held until the next event: another move of the same contact
-//!   replaces it, anything else (or the end of the turn, [`NativePointerState::flush`])
+//!   replaces it, anything else (or the end of the turn, [`WinitInput::flush`])
 //!   delivers it first.
 //! - **X11's first touch is not the mouse.** winit reports a `CursorMoved`
 //!   at the first touch's position before its events (0.30 before its press
@@ -232,7 +232,9 @@ struct HeldMove {
     reading: NativeReading,
 }
 
-pub(crate) struct NativePointerState {
+/// The winit loop's input ([`LoopInput`]): its pointers assembled through one
+/// registry, and its keys and input-method events translated.
+pub(crate) struct WinitInput {
     contacts: ContactRegistry,
     labels: HashMap<winit::event::DeviceId, DeviceLabels>,
     next_label: u64,
@@ -243,13 +245,13 @@ pub(crate) struct NativePointerState {
     held: Option<HeldMove>,
 }
 
-impl Default for NativePointerState {
+impl Default for WinitInput {
     fn default() -> Self {
         Self::with_registry(ContactRegistry::new(NativeClock::epoch_only()))
     }
 }
 
-impl NativePointerState {
+impl WinitInput {
     fn with_registry(contacts: ContactRegistry) -> Self {
         Self {
             contacts,
@@ -726,7 +728,7 @@ fn session(event_loop: &ActiveEventLoop) -> WinitSession {
 }
 
 /// The translation the winit loop holds ([`WinitHost::input`](crate::owner::winit::WinitHost::input)).
-impl LoopInput for NativePointerState {
+impl LoopInput for WinitInput {
     fn opening(&mut self, event_loop: &ActiveEventLoop) -> InputCapabilities {
         let session = session(event_loop);
         self.observe_session(session);
@@ -804,7 +806,7 @@ mod pointer_translation_tests {
     use flui_foundation::geometry::Point;
     use flui_platform::pointer::PointerEvent;
 
-    impl NativePointerState {
+    impl WinitInput {
         /// The window event's input as its own loop turn delivers it,
         /// without the announcement of a device first seen through it.
         fn window_input(
@@ -919,7 +921,7 @@ mod pointer_translation_tests {
         let id = winit::event::DeviceId::dummy();
         let window = flui_platform::WindowId(1);
         let session = |session| {
-            let mut state = NativePointerState::default();
+            let mut state = WinitInput::default();
             if let Some(session) = session {
                 state.observe_session(session);
             }
@@ -1073,7 +1075,7 @@ mod pointer_translation_tests {
         use winit::event::{DeviceEvent, Touch, TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
         let windows = [flui_platform::WindowId(1), flui_platform::WindowId(2)];
-        let mut state = NativePointerState::default();
+        let mut state = WinitInput::default();
         let added = state.device_event(native, &DeviceEvent::Added, &windows);
         let PlatformInput::Pointer(PointerEvent::DeviceAdded(first)) = &added[0].1 else {
             panic!("native Added")
@@ -1176,7 +1178,7 @@ mod pointer_translation_tests {
             std::num::NonZeroU64::new(owned::DeviceId::KEYBOARD.get().get() - 1).expect("nonzero");
         let native = winit::event::DeviceId::dummy();
         let window = flui_platform::WindowId(1);
-        let mut state = NativePointerState::with_registry(
+        let mut state = WinitInput::with_registry(
             ContactRegistry::new(NativeClock::epoch_only())
                 .with_first_pointer(std::num::NonZeroU64::MAX)
                 .with_first_device(last_hardware),
@@ -1248,7 +1250,7 @@ mod pointer_translation_tests {
         let native = winit::event::DeviceId::dummy();
         let window = flui_platform::WindowId(1);
         for pixels in [false, true] {
-            let mut state = NativePointerState::default();
+            let mut state = WinitInput::default();
             state.window_input(
                 window,
                 &WindowEvent::CursorMoved {
@@ -1346,7 +1348,7 @@ mod pointer_translation_tests {
                 }
             }
         }
-        let mut state = NativePointerState::default();
+        let mut state = WinitInput::default();
         state.window_input(
             window,
             &WindowEvent::CursorMoved {
@@ -1397,7 +1399,7 @@ mod pointer_translation_tests {
             phase,
         };
         for competing in [false, true] {
-            let mut state = NativePointerState::default();
+            let mut state = WinitInput::default();
             state.window_input(
                 window,
                 &WindowEvent::CursorMoved {
@@ -1472,7 +1474,7 @@ mod pointer_translation_tests {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
         let window = flui_platform::WindowId(1);
-        let mut state = NativePointerState::default();
+        let mut state = WinitInput::default();
         state.window_input(
             window,
             &WindowEvent::CursorMoved {
@@ -1525,7 +1527,7 @@ mod pointer_translation_tests {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
         let window = flui_platform::WindowId(1);
-        let mut state = NativePointerState::default();
+        let mut state = WinitInput::default();
         state.window_input(
             window,
             &WindowEvent::CursorMoved {
@@ -1650,7 +1652,7 @@ mod pointer_translation_tests {
                 force,
                 id: 0,
             };
-            let mut state = NativePointerState::default();
+            let mut state = WinitInput::default();
             let mut inputs = state
                 .window_input(
                     flui_platform::WindowId(1),
@@ -1693,7 +1695,7 @@ mod pointer_translation_tests {
     #[test]
     fn translated_events_meet_the_pointer_field_contract() {
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
-        let mut state = NativePointerState::default();
+        let mut state = WinitInput::default();
         let window = flui_platform::WindowId(1);
         let device = winit::event::DeviceId::dummy();
         let moved = winit::event::WindowEvent::CursorMoved {
@@ -1752,5 +1754,266 @@ mod pointer_translation_tests {
 
         // A hover move carries neither.
         assert_eq!(first.current().pressure, None);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_conversion_tests {
+    //! Pins the winit backend's delegation to `ui-events-winit` (see
+    //! `keyboard_event`'s doc in this file) rather than exercising
+    //! `keyboard_event` itself: `winit::event::KeyEvent` has a
+    //! `pub(crate) platform_specific` field
+    //! (`winit-0.30.13/src/event.rs:133`), so nothing outside winit can
+    //! construct one. `keyboard_event` now contains no conversion logic of
+    //! its own either way — it is one call into
+    //! `from_winit_keyboard_event`, which itself calls the
+    //! `ui_events_winit::keyboard::from_winit_*` functions tested here
+    //! directly. See `every_winit_keycode_maps_to_a_canonical_code`'s doc
+    //! for exactly what that leaves unpinned.
+    use std::collections::BTreeSet;
+
+    use keyboard_types::Code;
+    use ui_events_winit::keyboard::from_winit_code;
+    use winit::keyboard::{KeyCode, PhysicalKey};
+
+    /// Every `winit::keyboard::KeyCode` variant, winit 0.30.13
+    /// (`winit-0.30.13/src/keyboard.rs`, the `KeyCode` enum), in the exact
+    /// order it is declared there. The length assertion in the test below
+    /// is what catches a silently truncated copy of this list; the
+    /// `BTreeSet` assertion alongside it catches a duplicated entry
+    /// standing in for a dropped one (same length, wrong coverage).
+    const ALL_WINIT_KEYCODES: &[KeyCode] = &[
+        KeyCode::Backquote,
+        KeyCode::Backslash,
+        KeyCode::BracketLeft,
+        KeyCode::BracketRight,
+        KeyCode::Comma,
+        KeyCode::Digit0,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+        KeyCode::Equal,
+        KeyCode::IntlBackslash,
+        KeyCode::IntlRo,
+        KeyCode::IntlYen,
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+        KeyCode::Minus,
+        KeyCode::Period,
+        KeyCode::Quote,
+        KeyCode::Semicolon,
+        KeyCode::Slash,
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
+        KeyCode::Backspace,
+        KeyCode::CapsLock,
+        KeyCode::ContextMenu,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::Enter,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::Space,
+        KeyCode::Tab,
+        KeyCode::Convert,
+        KeyCode::KanaMode,
+        KeyCode::Lang1,
+        KeyCode::Lang2,
+        KeyCode::Lang3,
+        KeyCode::Lang4,
+        KeyCode::Lang5,
+        KeyCode::NonConvert,
+        KeyCode::Delete,
+        KeyCode::End,
+        KeyCode::Help,
+        KeyCode::Home,
+        KeyCode::Insert,
+        KeyCode::PageDown,
+        KeyCode::PageUp,
+        KeyCode::ArrowDown,
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowRight,
+        KeyCode::ArrowUp,
+        KeyCode::NumLock,
+        KeyCode::Numpad0,
+        KeyCode::Numpad1,
+        KeyCode::Numpad2,
+        KeyCode::Numpad3,
+        KeyCode::Numpad4,
+        KeyCode::Numpad5,
+        KeyCode::Numpad6,
+        KeyCode::Numpad7,
+        KeyCode::Numpad8,
+        KeyCode::Numpad9,
+        KeyCode::NumpadAdd,
+        KeyCode::NumpadBackspace,
+        KeyCode::NumpadClear,
+        KeyCode::NumpadClearEntry,
+        KeyCode::NumpadComma,
+        KeyCode::NumpadDecimal,
+        KeyCode::NumpadDivide,
+        KeyCode::NumpadEnter,
+        KeyCode::NumpadEqual,
+        KeyCode::NumpadHash,
+        KeyCode::NumpadMemoryAdd,
+        KeyCode::NumpadMemoryClear,
+        KeyCode::NumpadMemoryRecall,
+        KeyCode::NumpadMemoryStore,
+        KeyCode::NumpadMemorySubtract,
+        KeyCode::NumpadMultiply,
+        KeyCode::NumpadParenLeft,
+        KeyCode::NumpadParenRight,
+        KeyCode::NumpadStar,
+        KeyCode::NumpadSubtract,
+        KeyCode::Escape,
+        KeyCode::Fn,
+        KeyCode::FnLock,
+        KeyCode::PrintScreen,
+        KeyCode::ScrollLock,
+        KeyCode::Pause,
+        KeyCode::BrowserBack,
+        KeyCode::BrowserFavorites,
+        KeyCode::BrowserForward,
+        KeyCode::BrowserHome,
+        KeyCode::BrowserRefresh,
+        KeyCode::BrowserSearch,
+        KeyCode::BrowserStop,
+        KeyCode::Eject,
+        KeyCode::LaunchApp1,
+        KeyCode::LaunchApp2,
+        KeyCode::LaunchMail,
+        KeyCode::MediaPlayPause,
+        KeyCode::MediaSelect,
+        KeyCode::MediaStop,
+        KeyCode::MediaTrackNext,
+        KeyCode::MediaTrackPrevious,
+        KeyCode::Power,
+        KeyCode::Sleep,
+        KeyCode::AudioVolumeDown,
+        KeyCode::AudioVolumeMute,
+        KeyCode::AudioVolumeUp,
+        KeyCode::WakeUp,
+        KeyCode::Meta,
+        KeyCode::Hyper,
+        KeyCode::Turbo,
+        KeyCode::Abort,
+        KeyCode::Resume,
+        KeyCode::Suspend,
+        KeyCode::Again,
+        KeyCode::Copy,
+        KeyCode::Cut,
+        KeyCode::Find,
+        KeyCode::Open,
+        KeyCode::Paste,
+        KeyCode::Props,
+        KeyCode::Select,
+        KeyCode::Undo,
+        KeyCode::Hiragana,
+        KeyCode::Katakana,
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
+        KeyCode::F4,
+        KeyCode::F5,
+        KeyCode::F6,
+        KeyCode::F7,
+        KeyCode::F8,
+        KeyCode::F9,
+        KeyCode::F10,
+        KeyCode::F11,
+        KeyCode::F12,
+        KeyCode::F13,
+        KeyCode::F14,
+        KeyCode::F15,
+        KeyCode::F16,
+        KeyCode::F17,
+        KeyCode::F18,
+        KeyCode::F19,
+        KeyCode::F20,
+        KeyCode::F21,
+        KeyCode::F22,
+        KeyCode::F23,
+        KeyCode::F24,
+        KeyCode::F25,
+        KeyCode::F26,
+        KeyCode::F27,
+        KeyCode::F28,
+        KeyCode::F29,
+        KeyCode::F30,
+        KeyCode::F31,
+        KeyCode::F32,
+        KeyCode::F33,
+        KeyCode::F34,
+        KeyCode::F35,
+    ];
+
+    /// Every winit 0.30.13 `KeyCode` has a non-`Unidentified` canonical
+    /// `Code` through `ui-events-winit`'s `from_winit_code` — the property
+    /// this whole issue is about. Before this change,
+    /// `convert_physical_key`'s own hand table covered 71 of these 194
+    /// variants (letters, digits, a small nav/modifier subset, F1..F12) and
+    /// fell through to `Unidentified` for the other 123 — numpad, Intl*,
+    /// F13+, media/browser/system keys among them.
+    ///
+    /// What this test does NOT pin: a regression introduced *inside*
+    /// `keyboard_event` itself (a wrong function called, a field dropped
+    /// from the event it builds) would stay invisible here, because
+    /// `winit::event::KeyEvent` cannot be constructed outside winit (its
+    /// `platform_specific` field is `pub(crate)`,
+    /// `winit-0.30.13/src/event.rs:133`) and so `keyboard_event` can never
+    /// be called directly from a test. What this test pins is the
+    /// completeness of the `ui-events-winit` version `Cargo.lock` resolves
+    /// to — the dependency `keyboard_event` delegates to unconditionally.
+    #[test]
+    fn every_winit_keycode_maps_to_a_canonical_code() {
+        assert_eq!(ALL_WINIT_KEYCODES.len(), 194);
+        assert_eq!(
+            ALL_WINIT_KEYCODES.iter().collect::<BTreeSet<_>>().len(),
+            194,
+            "a duplicated entry would keep the length check above green while \
+             silently standing in for a variant this list dropped"
+        );
+        let unidentified: Vec<KeyCode> = ALL_WINIT_KEYCODES
+            .iter()
+            .copied()
+            .filter(|&k| from_winit_code(PhysicalKey::Code(k)) == Code::Unidentified)
+            .collect();
+        assert!(
+            unidentified.is_empty(),
+            "{} winit KeyCode variant(s) produced Code::Unidentified: {unidentified:?}",
+            unidentified.len()
+        );
     }
 }

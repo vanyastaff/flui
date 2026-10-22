@@ -16,7 +16,7 @@ use crate::display::windows::WindowsDisplays;
 use crate::display::winit::WinitDisplaySource;
 use crate::drag::winit::WinitDataTransfer;
 use crate::host::{Absent, Host, position};
-use crate::input::winit::NativePointerState;
+use crate::input::winit::WinitInput;
 #[cfg(target_os = "linux")]
 use crate::lifecycle::linux::WinitNotices;
 use crate::lifecycle::notice::SystemNotices;
@@ -120,7 +120,7 @@ impl WinitHost for Winit {
 
     /// The translation of winit's pointer, device and key events.
     fn input() -> Box<dyn LoopInput> {
-        Box::new(NativePointerState::default())
+        Box::new(WinitInput::default())
     }
 }
 

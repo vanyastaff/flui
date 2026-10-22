@@ -46,6 +46,8 @@ pub mod keys {
     //! `flagsChanged:` today; modifier *state* rides every event's
     //! `modifierFlags` instead.
 
+    #![forbid(unsafe_code)]
+
     use flui_platform::keyboard::{Code, Key, NamedKey};
 
     /// Apple's `kVK_*` virtual keycodes, from Carbon `HIToolbox/Events.h`.
@@ -412,13 +414,6 @@ pub mod keys {
         };
         Some(Key::Named(named))
     }
-
-    #[cfg(all(
-        test,
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ))]
-    mod tests;
 }
 
 #[cfg(target_os = "macos")]

@@ -131,12 +131,12 @@ impl HeadlessInputDevices {
 /// ([`SimulatedDevices`]): presence and device ids from one registry, and the
 /// native label each device is minted under, never one twice.
 #[derive(Default)]
-pub(crate) struct Devices {
+pub(crate) struct AttachedDevices {
     registry: DeviceRegistry,
     labels: IdMint<NonZeroU64>,
 }
 
-impl SimulatedDevices for Devices {
+impl SimulatedDevices for AttachedDevices {
     fn attach(&mut self, kind: PointerKind, time: EventTime) -> Option<PointerDeviceChange> {
         let label = self.labels.next().ok()?;
         self.registry
