@@ -1575,6 +1575,58 @@ graph LR
   `flui-app` под macOS и iOS (сборочный скрипт `psm` требует C-компилятора Apple и `xcrun`); Mac и
   iPhone: перенос чтения версии iOS в `AppleVersion::read`, публичные имена macOS и iOS от корня и
   тесты реального цикла на macOS (там они `ignore`) проверены только сборкой.
+- [x] **LY88** — ветка `platform/a11y-always`, на `main` @ `fc8f8ebaa` (LY34). Фичи `a11y` нет ни в
+  `flui-native`, ни в `flui-app`, ни в фасаде. `accesskit_windows` и `accesskit_macos` — безусловные
+  зависимости своих ОС: каждое окно Win32 и AppKit строит адаптер, таблица Win32 называет
+  `WindowsAccessibility` без двойника `Absent`, таблица Apple — `MacosAccessibility` на macOS и
+  `Absent` на iOS. `accesskit_unix` на Linux приносит `winit-backend` рядом с `zbus`, и он же —
+  dev-зависимость Linux. Решение: Linux-хоста, кроме winit, нет, без `winit-backend` адаптер AT-SPI
+  никто не называет, и безусловная зависимость собирала бы около 66 крейтов (zbus, atspi), которых
+  не зовёт ни один код; условие `accessibility::linux` и Linux-ветви `bridge` —
+  `all(target_os = "linux", any(feature = "winit-backend", test))`, и зависимость есть ровно там,
+  где оно истинно (`winit-backend` — обычная, `test` — dev). Когда LY78 и LY82 введут нативный хост
+  Linux, `accesskit_unix` станет безусловной зависимостью Linux вместе с `zbus`. `cargo shear`
+  находок по зависимостям не даёт (12 его предупреждений — о файлах trybuild, не о зависимостях).
+  Остальные условия: `accessibility::{apple, windows}` — `cfg(target_os = "macos")` и `cfg(windows)`,
+  таблица winit — `UnixAccessibility` на Linux и `Absent` на Windows и macOS, поля и
+  `HostWindow::accessibility` окон Win32, AppKit и winit (Linux) — без `cfg(feature)`,
+  `owner::panic_boundary::retain_off_owner_resource` — `any(windows, macos, test)`. xtask:
+  `facade-combos` — 9 сочетаний (без `--features a11y`), `cross-typecheck` включает из объявленных
+  только `testing`. Документы: README (абзац вместо строки таблицы фич), документация фасада и
+  `flui-native`, `docs/testing.md` (`cross-typecheck`), `docs/platform-parity.md` (заметка «Tree and
+  actions»; клетки те же: прогона со скринридером нет), `docs/gaps.md` (запись 2),
+  `PlatformWindow::request_redraw` в `flui-platform` (слушатель активации — `flui_runtime`, и в
+  сборке по умолчанию он теперь достижим), ARCHITECTURE.md ядра (абзац о зависимостях адаптеров);
+  `changelog.d/platform-a11y-always.md` — `### Removed` (имя по ветке, как велит
+  `changelog.d/README.md`). ADR-0084 своих строк про `a11y` не переписывает: это запись; `rg
+  'feature = "a11y"'` вне `docs/plans` и ADR-0084 пуст. Тест: `test_window_lifecycle_contract`
+  получил пункт «окно настольной ОС отдаёт мост доступности» (`window.accessibility().is_some()` под
+  `cfg(any(windows, macos, linux))`); на Windows с выключенным `HostWindow::accessibility` окна Win32
+  (то, что давала сборка по умолчанию с `a11y` выключенной) он падает, с исправлением проходит. На
+  Linux этот контракт окна winit не открывает (оно открывается только внутри `run()`), а под
+  `FLUI_HEADLESS` окно headless, мост у которого был и раньше; адаптер AT-SPI держит
+  `accessibility::linux::tests::activation_answers_with_the_retained_tree`, и он идёт без
+  `--features`. Исключений `module-dag` по-прежнему 33. Проверки (Windows): `cargo fmt`; clippy `-D
+  warnings` `-p flui-native -p flui-app -p flui-platform --all-targets` и `-p flui-native -p
+  flui-app` с `winit-backend`, `-p xtask`; nextest `-p flui-native -p flui-app` — 304 (2 пропущены),
+  с `winit-backend` — 337 (2), `-p xtask` — 45; `facade-combos` (9); clippy macOS lib `-p
+  flui-native` (и с `winit-backend`) и `--all-targets` (`clang` из LLVM), Android `--all-targets` `-p
+  flui-native -p flui-app`, iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51;
+  `checks` (с `android-dex` и taplo), `module-dag` (291 модуль, 321 ребро, 33 исключения) и самотест
+  (54), `globals` (56) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`,
+  `doc-strict`, `workspace` (28 крейтов, 229 рёбер), `reach` (68 корневых сборок), `deps --only
+  policy`. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-native -p
+  flui-app --all-targets` и с `winit-backend`; проходы `feature-matrix` (cargo-hack в WSL нет, его
+  `--each-feature` повторён руками): `flui-native` — по умолчанию, `--no-default-features` и каждая
+  из `desktop`, `winit-backend`, `web`, `wayland`, `x11`, `native-capture`, каждый и с `--tests
+  --benches --examples` (16), `flui-app` — 6, фасад — те же 9 сочетаний; nextest без признаков и без
+  дисплея `-p flui-native` — 199 (на LY34 — 198: тест моста AT-SPI теперь идёт без фичи), `-p
+  flui-app` под xvfb — 45 (1 пропущен), `--all-features` под xvfb (команда CI) — 278, `winit-backend`
+  под xvfb — 322 (1); в первом прогоне `logind_lock_and_unlock_reach_the_owner` не дождался события
+  за 5 с, отдельно прошёл 5 раз из 5 и в повторе всего набора; rustdoc `-D warnings
+  --document-private-items` с `winit-backend` и без. Устройства: Android и Web не тронуты (адаптеров
+  нет); Mac — сборка адаптера AppKit без фичи проверена только clippy, прогон в
+  vanyastaff/flui#1840. Не запускалось: `cross-typecheck` (нет `zig`; job в CI).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
