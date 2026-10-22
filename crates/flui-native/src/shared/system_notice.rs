@@ -34,6 +34,11 @@ pub(crate) type SystemNoticeHook = Box<dyn FnMut(SystemNotice) + Send>;
 pub(crate) struct SystemNotices {
     state: Mutex<Delivery>,
     cached: Mutex<Vec<Weak<dyn StaleOnWake>>>,
+    /// Runs once, on the dispatching thread, after a walk's last look at the
+    /// queue and before its guard is disarmed: the instant a notice from
+    /// another thread can arrive once the walk has stopped looking.
+    #[cfg(test)]
+    on_walk_end: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Default)]
@@ -45,8 +50,36 @@ struct Delivery {
     delivering: bool,
 }
 
-/// Ends a walk over the pending notices, however it ends.
+impl Delivery {
+    /// The next notice for the hook. With none left, or no hook to hear it,
+    /// the walk is over, under this same lock: a notice accepted from here on
+    /// finds `delivering` false and walks itself.
+    fn next_or_end(&mut self) -> Option<SystemNotice> {
+        let next = if self.hook.is_some() {
+            self.pending.pop_front()
+        } else {
+            // Nobody to tell: what was accepted has no listener.
+            self.pending.clear();
+            None
+        };
+        if next.is_none() {
+            self.delivering = false;
+        }
+        next
+    }
+}
+
+/// Ends a walk that unwinds out of the hook, so the next dispatch walks again.
+/// A walk that runs out of notices has already ended under the lock and
+/// disarms this: a newer walk may have begun since, and its flag is not this
+/// one's to clear.
 struct Walk<'a>(&'a SystemNotices);
+
+impl Walk<'_> {
+    fn disarm(self) {
+        std::mem::forget(self);
+    }
+}
 
 impl Drop for Walk<'_> {
     fn drop(&mut self) {
@@ -84,9 +117,12 @@ impl SystemNotices {
     /// installed meanwhile is not displaced. A notice that arrives from inside
     /// the hook (or while another thread's dispatch is running it) is queued
     /// behind the one being delivered and heard, in order, as soon as the hook
-    /// returns. A hook that panics keeps its place and its panic reaches the
-    /// caller: the next dispatch calls it again, and the notices queued behind
-    /// the failure are still delivered then.
+    /// returns. A walk ends under the same lock that finds nothing left to
+    /// deliver, so a notice from another thread is taken by the walk or starts
+    /// one of its own. A hook that panics keeps its place and its panic reaches
+    /// the caller: the next dispatch calls it again, and the notices queued
+    /// behind the failure wait for it and are delivered then. That is the one
+    /// case in which an accepted notice waits for a later one to carry it.
     pub(crate) fn dispatch(&self, notice: SystemNotice) {
         if notice == SystemNotice::Wake {
             let live: Vec<Arc<dyn StaleOnWake>> = self
@@ -107,22 +143,20 @@ impl SystemNotices {
             }
             state.delivering = true;
         }
-        let _walk = Walk(self);
+        let walk = Walk(self);
         loop {
-            let notice = {
-                let mut state = self.state.lock();
-                if state.hook.is_none() {
-                    // Nobody to tell: what was accepted has no listener.
-                    state.pending.clear();
-                    return;
-                }
-                let Some(notice) = state.pending.pop_front() else {
-                    return;
-                };
-                notice
-            };
+            let next = self.state.lock().next_or_end();
+            let Some(notice) = next else { break };
             call(&self.hook(), |hook| hook(notice)).or_resume(());
         }
+        #[cfg(test)]
+        {
+            let on_walk_end = self.on_walk_end.lock().take();
+            if let Some(on_walk_end) = on_walk_end {
+                on_walk_end();
+            }
+        }
+        walk.disarm();
     }
 }
 
@@ -280,6 +314,85 @@ mod tests {
                 ("start", SystemNotice::Wake),
             ],
             "a nested notice is queued, not dropped and not recursed into"
+        );
+    }
+
+    /// A notice another thread dispatches in the instant a walk ends is not
+    /// left queued for whichever notice comes next: the walk takes it, or it
+    /// walks itself.
+    #[test]
+    fn a_notice_accepted_as_a_walk_ends_is_heard_without_waiting_for_the_next() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let log = Arc::clone(&heard);
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+        }));
+        let other = Arc::clone(&notices);
+        *notices.on_walk_end.lock() = Some(Box::new(move || {
+            std::thread::spawn(move || other.dispatch(SystemNotice::Wake))
+                .join()
+                .expect("the second dispatch returns");
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [SystemNotice::Sleep, SystemNotice::Wake],
+            "the wake was heard before any later notice arrived"
+        );
+    }
+
+    /// A walk that begins as an earlier one ends is still delivering once the
+    /// earlier one is over: a notice dispatched while its hook runs queues
+    /// behind it, instead of starting a second walk that finds the hook out of
+    /// its slot and drops the notice.
+    #[test]
+    fn the_end_of_a_walk_leaves_the_walk_begun_after_it_delivering() {
+        use std::sync::Mutex as StdMutex;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let (entered, in_the_hook) = mpsc::channel();
+        let (release, held) = mpsc::channel::<()>();
+        let log = Arc::clone(&heard);
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+            if notice == SystemNotice::Wake {
+                entered.send(()).expect("the first walk's end waits");
+                held.recv().expect("the test releases the hook");
+            }
+        }));
+        let (started, second_walk) = mpsc::channel();
+        let other = Arc::clone(&notices);
+        *notices.on_walk_end.lock() = Some(Box::new(move || {
+            let second = std::thread::spawn(move || other.dispatch(SystemNotice::Wake));
+            // A wake left queued never reaches the hook: fail, don't hang.
+            let walked = in_the_hook.recv_timeout(Duration::from_secs(10)).is_ok();
+            started.send((second, walked)).expect("the test waits");
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        let (second, walked) = second_walk.recv().expect("the first walk ended");
+        assert!(
+            walked,
+            "the wake accepted as the first walk ended walked itself"
+        );
+        notices.dispatch(SystemNotice::SessionLocked);
+        release.send(()).expect("the hook is held");
+        second.join().expect("the second walk ends");
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [
+                SystemNotice::Sleep,
+                SystemNotice::Wake,
+                SystemNotice::SessionLocked
+            ],
+            "the notice dispatched during the second walk queued behind it"
         );
     }
 
