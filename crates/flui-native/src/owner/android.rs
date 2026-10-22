@@ -23,3 +23,71 @@ pub(crate) mod poll;
 
 #[cfg(target_os = "android")]
 pub(crate) use looper::AndroidLoop;
+
+#[cfg(target_os = "android")]
+pub(crate) use hooks::{AndroidHost, HostDisplays};
+
+/// What the host's table fills for the loop.
+#[cfg(target_os = "android")]
+mod hooks {
+    use std::sync::{Arc, Weak};
+
+    use android_activity::AndroidApp;
+    use android_activity::ndk::native_window::NativeWindow;
+    use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
+
+    use super::ndk::SymbolSource;
+    use crate::error::PlatformError;
+    use crate::owner::signal::OwnerSignal;
+    use crate::shared::os_version::android::AndroidApi;
+
+    /// What the Android host's table names for its owner thread (ADR-0151
+    /// §10): the displays the loop holds. The owner reaches them through the
+    /// hook and names no feature.
+    pub(crate) trait AndroidHost: 'static {
+        /// The displays of the platform on API level `api`, whose NDK
+        /// functions `library` looks up and whose changes wake `owner`. The
+        /// loop holds them for the table's displays position and hands them to
+        /// its window.
+        fn displays(
+            api: AndroidApi,
+            library: Arc<dyn SymbolSource>,
+            owner: Weak<OwnerSignal>,
+        ) -> Arc<dyn HostDisplays>;
+    }
+
+    /// The device's displays as the loop and its window reach them, which the
+    /// table makes ([`AndroidHost::displays`]).
+    pub(crate) trait HostDisplays: Send + Sync {
+        /// The snapshot: the kept one while nothing announced a change, a
+        /// fresh sample of `app`'s displays otherwise.
+        ///
+        /// # Errors
+        /// [`PlatformError::Displays`] when the sample cannot be read or the
+        /// snapshot revision space is used up.
+        fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError>;
+
+        /// The display state may have changed (configuration change, resume):
+        /// read it again at the next owner turn, which this asks for.
+        fn invalidate(&self);
+
+        /// The display the Activity was on at the last sample.
+        fn activity_display(&self) -> Option<DisplayId>;
+
+        /// Whether the highest rate of the Activity's display changed since
+        /// this was last asked; reading clears it.
+        fn take_max_rate_change(&self) -> bool;
+
+        /// Ask the system for the refresh rate `hint` names on `window`, if
+        /// this system has the request.
+        fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint);
+
+        /// Watch the refresh rate where the system reports it; on the thread
+        /// whose looper runs the app.
+        fn watch_refresh_rate(&self);
+
+        /// Stop watching the refresh rate; on the thread that started it,
+        /// before the platform goes away.
+        fn stop_watching(&self);
+    }
+}

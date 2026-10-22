@@ -2,19 +2,21 @@
 //! Win32 message loop.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::config::WindowConfiguration;
+use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::OwnerObjects;
-use crate::owner::windows::{WindowHooks, WindowsHost, WindowsLoop};
+use crate::owner::windows::{HostDisplays, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
     HostEvents, OleTransfer, PreferenceSource, TextServices, Touchpad, WindowProc,
-    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
+    WindowsClipboard, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
 
@@ -48,13 +50,19 @@ impl WindowsHost for Windows {
     /// of each window created.
     const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
 
-    /// The preferences (setting and display changes), then the lifecycle
-    /// (session, power, lock and memory).
+    /// The displays (display and work-area changes), then the preferences
+    /// (setting changes, the work area among them, which the displays pass
+    /// on), then the lifecycle (session, power, lock and memory).
     fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         vec![
+            Rc::new(DisplayBroadcasts::new(owner.displays, owner.signal)),
             Rc::new(owner.preferences.broadcasts()),
             Rc::clone(owner.lifecycle) as Rc<dyn Subscriber>,
         ]
+    }
+
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(WindowsDisplays::new())
     }
 }
 

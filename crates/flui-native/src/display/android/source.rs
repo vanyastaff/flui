@@ -358,6 +358,36 @@ impl AndroidDisplays {
     }
 }
 
+impl crate::owner::android::HostDisplays for AndroidDisplays {
+    fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError> {
+        AndroidDisplays::snapshot(self, app)
+    }
+
+    fn invalidate(&self) {
+        AndroidDisplays::invalidate(self);
+    }
+
+    fn activity_display(&self) -> Option<DisplayId> {
+        AndroidDisplays::activity_display(self)
+    }
+
+    fn take_max_rate_change(&self) -> bool {
+        AndroidDisplays::take_max_rate_change(self)
+    }
+
+    fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint) {
+        AndroidDisplays::request_frame_rate(self, window, hint);
+    }
+
+    fn watch_refresh_rate(&self) {
+        AndroidDisplays::watch_refresh_rate(self);
+    }
+
+    fn stop_watching(&self) {
+        AndroidDisplays::stop_watching(self);
+    }
+}
+
 impl crate::host::Displays<AndroidLoop> for AndroidDisplays {
     fn snapshot(owner: &AndroidLoop) -> Result<DisplaySnapshot, PlatformError> {
         let snapshot = owner.displays.snapshot(&owner.app)?;

@@ -44,15 +44,23 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
-use super::link_rate::{FrameRatePreference, ScreenPeriods, frame_rate_preference};
+use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
+
+use super::link_rate::{
+    FrameRatePreference, FrameRateRange, FrameRateRangeProperty, ScreenPeriods,
+    frame_rate_preference,
+};
 use super::{SameObject, ScreenLedger};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
-use crate::owner::apple::ios::NativeOwner;
+use crate::owner::apple::IOSLoop;
+use crate::owner::apple::ios::{NativeOwner, ScreenIdentity};
 use crate::owner::signal::OwnerSignal;
+use crate::owner::watch::Watch;
 use crate::platforms::ios::os_version;
+use crate::shared::os_version::Since;
 use crate::shared::os_version::apple::AppleVersion;
 use flui_platform::WindowId;
 
@@ -62,16 +70,6 @@ impl SameObject for RetainedScreen {
     fn same_object(&self, other: &Self) -> bool {
         Retained::as_ptr(self) == Retained::as_ptr(other)
     }
-}
-
-/// The screen a window is on, as the display source names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct ScreenIdentity {
-    /// The display's id; `None` when the source cannot issue one.
-    pub(crate) id: Option<DisplayId>,
-    /// The number the source assigned to the retained screen, which keys the
-    /// measured link period; `None` when the numbers are used up.
-    pub(crate) number: Option<u64>,
 }
 
 /// The displays of one iOS platform: their ids and the last snapshot (kept by
@@ -309,4 +307,70 @@ impl Drop for ScreenObserver {
             }
         }
     }
+}
+
+impl crate::host::Displays<IOSLoop> for IosDisplays {
+    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        owner.displays.snapshot(marker)
+    }
+}
+
+impl crate::owner::apple::ios::HostDisplays for IosDisplays {
+    fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
+        IosDisplays::snapshot(self, marker)
+    }
+
+    fn invalidate(&self) {
+        IosDisplays::invalidate(self);
+    }
+
+    fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity {
+        IosDisplays::identify(self, marker, screen)
+    }
+
+    fn report_link_period(&self, number: u64, window: WindowId, period: RefreshPeriod) {
+        IosDisplays::report_link_period(self, number, window, period);
+    }
+
+    fn forget_link_period(&self, number: u64, window: WindowId) {
+        IosDisplays::forget_link_period(self, number, window);
+    }
+
+    /// A frame-rate range on iOS 15 and later, `preferredFramesPerSecond`
+    /// before it.
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen) {
+        let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
+        match self.frame_rate_preference(maximum) {
+            FrameRatePreference::Range(property, range) => {
+                set_frame_rate_range(link, property, range);
+            }
+            FrameRatePreference::FramesPerSecond(frames) => {
+                link.setPreferredFramesPerSecond(
+                    isize::try_from(frames).expect("BUG: a u16 frame rate fits isize"),
+                );
+            }
+        }
+    }
+
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {
+        Watch::new(ScreenObserver::new(&self, signal))
+    }
+}
+
+/// `CADisplayLink.preferredFrameRateRange`, which exists from iOS 15. The
+/// proof can only come from a version check, so the call cannot be written for
+/// an older system.
+fn set_frame_rate_range(
+    link: &CADisplayLink,
+    _available: Since<FrameRateRangeProperty>,
+    range: FrameRateRange,
+) {
+    link.setPreferredFrameRateRange(CAFrameRateRange {
+        minimum: range.minimum,
+        maximum: range.maximum,
+        preferred: range.preferred,
+    });
 }

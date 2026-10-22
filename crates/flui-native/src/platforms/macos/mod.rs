@@ -7,7 +7,7 @@
 //!
 //! - **NSApplication**: Main application and event loop
 //! - **NSWindow**: Window management
-//! - **NSScreen**: Display enumeration and info
+//! - **NSScreen**: Display enumeration and info (`display::apple::macos`)
 //! - **NSRunLoop**: Owner-thread application event loop
 //!   (`owner/apple/macos.rs`)
 //! - **GCD/Tokio**: Background task execution
@@ -79,7 +79,6 @@ mod window;
 mod window_ext;
 mod window_tiling;
 
-pub(crate) use crate::display::apple::macos::{MacosDisplays, ScreenObserver};
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;

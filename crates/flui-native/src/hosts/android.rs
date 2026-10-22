@@ -1,15 +1,21 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
+use std::sync::{Arc, Weak};
+
 use android_activity::AndroidApp;
 
+use crate::display::android::AndroidDisplays;
 use crate::host::{Absent, Host, position};
-use crate::owner::android::AndroidLoop;
+use crate::owner::android::ndk::SymbolSource;
+use crate::owner::android::{AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput,
-    AndroidTransfer, AndroidWindow, MockClipboard,
+    AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput, AndroidTransfer,
+    AndroidWindow, MockClipboard,
 };
+use crate::shared::os_version::android::AndroidApi;
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -53,10 +59,20 @@ impl Host for Android {
 /// ```
 pub type AndroidPlatform = HostPlatform<Android>;
 
+impl AndroidHost for Android {
+    fn displays(
+        api: AndroidApi,
+        library: Arc<dyn SymbolSource>,
+        owner: Weak<OwnerSignal>,
+    ) -> Arc<dyn HostDisplays> {
+        Arc::new(AndroidDisplays::new(api, library, owner))
+    }
+}
+
 impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new(app))
+        Self::from_loop(AndroidLoop::new::<Android>(app))
     }
 }

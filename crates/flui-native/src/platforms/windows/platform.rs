@@ -34,8 +34,8 @@ use super::{
     text_services::TextServices,
     window::{NativeMode, WindowsWindow},
 };
-use crate::display::windows::WindowsDisplays;
 use crate::owner::call_point::{Field, call};
+use crate::owner::windows::HostDisplays;
 use crate::owner::windows::{
     WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
 };
@@ -128,7 +128,7 @@ pub(crate) struct WindowContext {
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The platform's monitors: a DPI change invalidates their snapshot.
-    pub displays: Arc<WindowsDisplays>,
+    pub displays: Arc<dyn HostDisplays>,
     /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
     /// before the first message; a change raises `on_display_changed`.
     pub last_monitor: std::cell::Cell<isize>,
@@ -1171,7 +1171,7 @@ impl WindowProc {
                     // the monitor is checked once the move has landed.
                     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
                     if let Some(ctx) = ctx {
-                        let monitor = crate::display::windows::source::nearest_monitor(hwnd);
+                        let monitor = ctx.displays.nearest_monitor(hwnd);
                         if ctx.last_monitor.replace(monitor) != monitor {
                             ctx.callbacks.dispatch_display_changed();
                         }

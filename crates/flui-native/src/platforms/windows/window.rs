@@ -79,7 +79,7 @@ pub struct WindowsWindow {
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
     /// The platform's monitors, by which this window names its display.
-    displays: Arc<crate::display::windows::WindowsDisplays>,
+    displays: Arc<dyn crate::owner::windows::HostDisplays>,
 
     /// The published window state (ADR-0237), shared with the window's
     /// owner-thread context, which refreshes it from the window messages.
@@ -455,7 +455,7 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
             crate::owner::windows::WindowIdentity::source(),
-            || Self::create_native(&options, &displays),
+            || Self::create_native(&options, displays.as_ref()),
         );
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
@@ -484,7 +484,7 @@ impl WindowsWindow {
     /// fullscreen, the rectangle it returns to (screen coordinates).
     fn create_native(
         options: &WindowOptions,
-        displays: &crate::display::windows::WindowsDisplays,
+        displays: &dyn crate::owner::windows::HostDisplays,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
@@ -567,7 +567,7 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
-        displays: Arc<crate::display::windows::WindowsDisplays>,
+        displays: Arc<dyn crate::owner::windows::HostDisplays>,
         notices: Arc<crate::shared::system_notice::SystemNotices>,
         config: crate::config::WindowConfiguration,
         identity: crate::owner::windows::WindowIdentity,

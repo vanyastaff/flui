@@ -33,6 +33,7 @@ use std::sync::Arc;
 use flui_platform::{DisplayId, DisplaySnapshot};
 use parking_lot::Mutex;
 use raw_window_handle::HasDisplayHandle;
+use winit::event_loop::ActiveEventLoop;
 use winit::platform::{wayland::MonitorHandleExtWayland, x11::MonitorHandleExtX11};
 
 use crate::display::linux::{
@@ -41,6 +42,8 @@ use crate::display::linux::{
 };
 use crate::error::PlatformError;
 use crate::owner::signal::OwnerSignal;
+use crate::owner::winit::HostDisplays;
+use crate::shared::system_notice::StaleOnWake;
 
 /// The platform's outputs, shared with every window.
 pub struct WinitDisplaySource {
@@ -56,22 +59,48 @@ impl std::fmt::Debug for WinitDisplaySource {
     }
 }
 
-impl WinitDisplaySource {
-    pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self {
-            native: LinuxDisplays::new(),
-            watcher: Mutex::new(None),
-        })
+/// A wake marks the outputs stale.
+impl StaleOnWake for WinitDisplaySource {
+    fn mark_stale(&self) {
+        self.native.mark_stale();
+    }
+}
+
+impl HostDisplays for WinitDisplaySource {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        WinitDisplaySource::snapshot(self)
     }
 
-    /// The platform's outputs, for what must be marked stale on a wake.
-    pub(crate) fn native(&self) -> Arc<LinuxDisplays> {
-        Arc::clone(&self.native)
+    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
+        WinitDisplaySource::id_of_window(self, window)
+    }
+
+    /// Make sure the display thread reads the protocol winit opened (it starts
+    /// one on first use); thereafter the thread wakes the owner itself.
+    fn resample(&self, event_loop: &ActiveEventLoop, signal: Option<&Arc<OwnerSignal>>) -> bool {
+        signal.is_some_and(|signal| self.follow(event_loop, signal))
+    }
+
+    fn is_wayland(&self) -> bool {
+        WinitDisplaySource::is_wayland(self)
+    }
+
+    fn stop(&self) {
+        WinitDisplaySource::stop(self);
+    }
+}
+
+impl WinitDisplaySource {
+    pub(crate) fn new() -> Self {
+        Self {
+            native: LinuxDisplays::new(),
+            watcher: Mutex::new(None),
+        }
     }
 
     /// The current snapshot. Before the event loop runs it is read once from the
     /// compositor the environment names.
-    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.native.snapshot()
     }
 
@@ -82,11 +111,7 @@ impl WinitDisplaySource {
     /// The environment decides which protocol the source tries first; the
     /// display winit really opened is the authority, and the two differ when
     /// winit was told to use X11 on a Wayland session.
-    pub(crate) fn follow(
-        &self,
-        window_system: &impl HasDisplayHandle,
-        signal: &Arc<OwnerSignal>,
-    ) -> bool {
+    fn follow(&self, window_system: &impl HasDisplayHandle, signal: &Arc<OwnerSignal>) -> bool {
         let Some(protocol) = window_system
             .display_handle()
             .ok()
@@ -127,7 +152,7 @@ impl WinitDisplaySource {
     /// once one runs (winit's own choice), else the one the environment names.
     /// A caller that asks before the event loop runs gets the environment's
     /// answer, which is winit's too unless winit was told otherwise.
-    pub(crate) fn is_wayland(&self) -> bool {
+    fn is_wayland(&self) -> bool {
         match &*self.watcher.lock() {
             Some((protocol, _)) => *protocol == Protocol::Wayland,
             None => Protocol::current() == Some(Protocol::Wayland),
@@ -137,7 +162,7 @@ impl WinitDisplaySource {
     /// Stop the display thread and close its connection. The caller has
     /// already closed the owner signal's admission, so a wake that is still on
     /// its way finds nobody to deliver to.
-    pub(crate) fn stop(&self) {
+    fn stop(&self) {
         let stopped = self.watcher.lock().take();
         drop(stopped);
     }
@@ -145,7 +170,7 @@ impl WinitDisplaySource {
     /// The display `window` is on: the one its monitor's native number names in
     /// the last snapshot. `None` for a window with no monitor, or on an output
     /// the snapshot does not hold.
-    pub(crate) fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
+    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
         let protocol = Protocol::of_display(window.display_handle().ok()?.as_raw())?;
         let monitor = window.current_monitor()?;
         let native = match protocol {

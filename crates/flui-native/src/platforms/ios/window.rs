@@ -28,7 +28,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_clas
 use objc2_foundation::{
     NSArray, NSDefaultRunLoopMode, NSNumber, NSObjectProtocol, NSRunLoop, NSSet,
 };
-use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
+use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
     UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
     UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
@@ -43,13 +43,9 @@ use flui_platform::{
 use super::events::TouchInputState;
 use super::status_bar::FluiViewController;
 use crate::display::apple::change_screen;
-use crate::display::apple::ios::{IosDisplays, ScreenIdentity};
-use crate::display::apple::link_rate::{
-    FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
-};
-use crate::owner::apple::ios::NativeOwner;
+use crate::display::apple::link_rate::LinkPeriod;
+use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity};
 use crate::owner::handlers::WindowCallbacks;
-use crate::shared::os_version::Since;
 use crate::shared::window_state::WindowStateCell;
 use flui_platform::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -87,7 +83,7 @@ pub struct FluiViewIvars {
     /// The cadence the link's ticks show, and the period it last published.
     link_period: RefCell<LinkPeriod>,
     /// The platform's display source, which holds the period the link reports.
-    displays: Arc<IosDisplays>,
+    displays: Arc<dyn HostDisplays>,
     /// The screen this window's scene is on; shared with the window, whose
     /// `display_id` any thread may call.
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
@@ -213,40 +209,9 @@ define_class!(
 /// What a view needs to name its display: the platform's source, the screen
 /// slot it shares with its window, and the window that owns its link periods.
 struct ViewDisplay {
-    displays: Arc<IosDisplays>,
+    displays: Arc<dyn HostDisplays>,
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     window: WindowId,
-}
-
-/// Ask `link` to run at the best rate `screen` sustains: a frame-rate range on
-/// iOS 15 and later, `preferredFramesPerSecond` before it.
-fn request_frame_rate(link: &CADisplayLink, displays: &IosDisplays, screen: &UIScreen) {
-    let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
-    match displays.frame_rate_preference(maximum) {
-        FrameRatePreference::Range(property, range) => {
-            set_frame_rate_range(link, property, range);
-        }
-        FrameRatePreference::FramesPerSecond(frames) => {
-            link.setPreferredFramesPerSecond(
-                isize::try_from(frames).expect("BUG: a u16 frame rate fits isize"),
-            );
-        }
-    }
-}
-
-/// `CADisplayLink.preferredFrameRateRange`, which exists from iOS 15. The
-/// proof can only come from a version check, so the call cannot be written for
-/// an older system.
-fn set_frame_rate_range(
-    link: &CADisplayLink,
-    _available: Since<FrameRateRangeProperty>,
-    range: FrameRateRange,
-) {
-    link.setPreferredFrameRateRange(CAFrameRateRange {
-        minimum: range.minimum,
-        maximum: range.maximum,
-        preferred: range.preferred,
-    });
 }
 
 /// Which touch callback produced a batch, mapped to the pointer phase the
@@ -415,7 +380,7 @@ impl FluiView {
         unsafe {
             link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSDefaultRunLoopMode);
         }
-        request_frame_rate(&link, &self.ivars().displays, screen);
+        self.ivars().displays.request_frame_rate(&link, screen);
         self.ivars().display_link.replace(Some(link));
     }
 
@@ -439,7 +404,7 @@ impl FluiView {
         self.ivars().link_period.borrow_mut().forget();
         let link = self.ivars().display_link.borrow().clone();
         if let Some(link) = link {
-            request_frame_rate(&link, &self.ivars().displays, screen);
+            self.ivars().displays.request_frame_rate(&link, screen);
         }
         self.ivars().displays.invalidate();
         self.callbacks().dispatch_display_changed();
@@ -755,7 +720,7 @@ impl IOSWindow {
         mtm: MainThreadMarker,
         id: WindowId,
         signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
-        displays: Arc<IosDisplays>,
+        displays: Arc<dyn HostDisplays>,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());

@@ -1,5 +1,7 @@
 //! `WM_DISPLAYCHANGE` on the hidden settings receiver: the cached snapshot is
-//! sampled again, on the owner's turn and not inside the message.
+//! sampled again, on the owner's turn and not inside the message. The Windows
+//! table lists the displays' subscriber before the preferences', so a
+//! work-area change reaches both.
 
 use crate::WindowsPlatform;
 use crate::owner::windows::broadcast::send_for_test;
@@ -110,6 +112,61 @@ fn work_area_change_invalidates_the_snapshot() {
     send_for_test(receiver, WM_SETTINGCHANGE, 0, 0);
     platform.display_snapshot().expect("cached answer");
     assert_eq!(platform.owner().displays.sample_count(), sampled + 1);
+}
+
+/// The table's receiver tells a work-area change to the displays, which pass
+/// it on, and then to the preferences, which answer it; a display change is
+/// the displays' alone. A table without the displays' subscriber, with it after
+/// the preferences' (which answer every setting change), or with one that
+/// answers the work area, leaves one of the two stale.
+#[test]
+fn a_work_area_change_reaches_the_displays_and_then_the_preferences() {
+    let platform = WindowsPlatform::new().expect("native platform");
+    let shares = platform
+        .owner()
+        .owner_control
+        .gate()
+        .shares("subscriber order fixture")
+        .expect("owner");
+    let (receiver, preferences) = (shares.broadcast_receiver, shares.preferences);
+    preferences.sample().expect("the first preference read");
+    platform.display_snapshot().expect("first sample");
+    let sampled = platform.owner().displays.sample_count();
+    assert!(
+        !preferences.pending(),
+        "a fresh read left the preferences stale"
+    );
+
+    send_for_test(receiver, WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize, 0);
+    platform
+        .display_snapshot()
+        .expect("sample after the change");
+    assert_eq!(
+        platform.owner().displays.sample_count(),
+        sampled + 1,
+        "the displays did not hear the work-area change"
+    );
+    assert!(
+        preferences.pending(),
+        "the preferences did not hear the work-area change"
+    );
+
+    preferences
+        .sample()
+        .expect("the preference read after the change");
+    send_for_test(receiver, WM_DISPLAYCHANGE, 32, 0);
+    platform
+        .display_snapshot()
+        .expect("sample after the display change");
+    assert_eq!(
+        platform.owner().displays.sample_count(),
+        sampled + 2,
+        "the displays did not hear the display change"
+    );
+    assert!(
+        !preferences.pending(),
+        "a display change reached the preferences"
+    );
 }
 
 #[test]

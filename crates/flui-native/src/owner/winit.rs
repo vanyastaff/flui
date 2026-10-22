@@ -113,13 +113,13 @@ use winit::{
 use flui_foundation::geometry::Point;
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
+use crate::owner::signal::OwnerSignal;
 #[cfg(target_os = "linux")]
 use crate::platforms::linux::x11_window_probe::X11WindowProbe;
 use crate::platforms::winit::window::{WinitWindow, shell_of};
 use crate::platforms::winit::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::platforms::winit::{
-    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, events as winit_events,
-};
+use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, events as winit_events};
+use crate::shared::system_notice::StaleOnWake;
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
@@ -133,10 +133,62 @@ use control::{
     control_lane,
 };
 use flui_platform::{
-    PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode, WindowOptions,
+    DisplayId, DisplaySnapshot, PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode,
+    WindowOptions,
 };
 
 pub(crate) mod control;
+
+/// What the winit host's table names for its owner thread (ADR-0151 §10): the
+/// displays the loop holds. The owner reaches them through the hook and names
+/// no feature.
+pub(crate) trait WinitHost: 'static {
+    /// The displays, made once per loop: the loop holds them for the table's
+    /// displays position and hands them to every window it opens.
+    fn displays() -> Arc<dyn HostDisplays>;
+}
+
+/// The host's displays as the winit loop and the windows it opens reach them:
+/// the operating system's own source, never winit's monitor list (ADR-0236),
+/// which the table makes ([`WinitHost::displays`]).
+pub(crate) trait HostDisplays: StaleOnWake {
+    /// The current snapshot: the last sample unless something invalidated it.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the source cannot be read on this
+    /// thread or the snapshot revision space is used up.
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
+
+    /// The display `window` is on; `None` when the source holds none for it.
+    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId>;
+
+    /// Bring the source up to date with `event_loop`, whose owner `signal` the
+    /// source may wake from then on: `true` when the snapshot may have
+    /// changed, so the owner is woken to sample it again.
+    fn resample(&self, event_loop: &ActiveEventLoop, signal: Option<&Arc<OwnerSignal>>) -> bool;
+
+    /// The source's part of the system's broadcasts, which the receiver the
+    /// loop builds on resume tells it before the preferences.
+    #[cfg(windows)]
+    fn broadcasts(
+        self: Arc<Self>,
+        signal: &Arc<OwnerSignal>,
+    ) -> std::rc::Rc<dyn super::windows::broadcast::Subscriber>;
+
+    /// Mark the source stale and wake the owner when AppKit reports a change
+    /// of screen parameters, until the watch is dropped.
+    #[cfg(target_os = "macos")]
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> super::watch::Watch;
+
+    /// Whether the windows open on a Wayland compositor.
+    #[cfg(target_os = "linux")]
+    fn is_wayland(&self) -> bool;
+
+    /// End the source's observation of the compositor; it reads no more
+    /// changes.
+    #[cfg(target_os = "linux")]
+    fn stop(&self);
+}
 
 /// Convert a tracked physical cursor position to logical pixels.
 fn logical_cursor_point(
@@ -194,10 +246,11 @@ impl WinitRunState {
 /// [`WinitPlatform`](crate::WinitPlatform) is its platform.
 pub struct WinitLoop {
     pub(crate) owner_signal: Mutex<Option<Arc<crate::owner::signal::OwnerSignal>>>,
-    /// The monitors last sampled and the snapshot built from them. Shared with
-    /// every window so each can name its display; outside the state lock so a
-    /// window's `display_id()` never contends with the platform state.
-    pub(crate) displays: Arc<WinitDisplaySource>,
+    /// The monitors last sampled and the snapshot built from them, as the
+    /// table made them. Shared with every window so each can name its
+    /// display; outside the state lock so a window's `display_id()` never
+    /// contends with the platform state.
+    pub(crate) displays: Arc<dyn HostDisplays>,
 
     /// The frame measured around decorated windows, so a remembered outer size
     /// can be fitted before the next window exists.
@@ -351,11 +404,11 @@ impl WinitLoopState {
 }
 
 impl WinitLoop {
-    /// A loop that has not run yet.
-    pub(crate) fn new() -> Self {
+    /// A loop that has not run yet, over the displays `H` makes.
+    pub(crate) fn new<H: WinitHost>() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
-            displays: WinitDisplaySource::new(),
+            displays: H::displays(),
             frame_inset: Arc::new(FrameInset::default()),
             notices: Arc::new(SystemNotices::default()),
             #[cfg(target_os = "linux")]
@@ -365,7 +418,7 @@ impl WinitLoop {
         #[cfg(target_os = "linux")]
         platform
             .notices
-            .mark_stale_on_wake(&platform.displays.native());
+            .mark_held_stale_on_wake(Arc::downgrade(&platform.displays) as _);
         platform
     }
 
@@ -386,37 +439,14 @@ impl WinitLoop {
     }
 
     /// Bring the display source up to date with `event_loop` and wake the owner
-    /// when that may have changed the snapshot, so the host samples it again.
-    ///
-    /// - Windows: sample the native source again; wake if the snapshot differs.
-    /// - macOS: mark the native source stale; the sample the wake leads to
-    ///   reads it.
-    /// - Linux: make sure the display thread reads the protocol winit opened
-    ///   (it starts one on first use); thereafter the thread wakes the owner
-    ///   itself.
+    /// when that may have changed the snapshot, so the host samples it again
+    /// ([`HostDisplays::resample`]).
     fn resample_displays(&self, event_loop: &ActiveEventLoop) {
-        #[cfg(windows)]
-        let changed = {
-            // The native source enumerates without the event loop.
-            let _ = event_loop;
-            self.displays.resample()
-        };
-        #[cfg(target_os = "macos")]
-        let changed = {
-            let _ = event_loop;
-            self.displays.native().invalidate();
-            true
-        };
-        #[cfg(target_os = "linux")]
-        let changed = {
-            let signal = self.owner_signal.lock().clone();
-            signal.is_some_and(|signal| self.displays.follow(event_loop, &signal))
-        };
-        if changed {
-            let signal = self.owner_signal.lock().clone();
-            if let Some(signal) = signal {
-                let _ = signal.wake();
-            }
+        let signal = self.owner_signal.lock().clone();
+        if self.displays.resample(event_loop, signal.as_ref())
+            && let Some(signal) = signal
+        {
+            let _ = signal.wake();
         }
     }
 
@@ -896,8 +926,8 @@ fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> 
 pub(crate) struct WinitApp {
     #[cfg(windows)]
     preference_source: Option<crate::platforms::windows::preferences::PreferenceSource>,
-    /// The hidden top-level window that tells the preference source the
-    /// system's setting and display broadcasts; owner-thread only.
+    /// The hidden top-level window that tells the displays and the preference
+    /// source the system's display and setting broadcasts; owner-thread only.
     #[cfg(windows)]
     preference_broadcasts: Option<super::windows::broadcast::Receiver>,
     #[cfg(target_os = "macos")]
@@ -913,7 +943,7 @@ pub(crate) struct WinitApp {
     pub(crate) host_notices: Option<crate::platforms::linux::host_notices::HostNoticeSource>,
     /// Marks the screens stale when AppKit reports a change; owner-thread only.
     #[cfg(target_os = "macos")]
-    screen_observer: Option<crate::platforms::macos::ScreenObserver>,
+    screen_observer: Option<super::watch::Watch>,
     pub(crate) platform: Arc<WinitLoop>,
     /// The platform over `platform` that `on_ready`'s owner capability wraps.
     owner_platform: Arc<dyn Platform>,
@@ -1742,10 +1772,7 @@ impl WinitApp {
         }
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
-            self.screen_observer = Some(crate::platforms::macos::ScreenObserver::new(
-                self.platform.displays.native(),
-                &signal,
-            ));
+            self.screen_observer = Some(Arc::clone(&self.platform.displays).observe(&signal));
         }
     }
 
@@ -1770,24 +1797,24 @@ impl WinitApp {
     fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
         let signal = self.platform.owner_signal.lock().clone();
         if self.preference_source.is_none()
-            && let Some(signal) = signal
+            && let Some(signal) = &signal
         {
-            self.preference_source = Some(
-                crate::platforms::windows::preferences::PreferenceSource::new(
-                    &signal,
-                    self.platform.displays.native(),
-                )?,
-            );
+            self.preference_source =
+                Some(crate::platforms::windows::preferences::PreferenceSource::new(signal)?);
         }
-        // The system's broadcasts reach the source through a receiver of its
-        // own: winit has no lifecycle subscriber on Windows.
+        // The system's broadcasts reach the displays and the source through a
+        // receiver of their own, in the Win32 host's order: winit has no
+        // lifecycle subscriber on Windows.
         if self.preference_broadcasts.is_none()
             && let Some(source) = &self.preference_source
+            && let Some(signal) = &signal
         {
-            let subscriber: std::rc::Rc<dyn super::windows::broadcast::Subscriber> =
-                std::rc::Rc::new(source.broadcasts());
+            let subscribers: [std::rc::Rc<dyn super::windows::broadcast::Subscriber>; 2] = [
+                Arc::clone(&self.platform.displays).broadcasts(signal),
+                std::rc::Rc::new(source.broadcasts()),
+            ];
             self.preference_broadcasts = Some(
-                super::windows::broadcast::Receiver::new([subscriber]).map_err(|error| {
+                super::windows::broadcast::Receiver::new(subscribers).map_err(|error| {
                     PlatformError::Preferences {
                         message: error.to_string(),
                     }

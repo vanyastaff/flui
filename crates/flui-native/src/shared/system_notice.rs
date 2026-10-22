@@ -101,11 +101,16 @@ impl SystemNotices {
 
     /// Mark `cache` stale whenever the machine wakes, for as long as it lives.
     pub(crate) fn mark_stale_on_wake<T: StaleOnWake + 'static>(&self, cache: &Arc<T>) {
-        let weak = Arc::downgrade(cache);
-        let weak: Weak<dyn StaleOnWake> = weak;
+        let cache: Weak<T> = Arc::downgrade(cache);
+        self.mark_held_stale_on_wake(cache);
+    }
+
+    /// [`mark_stale_on_wake`](Self::mark_stale_on_wake) for a cache its owner
+    /// holds as a trait object, which the generic form cannot take.
+    pub(crate) fn mark_held_stale_on_wake(&self, cache: Weak<dyn StaleOnWake>) {
         let mut cached = self.cached.lock();
         cached.retain(|entry| entry.strong_count() > 0);
-        cached.push(weak);
+        cached.push(cache);
     }
 
     /// Deliver `notice` to the host. A wake marks every cache registered with

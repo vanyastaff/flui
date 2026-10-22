@@ -1,24 +1,32 @@
 //! The Apple host: macOS (AppKit) and iOS (UIKit) share one table, and the
 //! target operating system picks the type that fills each position.
 
+use std::sync::Arc;
+
 #[cfg(target_os = "macos")]
 use crate::config::WindowConfiguration;
+#[cfg(target_os = "ios")]
+use crate::display::apple::ios::IosDisplays;
+#[cfg(target_os = "macos")]
+use crate::display::apple::macos::MacosDisplays;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
 #[cfg(target_os = "ios")]
 use crate::owner::apple::IOSLoop;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::MacOSLoop;
+#[cfg(target_os = "ios")]
+use crate::owner::apple::ios::IosHost;
+#[cfg(target_os = "macos")]
+use crate::owner::apple::macos::MacosHost;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
-use crate::platforms::ios::{
-    IOSClipboard, IOSHaptics, IOSPreferences, IOSSystemChrome, IOSWindow, IosDisplays,
-};
+use crate::platforms::ios::{IOSClipboard, IOSHaptics, IOSPreferences, IOSSystemChrome, IOSWindow};
 #[cfg(all(target_os = "macos", feature = "a11y"))]
 use crate::platforms::macos::MacosAccessibility;
 #[cfg(target_os = "macos")]
 use crate::platforms::macos::{
-    MacHaptics, MacOSClipboard, MacOSTextInput, MacOSWindow, MacosDisplays, PreferenceSource,
+    MacHaptics, MacOSClipboard, MacOSTextInput, MacOSWindow, PreferenceSource,
 };
 use crate::storage::UserDataDirs;
 
@@ -104,15 +112,31 @@ pub type MacOSPlatform = HostPlatform<Apple>;
 pub type IOSPlatform = HostPlatform<Apple>;
 
 #[cfg(target_os = "macos")]
+impl MacosHost for Apple {
+    fn displays() -> Arc<dyn crate::owner::apple::macos::HostDisplays> {
+        Arc::new(MacosDisplays::new())
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl IosHost for Apple {
+    fn displays(
+        marker: objc2::MainThreadMarker,
+    ) -> Arc<dyn crate::owner::apple::ios::HostDisplays> {
+        Arc::new(IosDisplays::new(marker))
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl HostPlatform<Apple> {
     /// Create a new macOS platform with default configuration
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(MacOSLoop::new()?))
+        Ok(Self::from_loop(MacOSLoop::new::<Apple>()?))
     }
 
     /// Create a new macOS platform with custom configuration
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(MacOSLoop::with_config(config)?))
+        Ok(Self::from_loop(MacOSLoop::with_config::<Apple>(config)?))
     }
 }
 
@@ -125,6 +149,6 @@ impl HostPlatform<Apple> {
     /// Returns [`PlatformError::Init`] if called off the main thread, which is
     /// where UIKit requires every window and view operation to run.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(IOSLoop::new()?))
+        Ok(Self::from_loop(IOSLoop::new::<Apple>()?))
     }
 }

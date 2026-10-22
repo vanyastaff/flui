@@ -36,7 +36,6 @@ pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
 // The types the Windows host's table names: public where they are defined (a
 // table names only public types), and nameable only inside the crate.
-pub(crate) use crate::display::windows::WindowsDisplays;
 pub(crate) use drag::OleTransfer;
 pub(crate) use haptics::WindowsHaptics;
 pub(crate) use host_events::HostEvents;

@@ -20,6 +20,8 @@
 //!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
 //!   │                         and slot, the panic boundary, the one call
 //!   │                         point for handlers and the handler registry
+//!   ├─ display/             - The displays: the registry and snapshot model
+//!   │                         beside one file per platform
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │
@@ -152,9 +154,10 @@
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, `platforms::android::memory`, and the loops
-// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`) carries its
-// own module-level `#![expect(unsafe_code)]` where it is declared, and the two
+// `platforms::winit`, `platforms::android::memory`, the loops
+// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, and the
+// display sources `display::windows::source`, `display::apple::{macos, ios}`)
+// carries its own module-level `#![expect(unsafe_code)]`, and the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,

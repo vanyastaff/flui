@@ -18,7 +18,6 @@ mod text_input;
 pub(crate) mod text_sizing;
 pub mod window;
 
-pub(crate) use crate::display::android::AndroidDisplays;
 pub use clipboard::MockClipboard;
 pub(crate) use drag::AndroidTransfer;
 pub(crate) use haptics::AndroidHaptics;

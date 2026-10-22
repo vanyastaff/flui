@@ -19,6 +19,6 @@ pub(crate) mod screen_identity;
 pub(crate) mod source;
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use events::{DisplayObservers, PixelRatioWatch};
+pub(crate) use events::PixelRatioWatch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use source::WebDisplays;

@@ -105,6 +105,27 @@ impl host::Displays<WebLoop> for WebDisplays {
     }
 }
 
+impl crate::owner::web::HostDisplays for WebDisplays {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        WebDisplays::snapshot(self)
+    }
+
+    fn current_display(&self) -> Option<DisplayId> {
+        WebDisplays::current_display(self)
+    }
+
+    fn frame(&self, timestamp_ms: f64) -> bool {
+        WebDisplays::frame(self, timestamp_ms)
+    }
+
+    fn observe(
+        self: Arc<Self>,
+        signal: &Arc<crate::owner::signal::OwnerSignal>,
+    ) -> crate::owner::watch::Watch {
+        crate::owner::watch::Watch::new(super::events::DisplayObservers::start(&self, signal))
+    }
+}
+
 impl WebDisplays {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {

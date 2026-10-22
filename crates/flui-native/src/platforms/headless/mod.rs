@@ -7,12 +7,13 @@ mod window_policy;
 
 pub use drag::HeadlessDragAndDrop;
 
-pub(crate) use crate::display::headless::HeadlessDisplays;
-pub use crate::display::headless::{DisplayChange, DisplayChangeError, DisplaySpec};
+pub use crate::display::headless::{
+    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
+};
 pub(crate) use drag::DragDouble;
 pub use platform::{
-    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDisplayControls,
-    HeadlessHostEvents, HeadlessInputDevices, HeadlessPreferences, MockWindow,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessHostEvents,
+    HeadlessInputDevices, HeadlessPreferences, MockWindow,
 };
 pub(crate) use platform::{TextStoreHostFactory, create_mock_window};
 pub use window_policy::HeadlessWindowPolicy;

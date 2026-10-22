@@ -2,10 +2,11 @@
 //!
 //! Samples the monitors with `EnumDisplayMonitors` and turns them into a
 //! [`DisplaySnapshot`]. [`WindowsDisplays`] keeps the last sample and answers
-//! from it until something invalidates it: `WM_DISPLAYCHANGE` on the hidden
-//! settings receiver, a work-area change, or a window's `WM_DPICHANGED`. The
-//! host asks for the snapshot on every owner turn, so a sample that costs
-//! several OS queries is taken when the displays may have changed, not per turn.
+//! from it until something invalidates it: `WM_DISPLAYCHANGE` or a work-area
+//! change on the owner's broadcast receiver (`DisplayBroadcasts`), or a
+//! window's `WM_DPICHANGED`. The host asks for the snapshot on every owner
+//! turn, so a sample that costs several OS queries is taken when the displays
+//! may have changed, not per turn.
 //!
 //! # Identity
 //!
@@ -94,6 +95,80 @@ impl crate::host::Displays<crate::owner::windows::WindowsLoop> for WindowsDispla
         owner: &crate::owner::windows::WindowsLoop,
     ) -> Result<DisplaySnapshot, PlatformError> {
         owner.displays.snapshot()
+    }
+}
+
+impl crate::owner::windows::HostDisplays for WindowsDisplays {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        WindowsDisplays::snapshot(self)
+    }
+
+    fn invalidate(&self) {
+        WindowsDisplays::invalidate(self);
+    }
+
+    fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId> {
+        WindowsDisplays::display_of_window(self, hwnd)
+    }
+
+    fn nearest_monitor(&self, hwnd: HWND) -> isize {
+        nearest_monitor(hwnd)
+    }
+
+    #[cfg(test)]
+    fn sample_count(&self) -> usize {
+        WindowsDisplays::sample_count(self)
+    }
+}
+
+/// The winit host's displays on Windows are these monitors. winit enumerates
+/// monitors only through a live event loop, and keys them by a reusable GDI
+/// device name; this source needs no event loop, keys monitors by display
+/// target, reads the refresh period from `QueryDisplayConfig` and names a
+/// window's display by `MonitorFromWindow`. winit's own monitor list is not
+/// read. The source is invalidated by `WM_DISPLAYCHANGE` and work-area changes
+/// on the loop's broadcast receiver (created on resume with the preference
+/// source) and sampled again where winit reports a move, a scale change or a
+/// resume.
+#[cfg(feature = "winit-backend")]
+impl crate::owner::winit::HostDisplays for WindowsDisplays {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        WindowsDisplays::snapshot(self)
+    }
+
+    /// The display `window` is on, by the monitor nearest its native window.
+    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+            return None;
+        };
+        self.display_of_window(HWND(handle.hwnd.get() as *mut _))
+    }
+
+    /// Sample the monitors now, which needs no event loop: whether the
+    /// snapshot changed. A revision that cannot advance keeps the previous
+    /// sample.
+    fn resample(
+        &self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        _signal: Option<&std::sync::Arc<crate::owner::signal::OwnerSignal>>,
+    ) -> bool {
+        match self.resample_changed() {
+            Ok(changed) => changed,
+            Err(error) => {
+                tracing::warn!(%error, "display revisions exhausted; keeping the last snapshot");
+                false
+            }
+        }
+    }
+
+    fn broadcasts(
+        self: std::sync::Arc<Self>,
+        signal: &std::sync::Arc<crate::owner::signal::OwnerSignal>,
+    ) -> std::rc::Rc<dyn crate::owner::windows::broadcast::Subscriber> {
+        let displays: std::sync::Arc<dyn crate::owner::windows::HostDisplays> = self;
+        std::rc::Rc::new(super::DisplayBroadcasts::new(&displays, signal))
     }
 }
 
@@ -227,7 +302,7 @@ impl WindowsDisplays {
 }
 
 /// The handle of the monitor nearest `hwnd`, `0` for none.
-pub(crate) fn nearest_monitor(hwnd: HWND) -> isize {
+fn nearest_monitor(hwnd: HWND) -> isize {
     // SAFETY: `MonitorFromWindow` takes the handle by value and dereferences
     // nothing; a destroyed or foreign handle yields a handle or null, never a
     // fault.

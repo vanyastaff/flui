@@ -1,9 +1,11 @@
 //! The web host: a canvas in the browser page, on the browser's own event loop.
 
+use std::sync::Arc;
+
 use crate::display::web::WebDisplays;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
-use crate::owner::web::WebLoop;
+use crate::owner::web::{HostDisplays, WebHost, WebLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
     PageObservers, WebClipboard, WebHaptics, WebPreferences, WebTextInput, WebTransfer, WebWindow,
@@ -32,6 +34,12 @@ impl Host for Web {
     type Storage = UserDataDirs;
 }
 
+impl WebHost for Web {
+    fn displays() -> Arc<dyn HostDisplays> {
+        WebDisplays::new()
+    }
+}
+
 /// The web platform: a canvas window on the browser's event loop, over
 /// WebAssembly with `wasm-bindgen` and `web-sys`.
 pub type WebPlatform = HostPlatform<Web>;
@@ -43,6 +51,6 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WebLoop::new()?))
+        Ok(Self::from_loop(WebLoop::new::<Web>()?))
     }
 }

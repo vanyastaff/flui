@@ -61,7 +61,6 @@ mod status_bar;
 pub(crate) mod text_sizing;
 mod window;
 
-pub(crate) use crate::display::apple::ios::{IosDisplays, ScreenObserver};
 pub use crate::owner::apple::ios::{
     IOSExecutor, IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId,
 };

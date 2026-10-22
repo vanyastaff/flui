@@ -63,11 +63,10 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::android::java_view;
+use crate::owner::android::{AndroidHost, HostDisplays};
 use crate::platform::HostPlatform;
 use crate::platforms::android::window::ActivityFlags;
-use crate::platforms::android::{
-    AndroidDisplays, AndroidWindow, MockClipboard, input, memory, preferences,
-};
+use crate::platforms::android::{AndroidWindow, MockClipboard, input, memory, preferences};
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -144,7 +143,8 @@ pub struct AndroidLoop {
     preference_admission: crate::shared::preference_read::ReadAdmission,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
-    pub(crate) displays: Arc<AndroidDisplays>,
+    /// The displays, as the table made them; shared with the window.
+    pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
 }
 
@@ -176,7 +176,7 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    pub(crate) fn new(app: AndroidApp) -> Self {
+    pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -209,7 +209,7 @@ impl AndroidLoop {
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
-            displays: Arc::new(AndroidDisplays::new(api, library, owner)),
+            displays: H::displays(api, library, owner),
             api,
         }
     }

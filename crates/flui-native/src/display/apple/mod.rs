@@ -1,9 +1,10 @@
 //! The Apple displays: `NSScreen` on macOS ([`macos`]), `UIScreen` on iOS
 //! ([`ios`]), and how the two sources name a display, which is what they share.
 //!
-//! macOS keys a screen by the UUID of the display behind it. iOS has no such
-//! identifier, so the source numbers each `UIScreen` it retains and recognises
-//! the screen again only through the object it holds.
+//! macOS keys a screen by the UUID of the display behind it, and publishes its
+//! frame in device pixels from the top-left of the primary screen. iOS has no
+//! such identifier, so the source numbers each `UIScreen` it retains and
+//! recognises the screen again only through the object it holds.
 //!
 //! The period a macOS mode's rate becomes ([`period`]) and the iOS display
 //! link's frame-rate rules ([`link_rate`]) are pure, and every host runs their
@@ -51,6 +52,26 @@ pub(crate) fn macos_display_persistent_key(uuid: [u8; 16]) -> String {
         write!(key, "{byte:02X}").expect("BUG: writing to a String cannot fail");
     }
     key
+}
+
+/// A macOS screen's frame in the display snapshot's terms: device pixels of
+/// that screen, measured from the top-left of the primary screen. AppKit
+/// measures from the bottom-left corner of the primary screen, whose height is
+/// `primary_height`, in points.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn device_bounds_of_screen(
+    frame: flui_foundation::geometry::Bounds<f64>,
+    primary_height: f64,
+    scale: f64,
+) -> flui_foundation::geometry::Bounds<i32> {
+    use flui_foundation::geometry::{Bounds, Point, Size};
+
+    let top = primary_height - (frame.origin.y + frame.size.height);
+    let device = |points: f64| (points * scale).round() as i32;
+    Bounds {
+        origin: Point::new(device(frame.origin.x), device(top)),
+        size: Size::new(device(frame.size.width), device(frame.size.height)),
+    }
 }
 
 /// An object that can tell whether another handle names the very same native
@@ -133,12 +154,58 @@ impl<S: Clone + SameObject> ScreenLedger<S> {
 mod tests {
     use flui_platform::{DisplayKey, DisplayRegistry};
 
+    use flui_foundation::geometry::{Bounds, Point, Size};
+
     use super::{
-        SameObject, ScreenLedger, change_screen, macos_display_key, macos_display_persistent_key,
+        SameObject, ScreenLedger, change_screen, device_bounds_of_screen, macos_display_key,
+        macos_display_persistent_key,
     };
 
     const UUID_A: [u8; 16] = [0xA0; 16];
     const UUID_B: [u8; 16] = [0xB0; 16];
+
+    #[test]
+    fn a_screen_is_published_in_device_pixels_from_the_top_left() {
+        const PRIMARY: f64 = 900.0;
+        let frame = |x, y, width, height| Bounds {
+            origin: Point::new(x, y),
+            size: Size::new(width, height),
+        };
+        // (name, cocoa frame, scale, device bounds as (x, y, width, height))
+        let rows = [
+            (
+                "the primary screen at 2x",
+                frame(0.0, 0.0, 1440.0, 900.0),
+                2.0,
+                (0, 0, 2880, 1800),
+            ),
+            (
+                "a 1x screen above the primary",
+                frame(0.0, 900.0, 1920.0, 1080.0),
+                1.0,
+                (0, -1080, 1920, 1080),
+            ),
+            (
+                "a 2x screen right of the primary",
+                frame(1440.0, 0.0, 1280.0, 720.0),
+                2.0,
+                (2880, 360, 2560, 1440),
+            ),
+        ];
+        for (name, input, scale, (x, y, width, height)) in rows {
+            let bounds = device_bounds_of_screen(input, PRIMARY, scale);
+            assert_eq!(
+                (
+                    bounds.origin.x,
+                    bounds.origin.y,
+                    bounds.size.width,
+                    bounds.size.height
+                ),
+                (x, y, width, height),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn a_display_uuid_is_written_in_the_canonical_form() {
