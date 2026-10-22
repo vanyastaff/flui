@@ -448,6 +448,74 @@ graph LR
   `module-dag` (243 модуля, 1 base), `globals` (55), `workspace`, `reach`, `file-length`. WSL:
   clippy `winit-backend,a11y`, `linux_preferences` — 16, юнит-тесты `owner::` — 4,
   `compiler_guards` — зелёный.
+- [x] **LY26** — ветка `platform/owner-call-point`. `shared/handlers.rs` → `owner/handlers.rs`
+  (`git mv`, 2 499 → 2 260 строк); точка вызова — `owner/call_point.rs` (384 строки и тесты рядом).
+  Форма: трейт `HandlerSlot { take, restore, replace }` — каждый метод берёт и отпускает лок или
+  заём своего слота и не запускает пользовательский код; `call(&slot, |handler| ..) -> Called<R>`
+  (`Vacant`, `Returned(R)`, `Panicked(Failure)`) берёт обработчик, вызывает его без локов в
+  `catch_unwind` и возвращает на место, если за время вызова не поставили новый (тогда новый
+  остаётся, вызванный уходит в `retire`); `Called::{or_resume, or_contain}` решают, поднять панику
+  дальше (headless, winit, FIFO окна, Web, Android) или погасить её (выход и конец сессии Win32,
+  AppKit, UIKit, проходы ввода, немедленные события iOS); `install` и `retire` — замена и сброс вне
+  локов (паника деструктора погашена, во время раскрутки значение удерживается). Первый отказ:
+  полезная нагрузка — паника самого обработчика; обработчик, вытесненный во время упавшего вызова,
+  удерживается (`mem::forget`, ADR-0127 §2) в одном месте — `call`; `thread::panicking()` для этого
+  не читается; брошенный `Failure` удерживает нагрузку. Слоты: `Field` — поле состояния за
+  `Mutex`/`RefCell` (трейт `Guarded`), `restoring_while` — macOS (`accepts_windows`) и сцена iOS
+  (`signal.accepting`); `SharedField` — хук `Arc` (wake deadline) вызывается клоном и остаётся
+  установлен; `Once` — одноразовый вызов (quit); `Mutex<Option<H>>` — слот окна; в
+  `owner/handlers.rs` — `Latched` (защёлки окна `cleared`/`lifecycle_closed` читаются под локом
+  слота), `InputSlot` (слот владельца) и `Closing` (`FnOnce` `on_close` в конверте). Удалены:
+  `RunningSessionEndHook`, `CallbackLease`, `InputLease`, `WindowEventLease`,
+  `WindowEventHandlerLease`, `ExitPolicyHookLease`, а также `TakenSessionHook` (headless),
+  `Walk` уведомлений (`shared/system_notice.rs`, общий для всех хостов), `with_leased_handler` и
+  `DeadlineQuery` Win32, `invoke_and_drop_owner_callback`, `PlatformHandlers::{invoke_*,
+  run_session_end}`; ручной take/restore macOS (`ask_session_end`, `drain_reopens`, `evaluate`,
+  `finish`), iOS (`emit_scene`, `announce_session_end`, `invoke_quit`, сброс потребителя сцены,
+  `arm_deadline`, регистрации) и Web (`dispatch_window_event`, `report_session_phase`, `quit`).
+  Исправлено: Android `invoke_quit` под мьютексом обработчиков; headless `create_mock_window`
+  больше не объявляет `Created` — это делают `open` и `resolve_next` после лока; `Drop`
+  заменённого обработчика под локом — Android, iOS, headless, а также найденные сверх строки:
+  winit (все регистрации и обе аренды, отдававшие вытесненный обработчик в замыкании
+  `with_state`), регистрации macOS, сеттеры макроса окон (все хосты, кроме Win32 и Web), хук конца
+  сессии и хук уведомлений, заменившие себя изнутри вызова; Win32 и macOS роняли вытесненный хук
+  после погашенной паники. Решения, которых строка не называла: (1) уведомления системы идут через
+  ту же точку — это обработчик приложения; (2) регистрации после `clear()` по-прежнему принимаются
+  и срабатывают один раз (поведение не менялось); (3) headless сверяет пустоту окон и после хука
+  выхода: окно, открытое самим хуком, теперь удерживает платформу (раньше она выходила); (4) quit
+  Win32 в `RunGuard` — одноразовый вызов с погашенной паникой, его захваты после паники
+  удерживаются; (5) `PlatformHandlers` не перестраивался, корень получил `InputCallback` и
+  `InputWake` вместо пути `shared::`. `owner/signal.rs` называет теперь
+  `super::handlers::{InputWake, WindowCallbacks}` — ребро внутри `owner/`; оконная машинерия
+  остаётся в `owner/` до LY28 (и LY44/LY45 её удаляют). Тесты: юнит `owner::call_point::tests` —
+  11; `tests/handler_reentry.rs` (модуль `tests/main.rs`) — таблицы headless (6 случаев) и Win32
+  (4), `replaced_winit_handlers_reach_the_platform`; в крейте
+  `winit_handlers_run_outside_the_state_lock`; строка `a_hook_that_replaced_itself_and_failed_is_retained`
+  в `native_host_events`; wasm `web_session_end_hook_reenters_the_platform`. Каждый случай идёт в
+  рабочем потоке с таймаутом 10 с: регрессия — это дедлок, а не зависание. Против исходников базы
+  (`git restore --source=<база>` для `src/`): headless — все 6 случаев падают (5 — «deadlocked — a
+  handler ran, or a replaced one was dropped, under a lock the platform holds», 1 — «the failed
+  hook's captures are retained, not dropped»), так же в WSL; winit — «winit application handlers:
+  deadlocked …» (Windows и WSL); Win32 — «a failing exit-policy hook keeps the first failure» и
+  строка `native_host_events` падают с «the failed hook's captures are retained, not dropped»;
+  внутренний тест winit с возвращёнными арендами — «deadlocked: a handler ran, or was dropped,
+  under the state lock». Не падают на базе (регрессионные, дефекта там не было): Win32 «a
+  window-event handler installs, opens and quits», «replaced application handlers…», «replaced
+  window callbacks…» (Win32 отпускал `RefCell` и временный гард до вызова) и wasm-тест Web.
+  Мутации точки: `retire` вместо удержания после отказа роняет
+  `a_failing_call_retains_the_handler_it_displaced` и headless-случай отказа; возврат поверх нового
+  обработчика роняет `a_handler_installed_during_a_call_replaces_the_one_that_ran`. Проверки на
+  Windows: clippy `-p flui-native -p flui-app -p flui-testing --all-targets -D warnings` и
+  `-p flui-native --all-targets --features winit-backend,a11y`; nextest `-p flui-native -p
+  flui-app` — 273 (2 пропущены), с `winit-backend` — 255; `wasm-check`, `wasm-test` (49
+  утверждений); clippy Android (`-p flui-native -p flui-app --all-targets`), macOS lib, iOS lib
+  (`DOCS_RS=1`); `doc-strict`, `checks`, `module-dag` (244 модуля, 1 base), `globals` (55),
+  `file-length`, `markers`, `workspace`, `reach`. WSL Ubuntu 24.04: clippy `winit-backend,a11y` и
+  без фич (`-p flui-native -p flui-app`); nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 168; с
+  `winit-backend` под xvfb — 254 из 255: `a_randr_reconfiguration_on_a_real_server_is_published`
+  падает и на базе (RandR в xvfb этого окружения); `linux_preferences` — 16. Не запускалось:
+  Android, macOS и iOS — только проверка типов, их места покрыты общей точкой и её тестами; Dev
+  Android (выход по системе) — устройства в этой сессии нет.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
