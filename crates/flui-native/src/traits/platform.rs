@@ -147,15 +147,12 @@ pub trait Platform: Send + Sync + 'static {
     /// depends on `flui-native`, never the reverse) instead of letting
     /// this backend's native window count decide alone.
     ///
-    /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit`, AppKit, Win32 and `headless` today; Android, Web and
-    /// iOS do not implement this mechanism) keeps its pre-existing native
-    /// lifecycle behavior; installing a hook there is inert. Win32 consults
-    /// the hook on an owner-window turn after the last tracked window's
-    /// `WM_DESTROY`, and with no hook installed ends its message loop there.
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        let _ = hook;
-    }
+    /// The `winit`, AppKit, Win32 and headless hosts consult the hook; Android,
+    /// the web and iOS leave the end of the process to the Activity lifecycle,
+    /// the page and UIKit, and drop it. Win32 consults the hook on an
+    /// owner-window turn after the last tracked window's `WM_DESTROY`, and with
+    /// no hook installed ends its message loop there.
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>);
 
     /// Request that the exit-policy hook
     /// ([`set_exit_policy_hook`](Self::set_exit_policy_hook)) be
@@ -177,16 +174,15 @@ pub trait Platform: Send + Sync + 'static {
     /// one re-check); always safe to over-call — a re-check while windows
     /// are still open, or while the hook still vetoes, is a no-op.
     ///
-    /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit`, AppKit, Win32 and `headless` today; Android, Web and
-    /// iOS do not implement this mechanism) simply never re-evaluates: on those
-    /// backends a keep-alive holder's release does not end the process
-    /// until an explicit [`quit`](Self::quit). The headless backend parks
-    /// the request; its embedder drives the actual re-check on the owner
-    /// thread (`HeadlessExitReevaluation::drive`) — consulting the hook on
-    /// the *calling* thread would run it against the wrong thread-local
-    /// runtime state.
-    fn request_exit_policy_reevaluation(&self) {}
+    /// The `winit`, AppKit and Win32 hosts wake their owner loop to re-check.
+    /// Android, the web and iOS have no exit policy to consult again, so a
+    /// keep-alive holder's release does not end the process there until an
+    /// explicit [`quit`](Self::quit). The headless host parks the request; its
+    /// embedder drives the actual re-check on the owner thread
+    /// (`HeadlessExitReevaluation::drive`) — consulting the hook on the
+    /// *calling* thread would run it against the wrong thread-local runtime
+    /// state.
+    fn request_exit_policy_reevaluation(&self);
 
     /// Install the hook this platform consults, once per idle iteration,
     /// for the earliest wall-clock instant something upstream needs the
@@ -208,18 +204,14 @@ pub trait Platform: Send + Sync + 'static {
     /// reverse) and installs this hook once, the same seam
     /// [`set_exit_policy_hook`](Self::set_exit_policy_hook) uses.
     ///
-    /// Default no-op: a backend that never overrides this (every backend
-    /// except winit and native Win32 today — headless has no idle-blocking
-    /// event loop to wake, and AppKit/Android/Web/iOS do not implement this
-    /// mechanism)
-    /// keeps its pre-existing behavior exactly as before; installing a hook
-    /// there is inert.
+    /// The AppKit and Android hosts actuate the deadline from their own loops
+    /// and iOS keeps the hook for it; the headless host has no idle-blocking
+    /// event loop to wake and the web host's browser loop has no idle wait to
+    /// bound, so both drop it.
     fn set_wake_deadline_hook(
         &self,
         hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
-    ) {
-        let _ = hook;
-    }
+    );
 
     // ==================== Window Management ====================
 
@@ -254,9 +246,7 @@ pub trait Platform: Send + Sync + 'static {
     /// # Errors
     /// Reports a failed native read or an unavailable owner. An error is not an
     /// observation that a setting has been disabled.
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        Ok(flui_platform::SystemPreferences::default())
-    }
+    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError>;
 
     // ==================== Display Management ====================
 
@@ -291,10 +281,9 @@ pub trait Platform: Send + Sync + 'static {
     /// state must live behind an `Arc` the platform clones out, never be
     /// reconstructed per call (two independently minted tables would split
     /// the id space and let cross-table ids pass each other's generation
-    /// checks). Deliberately a required method with no default body so a
-    /// new backend must make that choice explicitly. Backends without a
-    /// transport return [`flui_platform::data_transfer::NullDataTransferSource`]
-    /// (inert, honest — not fake success).
+    /// checks). Backends without a transport return
+    /// [`flui_platform::data_transfer::NullDataTransferSource`] (inert,
+    /// honest — not fake success).
     fn data_transfer(&self) -> Arc<dyn DataTransferSource>;
 
     // ==================== App Activation (US3) ====================
@@ -302,43 +291,35 @@ pub trait Platform: Send + Sync + 'static {
     /// Activate the application (bring to front)
     ///
     /// On Windows: brings the active window to the foreground.
-    /// On macOS: activates the app via NSApp.
-    fn activate(&self, ignoring_other_apps: bool) {
-        let _ = ignoring_other_apps;
-    }
+    /// The other hosts do nothing: AppKit activates the application once, as
+    /// its loop starts, and winit, the web, Android and iOS have no way to
+    /// bring the whole application forward.
+    fn activate(&self, ignoring_other_apps: bool);
 
     // ==================== Clipboard (US3 Enhanced) ====================
 
     /// Write a rich clipboard item (text + metadata)
-    fn write_to_clipboard(&self, item: ClipboardItem) {
-        // Default: write first text entry via existing Clipboard trait
-        if let Some(text) = item.text_content() {
-            self.clipboard().write_text(text.to_string());
-        }
-    }
+    ///
+    /// A host that keeps only text writes the item's first text entry to the
+    /// [`clipboard`](Self::clipboard).
+    fn write_to_clipboard(&self, item: ClipboardItem);
 
     /// Read a rich clipboard item
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        // Default: read via existing Clipboard trait
-        self.clipboard().read_text().map(ClipboardItem::text)
-    }
+    ///
+    /// A host that keeps only text answers the [`clipboard`](Self::clipboard)'s
+    /// text.
+    fn read_from_clipboard(&self) -> Option<ClipboardItem>;
 
     // ==================== File Operations (US3) ====================
 
     /// Open a URL with the system's default handler
-    fn open_url(&self, url: &str) {
-        let _ = url;
-    }
+    fn open_url(&self, url: &str);
 
     /// Reveal a path in the platform's file manager
-    fn reveal_path(&self, path: &Path) {
-        let _ = path;
-    }
+    fn reveal_path(&self, path: &Path);
 
     /// Open a path with the system's default application
-    fn open_path(&self, path: &Path) {
-        let _ = path;
-    }
+    fn open_path(&self, path: &Path);
 
     /// Show a file/directory picker dialog
     ///
@@ -349,10 +330,7 @@ pub trait Platform: Send + Sync + 'static {
     fn prompt_for_paths(
         &self,
         options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        let _ = options;
-        Task::ready(Ok(None))
-    }
+    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>>;
 
     /// Show a "Save As" dialog for selecting a new file path
     ///
@@ -363,22 +341,19 @@ pub trait Platform: Send + Sync + 'static {
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        Task::ready(Ok(None))
-    }
+    ) -> Task<Result<Option<PathBuf>, PlatformError>>;
 
     // ==================== Keyboard (US3) ====================
 
     /// Get the current keyboard layout identifier
-    fn keyboard_layout(&self) -> String {
-        String::new()
-    }
+    ///
+    /// Empty where the host does not read the layout.
+    fn keyboard_layout(&self) -> String;
 
     /// Register a callback for keyboard layout changes
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-        let _ = callback;
-    }
+    ///
+    /// A host that does not read the layout never calls it.
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
 
     // ==================== Callbacks ====================
 
@@ -390,34 +365,29 @@ pub trait Platform: Send + Sync + 'static {
     /// the owner thread, possibly inside a nested native loop, once per
     /// phase of each session end; see [`SessionEndPhase`].
     ///
-    /// A backend without session-end messages never calls it, and the
-    /// default implementation drops it unused.
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        let _ = callback;
-    }
+    /// A host without session-end messages never calls it and drops it
+    /// unused.
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>);
 
     /// Register the callback the platform calls with every system notice other
     /// than a session end's phases (sleep, wake, session lock, memory
     /// pressure), replacing any earlier one. It runs on the owner thread.
     ///
-    /// A backend that observes none of them never calls it, and the default
-    /// implementation drops it unused.
+    /// A host that observes none of them never calls it and drops it unused.
     ///
     /// A backend that delivers [`SystemNotice::Wake`] marks its display
     /// snapshot and every window's state stale first, in the shared dispatch
     /// (`shared::system_notice`), so the first read after the machine woke asks
     /// the operating system again.
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        let _ = callback;
-    }
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>);
 
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
     /// last [`SessionEndBlock`](flui_platform::SessionEndBlock) was
     /// released. A backend that holds the session open (Windows'
     /// `ShutdownBlockReason`) lets go here; one that answered synchronously has
-    /// nothing to undo, and the default does nothing.
-    fn release_session_end(&self) {}
+    /// nothing to undo.
+    fn release_session_end(&self);
 
     /// Which window commands and observations this platform's windows have,
     /// known before any window exists.
@@ -433,14 +403,11 @@ pub trait Platform: Send + Sync + 'static {
     /// bar and borders. Known before any window exists, so a remembered
     /// placement can be fitted by its outer size.
     ///
-    /// The default is zero, which is exact for a platform whose windows have no
-    /// non-client area (headless, mobile, web) and an under-estimate where the
-    /// frame is not measured yet (winit, AppKit: applied with their placement
-    /// support).
-    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
-        let _ = scale_factor;
-        flui_foundation::geometry::Size::new(0.0, 0.0)
-    }
+    /// Zero is exact for a platform whose windows have no non-client area
+    /// (headless, mobile, web). Win32 answers zero, an under-estimate, since it
+    /// does not measure the frame before a window exists; winit answers the
+    /// frame it has measured so far and AppKit the one its window style gives.
+    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64>;
 
     /// Register the macOS application's reopen signal callback.
     ///
@@ -451,28 +418,25 @@ pub trait Platform: Send + Sync + 'static {
     /// wait until the active callback and its cleanup finish. Replacement is safe
     /// from inside a callback. Explicit quit rejects pending signals and later
     /// registrations; callbacks are released when the native run ends.
-    /// Other backends may leave this optional native transport unsupported.
-    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        let _ = callback;
-    }
+    /// Other hosts never produce the signal and drop the callback unused.
+    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>);
 
     /// Register a callback for window events
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
 
     /// Register a callback for URLs opened by the system
-    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
-        let _ = callback;
-    }
+    ///
+    /// No host produces opened URLs yet; the callback is dropped unused.
+    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>);
 
     // ==================== Platform Info ====================
 
     /// Get the platform's name for debugging/logging
     fn name(&self) -> &'static str;
 
-    /// Get the compositor name (e.g., "DWM" on Windows)
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
+    /// Get the compositor name (e.g., "DWM" on Windows), empty where the host
+    /// names none
+    fn compositor_name(&self) -> &'static str;
 
     /// Get the application's executable path
     ///
@@ -483,12 +447,10 @@ pub trait Platform: Send + Sync + 'static {
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.
     ///
-    /// The default is the current user's data directories
-    /// ([`crate::storage::data_dirs`]); a backend whose process has no such
-    /// directories (Android) answers with its own.
-    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
-        crate::storage::data_dirs(app)
-    }
+    /// Every host but Android answers with the current user's data directories
+    /// ([`crate::storage::data_dirs`]); Android's process has no such
+    /// directories, so it answers with its own.
+    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs>;
 }
 
 /// Platform executor trait for async task execution

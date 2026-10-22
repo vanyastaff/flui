@@ -16,7 +16,7 @@ use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
 /// The page's haptic actuator.
 #[derive(Debug, Default)]
-pub(super) struct WebHaptics;
+pub struct WebHaptics;
 
 /// Whether the page can vibrate now: `navigator.vibrate` exists and the page
 /// has had user activation (`navigator.userActivation.hasBeenActive`, the

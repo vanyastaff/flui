@@ -2,6 +2,8 @@
 //! sampled again, on the owner's turn and not inside the message.
 
 use super::*;
+use crate::WindowsPlatform;
+use flui_platform::WindowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_SETWORKAREA, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
@@ -10,8 +12,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[test]
 fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
     let platform = WindowsPlatform::new().expect("native platform");
-    let displays = Arc::clone(&platform.displays);
+    let displays = Arc::clone(&platform.owner().displays);
     let source = platform
+        .owner()
         .owner_control
         .gate()
         .shares("display message fixture")
@@ -83,26 +86,27 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
 fn work_area_change_invalidates_the_snapshot() {
     let platform = WindowsPlatform::new().expect("native platform");
     let source = platform
+        .owner()
         .owner_control
         .gate()
         .shares("work area fixture")
         .expect("owner")
         .preferences;
     platform.display_snapshot().expect("first sample");
-    let sampled = platform.displays.sample_count();
+    let sampled = platform.owner().displays.sample_count();
     source.send_message_for_test(WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize);
     platform
         .display_snapshot()
         .expect("sample after the change");
     assert_eq!(
-        platform.displays.sample_count(),
+        platform.owner().displays.sample_count(),
         sampled + 1,
         "a work-area change left the snapshot cached"
     );
     // Any other setting leaves the displays alone.
     source.send_message_for_test(WM_SETTINGCHANGE, 0);
     platform.display_snapshot().expect("cached answer");
-    assert_eq!(platform.displays.sample_count(), sampled + 1);
+    assert_eq!(platform.owner().displays.sample_count(), sampled + 1);
 }
 
 #[test]
@@ -125,7 +129,7 @@ fn dpi_change_invalidates_the_snapshot() {
         .expect("Win32 backend")
         .hwnd();
     platform.display_snapshot().expect("first sample");
-    let sampled = platform.displays.sample_count();
+    let sampled = platform.owner().displays.sample_count();
     // SAFETY: the window is live on this thread; `rect` outlives the
     // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
     unsafe {
@@ -143,7 +147,7 @@ fn dpi_change_invalidates_the_snapshot() {
         .display_snapshot()
         .expect("sample after the change");
     assert_eq!(
-        platform.displays.sample_count(),
+        platform.owner().displays.sample_count(),
         sampled + 1,
         "a DPI change left the snapshot cached"
     );

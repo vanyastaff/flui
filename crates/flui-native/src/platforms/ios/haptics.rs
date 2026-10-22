@@ -345,7 +345,7 @@ fn build_pattern(part: &CoreHapticsPart) -> Result<Retained<CHHapticPattern>, Re
 }
 
 /// The window's haptic actuator, bound to its view on the main thread.
-pub(super) struct IOSHaptics {
+pub struct IOSHaptics {
     view: super::native_owner::NativeOwner<Retained<UIView>>,
     core: Arc<CoreHaptics>,
 }

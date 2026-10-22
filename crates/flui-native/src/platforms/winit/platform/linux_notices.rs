@@ -9,13 +9,13 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use winit::event_loop::ActiveEventLoop;
 
-use super::{WinitApp, WinitPlatform};
+use super::{WinitApp, WinitLoop};
 use crate::platforms::linux::{
     host_notices::{HostEvent, HostNoticeSource},
     x11_window_probe::X11WindowProbe,
 };
 
-impl WinitPlatform {
+impl WinitLoop {
     /// One phase of a session end: the hook the host registered is asked and
     /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
     /// registered. The hook runs outside the state lock (ADR-0039) and is
@@ -176,7 +176,7 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::*;
-    use crate::traits::Platform;
+    use crate::{WinitPlatform, traits::Platform};
 
     type Phases = Arc<Mutex<Vec<SessionEndPhase>>>;
 
@@ -194,7 +194,7 @@ mod tests {
     fn session_end_without_a_hook_proceeds() {
         let platform = WinitPlatform::new();
         assert_eq!(
-            platform.session_end(SessionEndPhase::Query),
+            platform.owner().session_end(SessionEndPhase::Query),
             SessionEndAnswer::Proceed
         );
     }
@@ -209,7 +209,7 @@ mod tests {
             SessionEndPhase::Ending,
             SessionEndPhase::Cancelled,
         ] {
-            assert_eq!(platform.session_end(phase), SessionEndAnswer::Block);
+            assert_eq!(platform.owner().session_end(phase), SessionEndAnswer::Block);
         }
         assert_eq!(
             *phases.lock(),
@@ -235,11 +235,11 @@ mod tests {
         }));
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            platform.session_end(SessionEndPhase::Query);
+            platform.owner().session_end(SessionEndPhase::Query);
         }));
         assert!(outcome.is_err(), "the panic reaches the caller");
 
-        platform.session_end(SessionEndPhase::Ending);
+        platform.owner().session_end(SessionEndPhase::Ending);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -261,8 +261,8 @@ mod tests {
             SessionEndAnswer::Proceed
         }));
 
-        platform.session_end(SessionEndPhase::Query);
-        platform.session_end(SessionEndPhase::Ending);
+        platform.owner().session_end(SessionEndPhase::Query);
+        platform.owner().session_end(SessionEndPhase::Ending);
         assert_eq!(
             *phases.lock(),
             [SessionEndPhase::Ending],

@@ -940,7 +940,7 @@ mod tests {
     use flui_platform::text_store::{CompositionEnd, TextStore, TextStoreHostError};
 
     use super::*;
-    use crate::platforms::HeadlessPlatform;
+    use crate::HeadlessPlatform;
 
     struct Host;
 

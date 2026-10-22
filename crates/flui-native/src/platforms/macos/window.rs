@@ -120,7 +120,7 @@ pub struct MacOSWindow {
     ///
     /// `Weak`, and a `OnceLock`: the pump is platform-owned and outlives every
     /// window, so a window must not keep it alive — and the slot is filled
-    /// once, by `MacOSPlatform::open_window` right after construction. A
+    /// once, by the window position's `open` right after construction. A
     /// window constructed without a platform leaves it empty and simply never
     /// arms one.
     wake_pump: std::sync::OnceLock<super::wake_pump::WeakWakePump>,
@@ -134,7 +134,7 @@ pub struct MacOSWindow {
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
-    /// `MacOSPlatform::open_window` right after construction, like the wake
+    /// the window position's `open` right after construction, like the wake
     /// pump; a window built without a platform names no display.
     displays: std::sync::OnceLock<Arc<MacosDisplays>>,
 
@@ -294,7 +294,7 @@ impl MacOSWindow {
     ///
     /// `options.position` and `options.normal_geometry` are read as global
     /// logical pixels from the primary screen's top-left corner; a display
-    /// named in `options.display` is resolved by `MacOSPlatform::open_window`
+    /// named in `options.display` is resolved by the window position's `open`
     /// before the window is built.
     ///
     /// # Errors
@@ -320,7 +320,7 @@ impl MacOSWindow {
     /// Hand this window the platform's display registry, and read which display
     /// it is on.
     ///
-    /// Called once by `MacOSPlatform::open_window`, right after construction
+    /// Called once by the window position's `open`, right after construction
     /// and before the window is handed to anyone. `pub(crate)` and a setter,
     /// like [`Self::install_wake_pump`], so a platform-internal type stays out
     /// of the public `MacOSWindow::new` signature.
@@ -358,7 +358,7 @@ impl MacOSWindow {
 
     /// Hand this window the platform's wake pump.
     ///
-    /// Called once by `MacOSPlatform::open_window`, immediately after
+    /// Called once by the window position's `open`, immediately after
     /// construction and before the window is handed to anyone who could
     /// redraw it. `pub(crate)` and a setter rather than a `MacOSWindow::new`
     /// parameter on purpose: `MacOSWindow` is public API, and threading a

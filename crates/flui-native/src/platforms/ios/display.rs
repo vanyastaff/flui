@@ -69,7 +69,7 @@ pub(super) struct ScreenIdentity {
 /// The displays of one iOS platform: their ids and the last snapshot (kept by
 /// the [`DisplaySource`] until an event invalidates it), the link periods
 /// windows measured, and the OS version.
-pub(super) struct IosDisplays {
+pub struct IosDisplays {
     source: DisplaySource,
     version: AppleVersion,
     /// The retained screens and their numbers. Main thread only: a
@@ -77,6 +77,12 @@ pub(super) struct IosDisplays {
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,
     /// The period each window's display link last published, by screen.
     link_periods: Mutex<ScreenPeriods<WindowId>>,
+}
+
+impl std::fmt::Debug for IosDisplays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IosDisplays").finish_non_exhaustive()
+    }
 }
 
 impl IosDisplays {

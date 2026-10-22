@@ -13,7 +13,7 @@ use flui_platform::{
     DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 
-/// One display a [`HeadlessPlatform`](super::HeadlessPlatform) is built with.
+/// One display a [`HeadlessPlatform`](crate::HeadlessPlatform) is built with.
 ///
 /// Displays are laid out left to right in the order given; the first is the
 /// primary display.
@@ -100,7 +100,7 @@ pub enum DisplayChangeError {
 /// The snapshot the platform last published. The registry that issued its ids is
 /// only needed while the specs are turned into displays, so it is not kept.
 #[derive(Debug)]
-pub(super) struct HeadlessDisplays {
+pub struct HeadlessDisplays {
     snapshot: DisplaySnapshot,
 }
 

@@ -23,8 +23,14 @@ use super::super::macos::display::MacosDisplays;
 use crate::error::PlatformError;
 
 /// The platform's screens, shared with every window.
-pub(super) struct WinitDisplaySource {
+pub struct WinitDisplaySource {
     native: Arc<MacosDisplays>,
+}
+
+impl std::fmt::Debug for WinitDisplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinitDisplaySource").finish_non_exhaustive()
+    }
 }
 
 impl WinitDisplaySource {

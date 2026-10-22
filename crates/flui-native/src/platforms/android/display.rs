@@ -159,7 +159,7 @@ unsafe extern "C" fn on_refresh_rate(period_nanos: i64, data: *mut c_void) {
 }
 
 /// The displays of the device, sampled through JNI and kept between samples.
-pub(super) struct AndroidDisplays {
+pub struct AndroidDisplays {
     source: Arc<DisplaySource>,
     api: AndroidApi,
     library: Arc<dyn SymbolSource>,
@@ -170,6 +170,12 @@ pub(super) struct AndroidDisplays {
     /// until the window has asked again with it.
     max_rate_changed: AtomicBool,
     watch: Mutex<Option<Registration>>,
+}
+
+impl std::fmt::Debug for AndroidDisplays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidDisplays").finish_non_exhaustive()
+    }
 }
 
 impl AndroidDisplays {
@@ -348,6 +354,21 @@ impl AndroidDisplays {
     pub(super) fn stop_watching(&self) {
         let registration = self.watch.lock().take();
         drop(registration);
+    }
+}
+
+impl crate::host::Displays<super::AndroidLoop> for AndroidDisplays {
+    fn snapshot(owner: &super::AndroidLoop) -> Result<DisplaySnapshot, PlatformError> {
+        let snapshot = owner.displays.snapshot(&owner.app)?;
+        if owner.displays.take_max_rate_change() {
+            // A `High` hint skipped while the display's highest rate was
+            // unknown (or sent with an older one) is asked again.
+            let window = owner.window.lock().clone();
+            if let Some(window) = window {
+                window.apply_frame_rate_hint();
+            }
+        }
+        Ok(snapshot)
     }
 }
 

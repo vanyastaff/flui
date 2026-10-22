@@ -78,7 +78,7 @@ pub(super) struct OwnerControlContext {
     /// OLE drag and drop, whose sessions run from this window.
     drag: Arc<super::drag::OleTransfer>,
     /// The last wake deadline the modal drag loop delivered, with the frame
-    /// count it was delivered at (see `WindowsPlatform::deliver_modal_frames`).
+    /// count it was delivered at (see `WindowsLoop::deliver_modal_frames`).
     modal_delivery: Rc<ModalDelivery>,
 }
 
@@ -159,7 +159,7 @@ pub(super) struct OwnerControl {
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
-    /// `WindowsPlatform::with_config`).
+    /// `WindowsLoop::with_config`).
     pub(super) fn new(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
@@ -567,7 +567,7 @@ unsafe extern "system" fn procedure(
                 let frames = Rc::clone(&context.frames);
                 let delivered = Rc::clone(&context.modal_delivery);
                 let windows = context.windows.clone();
-                let wait = super::platform::WindowsPlatform::deliver_modal_frames(
+                let wait = super::platform::WindowsLoop::deliver_modal_frames(
                     &handlers, &windows, &frames, &delivered,
                 );
                 result = LRESULT(wait as isize);

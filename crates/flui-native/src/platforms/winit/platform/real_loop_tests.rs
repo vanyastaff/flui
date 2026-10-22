@@ -32,8 +32,10 @@ use winit::{
     window::WindowId as WinitWindowId,
 };
 
-use super::{SelfCloseRoute, WinitApp, WinitPlatform, WinitRunState};
-use crate::{platforms::winit::control::control_lane, traits::HostWindow, traits::Platform};
+use super::{SelfCloseRoute, WinitApp, WinitLoop, WinitRunState};
+use crate::{
+    WinitPlatform, platforms::winit::control::control_lane, traits::HostWindow, traits::Platform,
+};
 use flui_platform::{WindowEvent, WindowId, WindowOptions};
 
 fn options(title: impl Into<String>) -> WindowOptions {
@@ -44,7 +46,7 @@ fn options(title: impl Into<String>) -> WindowOptions {
 }
 
 /// Manual WinitApp fixtures need the same owner signal as run_event_loop.
-fn install_test_owner_signal(platform: &WinitPlatform, event_loop: &EventLoop<()>) {
+fn install_test_owner_signal(platform: &WinitLoop, event_loop: &EventLoop<()>) {
     let proxy = event_loop.create_proxy();
     *platform.owner_signal.lock() = Some(crate::shared::owner_signal::OwnerSignal::new(Arc::new(
         move || {
@@ -61,7 +63,7 @@ fn install_test_owner_signal(platform: &WinitPlatform, event_loop: &EventLoop<()
 /// at which `resumed()` has returned and the owner lane accepts
 /// deferred, post-bootstrap requests. Real wall-clock, not simulated:
 /// these lane tests drive an actual winit event loop.
-fn wait_for_running(platform: &WinitPlatform) {
+fn wait_for_running(platform: &WinitLoop) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while !platform.with_state(|state| matches!(state.run_state, WinitRunState::Running { .. })) {
         assert!(
@@ -77,7 +79,7 @@ fn wait_for_running(platform: &WinitPlatform) {
 /// up) and that an unwind completed (count goes back down) — a
 /// deterministic condition, not a blind sleep, even though the exact
 /// wake-up latency is real wall-clock time.
-fn wait_for_map_len(platform: &WinitPlatform, expected: usize, what: &str) {
+fn wait_for_map_len(platform: &WinitLoop, expected: usize, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let actual = platform.with_state(|state| state.window_id_map.len());
@@ -306,7 +308,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         },
     };
 
-    let platform = Arc::new(WinitPlatform::new());
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     let proxy = event_loop.create_proxy();
     let owner_proxy = proxy.clone();
@@ -345,8 +348,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let sink = scrolls.clone();
     let observed = observations.clone();
     let callback_done = done.clone();
-    let quit = platform.clone();
-    let wake_platform = platform.clone();
+    let quit = host.clone();
+    let wake_platform = host.clone();
     let wake_frames = frames.clone();
     let wake_deferred = deferred_frame;
     let wake_recovered = recovered.clone();
@@ -355,7 +358,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let frame_healthy = healthy_frame;
     let frame_sink = frames.clone();
     let mut app = WinitApp {
-        platform: platform.clone(),
+        platform,
+        owner_platform: host.clone(),
         preference_source: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
@@ -507,7 +511,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         "drain and healthy redraw both complete"
     );
     assert!(
-        platform.preferences().is_err(),
+        host.preferences().is_err(),
         "shutdown refuses the retired owner snapshot"
     );
     let log = scrolls.lock();
@@ -615,7 +619,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         }
     }
 
-    let platform = Arc::new(WinitPlatform::new());
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     let proxy = event_loop.create_proxy();
     let owner_proxy = proxy.clone();
@@ -650,7 +655,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         move || control.request_quit(),
     );
     let bootstrap_deferred = deferred.clone();
-    let wake_platform = platform.clone();
+    let wake_platform = host.clone();
     let wake_frames = frames.clone();
     let wake_baseline = baseline.clone();
     let wake_recovered = recovered.clone();
@@ -658,10 +663,11 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let wake_healthy = healthy_frame.clone();
     let frame_healthy = healthy_frame;
     let frame_done = done.clone();
-    let frame_quit = platform.clone();
+    let frame_quit = host.clone();
     let frame_sink = frames.clone();
     let app = WinitApp {
-        platform: platform.clone(),
+        platform,
+        owner_platform: host.clone(),
         preference_source: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
@@ -754,10 +760,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         done.load(Ordering::Acquire),
         "cold drain and healthy redraw both complete"
     );
-    assert!(
-        platform.preferences().is_err(),
-        "retired owner refuses reads"
-    );
+    assert!(host.preferences().is_err(), "retired owner refuses reads");
 }
 
 /// Drives a REAL winit event loop (this sandbox has a live X11/Wayland
@@ -778,7 +781,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
               the test harness runs this on an ordinary test thread"
 )]
 fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
-    let platform = Arc::new(WinitPlatform::new());
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     install_test_owner_signal(&platform, &event_loop);
     let event_loop_proxy = event_loop.create_proxy();
@@ -888,6 +892,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 
     let mut app = WinitApp {
         platform: Arc::clone(&platform),
+        owner_platform: host,
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
         #[cfg(target_os = "macos")]
@@ -1091,7 +1096,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         }
     }
 
-    let platform = Arc::new(WinitPlatform::new());
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     install_test_owner_signal(&platform, &event_loop);
     let event_loop_proxy = event_loop.create_proxy();
@@ -1112,7 +1118,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
     let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
-    let global_close_events = record_global_close_events(&platform);
+    let global_close_events = record_global_close_events(&host);
 
     let platform_for_worker = Arc::clone(&platform);
     let control_for_worker = control;
@@ -1195,6 +1201,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let mut app = ExitObserver {
         inner: WinitApp {
             platform: Arc::clone(&platform),
+            owner_platform: host,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(target_os = "macos")]
@@ -1420,10 +1427,11 @@ mod x11_window {
     /// [`run_x11_scenario`] on a platform the caller has prepared, for a
     /// scenario that needs no X11 id.
     fn run_x11_window(
-        platform: Arc<WinitPlatform>,
+        host: Arc<WinitPlatform>,
         opening: WindowOptions,
         scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
     ) {
+        let platform = host.shared_owner();
         let event_loop = build_x11_event_loop();
         install_test_owner_signal(&platform, &event_loop);
         let event_loop_proxy = event_loop.create_proxy();
@@ -1461,6 +1469,7 @@ mod x11_window {
 
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
+            owner_platform: host,
             preference_source: None,
             host_notices: None,
             on_ready: None,
@@ -1848,13 +1857,14 @@ mod x11_window {
     /// that nothing would tell it of: winit sends no event for one on X11.
     #[test]
     fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
-        let platform = Arc::new(WinitPlatform::new());
+        let host = Arc::new(WinitPlatform::new());
+        let platform = host.shared_owner();
         // The probe's connections failed: the platform remembers that.
         assert!(
             platform.x11_probe.set(None).is_ok(),
             "no probe was made yet"
         );
-        run_x11_window(platform, WindowOptions::default(), |window, _server| {
+        run_x11_window(host, WindowOptions::default(), |window, _server| {
             let capabilities = window.capabilities();
             assert!(!capabilities.observes_minimized);
             // Nothing else is taken away.
@@ -1898,7 +1908,8 @@ mod wayland_window {
             eprintln!("skipped: no Wayland compositor (WAYLAND_DISPLAY is not set)");
             return;
         }
-        let platform = Arc::new(WinitPlatform::new());
+        let host = Arc::new(WinitPlatform::new());
+        let platform = host.shared_owner();
         let event_loop = build_wayland_event_loop();
         install_test_owner_signal(&platform, &event_loop);
         let event_loop_proxy = event_loop.create_proxy();
@@ -1911,6 +1922,7 @@ mod wayland_window {
             .expect("first install succeeds");
 
         let platform_for_worker = Arc::clone(&platform);
+        let host_for_worker = Arc::clone(&host);
         let control_for_worker = control;
         let worker = thread::spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -1935,7 +1947,7 @@ mod wayland_window {
                 assert!(
                     capabilities.sets_title && capabilities.sets_size && capabilities.maximizes
                 );
-                assert_eq!(platform_for_worker.window_capabilities(), capabilities);
+                assert_eq!(host_for_worker.window_capabilities(), capabilities);
                 assert_ne!(capabilities, WindowCapabilities::ALL);
 
                 let state = window.state();
@@ -1977,6 +1989,7 @@ mod wayland_window {
 
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
+            owner_platform: host,
             preference_source: None,
             host_notices: None,
             on_ready: None,

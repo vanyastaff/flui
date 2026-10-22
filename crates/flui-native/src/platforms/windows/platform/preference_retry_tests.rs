@@ -1,12 +1,13 @@
 //! Native idle-loop proof with a private failing getter; no OS settings mutation.
 
 use super::*;
+use crate::WindowsPlatform;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[test]
 fn native_setting_message_replaces_the_cached_observation() {
     let platform = WindowsPlatform::new().expect("native platform");
-    let gate = platform.owner_control.gate();
+    let gate = platform.owner().owner_control.gate();
     let source = gate
         .shares("notification fixture")
         .expect("owner")
@@ -77,6 +78,7 @@ fn failed_native_posts_still_deliver_owner_turns_and_quit() {
         .preferences()
         .expect("clean source before registration");
     platform
+        .owner()
         .owner_control
         .wake
         .fail_posts
@@ -154,7 +156,7 @@ fn preference_failure_retries_without_a_user_window() {
 
 fn recovery(panics: bool, repeat_failure: bool) {
     let platform = WindowsPlatform::new().expect("native platform");
-    let gate = platform.owner_control.gate();
+    let gate = platform.owner().owner_control.gate();
     let source = gate.shares("retry fixture").expect("owner").preferences;
     source.sample().expect("initial observation");
     let recovered = Arc::new(AtomicBool::new(false));

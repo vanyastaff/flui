@@ -1,10 +1,10 @@
-//! Each case builds a small crate in memory, declares its layers, and checks
-//! the identities of what the rule reports; the last case reads the real
-//! flui-widgets tree.
+//! Each case builds a small crate in memory, declares its layers or its
+//! features, and checks the identities of what the rule reports; the last case
+//! reads the real flui-widgets tree.
 
 use std::collections::BTreeSet;
 
-use super::source::{self, Sources};
+use super::source::{self, Depth, Reach, Resolved, Sources};
 use super::{Finding, Identity, Outcome, check, declaration_from_toml};
 use crate::util;
 
@@ -256,6 +256,48 @@ fn test_only_relay_items_do_not_change_production_attribution() {
             ],
         ),
         set(&[]),
+    );
+}
+
+/// A statement or expression compiled only under `cfg(test)` inside production
+/// code is test code: what it names is no production edge.
+fn test_only_statements_name_no_production_edge() {
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                TWO_LIB,
+                (
+                    "low.rs",
+                    "pub fn run() {\n\
+                     #[cfg(test)]\n\
+                     crate::high::record();\n\
+                     #[cfg(test)]\n\
+                     let _probe = crate::high::High;\n\
+                     #[cfg(test)]\n\
+                     crate::high::note!();\n\
+                     }",
+                ),
+                (
+                    "high.rs",
+                    "pub struct High; pub fn record() {}\n\
+                     #[macro_export] macro_rules! note { () => {} }",
+                ),
+            ],
+        ),
+        set(&[]),
+    );
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                TWO_LIB,
+                ("low.rs", "pub fn run() { crate::high::record(); }"),
+                ("high.rs", "pub fn record() {}"),
+            ],
+        ),
+        set(&[("low", "high", "refused")]),
+        "the same statement outside cfg(test) is an edge"
     );
 }
 
@@ -833,6 +875,759 @@ fn a_missing_module_file_or_a_parse_error_stops_the_scan() {
     assert!(format!("{error:#}").contains("c/src/bad.rs:1"), "{error:#}");
 }
 
+fn a_module_that_re_exports_another_modules_item_owns_the_path_on_the_layer_axis() {
+    // `c` names the item through `m`, which a lower layer may do; the item
+    // lives in `o`, which `c` may not name. The layer axis stops at the
+    // top-level module the path names, so only `m`'s own import is refused.
+    assert_eq!(
+        identities(
+            r#"layers = [["m"], ["c"], ["o"]]"#,
+            &[
+                ("lib.rs", "pub mod m;\npub mod c;\npub mod o;\n"),
+                ("m.rs", "pub use crate::o::Thing;\n"),
+                ("c.rs", "use crate::m::Thing;\n"),
+                ("o.rs", "pub struct Thing;\n"),
+            ],
+        ),
+        set(&[("m", "o", "refused")])
+    );
+}
+
+/// The owners of the absolute `path` in a crate `c` of `files`, read through
+/// every module.
+fn owners(files: &[(&str, &str)], path: &str) -> BTreeSet<Resolved> {
+    let sources = files
+        .iter()
+        .fold(Sources::default(), |sources, (rel, text)| {
+            sources.with(&format!("c/src/{rel}"), text)
+        });
+    let scan = source::scan(&sources, "c/src/lib.rs").expect("the test crate scans");
+    let path: Vec<String> = path.split("::").map(str::to_owned).collect();
+    let transparent = BTreeSet::new();
+    scan.resolve(
+        &path,
+        Reach {
+            depth: Depth::Full,
+            transparent: &transparent,
+        },
+    )
+}
+
+/// The module `path` names, as an owner.
+fn owner(path: &str) -> Resolved {
+    Resolved::Module(path.split("::").map(str::to_owned).collect())
+}
+
+/// The one module `path` names, as the only owner.
+fn module(path: &str) -> BTreeSet<Resolved> {
+    BTreeSet::from([owner(path)])
+}
+
+/// Whether the owners are a single name nothing supplies.
+fn is_missing(owners: &BTreeSet<Resolved>) -> bool {
+    matches!(
+        owners.iter().collect::<Vec<_>>().as_slice(),
+        [Resolved::Missing(_)]
+    )
+}
+
+fn a_re_export_at_depth_resolves_to_the_module_that_defines_the_item() {
+    let files = [
+        ("lib.rs", "pub mod display;\n"),
+        (
+            "display/mod.rs",
+            "mod windows;\npub struct Model;\n\
+             pub use windows::Displays;\npub use windows::Displays as Registry;\n\
+             pub use windows::tsf::Ime;\npub use self::windows::Wrapped;\n\
+             pub use crate::display::windows::Absolute;\n",
+        ),
+        (
+            "display/windows/mod.rs",
+            "pub mod tsf;\npub struct Displays;\npub struct Absolute;\n\
+             pub use inner::Wrapped;\nmod inner { pub struct Wrapped; }\n",
+        ),
+        ("display/windows/tsf.rs", "pub struct Ime;\n"),
+    ];
+    for (path, owner) in [
+        ("display::Displays", "display::windows"),
+        ("display::Registry", "display::windows"),
+        ("display::Absolute", "display::windows"),
+        // through a submodule, and through an inline module
+        ("display::Ime", "display::windows::tsf"),
+        ("display::Wrapped", "display::windows::inner"),
+        // an item of the module itself, a path that ends at a module, a path
+        // that continues into an associated item
+        ("display::Model", "display"),
+        ("display::windows", "display::windows"),
+        ("display::windows::tsf", "display::windows::tsf"),
+        ("display::Displays::new", "display::windows"),
+    ] {
+        assert_eq!(owners(&files, path), module(owner), "{path}");
+    }
+    assert!(is_missing(&owners(&files, "display::Nowhere")));
+}
+
+fn a_glob_re_export_at_depth_supplies_the_names_of_the_module_it_reads() {
+    let files = [
+        ("lib.rs", "pub mod display;\n"),
+        (
+            "display/mod.rs",
+            "mod windows;\nmod apple;\npub struct Model;\npub struct Both;\n\
+             pub use windows::*;\npub use apple::*;\npub use flui_foundation::prelude::*;\n",
+        ),
+        (
+            "display/windows.rs",
+            "pub use super::*;\npub struct Win;\npub struct Both;\npub struct Twin;\n",
+        ),
+        (
+            "display/apple.rs",
+            "pub struct Mac;\npub struct Both;\npub struct Twin;\n",
+        ),
+    ];
+    // each glob is tried and the one that has the name owns it; a glob of
+    // another crate may supply any name, so it is a possible owner too
+    assert_eq!(
+        owners(&files, "display::Win"),
+        BTreeSet::from([owner("display::windows"), Resolved::External])
+    );
+    // an item of the module outranks the globs
+    assert_eq!(owners(&files, "display::Both"), module("display"));
+    // two globs with the name are both owners
+    assert_eq!(
+        owners(&files, "display::Twin"),
+        BTreeSet::from([
+            owner("display::windows"),
+            owner("display::apple"),
+            Resolved::External
+        ])
+    );
+    // a glob of another crate may supply what no glob of the crate has, and
+    // the globs that read each other end instead of looping
+    assert_eq!(
+        owners(&files, "display::Color"),
+        BTreeSet::from([Resolved::External])
+    );
+    let without_external = [
+        ("lib.rs", "pub mod display;\n"),
+        ("display/mod.rs", "mod windows;\npub use windows::*;\n"),
+        ("display/windows.rs", "pub use super::*;\npub struct Win;\n"),
+    ];
+    assert_eq!(
+        owners(&without_external, "display::Win"),
+        module("display::windows")
+    );
+    assert!(is_missing(&owners(&without_external, "display::Nowhere")));
+}
+
+fn a_module_with_items_the_scan_cannot_read_owns_a_name_nothing_supplies() {
+    let owned = |windows: &str| {
+        owners(
+            &[
+                ("lib.rs", "pub mod display;\n"),
+                ("display/mod.rs", "pub mod windows;\n"),
+                ("display/windows.rs", windows),
+            ],
+            "display::windows::Generated",
+        )
+    };
+    assert!(is_missing(&owned("pub struct Other;\n")));
+    for hides in [
+        "define_things! { Generated }\n",
+        "extern \"C\" { pub fn Generated(); }\n",
+        "include!(\"generated.rs\");\n",
+    ] {
+        assert_eq!(owned(hides), module("display::windows"), "{hides}");
+    }
+    // a `macro_rules!` definition hides nothing
+    assert!(is_missing(&owned("macro_rules! make { () => {}; }\n")));
+}
+
+fn a_use_of_a_name_the_module_defines_keeps_its_owner() {
+    // `use make;` beside `macro_rules! make` re-exports the macro the module
+    // defines; it is no source to follow. A crate is re-exported as `::name`.
+    let files = [
+        ("lib.rs", "pub mod shared;\n"),
+        (
+            "shared/mod.rs",
+            "mod handlers;\npub(crate) use handlers::make;\npub use ::serde;\n",
+        ),
+        (
+            "shared/handlers.rs",
+            "macro_rules! make { () => {}; }\npub(crate) use make;\n",
+        ),
+    ];
+    assert_eq!(owners(&files, "shared::make"), module("shared::handlers"));
+    assert_eq!(
+        owners(&files, "shared::serde::Serialize"),
+        BTreeSet::from([Resolved::External])
+    );
+    // while a name nothing defines that a `use` binds to itself leads nowhere
+    let looped = [
+        ("lib.rs", "pub mod shared;\n"),
+        ("shared/mod.rs", "pub use serde;\n"),
+    ];
+    assert!(
+        owners(&looped, "shared::serde::Serialize")
+            .iter()
+            .all(|owner| matches!(owner, Resolved::Unattributed(_)))
+    );
+}
+
+fn self_and_super_paths_in_nested_modules_start_at_the_nested_module() {
+    let files = [
+        ("lib.rs", "pub mod window;\n"),
+        ("window/mod.rs", "pub mod windows;\npub struct State;\n"),
+        ("window/windows/mod.rs", "mod proc;\npub struct Handle;\n"),
+        (
+            "window/windows/proc.rs",
+            "use super::Handle;\nuse super::super::State;\nuse self::inner::Inner;\n\
+             use crate::window::State as Shared;\n\
+             mod inner {\n    pub struct Inner;\n    use super::Handle as Outer;\n    \
+             use super::super::super::State as Far;\n}\n",
+        ),
+    ];
+    let sources = files
+        .iter()
+        .fold(Sources::default(), |sources, (rel, text)| {
+            sources.with(&format!("c/src/{rel}"), text)
+        });
+    let scan = source::scan(&sources, "c/src/lib.rs").expect("the test crate scans");
+    let named: BTreeSet<(String, String)> = scan
+        .references
+        .iter()
+        .map(|reference| (reference.from.join("::"), reference.path.join("::")))
+        .collect();
+    let pairs = |pairs: &[(&str, &str)]| -> BTreeSet<(String, String)> {
+        pairs
+            .iter()
+            .map(|&(from, path)| (from.to_owned(), path.to_owned()))
+            .collect()
+    };
+    assert_eq!(
+        named,
+        pairs(&[
+            ("window::windows::proc", "window::windows::Handle"),
+            ("window::windows::proc", "window::State"),
+            (
+                "window::windows::proc",
+                "window::windows::proc::inner::Inner"
+            ),
+            (
+                "window::windows::proc::inner",
+                "window::windows::proc::Handle"
+            ),
+            ("window::windows::proc::inner", "window::State"),
+        ])
+    );
+    assert_eq!(
+        owners(&files, "window::windows::proc::Handle"),
+        module("window::windows")
+    );
+    assert_eq!(
+        owners(&files, "window::windows::proc::inner::Inner"),
+        module("window::windows::proc::inner")
+    );
+    assert_eq!(owners(&files, "window::State"), module("window"));
+}
+
+fn a_path_attribute_places_a_module_file_relative_to_the_file_that_declares_it() {
+    let toml = r#"
+features = ["display", "window"]
+platforms = ["windows"]
+hosts = "hosts"
+"#;
+    assert_eq!(
+        identities(
+            toml,
+            &[
+                (
+                    "lib.rs",
+                    "#[path = \"shared/display_model.rs\"]\npub mod display;\n\
+                     pub mod window;\npub mod hosts;\n",
+                ),
+                (
+                    "shared/display_model.rs",
+                    "pub mod windows;\nuse crate::window::windows::Win;\n",
+                ),
+                ("shared/windows.rs", "pub struct DisplayWin;\n"),
+                ("window/mod.rs", "pub mod windows;\n"),
+                ("window/windows.rs", "pub struct Win;\n"),
+                ("hosts.rs", ""),
+            ],
+        ),
+        set(&[(
+            "display",
+            "window::windows",
+            "names another feature's platform file"
+        )])
+    );
+    // a nested one is relative to the directory of the file that declares it
+    // (not to the directory that file keeps its own children in), or to the
+    // directory of the inline block around it
+    let sources = Sources::default()
+        .with("c/src/lib.rs", "pub mod display;\npub mod window;\n")
+        .with(
+            "c/src/display/mod.rs",
+            "#[path = \"side/model_windows.rs\"]\npub mod windows;\n",
+        )
+        .with("c/src/display/side/model_windows.rs", "pub mod beside;\n")
+        .with("c/src/display/side/beside.rs", "")
+        .with(
+            "c/src/window.rs",
+            "#[path = \"elsewhere/x.rs\"]\nmod x;\nmod inline {\n    #[path = \"y.rs\"]\n    mod y;\n}\n",
+        )
+        .with("c/src/elsewhere/x.rs", "")
+        .with("c/src/window/inline/y.rs", "");
+    let scan = source::scan(&sources, "c/src/lib.rs").expect("the test crate scans");
+    let modules: Vec<String> = scan.tree.keys().map(|module| module.join("::")).collect();
+    assert_eq!(
+        modules,
+        [
+            "display",
+            "display::windows",
+            "display::windows::beside",
+            "window",
+            "window::inline",
+            "window::inline::y",
+            "window::x",
+        ]
+    );
+    let sources = Sources::default()
+        .with("c/src/lib.rs", "pub mod window;\n")
+        .with("c/src/window.rs", "#[path = \"elsewhere/x.rs\"]\nmod x;\n");
+    let error = source::scan(&sources, "c/src/lib.rs").expect_err("no such file");
+    assert!(
+        format!("{error:#}").contains("looked for c/src/elsewhere/x.rs"),
+        "{error:#}"
+    );
+}
+
+/// The declaration of the feature crates below.
+const FEATURES: &str = r#"
+features = ["window", "display"]
+platforms = ["windows", "apple", "winit"]
+groups = { apple = ["macos", "ios"] }
+base = ["owner"]
+hosts = "hosts"
+"#;
+
+/// The files of a feature crate in which every module only declares its
+/// children and defines a struct, with `changes` replacing or adding files.
+fn feature_files<'a>(changes: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut files = vec![
+        (
+            "lib.rs",
+            "pub mod window;\npub mod display;\npub mod owner;\npub mod hosts;\npub mod platform;\n",
+        ),
+        (
+            "window/mod.rs",
+            "pub mod windows;\npub mod winit;\npub mod apple;\npub struct Window;\n",
+        ),
+        ("window/windows.rs", "pub struct Win;\n"),
+        ("window/winit.rs", "pub struct Winit;\n"),
+        (
+            "window/apple/mod.rs",
+            "pub mod macos;\npub mod ios;\npub struct Shared;\n",
+        ),
+        ("window/apple/macos.rs", "pub struct Mac;\n"),
+        ("window/apple/ios.rs", "pub struct Ios;\n"),
+        ("display/mod.rs", "pub mod windows;\npub struct Display;\n"),
+        ("display/windows.rs", "pub struct DisplayWin;\n"),
+        ("owner.rs", "pub struct Owner;\n"),
+        ("hosts.rs", "pub struct Host;\n"),
+        ("platform.rs", "pub struct Platform;\n"),
+    ];
+    for &(rel, text) in changes {
+        match files.iter_mut().find(|(known, _)| *known == rel) {
+            Some(file) => file.1 = text,
+            None => files.push((rel, text)),
+        }
+    }
+    files
+}
+
+fn the_feature_axis_judges_each_edge_by_the_roles_of_its_ends() {
+    const HOSTS: &str = "names hosts";
+    const BASE: &str = "base names a feature";
+    const FOREIGN: &str = "names another feature's platform file";
+    const OTHER: &str = "names another platform's file";
+    type Case<'a> = (
+        &'a [(&'a str, &'a str)],
+        &'a [(&'a str, &'a str, &'static str)],
+    );
+    let cases: &[Case<'_>] = &[
+        // nothing outside `hosts` names it, whatever the source
+        (
+            &[("window/windows.rs", "use crate::hosts::Host;")],
+            &[("window::windows", "hosts", HOSTS)],
+        ),
+        (
+            &[("platform.rs", "use crate::hosts::Host;")],
+            &[("platform", "hosts", HOSTS)],
+        ),
+        (
+            &[("window/mod.rs", "pub mod windows;\nuse crate::hosts::Host;")],
+            &[("window", "hosts", HOSTS)],
+        ),
+        // a base module names no feature, in any of its parts
+        (
+            &[("owner.rs", "use crate::window::Window;")],
+            &[("owner", "window", BASE)],
+        ),
+        (
+            &[("owner.rs", "use crate::window::windows::Win;")],
+            &[("owner", "window::windows", BASE)],
+        ),
+        (
+            &[("owner.rs", "use crate::window::apple::macos::Mac;")],
+            &[("owner", "window::apple::macos", BASE)],
+        ),
+        // a feature names another feature's model, never its platform files
+        (
+            &[(
+                "window/windows.rs",
+                "use crate::display::windows::DisplayWin;",
+            )],
+            &[("window::windows", "display::windows", FOREIGN)],
+        ),
+        (
+            &[(
+                "window/apple/ios.rs",
+                "use crate::display::windows::DisplayWin;",
+            )],
+            &[("window::apple::ios", "display::windows", FOREIGN)],
+        ),
+        (
+            &[(
+                "window/mod.rs",
+                "pub mod windows;\nuse crate::display::windows::DisplayWin;",
+            )],
+            &[("window", "display::windows", FOREIGN)],
+        ),
+        // a platform file names no other platform's file, a group module
+        // included, nor a sibling child of its group
+        (
+            &[("window/windows.rs", "use crate::window::winit::Winit;")],
+            &[("window::windows", "window::winit", OTHER)],
+        ),
+        (
+            &[("window/windows.rs", "use crate::window::apple::Shared;")],
+            &[("window::windows", "window::apple", OTHER)],
+        ),
+        (
+            &[("window/windows.rs", "use crate::window::apple::ios::Ios;")],
+            &[("window::windows", "window::apple::ios", OTHER)],
+        ),
+        (
+            &[("window/apple/macos.rs", "use super::ios::Ios;")],
+            &[("window::apple::macos", "window::apple::ios", OTHER)],
+        ),
+        // the submodules of a platform file belong to it
+        (
+            &[
+                ("window/windows.rs", "pub mod proc;\npub struct Win;"),
+                ("window/windows/proc.rs", "use crate::window::winit::Winit;"),
+            ],
+            &[("window::windows", "window::winit", OTHER)],
+        ),
+        (
+            &[(
+                "window/windows.rs",
+                "pub mod inner { use crate::hosts::Host; }",
+            )],
+            &[("window::windows", "hosts", HOSTS)],
+        ),
+        // and so does a model's: a model names another feature's model only
+        (
+            &[
+                (
+                    "display/mod.rs",
+                    "pub mod windows;\npub mod source;\npub struct Display;",
+                ),
+                (
+                    "display/source.rs",
+                    "use crate::display::windows::DisplayWin;\nuse crate::window::Window;\n\
+                     use crate::window::windows::Win;",
+                ),
+            ],
+            &[("display", "window::windows", FOREIGN)],
+        ),
+        // what stays legal
+        (
+            &[(
+                "window/windows.rs",
+                "use crate::window::Window;\nuse crate::display::Display;\n\
+                 use crate::owner::Owner;\nuse crate::platform::Platform;",
+            )],
+            &[],
+        ),
+        (&[("window/apple/macos.rs", "use super::Shared;")], &[]),
+        (
+            &[(
+                "window/apple/mod.rs",
+                "pub mod macos;\npub mod ios;\nuse crate::window::apple::macos::Mac;",
+            )],
+            &[],
+        ),
+        (
+            &[(
+                "window/mod.rs",
+                "pub mod windows;\npub mod apple;\nuse crate::window::windows::Win;\n\
+                 use crate::window::apple::macos::Mac;",
+            )],
+            &[],
+        ),
+        (
+            &[(
+                "hosts.rs",
+                "use crate::window::windows::Win;\nuse crate::display::windows::DisplayWin;\n\
+                 use crate::owner::Owner;\nuse crate::platform::Platform;",
+            )],
+            &[],
+        ),
+        (&[("platform.rs", "use crate::window::windows::Win;")], &[]),
+        (
+            &[(
+                "window/windows.rs",
+                "#[cfg(test)]\nmod t { use crate::hosts::Host; use super::super::winit::Winit; }",
+            )],
+            &[],
+        ),
+    ];
+    for (changes, expected) in cases {
+        assert_eq!(
+            identities(FEATURES, &feature_files(changes)),
+            set(expected),
+            "{changes:?}"
+        );
+    }
+}
+
+fn a_path_the_feature_axis_cannot_attribute_is_reported() {
+    let lib = (
+        "lib.rs",
+        "pub mod window;\npub mod display;\npub mod hosts;\n",
+    );
+    let files = |display: &'static str, window: &'static str| {
+        vec![
+            lib,
+            ("window/mod.rs", window),
+            ("display/mod.rs", display),
+            ("display/windows.rs", "pub struct DisplayWin;\n"),
+            ("hosts.rs", ""),
+        ]
+    };
+    let toml = r#"
+features = ["window", "display"]
+platforms = ["windows"]
+hosts = "hosts"
+"#;
+    // a glob that has no such name leaves it unattributed; one that has it owns it
+    assert_eq!(
+        identities(
+            toml,
+            &files(
+                "pub mod windows;\npub use windows::*;\n",
+                "use crate::display::Nowhere;\n"
+            )
+        ),
+        set(&[("window", "crate::display::Nowhere", "unattributed")])
+    );
+    assert_eq!(
+        identities(
+            toml,
+            &files(
+                "pub mod windows;\npub use windows::*;\n",
+                "use crate::display::DisplayWin;\n"
+            )
+        ),
+        set(&[(
+            "window",
+            "display::windows",
+            "names another feature's platform file"
+        )])
+    );
+    // items of the crate root are no node
+    assert_eq!(
+        identities(
+            toml,
+            &[
+                (
+                    "lib.rs",
+                    "pub mod window;\npub mod display;\npub mod hosts;\npub fn helper() {}\n"
+                ),
+                ("window/mod.rs", "pub fn f() { crate::helper(); }\n"),
+                ("display/mod.rs", ""),
+                ("hosts.rs", ""),
+            ]
+        ),
+        set(&[("window", "crate::helper", "unattributed")])
+    );
+}
+
+fn the_feature_axis_reads_its_declaration_and_refuses_a_mixed_one() {
+    for toml in [
+        r#"hosts = "hosts""#,
+        r#"hosts = "hosts"
+           features = []
+           platforms = []
+           groups = {}
+           base = []
+           transparent = []"#,
+    ] {
+        declaration_from_toml(toml).expect(toml);
+    }
+    for (toml, needle) in [
+        (r#"features = ["window"]"#, "need `hosts`"),
+        ("hosts = 1", "`hosts` must be a module name"),
+        (
+            r#"hosts = "hosts"
+           groups = []"#,
+            "`groups` must be a table",
+        ),
+        (
+            r#"hosts = "hosts"
+               groups = { apple = "macos" }"#,
+            "the children of the group `apple` must be a list",
+        ),
+        (
+            r#"hosts = "hosts"
+               features = "window""#,
+            "`features` must be a list",
+        ),
+        (
+            r#"hosts = "hosts"
+           extra = 1"#,
+            "unknown `[package.metadata.flui.modules]` key `extra`",
+        ),
+    ] {
+        let error = declaration_from_toml(toml).expect_err(toml);
+        assert!(format!("{error:#}").contains(needle), "{toml}: {error:#}");
+    }
+    // `layers` beside any feature key is a finding naming the keys, and no
+    // other check runs
+    assert_eq!(
+        identities(
+            "layers = [[\"low\"]]\nhosts = \"hosts\"\nbase = [\"nowhere\"]",
+            &[
+                ("lib.rs", "pub mod low;\n"),
+                ("low.rs", "use crate::Nowhere;\n")
+            ],
+        ),
+        set(&[("layers", "base, hosts", "layers with feature keys")])
+    );
+}
+
+fn the_feature_axis_admits_an_edge_by_exception_and_reports_a_stale_one() {
+    let entry = |from: &str, to: &str| {
+        format!(
+            r#"{{ from = "{from}", to = "{to}", exit = "ADR-0001", since = "2026-10-21", reason = "r" }}"#
+        )
+    };
+    let files = feature_files(&[("window/windows.rs", "use crate::window::winit::Winit;")]);
+    let with = |exceptions: &[String]| {
+        identities(
+            &format!("{FEATURES}\nexceptions = [{}]", exceptions.join(", ")),
+            &files,
+        )
+    };
+    assert_eq!(with(&[entry("window::windows", "window::winit")]), set(&[]));
+    // the edge goes one way, an edge the code lacks admits nothing, and a
+    // module the crate lacks is no module
+    assert_eq!(
+        with(&[entry("window::winit", "window::windows")]),
+        set(&[
+            (
+                "window::windows",
+                "window::winit",
+                "names another platform's file"
+            ),
+            ("window::winit", "window::windows", "stale exception"),
+        ])
+    );
+    assert_eq!(
+        with(&[
+            entry("window::windows", "window::winit"),
+            entry("window::windows", "window"),
+            entry("window::windows", "window::linux"),
+        ]),
+        set(&[
+            ("window::windows", "window", "stale exception"),
+            ("window::windows", "window::linux", "exception module"),
+        ])
+    );
+    assert_eq!(
+        with(&[
+            entry("window::windows", "window::winit"),
+            entry("window::windows", "window::winit")
+        ]),
+        set(&[("window::windows", "window::winit", "stale exception")])
+    );
+}
+
+/// The outcome over a planted crate.
+fn planted_outcome(planted: &super::Planted) -> Outcome {
+    let files: Vec<(String, &str)> = planted
+        .files
+        .iter()
+        .map(|&(rel, text)| (format!("{}/src/{rel}", planted.name), text))
+        .collect();
+    let sources = files
+        .iter()
+        .fold(Sources::default(), |sources, (rel, text)| {
+            sources.with(rel, text)
+        });
+    let scan = source::scan(&sources, &format!("{}/src/lib.rs", planted.name))
+        .expect("the planted crate scans");
+    let declaration = declaration_from_toml(planted.declaration).expect("the declaration reads");
+    check(&declaration, &scan, &["ADR-0001-self-test.md".to_owned()])
+}
+
+fn the_self_test_crates_report_exactly_the_planted_findings() {
+    let (missed, extra) = super::self_test_diff().expect("the planted crates scan");
+    assert_eq!((missed, extra), (vec![], vec![]));
+}
+
+fn the_legal_edges_of_the_planted_feature_crate_are_scanned_not_only_silent() {
+    let outcome = planted_outcome(&super::features::PLANTED[0]);
+    let edges: BTreeSet<(&str, &str)> = outcome
+        .edges
+        .keys()
+        .map(|(from, to)| (from.as_str(), to.as_str()))
+        .collect();
+    for legal in [
+        // a platform file names its model, other models, a base module and
+        // a crate-level module
+        ("window::windows", "window"),
+        ("window::windows", "display"),
+        ("window::windows", "owner"),
+        ("window::windows", "platform"),
+        // a child names its group module; a model names its platform files
+        ("window::apple::macos", "window::apple"),
+        ("window", "window::apple"),
+        ("display", "display::windows"),
+        ("text", "text::windows"),
+        // the hosts module names everything
+        ("hosts", "window::windows"),
+        ("hosts", "display::apple::macos"),
+        ("hosts", "owner"),
+        ("hosts", "platform"),
+        // a base module names a base module and a crate-level one
+        ("owner", "version"),
+        ("owner", "platform"),
+        // crate-level code is no checked source
+        ("platform", "window::windows"),
+        // the edge an exception admits is still an edge
+        ("display::winit", "display::linux"),
+    ] {
+        assert!(edges.contains(&legal), "{legal:?} is not among {edges:?}");
+    }
+    // the test-only import of a platform file's `tests` module is not an edge
+    // site: only the production import is
+    let sites = &outcome.edges[&("window::windows".to_owned(), "window::winit".to_owned())];
+    assert_eq!(sites.len(), 1, "{sites:?}");
+}
+
 fn a_planted_import_in_the_real_widgets_tree_is_refused() {
     let root = util::repo_root();
     let manifest: toml::Table = toml::from_str(
@@ -863,8 +1658,11 @@ fn a_planted_import_in_the_real_widgets_tree_is_refused() {
             .expect("the widgets declaration names a module in its lowest and highest layers")
             .clone()
     };
-    let low = named(declaration.layers.first());
-    let high = named(declaration.layers.last());
+    let super::Axis::Layers(layers) = &declaration.axis else {
+        panic!("the widgets declaration orders its modules by layers");
+    };
+    let low = named(layers.first());
+    let high = named(layers.last());
     let on_disk = Sources::on_disk(root.clone());
     let file = source::scan(&on_disk, lib)
         .expect("the widgets tree scans")
@@ -928,6 +1726,10 @@ fn module_dag_contract() {
             (
                 "test_only_relay_items_do_not_change_production_attribution",
                 test_only_relay_items_do_not_change_production_attribution as fn(),
+            ),
+            (
+                "test_only_statements_name_no_production_edge",
+                test_only_statements_name_no_production_edge as fn(),
             ),
             (
                 "inner_test_only_relay_modules_do_not_change_production_attribution",
@@ -1016,6 +1818,60 @@ fn module_dag_contract() {
             (
                 "a_missing_module_file_or_a_parse_error_stops_the_scan",
                 a_missing_module_file_or_a_parse_error_stops_the_scan as fn(),
+            ),
+            (
+                "a_module_that_re_exports_another_modules_item_owns_the_path_on_the_layer_axis",
+                a_module_that_re_exports_another_modules_item_owns_the_path_on_the_layer_axis
+                    as fn(),
+            ),
+            (
+                "a_re_export_at_depth_resolves_to_the_module_that_defines_the_item",
+                a_re_export_at_depth_resolves_to_the_module_that_defines_the_item as fn(),
+            ),
+            (
+                "a_glob_re_export_at_depth_supplies_the_names_of_the_module_it_reads",
+                a_glob_re_export_at_depth_supplies_the_names_of_the_module_it_reads as fn(),
+            ),
+            (
+                "a_module_with_items_the_scan_cannot_read_owns_a_name_nothing_supplies",
+                a_module_with_items_the_scan_cannot_read_owns_a_name_nothing_supplies as fn(),
+            ),
+            (
+                "a_use_of_a_name_the_module_defines_keeps_its_owner",
+                a_use_of_a_name_the_module_defines_keeps_its_owner as fn(),
+            ),
+            (
+                "self_and_super_paths_in_nested_modules_start_at_the_nested_module",
+                self_and_super_paths_in_nested_modules_start_at_the_nested_module as fn(),
+            ),
+            (
+                "a_path_attribute_places_a_module_file_relative_to_the_file_that_declares_it",
+                a_path_attribute_places_a_module_file_relative_to_the_file_that_declares_it
+                    as fn(),
+            ),
+            (
+                "the_feature_axis_judges_each_edge_by_the_roles_of_its_ends",
+                the_feature_axis_judges_each_edge_by_the_roles_of_its_ends as fn(),
+            ),
+            (
+                "a_path_the_feature_axis_cannot_attribute_is_reported",
+                a_path_the_feature_axis_cannot_attribute_is_reported as fn(),
+            ),
+            (
+                "the_feature_axis_reads_its_declaration_and_refuses_a_mixed_one",
+                the_feature_axis_reads_its_declaration_and_refuses_a_mixed_one as fn(),
+            ),
+            (
+                "the_feature_axis_admits_an_edge_by_exception_and_reports_a_stale_one",
+                the_feature_axis_admits_an_edge_by_exception_and_reports_a_stale_one as fn(),
+            ),
+            (
+                "the_self_test_crates_report_exactly_the_planted_findings",
+                the_self_test_crates_report_exactly_the_planted_findings as fn(),
+            ),
+            (
+                "the_legal_edges_of_the_planted_feature_crate_are_scanned_not_only_silent",
+                the_legal_edges_of_the_planted_feature_crate_are_scanned_not_only_silent as fn(),
             ),
             (
                 "a_planted_import_in_the_real_widgets_tree_is_refused",

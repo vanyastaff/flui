@@ -59,7 +59,7 @@ enum Publish {
 }
 
 /// The window's text input (see the module doc).
-pub(crate) struct AndroidTextInput {
+pub struct AndroidTextInput {
     view: Arc<JavaView>,
     /// Whether the input method can start stylus handwriting on the view.
     handwriting: Option<Since<StylusHandwriting>>,
@@ -73,6 +73,12 @@ pub(crate) struct AndroidTextInput {
     pending: RefCell<VecDeque<HostOp>>,
     retired: Cell<bool>,
     this: Weak<Self>,
+}
+
+impl std::fmt::Debug for AndroidTextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidTextInput").finish_non_exhaustive()
+    }
 }
 
 /// Counts one call into a store, however it ends.
@@ -481,6 +487,8 @@ impl TextStoreHost for AndroidTextInput {
         Ok(end)
     }
 }
+
+impl crate::host::Text for AndroidTextInput {}
 
 /// What the store tells the view when the application changes the field.
 struct MirrorObserver {

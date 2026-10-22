@@ -66,7 +66,11 @@ pub(crate) mod text_sizing;
 mod window;
 
 pub use clipboard::IOSClipboard;
+pub(crate) use display::IosDisplays;
 pub use executor::IOSExecutor;
-pub use platform::IOSPlatform;
+pub(crate) use haptics::IOSHaptics;
+pub(crate) use platform::IOSLoop;
+pub(crate) use preferences::IOSPreferences;
 pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};
+pub(crate) use status_bar::IOSSystemChrome;
 pub use window::IOSWindow;

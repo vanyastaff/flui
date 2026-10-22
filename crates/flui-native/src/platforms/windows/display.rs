@@ -65,7 +65,7 @@ use crate::shared::{
 
 /// One platform instance's monitors: the last sample, and whether anything has
 /// invalidated it since (both kept by the [`DisplaySource`]).
-pub(crate) struct WindowsDisplays {
+pub struct WindowsDisplays {
     source: DisplaySource,
     build: WindowsBuild,
     /// The handle-to-key pairs of the last sample, which resolve a window's
@@ -75,9 +75,21 @@ pub(crate) struct WindowsDisplays {
     samples: std::sync::atomic::AtomicUsize,
 }
 
+impl std::fmt::Debug for WindowsDisplays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowsDisplays").finish_non_exhaustive()
+    }
+}
+
 impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
     fn mark_stale(&self) {
         self.invalidate();
+    }
+}
+
+impl crate::host::Displays<super::platform::WindowsLoop> for WindowsDisplays {
+    fn snapshot(owner: &super::platform::WindowsLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
     }
 }
 

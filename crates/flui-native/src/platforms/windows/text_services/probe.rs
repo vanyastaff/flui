@@ -414,7 +414,7 @@ fn text_services_probe() {
         .finish();
     let _subscriber = tracing::subscriber::set_default(subscriber);
 
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let options = WindowOptions::default()
         .with_title("flui tsf probe")
         .with_size(Size::new(640.0, 200.0));

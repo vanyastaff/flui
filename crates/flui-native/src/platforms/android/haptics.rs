@@ -50,7 +50,7 @@ const PRIMITIVES: [AndroidPrimitive; 4] = [
 
 /// The window's haptic actuator: the Activity's decor view and the device
 /// vibrator.
-pub(super) struct AndroidHaptics {
+pub struct AndroidHaptics {
     app: AndroidApp,
     /// The haptics APIs of the device, from its API level.
     api: AndroidHapticsApi,

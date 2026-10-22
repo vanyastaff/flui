@@ -34,4 +34,12 @@ mod registration;
 mod text_input;
 mod window;
 
-pub use platform::WebPlatform;
+pub(crate) use clipboard::WebClipboard;
+pub(crate) use display::WebDisplays;
+pub(crate) use drag::WebTransfer;
+pub(crate) use haptics::WebHaptics;
+pub(crate) use page_events::PageObservers;
+pub(crate) use platform::WebLoop;
+pub(crate) use preferences::WebPreferences;
+pub(crate) use text_input::WebTextInput;
+pub(crate) use window::WebWindow;

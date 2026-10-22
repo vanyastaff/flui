@@ -22,6 +22,8 @@
 //! The lane machinery itself lives in the shared [`super::owner_lane`]
 //! module — this file only decides what runs on the lane.
 
+use std::sync::Arc;
+
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
@@ -135,6 +137,12 @@ impl MacOSClipboard {
 impl Default for MacOSClipboard {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl crate::host::Clipboard<super::MacOSLoop> for MacOSClipboard {
+    fn clipboard(_: &super::MacOSLoop) -> Arc<dyn Clipboard> {
+        Arc::new(MacOSClipboard::new())
     }
 }
 

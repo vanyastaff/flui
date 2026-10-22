@@ -17,15 +17,17 @@ use flui_foundation::geometry::{EdgeInsets, Point, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use flui_platform::{
     DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowGeometry, WindowState,
+    WindowCommandError, WindowEvent, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
+use super::AndroidLoop;
+use crate::host;
 use crate::{
     shared::WindowCallbacks, shared::input_availability::AndroidInputApis,
     shared::os_version::android::AndroidApi, shared::os_version::android::DragSource,
     shared::os_version::android::GestureExclusion, shared::os_version::android::TouchpadGestures,
-    shared::owner_slot::OwnerSlot, shared::window_state::WindowStateCell,
+    shared::owner_slot::OwnerSlot, shared::window_state::WindowStateCell, traits::OpenWindowError,
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -197,7 +199,7 @@ impl AndroidWindow {
         self.drag_source.retire();
     }
 
-    /// Access the callback storage (used by `AndroidPlatform` to dispatch
+    /// Access the callback storage (used by `AndroidLoop` to dispatch
     /// events)
     pub fn callbacks(&self) -> &WindowCallbacks {
         &self.callbacks
@@ -462,6 +464,60 @@ impl crate::traits::HostWindow for AndroidWindow {
     }
 }
 
+impl host::Window<AndroidLoop> for AndroidWindow {
+    fn open(
+        owner: &AndroidLoop,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+        if options.input_latency == flui_platform::InputLatency::Low {
+            // NativeActivity takes touch from the native input queue, which
+            // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
+            tracing::warn!(
+                "InputLatency::Low is not supported on Android yet; input stays batched"
+            );
+        }
+        let cancelled = owner
+            .input_state
+            .lock()
+            .cancel_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
+        let window = Arc::new(AndroidWindow::new(
+            owner.app.clone(),
+            Arc::clone(&owner.activity),
+            Arc::downgrade(&owner.owner_signal),
+            Arc::clone(&owner.java_view),
+            Arc::clone(&owner.displays),
+            owner.api,
+        ));
+        let previous = owner.window.lock().replace(Arc::clone(&window));
+        if let Some(previous) = previous {
+            previous.retire_java_view();
+            previous.revoke_geometry();
+            for event in cancelled {
+                previous.callbacks().dispatch_input(event);
+            }
+        }
+        tracing::info!("Android window created (wrapping ANativeWindow)");
+        Ok(window)
+    }
+
+    fn active(owner: &AndroidLoop) -> Option<WindowId> {
+        owner.window.lock().as_ref().map(|_| WindowId(0))
+    }
+
+    fn capabilities(_: &AndroidLoop) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn frame_inset(_: &AndroidLoop, _: f64) -> Size<f64> {
+        // The Activity fills its display with no frame, title or border.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &AndroidLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        owner.handlers.lock().window_event = Some(callback);
+    }
+}
+
 /// The light/dark half of the activity's configuration: night mode is the
 /// system dark theme (or the app's `AppCompatDelegate` override of it). The
 /// native configuration stands in when the Java read fails; it is current only
@@ -689,12 +745,13 @@ impl PlatformWindow for AndroidWindow {
         // `native_activity/glue.rs` — which the main loop applies *after* the
         // `MainEvent::TerminateWindow` callback returns (`pre_exec_cmd` →
         // callback → `post_exec_cmd`). The `'_` on the returned handle is the
-        // borrow of `self` and does not encode that bound: `AndroidPlatform`
+        // borrow of `self` and does not encode that bound: `AndroidLoop`
         // keeps holding its `AndroidWindow` across a pause, and the only
-        // writes to that field (`platforms/android/mod.rs`) are `open_window`,
-        // which fills it, and `AndroidPlatform::run`'s exit path, which takes
-        // it exactly once, after the last dispatch, so for every handle this
-        // method ever returns, `self` and the borrow outlive the pointer.
+        // writes to that field are `Window::open` (this file), which fills it,
+        // and `AndroidLoop::run`'s exit path (`platforms/android/mod.rs`),
+        // which takes it exactly once, after the last dispatch, so for every
+        // handle this method ever returns, `self` and the borrow outlive the
+        // pointer.
         //
         // The obligation that carries the weight is therefore
         // consumer-enforced, not type-enforced: nothing may dereference the

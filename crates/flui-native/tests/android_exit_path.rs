@@ -3,7 +3,7 @@
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
-//! `AndroidPlatform::run` cannot execute on any host this suite runs on: it
+//! `AndroidLoop::run` cannot execute on any host this suite runs on: it
 //! needs a live `AndroidApp`, constructible only by the real Android
 //! runtime, and the Android target is type-checked (the NDK-free `flui-app`
 //! check, and `cargo xtask cross-typecheck`) rather than run. So the site is pinned
@@ -39,8 +39,8 @@
 /// compile rather than silently scanning nothing.
 const ANDROID_PLATFORM_SOURCE: &str = include_str!("../src/platforms/android/mod.rs");
 
-/// The signature `AndroidPlatform::run` is located by.
-const RUN_SIGNATURE: &str = "fn run(self: Box<Self>";
+/// The signature `AndroidLoop::run` is located by.
+const RUN_SIGNATURE: &str = "fn run(";
 
 /// The loop the exit region follows.
 const LOOP_HEADER: &str = "loop {";
@@ -55,8 +55,8 @@ const WINDOW_TAKE: &str = ".window.lock().take()";
 const CALLBACKS_CLEAR: &str = ".callbacks().clear()";
 
 /// The brace depth of `run`'s direct children, in [`line_start_depths`]'
-/// scale (where the signature line is 0, so every line inside the body that
-/// is not nested further reads 1).
+/// scale (where the line holding the body's opening brace is 0, so every line
+/// inside the body that is not nested further reads 1).
 const RUN_BODY_TOP_LEVEL: i32 = 1;
 
 /// Cap on the exit region's non-blank lines. The tail is a handful of
@@ -175,11 +175,9 @@ fn char_literal_len(chars: &[char], start: usize) -> Option<usize> {
 /// before that offset is discarded, so the `impl` and `fn` braces are not
 /// counted.
 ///
-/// The returned vector is indexed by line offset from the signature line, so
-/// it lines up with `body_lines` only while `run`'s `{` stays on that line. A
-/// reformat that moves the brace to its own line misaligns every read, and
-/// the scan then fails loudly on its first anchor ("expected exactly one
-/// top-level `loop {` line … found 0") rather than passing on shifted text.
+/// The returned vector is indexed by line offset from the line holding the
+/// brace, which is also the line `body_lines` starts at, so the two line up
+/// however the signature above the brace is wrapped.
 fn line_start_depths(source: &str, body_open: usize) -> Vec<i32> {
     let mut depths = Vec::new();
     let mut depth = 0;
@@ -205,7 +203,7 @@ fn line_start_depths(source: &str, body_open: usize) -> Vec<i32> {
     depths
 }
 
-/// The lines of `AndroidPlatform::run` strictly between the close of its
+/// The lines of `AndroidLoop::run` strictly between the close of its
 /// `loop` and its `invoke_quit()` call, preprocessed, plus the inversion
 /// refusals. Every anchor fails explicitly rather than yielding an empty
 /// region a shape test would read as "nothing to check".
@@ -217,26 +215,26 @@ fn exit_region() -> Vec<String> {
         .map(|(offset, _)| offset);
     let Some(signature_at) = signature_hits.next() else {
         panic!(
-            "could not locate `AndroidPlatform::run`: `{RUN_SIGNATURE}` appears nowhere in \
+            "could not locate `AndroidLoop::run`: `{RUN_SIGNATURE}` appears nowhere in \
              platforms/android/mod.rs; read the file by hand and update this scan"
         );
     };
     assert!(
         signature_hits.next().is_none(),
-        "could not locate `AndroidPlatform::run`: `{RUN_SIGNATURE}` appears more than once in \
+        "could not locate `AndroidLoop::run`: `{RUN_SIGNATURE}` appears more than once in \
          platforms/android/mod.rs; read the file by hand and update this scan"
     );
 
     let Some(body_offset) = source[signature_at..].find('{') else {
         panic!(
-            "could not locate `AndroidPlatform::run`'s body: its signature is never followed \
+            "could not locate `AndroidLoop::run`'s body: its signature is never followed \
              by a `{{`; read the file by hand and update this scan"
         )
     };
     let body_open = signature_at + body_offset;
 
     let depths = line_start_depths(&source, body_open);
-    let signature_line = source[..signature_at].matches('\n').count();
+    let open_line = source[..body_open].matches('\n').count();
     // `run`'s own close, so the anchors below cannot reach a sibling
     // function's `loop {` or a second `invoke_quit()` further down the file:
     // an unrelated function added after `run` must not make this scan fail
@@ -245,7 +243,7 @@ fn exit_region() -> Vec<String> {
     // before it.
     let Some(back_at_top_level) = (1..depths.len()).find(|&line| depths[line] == 0) else {
         panic!(
-            "could not locate the close of `AndroidPlatform::run`'s body: no line after its \
+            "could not locate the close of `AndroidLoop::run`'s body: no line after its \
              opening brace returns the file to depth 0; read the file by hand and update this \
              scan"
         )
@@ -253,7 +251,7 @@ fn exit_region() -> Vec<String> {
     let body_close = back_at_top_level - 1;
     let body_lines: Vec<&str> = source
         .lines()
-        .skip(signature_line)
+        .skip(open_line)
         .take(body_close + 1)
         .collect();
 
@@ -266,7 +264,7 @@ fn exit_region() -> Vec<String> {
     let [loop_line] = loop_lines[..] else {
         panic!(
             "could not locate `run`'s `loop`: expected exactly one top-level `{LOOP_HEADER}` \
-             line in `AndroidPlatform::run`, found {}; read the file by hand and update this \
+             line in `AndroidLoop::run`, found {}; read the file by hand and update this \
              scan",
             loop_lines.len()
         );
@@ -291,7 +289,7 @@ fn exit_region() -> Vec<String> {
         .collect();
     let [quit_line] = quit_lines[..] else {
         panic!(
-            "could not locate `{QUIT_CALL}` in `AndroidPlatform::run`: expected exactly one \
+            "could not locate `{QUIT_CALL}` in `AndroidLoop::run`: expected exactly one \
              line naming it, found {}; read the file by hand and update this scan",
             quit_lines.len()
         );
@@ -378,7 +376,7 @@ fn window_clear_line(region: &[String]) -> (usize, &str) {
     assert_eq!(
         clear_lines.len(),
         1,
-        "missing exit-path clear: `AndroidPlatform::run` has {} line(s) containing \
+        "missing exit-path clear: `AndroidLoop::run` has {} line(s) containing \
          `{CALLBACKS_CLEAR}` between its `loop` and its `{QUIT_CALL}`, expected exactly one. The \
          window's callback slots are the platform's only owning path into the embedder's \
          presentation (window -> slot -> closure -> raster lane -> renderer -> the window's own \
@@ -393,7 +391,7 @@ fn window_clear_line(region: &[String]) -> (usize, &str) {
 /// binds the platform's window to.
 ///
 /// The `let`-statement requirement refuses the fused
-/// `if let Some(w) = platform.window.lock().take() { w.callbacks().clear(); }`
+/// `if let Some(w) = self.window.lock().take() { w.callbacks().clear(); }`
 /// whose scrutinee guard lives through the body — on edition 2024 an `if let`
 /// drops its scrutinee's temporaries only after the whole `if let` — and
 /// would therefore run the clear under the `window` lock. Whether the clear
@@ -404,7 +402,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
     assert_eq!(
         take_lines.len(),
         1,
-        "missing exit-path release: `AndroidPlatform::run` has {} line(s) containing \
+        "missing exit-path release: `AndroidLoop::run` has {} line(s) containing \
          `{WINDOW_TAKE}` between its `loop` and its `{QUIT_CALL}`, expected exactly one. The \
          platform's own `window` field outlives the loop and is the window's close body's last \
          step on this backend, so the take belongs on the exit path, ahead of the clear",
@@ -432,7 +430,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
     // take off another receiver, re-derives the value while every shape
     // assertion above stays true — the name tie would then be satisfied by a
     // window the platform never released, or by `None`.
-    let expected = format!("let {binding} = platform.window.lock().take();");
+    let expected = format!("let {binding} = self.window.lock().take();");
     assert_eq!(
         take_line,
         expected.as_str(),

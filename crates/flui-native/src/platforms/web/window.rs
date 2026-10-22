@@ -12,16 +12,18 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    shared::WindowCallbacks, shared::window_state::WindowStateCell, traits::OpenWindowError,
+    host, shared::WindowCallbacks, shared::owner_signal::OwnerSignal,
+    shared::window_state::WindowStateCell, traits::HostWindow, traits::OpenWindowError,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-    WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
-    WindowState,
+    WindowCommand, WindowCommandError, WindowEvent, WindowExecutionState, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowState,
 };
 
 use super::{
     display::WebDisplays,
+    platform::WebLoop,
     registration::{CanvasClaim, Registration, effective_focus},
 };
 
@@ -631,6 +633,87 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     capabilities.sets_title = true;
     capabilities.enters_fullscreen = true;
     capabilities
+}
+
+impl std::fmt::Debug for WebWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebWindow")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl host::Window<WebLoop> for WebWindow {
+    fn open(
+        owner: &WebLoop,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        tracing::info!(title = %options.title, "Creating web window (canvas)");
+
+        let window = Self::new(
+            WindowId(0), // Single window in browser
+            &options.title,
+            options.size.width,
+            options.size.height,
+            Arc::clone(&owner.displays),
+        )?;
+
+        // Store window callbacks in state so the RAF loop can dispatch frames
+        let callbacks = window.callbacks().clone();
+        callbacks.set_input_capabilities(crate::shared::input_availability::web(
+            super::events::has_gesture_events(),
+        ));
+        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
+        let retiring = Arc::clone(&callbacks);
+        let state = Arc::downgrade(&owner.state);
+        let transfer = owner.with_state(|s| Arc::clone(&s.transfer));
+        window.install(options.input_latency, &transfer, move || {
+            let removed = state.upgrade().and_then(|state| {
+                let mut state = state.lock();
+                if state
+                    .window_callbacks
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &retiring))
+                {
+                    state.window_callbacks.take()
+                } else {
+                    None
+                }
+            });
+            drop(removed);
+        })?;
+        owner.with_state(|s| {
+            s.window_callbacks = Some(callbacks);
+        });
+
+        // Notify window created
+        WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
+
+        Ok(Arc::new(window))
+    }
+
+    fn active(owner: &WebLoop) -> Option<WindowId> {
+        owner
+            .state
+            .lock()
+            .window_callbacks
+            .as_ref()
+            .map(|_| WindowId(0))
+    }
+
+    fn capabilities(_: &WebLoop) -> WindowCapabilities {
+        window_capabilities()
+    }
+
+    fn frame_inset(_: &WebLoop, _: f64) -> Size<f64> {
+        // A canvas has no title bar or borders: its outer size is its content size.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &WebLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        let previous = owner.with_state(|state| state.handlers.window_event.replace(callback));
+        drop(previous);
+    }
 }
 
 impl PlatformWindow for WebWindow {

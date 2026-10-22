@@ -1,16 +1,31 @@
-//! `cargo xtask module-dag`: the import direction between a crate's top-level
-//! modules.
+//! `cargo xtask module-dag`: the import direction between a crate's modules.
 //!
-//! A crate opts in with `[package.metadata.flui.modules]`: `layers`, its
-//! top-level modules bottom to top; `transparent`, modules of `use` items
+//! A crate opts in with `[package.metadata.flui.modules]` and orders its
+//! modules by one of two axes. Both take `transparent`, modules of `use` items
 //! only (a prelude, a seam module), through which a path counts as a path to
-//! what they re-export; and `exceptions`, each a refused edge that stays legal
-//! until the change in the ADR its `exit` names removes it. Non-test code of a
-//! module names only modules in lower layers; modules in one layer name none
-//! of each other, except that `"*"`, alone in a layer, stands for every
-//! module not named elsewhere, unchecked among themselves. `#[cfg(test)]`
+//! what they re-export, and `exceptions`, each a refused edge that stays legal
+//! until the change in the ADR its `exit` names removes it. `#[cfg(test)]`
 //! code is exempt, as dev-dependencies are between crates. An exception the
 //! scan no longer needs is a finding, so the list only shrinks.
+//!
+//! The layer axis, for a crate of subsystems: `layers` lists the top-level
+//! modules bottom to top. Non-test code of a module names only modules in
+//! lower layers; modules in one layer name none of each other, except that
+//! `"*"`, alone in a layer, stands for every module not named elsewhere,
+//! unchecked among themselves.
+//!
+//! The feature axis ([`features`]), for a crate laid out by feature: a
+//! directory per feature holds the feature's model beside one file per
+//! platform. `features` are those directories, `platforms` the file names,
+//! `groups` the platforms that open into children where code differs, `base`
+//! the modules every feature builds on and `hosts` the one module that wires a
+//! host together. A platform file's submodules belong to it; any other
+//! top-level module is crate-level and unchecked as a source. Nothing outside
+//! `hosts` names it, a base module names no feature, a feature names another
+//! feature's model and never its platform files, and a platform file names no
+//! other platform's file (a model names its own platform files, a group module
+//! its children, a child its group module). `layers` and the feature keys
+//! exclude each other.
 //!
 //! Why a scan (ADR-0078 §4, condition 1): no type or stock lint states the
 //! rule. Visibility (`pub(crate)`, `pub(in ...)`) says who may name an item,
@@ -29,10 +44,13 @@
 //! `use` items, types, expressions, patterns, bounds, impl headers, a macro's
 //! path and the tokens of macro invocations and `macro_rules!` bodies. A path
 //! through a root re-export, a transparent module, a glob re-export or a
-//! `#[macro_export]` macro is followed to the module that owns the name.
-//! Conditional named re-exports contribute every possible owning module. Doc
-//! comments, string literals and `pub(in ...)` restrictions are not
-//! dependencies. What the scan cannot attribute is a finding, never skipped.
+//! `#[macro_export]` macro is followed to the module that owns the name: on
+//! the layer axis the top-level module, on the feature axis, through the `use`
+//! items of every module, the deepest module that defines the item. The code
+//! that names a path is attributed to the module it is in. Conditional named
+//! re-exports contribute every possible owning module. Doc comments, string
+//! literals and `pub(in ...)` restrictions are not dependencies. What the scan
+//! cannot attribute is a finding, never skipped.
 //!
 //! Limit: code a proc-macro generates, or a macro from another crate expands
 //! to, is not seen; only the tokens written in this crate are.
@@ -47,11 +65,13 @@ use serde_json::Value as Json;
 
 use crate::util;
 
+mod features;
 mod source;
 #[cfg(test)]
 mod tests;
 
-use source::{Resolved, Scan, Site, Sources};
+use features::FeatureAxis;
+use source::{Depth, Reach, Resolved, Scan, Site, Sources};
 
 /// Arguments for `cargo xtask module-dag`.
 #[derive(Debug, clap::Args)]
@@ -64,8 +84,9 @@ pub(crate) struct ModuleDagArgs {
     /// the workspace; exit 1 unless it reports exactly those.
     #[arg(long)]
     self_test: bool,
-    /// Print each production edge between top-level modules and exit 0: the
-    /// scan's own run, to seed a declaration or its exceptions from.
+    /// Print each production edge and exit 0: the scan's own run, to seed a
+    /// declaration or its exceptions from. Edges join top-level modules on the
+    /// layer axis and `::`-joined module paths on the feature axis.
     #[arg(long, conflicts_with = "self_test")]
     print_edges: bool,
 }
@@ -189,7 +210,8 @@ fn declaring_packages(
     Ok(packages)
 }
 
-/// The keys of `[package.metadata.flui.modules]`; the set is closed.
+/// The keys of `[package.metadata.flui.modules]` besides the feature axis's
+/// ([`features::KEYS`]); the set is closed.
 const KEYS: [&str; 3] = ["layers", "transparent", "exceptions"];
 
 /// The keys of one `exceptions` entry, all required.
@@ -199,11 +221,37 @@ const EXCEPTION_KEYS: [&str; 5] = ["from", "to", "exit", "since", "reason"];
 const WILDCARD: &str = "*";
 
 /// `[package.metadata.flui.modules]`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Declaration {
-    layers: Vec<Vec<String>>,
+    axis: Axis,
     transparent: Vec<String>,
     exceptions: Vec<Exception>,
+}
+
+/// What the declaration orders the modules by.
+#[derive(Debug)]
+enum Axis {
+    /// `layers`: the top-level modules, bottom to top.
+    Layers(Vec<Vec<String>>),
+    /// `features` and the keys beside it: a model and one file per platform in
+    /// each feature's directory.
+    Features(FeatureAxis),
+    /// `layers` beside feature keys, which are named here: a declaration the
+    /// check reports and goes no further with.
+    Mixed { keys: Vec<String> },
+}
+
+/// A list of strings read from the manifest.
+fn names(value: &Json, what: &str, rel: &str) -> anyhow::Result<Vec<String>> {
+    value
+        .as_array()
+        .and_then(|names| {
+            names
+                .iter()
+                .map(|name| name.as_str().map(str::to_owned))
+                .collect()
+        })
+        .with_context(|| format!("{rel}: {what} must be a list of module names"))
 }
 
 /// A refused edge, legal until the change in the ADR named by `exit`.
@@ -224,34 +272,42 @@ impl Declaration {
         let table = modules
             .as_object()
             .with_context(|| format!("{rel}: `[package.metadata.flui] modules` must be a table"))?;
-        if let Some(key) = table.keys().find(|key| !KEYS.contains(&key.as_str())) {
+        let known = || KEYS.iter().chain(&features::KEYS);
+        if let Some(key) = table
+            .keys()
+            .find(|key| !known().any(|known| *known == key.as_str()))
+        {
             bail!(
                 "{rel}: unknown `[package.metadata.flui.modules]` key `{key}` (known: {})",
-                KEYS.join(", ")
+                known().copied().collect::<Vec<_>>().join(", ")
             );
         }
-        let names = |value: &Json, what: &str| -> anyhow::Result<Vec<String>> {
-            value
-                .as_array()
-                .and_then(|names| {
-                    names
-                        .iter()
-                        .map(|name| name.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .with_context(|| format!("{rel}: {what} must be a list of module names"))
-        };
-        let layers = table
-            .get("layers")
-            .with_context(|| format!("{rel}: `[package.metadata.flui.modules]` needs `layers`"))?
-            .as_array()
-            .with_context(|| format!("{rel}: `layers` must be a list of lists of module names"))?
+        let feature_keys: Vec<String> = features::KEYS
             .iter()
-            .map(|layer| names(layer, "each layer"))
-            .collect::<anyhow::Result<_>>()?;
+            .filter(|key| table.contains_key(**key))
+            .map(|key| (*key).to_owned())
+            .collect();
+        let axis = match (table.get("layers"), feature_keys.is_empty()) {
+            (Some(_), false) => Axis::Mixed { keys: feature_keys },
+            (Some(layers), true) => Axis::Layers(
+                layers
+                    .as_array()
+                    .with_context(|| {
+                        format!("{rel}: `layers` must be a list of lists of module names")
+                    })?
+                    .iter()
+                    .map(|layer| names(layer, "each layer", rel))
+                    .collect::<anyhow::Result<_>>()?,
+            ),
+            (None, false) => Axis::Features(FeatureAxis::from_table(table, rel)?),
+            (None, true) => bail!(
+                "{rel}: `[package.metadata.flui.modules]` needs `layers`, or `hosts` with the \
+                 feature keys"
+            ),
+        };
         let transparent = match table.get("transparent") {
             None => Vec::new(),
-            Some(value) => names(value, "`transparent`")?,
+            Some(value) => names(value, "`transparent`", rel)?,
         };
         let malformed = || {
             format!(
@@ -292,7 +348,7 @@ impl Declaration {
                 .collect::<anyhow::Result<_>>()?,
         };
         Ok(Self {
-            layers,
+            axis,
             transparent,
             exceptions,
         })
@@ -311,6 +367,14 @@ enum Finding {
         to_layer: usize,
         sites: Vec<Site>,
     },
+    /// Non-test code names a module a rule of the feature axis keeps it from,
+    /// and no exception admits the edge.
+    Forbidden {
+        rule: features::Rule,
+        from: String,
+        to: String,
+        sites: Vec<Site>,
+    },
     /// A `crate`-relative path the scan cannot attribute to a module.
     Unattributed {
         from: String,
@@ -322,10 +386,18 @@ enum Finding {
     Undeclared { module: String },
     /// A declared name that is not a top-level module of the crate.
     Unknown { name: String },
-    /// A name declared more than once across `layers` and `transparent`.
+    /// A name declared more than once across `layers` and `transparent`, or
+    /// across the roles of the feature axis, or among the platforms or the
+    /// children of the groups.
     Duplicate { name: String },
     /// A declared name with `::`: only top-level modules are nodes.
     Nested { name: String },
+    /// A `groups` key that `platforms` does not list.
+    UnknownGroup { group: String },
+    /// A `groups` child that `platforms` lists too.
+    ChildIsPlatform { group: String, child: String },
+    /// `layers` beside keys of the feature axis.
+    Mixed { keys: Vec<String> },
     /// `"*"` in a layer with other names, or in more than one layer.
     Wildcard { layer: usize },
     /// A transparent module holding an item other than a `use`.
@@ -363,11 +435,17 @@ impl Finding {
         let pair = |a: &str, b: &str, kind| (a.to_owned(), b.to_owned(), kind);
         match self {
             Self::Refused { from, to, .. } => pair(from, to, "refused"),
+            Self::Forbidden { rule, from, to, .. } => pair(from, to, rule.kind()),
             Self::Unattributed { from, site, .. } => pair(from, &site.text, "unattributed"),
             Self::Undeclared { module } => pair(module, "", "undeclared"),
             Self::Unknown { name } => pair(name, "", "unknown"),
             Self::Duplicate { name } => pair(name, "", "duplicate"),
             Self::Nested { name } => pair(name, "", "nested"),
+            Self::UnknownGroup { group } => pair(group, "", "group not a platform"),
+            Self::ChildIsPlatform { group, child } => {
+                pair(group, child, "group child is a platform")
+            }
+            Self::Mixed { keys } => pair("layers", &keys.join(", "), "layers with feature keys"),
             Self::Wildcard { layer } => pair(&format!("layer {layer}"), WILDCARD, "wildcard"),
             Self::RelayItem { module, .. } => pair(module, "", "relay item"),
             Self::Stale { from, to } => pair(from, to, "stale exception"),
@@ -407,6 +485,26 @@ impl fmt::Display for Finding {
                     sites.len()
                 )
             }
+            Self::Forbidden {
+                rule,
+                from,
+                to,
+                sites,
+            } => {
+                let shown: Vec<String> = sites
+                    .iter()
+                    .take(SITES_SHOWN)
+                    .map(ToString::to_string)
+                    .collect();
+                write!(
+                    f,
+                    "{from} names {to} at {} ({} site(s)); {rule}: move the code, change the \
+                     declaration, or add a dated `exceptions` entry with the ADR that removes \
+                     the edge",
+                    shown.join(", "),
+                    sites.len()
+                )
+            }
             Self::Unattributed { from, site, why } => write!(
                 f,
                 "{from} names {site}, which the scan cannot attribute to a module: {why}"
@@ -423,8 +521,23 @@ impl fmt::Display for Finding {
             Self::Duplicate { name } => write!(f, "`{name}` is declared more than once"),
             Self::Nested { name } => write!(
                 f,
-                "`{name}` is a nested module; nested modules are not nodes yet, only top-level \
-                 ones"
+                "`{name}` is a nested path; a top-level module (or a platform word) is declared \
+                 by its name alone"
+            ),
+            Self::UnknownGroup { group } => write!(
+                f,
+                "the group `{group}` is not in `platforms`; a group splits one platform"
+            ),
+            Self::ChildIsPlatform { group, child } => write!(
+                f,
+                "`{child}` is a child of the group `{group}` and also in `platforms`; a child \
+                 belongs to its group alone"
+            ),
+            Self::Mixed { keys } => write!(
+                f,
+                "`layers` and the feature keys ({}) exclude each other: declare the layer axis \
+                 or the feature axis",
+                keys.join(", ")
             ),
             Self::Wildcard { layer } => write!(
                 f,
@@ -437,8 +550,8 @@ impl fmt::Display for Finding {
             ),
             Self::Stale { from, to } => write!(
                 f,
-                "the exception for {from} -> {to} admits nothing: the layers allow the edge, \
-                 the code no longer has it, or it repeats an entry; remove it"
+                "the exception for {from} -> {to} admits nothing: the declaration allows the \
+                 edge, the code no longer has it, or it repeats an entry; remove it"
             ),
             Self::ExceptionModule { from, to } => write!(
                 f,
@@ -482,6 +595,24 @@ enum Placement {
 /// Checks `scan` against `declaration`; `adr_files` are the names under
 /// docs/adr (see [`util::adr_files`]).
 fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcome {
+    match &declaration.axis {
+        Axis::Layers(layers) => check_layers(declaration, layers, scan, adr_files),
+        Axis::Features(spec) => features::check(declaration, spec, scan, adr_files),
+        Axis::Mixed { keys } => Outcome {
+            findings: vec![Finding::Mixed { keys: keys.clone() }],
+            edges: BTreeMap::new(),
+            summary: String::new(),
+        },
+    }
+}
+
+/// [`check`] for the layer axis.
+fn check_layers(
+    declaration: &Declaration,
+    layers: &[Vec<String>],
+    scan: &Scan,
+    adr_files: &[String],
+) -> Outcome {
     let mut findings = Vec::new();
 
     let mut placed: BTreeMap<String, Placement> = BTreeMap::new();
@@ -510,7 +641,7 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         }
         placed.insert(name.to_owned(), at);
     };
-    for (index, layer) in declaration.layers.iter().enumerate() {
+    for (index, layer) in layers.iter().enumerate() {
         for name in layer {
             if name == WILDCARD {
                 if wildcard.is_some() || layer.len() != 1 {
@@ -545,58 +676,13 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         .filter(|(name, at)| **at == Placement::Transparent && scan.modules.contains_key(*name))
         .map(|(name, _)| name.clone())
         .collect();
-    for module in &transparent {
-        if let Some(site) = scan.first_item.get(module) {
-            findings.push(Finding::RelayItem {
-                module: module.clone(),
-                site: site.clone(),
-            });
-        }
-    }
+    relay_items(&transparent, scan, &mut findings);
 
-    let mut edges: BTreeMap<(String, String), Vec<Site>> = BTreeMap::new();
-    for reference in &scan.references {
-        if transparent.contains(&reference.from) {
-            continue; // a relay's own `use` items are not edges
-        }
-        for resolved in scan.resolve(&reference.path, &transparent) {
-            let to = match resolved {
-                Resolved::Module(to) => to,
-                // The root is no node: its own code is not scanned, so an edge
-                // into it could hide one out of it.
-                Resolved::Root(name) => {
-                    findings.push(Finding::Unattributed {
-                        from: reference.from.clone(),
-                        site: reference.site.clone(),
-                        why: format!(
-                            "it names `{name}`, an item of the crate root itself; move it into a \
-                             module"
-                        ),
-                    });
-                    continue;
-                }
-                Resolved::External => continue,
-                Resolved::Unattributed(why) => {
-                    findings.push(Finding::Unattributed {
-                        from: reference.from.clone(),
-                        site: reference.site.clone(),
-                        why,
-                    });
-                    continue;
-                }
-            };
-            if to != reference.from {
-                edges
-                    .entry((reference.from.clone(), to))
-                    .or_default()
-                    .push(reference.site.clone());
-            }
-        }
-    }
-    for sites in edges.values_mut() {
-        sites.sort();
-        sites.dedup();
-    }
+    let reach = Reach {
+        depth: Depth::Top,
+        transparent: &transparent,
+    };
+    let edges = edges_between(scan, reach, top, top, &mut findings);
 
     let mut refused = BTreeSet::new();
     for ((from, to), sites) in &edges {
@@ -606,12 +692,8 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         if to_layer < from_layer || (to_layer == from_layer && Some(to_layer) == wildcard) {
             continue;
         }
-        refused.insert((from.as_str(), to.as_str()));
-        if declaration
-            .exceptions
-            .iter()
-            .any(|entry| entry.from == *from && entry.to == *to)
-        {
+        refused.insert((from.clone(), to.clone()));
+        if admitted(&declaration.exceptions, from, to) {
             continue;
         }
         findings.push(Finding::Refused {
@@ -623,15 +705,140 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         });
     }
 
+    check_exceptions(
+        &declaration.exceptions,
+        |module| scan.modules.contains_key(module),
+        &refused,
+        adr_files,
+        &mut findings,
+    );
+
+    let layered = scan
+        .modules
+        .keys()
+        .filter(|module| layer_of(module).is_some())
+        .count();
+    let summary = format!(
+        "{} modules ({layered} in {} layers, {} transparent), {} edges, {} exceptions checked",
+        scan.modules.len(),
+        layers.len(),
+        transparent.len(),
+        edges.len(),
+        declaration.exceptions.len()
+    );
+    Outcome {
+        findings,
+        edges,
+        summary,
+    }
+}
+
+/// The top-level module a module path starts in.
+fn top(module: &[String]) -> String {
+    module.first().cloned().unwrap_or_default()
+}
+
+/// A transparent module holding an item other than a `use` is a finding.
+fn relay_items(transparent: &BTreeSet<String>, scan: &Scan, findings: &mut Vec<Finding>) {
+    for module in transparent {
+        if let Some(site) = scan.first_item.get(module) {
+            findings.push(Finding::RelayItem {
+                module: module.clone(),
+                site: site.clone(),
+            });
+        }
+    }
+}
+
+/// Every non-test edge between two nodes, with where it is named. `node` maps
+/// a module path (the module that names a path, or the one that owns it) to
+/// its node and `label` names the first in a finding. A path the scan cannot
+/// attribute is a finding.
+fn edges_between<N: Ord>(
+    scan: &Scan,
+    reach: Reach<'_>,
+    node: impl Fn(&[String]) -> N,
+    label: impl Fn(&[String]) -> String,
+    findings: &mut Vec<Finding>,
+) -> BTreeMap<(N, N), Vec<Site>> {
+    let mut edges: BTreeMap<(N, N), Vec<Site>> = BTreeMap::new();
+    for reference in &scan.references {
+        if reference
+            .from
+            .first()
+            .is_some_and(|module| reach.transparent.contains(module))
+        {
+            continue; // a relay's own `use` items are not edges
+        }
+        let mut unattributed = |why| {
+            findings.push(Finding::Unattributed {
+                from: label(&reference.from),
+                site: reference.site.clone(),
+                why,
+            });
+        };
+        for resolved in scan.resolve(&reference.path, reach) {
+            let to = match resolved {
+                Resolved::Module(to) => to,
+                // The root is no node: its own code is not scanned, so an edge
+                // into it could hide one out of it.
+                Resolved::Root(name) => {
+                    unattributed(format!(
+                        "it names `{name}`, an item of the crate root itself; move it into a \
+                         module"
+                    ));
+                    continue;
+                }
+                Resolved::External => continue,
+                Resolved::Unattributed(why) | Resolved::Missing(why) => {
+                    unattributed(why);
+                    continue;
+                }
+            };
+            let (from, to) = (node(&reference.from), node(&to));
+            if from != to {
+                edges
+                    .entry((from, to))
+                    .or_default()
+                    .push(reference.site.clone());
+            }
+        }
+    }
+    for sites in edges.values_mut() {
+        sites.sort();
+        sites.dedup();
+    }
+    edges
+}
+
+/// Whether an exception admits the edge `from -> to`.
+fn admitted(exceptions: &[Exception], from: &str, to: &str) -> bool {
+    exceptions
+        .iter()
+        .any(|entry| entry.from == from && entry.to == to)
+}
+
+/// The findings about the `exceptions` list itself. `exists` says whether a
+/// name is a module of the crate; `refused` holds the edges the declaration
+/// refuses, admitted or not.
+fn check_exceptions(
+    exceptions: &[Exception],
+    exists: impl Fn(&str) -> bool,
+    refused: &BTreeSet<(String, String)>,
+    adr_files: &[String],
+    findings: &mut Vec<Finding>,
+) {
     let mut seen = BTreeSet::new();
-    for entry in &declaration.exceptions {
+    for entry in exceptions {
         let (from, to) = (entry.from.clone(), entry.to.clone());
-        if !scan.modules.contains_key(&entry.from) || !scan.modules.contains_key(&entry.to) {
+        if !exists(&entry.from) || !exists(&entry.to) {
             findings.push(Finding::ExceptionModule { from, to });
             continue;
         }
-        let first = seen.insert((entry.from.as_str(), entry.to.as_str()));
-        if !first || !refused.contains(&(entry.from.as_str(), entry.to.as_str())) {
+        let edge = (from.clone(), to.clone());
+        let refused_here = refused.contains(&edge);
+        let first = seen.insert(edge);
+        if !first || !refused_here {
             findings.push(Finding::Stale {
                 from: from.clone(),
                 to: to.clone(),
@@ -657,25 +864,6 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
                 since: entry.since.clone(),
             });
         }
-    }
-
-    let layered = scan
-        .modules
-        .keys()
-        .filter(|module| layer_of(module).is_some())
-        .count();
-    let summary = format!(
-        "{} modules ({layered} in {} layers, {} transparent), {} edges, {} exceptions checked",
-        scan.modules.len(),
-        declaration.layers.len(),
-        transparent.len(),
-        edges.len(),
-        declaration.exceptions.len()
-    );
-    Outcome {
-        findings,
-        edges,
-        summary,
     }
 }
 
@@ -723,8 +911,9 @@ struct Planted {
     files: &'static [(&'static str, &'static str)],
 }
 
-/// The self-test crates: every legal shape stays silent, and each planted
-/// violation produces one finding of [`EXPECTED`].
+/// The self-test crates of the layer axis: every legal shape stays silent, and
+/// each planted violation produces one finding of [`EXPECTED`]. The feature
+/// axis has its own ([`features::PLANTED`]).
 const PLANTED: [Planted; 2] = [
     Planted {
         name: "a",
@@ -861,7 +1050,8 @@ transparent = ["prelude"]
     },
 ];
 
-/// The finding each planted violation must produce, and no other.
+/// The finding each planted violation of the layer axis must produce, and no
+/// other.
 const EXPECTED: [(&str, &str, &str); 24] = [
     ("via_use", "top", "refused"),
     ("peer_a", "peer_b", "refused"),
@@ -909,11 +1099,12 @@ fn planted_findings(planted: &Planted) -> anyhow::Result<Vec<Finding>> {
 /// `(missed, false positives)` of the rule over the self-test crates.
 fn self_test_diff() -> anyhow::Result<(Vec<Identity>, Vec<Identity>)> {
     let mut seen = Vec::new();
-    for planted in &PLANTED {
+    for planted in PLANTED.iter().chain(&features::PLANTED) {
         seen.extend(planted_findings(planted)?.iter().map(Finding::identity));
     }
     let expected = EXPECTED
         .iter()
+        .chain(&features::EXPECTED)
         .map(|&(from, to, kind)| (from.to_owned(), to.to_owned(), kind))
         .collect();
     Ok(multiset_diff(expected, seen))
@@ -957,7 +1148,7 @@ fn self_test() -> ExitCode {
     }
     println!(
         "module-dag: self-test ok ({} expected findings, no others)",
-        EXPECTED.len()
+        EXPECTED.len() + features::EXPECTED.len()
     );
     ExitCode::SUCCESS
 }

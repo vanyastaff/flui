@@ -127,8 +127,14 @@ impl crate::shared::system_notice::StaleOnWake for MacosDisplays {
 
 /// The displays of one macOS platform: their ids and the last snapshot, which
 /// the [`DisplaySource`] keeps until an event invalidates it.
-pub(crate) struct MacosDisplays {
+pub struct MacosDisplays {
     source: DisplaySource,
+}
+
+impl std::fmt::Debug for MacosDisplays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacosDisplays").finish_non_exhaustive()
+    }
 }
 
 impl MacosDisplays {

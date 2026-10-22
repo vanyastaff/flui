@@ -14,8 +14,9 @@ use flui_platform::SystemPreferences;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{Event, EventTarget, MediaQueryList, Window};
 
+use super::platform::WebLoop;
 use crate::{
-    PlatformError,
+    PlatformError, host,
     shared::{
         browser_preferences::{MediaFeature, MediaMatches},
         owner_signal::OwnerSignal,
@@ -82,14 +83,14 @@ impl Sampler {
     }
 }
 
-pub(super) struct Preferences {
+pub struct WebPreferences {
     sampler: Sampler,
     callback: Option<Closure<dyn FnMut(Event)>>,
     /// Each target and event the callback is registered for, in order.
     registered: Vec<(EventTarget, &'static str)>,
 }
 
-impl Preferences {
+impl WebPreferences {
     pub(super) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let window = web_sys::window().ok_or_else(|| PlatformError::Preferences {
             message: "browser preference observation requires a Window".into(),
@@ -159,7 +160,42 @@ impl Preferences {
     }
 }
 
-impl Drop for Preferences {
+impl std::fmt::Debug for WebPreferences {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebPreferences").finish_non_exhaustive()
+    }
+}
+
+impl host::Preferences<WebLoop> for WebPreferences {
+    fn sample(owner: &WebLoop) -> Result<SystemPreferences, PlatformError> {
+        if !owner.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner has stopped".into(),
+            });
+        }
+        // Sample outside the borrow: the browser's answers must not observe
+        // the host's own state held.
+        let Some(sampler) = owner
+            .preferences
+            .borrow()
+            .as_ref()
+            .map(WebPreferences::sampler)
+        else {
+            return Err(PlatformError::Preferences {
+                message: "browser preference source is closed".into(),
+            });
+        };
+        let preferences = sampler.sample()?;
+        if !owner.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner stopped during sampling".into(),
+            });
+        }
+        Ok(preferences)
+    }
+}
+
+impl Drop for WebPreferences {
     fn drop(&mut self) {
         self.sampler.active.store(false, Ordering::Release);
         let Some(callback) = self.callback.take() else {

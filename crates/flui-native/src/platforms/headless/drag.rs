@@ -3,7 +3,7 @@
 //! windows, or a drag arriving from another application, without a display.
 //!
 //! The double is the platform's one [`DataTransferSource`]. A window it
-//! serves ([`HeadlessPlatform::with_os_drag`](super::HeadlessPlatform::with_os_drag))
+//! serves ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag))
 //! starts a session through its [`PlatformDragSource`]; the test then plays the
 //! pointer with [`HeadlessDragAndDrop::hover`], [`drop_here`](HeadlessDragAndDrop::drop_here)
 //! and [`cancel`](HeadlessDragAndDrop::cancel). Each step reaches the window under
@@ -58,10 +58,18 @@ struct Inner {
     open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
 }
 
-pub(crate) struct DragDouble {
+/// The headless host's drag-and-drop transport and the OS drag session it
+/// simulates.
+pub struct DragDouble {
     inner: Mutex<Inner>,
     windows: Mutex<Weak<Mutex<HeadlessState>>>,
     start: Mutex<Option<OsDragStart>>,
+}
+
+impl std::fmt::Debug for DragDouble {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragDouble").finish_non_exhaustive()
+    }
 }
 
 impl DragDouble {
@@ -227,7 +235,7 @@ impl PlatformDragSource for HeadlessDragSource {
     }
 }
 
-/// Plays the operating system's side of a drag on a [`HeadlessPlatform`](super::HeadlessPlatform).
+/// Plays the operating system's side of a drag on a [`HeadlessPlatform`](crate::HeadlessPlatform).
 #[derive(Clone)]
 pub struct HeadlessDragAndDrop {
     double: Arc<DragDouble>,

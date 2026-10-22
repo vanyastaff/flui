@@ -76,7 +76,7 @@ impl Invalidation {
 
 /// Native subscriptions and interfaces belong to the owner context, not its
 /// Send + Sync platform wrapper. Interfaces and receiver retire before WinRT.
-pub(crate) struct PreferenceSource {
+pub struct PreferenceSource {
     invalidation: Arc<Invalidation>,
     _receiver: receiver::Receiver,
     ui: UISettings,
@@ -85,6 +85,25 @@ pub(crate) struct PreferenceSource {
     motion_token: Option<i64>,
     cache: SampleCache,
     _entry: WinRtEntry,
+}
+
+impl std::fmt::Debug for PreferenceSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreferenceSource").finish_non_exhaustive()
+    }
+}
+
+impl crate::host::Preferences<super::platform::WindowsLoop> for PreferenceSource {
+    fn sample(owner: &super::platform::WindowsLoop) -> Result<SystemPreferences, PlatformError> {
+        owner
+            .owner_control
+            .shares("read system preferences")
+            .map_err(|reason| PlatformError::Preferences {
+                message: format!("platform owner is unavailable: {reason:?}"),
+            })?
+            .preferences
+            .sample()
+    }
 }
 
 impl PreferenceSource {

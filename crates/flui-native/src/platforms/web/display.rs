@@ -64,17 +64,25 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, JsValue};
 
 use super::features::BrowserFeatures;
+use super::platform::WebLoop;
 use crate::error::PlatformError;
+use crate::host;
 use crate::shared::display_source::DisplaySource;
 use crate::shared::refresh_estimate::RefreshEstimator;
 use crate::shared::screen_identity::RetainedScreens;
 
 /// The Web platform's display state: identities, the estimator and the cached
 /// snapshot. Shared by the platform, its window and the browser listeners.
-pub(super) struct WebDisplays {
+pub struct WebDisplays {
     source: DisplaySource,
     pub(super) features: BrowserFeatures,
     state: Mutex<State>,
+}
+
+impl std::fmt::Debug for WebDisplays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebDisplays").finish_non_exhaustive()
+    }
 }
 
 struct State {
@@ -89,6 +97,12 @@ struct State {
     /// first seen, taken as the display's own scale with the page at 100%.
     /// `None` until the first sample and after the screen changed.
     screen_ratio: Option<f64>,
+}
+
+impl host::Displays<WebLoop> for WebDisplays {
+    fn snapshot(owner: &WebLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
+    }
 }
 
 impl WebDisplays {

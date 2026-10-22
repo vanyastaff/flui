@@ -112,10 +112,12 @@ steps.
 
 ## Definition of Done
 
-New behavior has a test that fails without it, written through the public API from `tests/`.
-Every concrete `RenderBox`/`RenderSliver` has a `render_object_harness` row. Cases that differ
-only in input join an existing table test, and a crate's integration tests are modules of one
-`tests/main.rs`. Tests are cited by name in docs and ADRs: `rg` before renaming one.
+New behavior has a test that fails without it, written through the public API from `tests/`. In
+`flui-native` the tests of a feature's model and of a platform file's pure part sit beside them as
+`pub(crate)` modules and run on the Linux CI host; its `tests/` keeps the conformance table and the
+recordings of native traces. Every concrete `RenderBox`/`RenderSliver` has a
+`render_object_harness` row. Cases that differ only in input join an existing table test, and a
+crate's integration tests are modules of one `tests/main.rs`. Tests are cited by name in docs and ADRs: `rg` before renaming one.
 
 ## Where to read next
 

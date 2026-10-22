@@ -26,7 +26,7 @@ mod linux_lifecycle_models;
 
 // Mobile platforms
 #[cfg(target_os = "android")]
-pub mod android;
+pub(crate) mod android;
 
 #[cfg(target_os = "ios")]
 pub mod ios;
@@ -45,24 +45,9 @@ pub mod web;
 pub mod winit;
 
 // Re-exports
-#[cfg(target_os = "android")]
-pub use android::AndroidPlatform;
 pub use headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
+    HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
-#[cfg(target_os = "ios")]
-pub use ios::IOSPlatform;
-#[cfg(target_os = "macos")]
-pub use macos::MacOSPlatform;
-#[cfg(target_arch = "wasm32")]
-pub use web::WebPlatform;
-#[cfg(windows)]
-pub use windows::WindowsPlatform;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub use winit::WinitPlatform; // winit fallback backend — see `platforms::winit` docs

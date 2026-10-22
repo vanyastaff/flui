@@ -171,6 +171,13 @@ mod text_sizing;
 pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
+// Reachable so a crate outside can show that a table missing a position does
+// not compile (`tests/ui/host_table_names_every_position.rs`); not an embedding
+// API: nothing outside the crate can build a `HostPlatform`.
+#[doc(hidden)]
+pub mod host;
+mod hosts;
+mod platform;
 pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
 mod redraw_poll;
@@ -192,33 +199,36 @@ pub use error::{BootstrapError, PlatformError, PlatformResult};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;
+// Each host's platform: the one implementation of `Platform` over its table.
+pub use hosts::HeadlessPlatform;
+#[cfg(target_os = "ios")]
+pub use hosts::IOSPlatform;
+#[cfg(target_os = "macos")]
+pub use hosts::MacOSPlatform;
+pub use platform::HostPlatform;
 // Mobile platforms
 #[cfg(target_os = "android")]
-pub use platforms::AndroidPlatform;
+pub use hosts::AndroidPlatform;
 // Re-export platform implementations
-#[cfg(target_os = "ios")]
-pub use platforms::IOSPlatform;
-#[cfg(target_os = "macos")]
-pub use platforms::MacOSPlatform;
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
+    HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
-pub use platforms::WebPlatform;
+pub use hosts::WebPlatform;
 // Desktop platforms
 #[cfg(windows)]
-pub use platforms::WindowsPlatform;
+pub use hosts::WindowsPlatform;
 // winit fallback backend — primary on Linux until native Wayland/X11 lands
 // (roadmap Cross.P)
 #[cfg(all(
     feature = "winit-backend",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-pub use platforms::WinitPlatform;
+pub use hosts::WinitPlatform;
 // Re-export shared infrastructure
 pub use shared::{PlatformHandlers, WindowCallbacks};
 // Re-export task types

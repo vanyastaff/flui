@@ -5,7 +5,7 @@
 //! which delivers deadlines, does not run: with the pointer still, caret
 //! blink, timers and the reveal fallback stop. Those loops do dispatch
 //! `WM_TIMER`, so a timer of the window delivers what is due the way the
-//! drag-and-drop loop does (`WindowsPlatform::deliver_modal_frames`), and is
+//! drag-and-drop loop does (`WindowsLoop::deliver_modal_frames`), and is
 //! armed again for when the next one is.
 
 use std::cell::Cell;
@@ -16,7 +16,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{KillTimer, SetTimer},
 };
 
-use super::platform::{FrameCount, ModalDelivery, WindowContext, WindowsPlatform};
+use super::platform::{FrameCount, ModalDelivery, WindowContext, WindowsLoop};
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(super) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
@@ -74,7 +74,7 @@ impl WindowContext {
         let windows = self.windows.clone();
         let frames = Rc::clone(&self.modal_pacing.frames);
         let delivered = Rc::clone(&self.modal_pacing.delivered);
-        let wait = WindowsPlatform::deliver_modal_frames(&handlers, &windows, &frames, &delivered);
+        let wait = WindowsLoop::deliver_modal_frames(&handlers, &windows, &frames, &delivered);
         if self.modal_pacing.depth.get() > 0 {
             arm(hwnd, wait);
         }

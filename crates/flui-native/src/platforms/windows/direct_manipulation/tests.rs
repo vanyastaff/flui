@@ -16,8 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::PUMP_TIMER;
+use crate::WindowsPlatform;
+use crate::platforms::windows::WindowsWindow;
 use crate::platforms::windows::platform::{WindowContext, with_window_context};
-use crate::platforms::windows::{WindowsPlatform, WindowsWindow};
 use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
 use crate::shared::input_availability;
 use crate::{traits::HostWindow, traits::Platform as _};

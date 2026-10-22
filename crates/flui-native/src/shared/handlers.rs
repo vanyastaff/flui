@@ -336,7 +336,7 @@ impl PlatformHandlers {
     /// when unset — the pre-#555 unconditional "last window closed -> exit"
     /// default a real native backend (winit) had. Nothing calls this
     /// directly: winit's own `CloseRequested` handling
-    /// leases the hook out of the lock first (`WinitPlatform::
+    /// leases the hook out of the lock first (`WinitLoop::
     /// lease_exit_policy_hook`) rather than calling this while the lock is
     /// held, and AppKit and Win32 likewise take the hook out of their handler
     /// set before running it, with the same "no hook allows the exit"
@@ -856,7 +856,7 @@ impl WindowCallbacks {
     /// `WM_DESTROY` arm (`platforms/windows/platform.rs`), AppKit's
     /// `handle_close` (`platforms/macos/window.rs`, reached from the
     /// `windowWillClose:` delegate), and the Android backend's loop exit
-    /// (`platforms/android/mod.rs`, `AndroidPlatform::run` after its `loop`,
+    /// (`platforms/android/mod.rs`, `AndroidLoop::run` after its `loop`,
     /// reached by `Destroy`, `quit()` and a failed bootstrap; a panic out of
     /// `run` skips it, by decision) — so that destruction order is pinned
     /// deterministically instead of left to struct field order.
@@ -2443,12 +2443,12 @@ mod tests {
             #[cfg(target_os = "windows")]
             (
                 "window identity exhaustion",
-                crate::platforms::windows::WindowsPlatform::window_identity_exhaustion_permanently_refuses_retries,
+                crate::platforms::windows::WindowsLoop::window_identity_exhaustion_permanently_refuses_retries,
             ),
             #[cfg(target_os = "windows")]
             (
                 "platform identity exhaustion",
-                crate::platforms::windows::WindowsPlatform::platform_identity_exhaustion_acquires_nothing,
+                crate::platforms::windows::WindowsLoop::platform_identity_exhaustion_acquires_nothing,
             ),
             (
                 "clear multiple panicking captures",

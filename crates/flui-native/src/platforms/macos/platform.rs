@@ -1,27 +1,32 @@
-//! macOS platform implementation using AppKit/Cocoa
+//! The macOS host's loop (AppKit/Cocoa) and its table's bindings to it.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use flui_foundation::OwnerAffinity;
+use flui_foundation::geometry::Size;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::NSApplication;
 use parking_lot::Mutex;
 
-use super::{display, window::MacOSWindow};
+use super::{display, preferences::PreferenceSource, window::MacOSWindow};
+use crate::host::{self, Host};
+use crate::platform::HostPlatform;
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
-    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::OpenWindowError,
-    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
+    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::HostWindow,
+    traits::OpenWindowError, traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
     traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
 };
 use flui_platform::{
-    Clipboard, DisplaySnapshot, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    data_transfer::DataTransferSource, data_transfer::NullDataTransferSource,
+    DisplaySnapshot, PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
 };
 
-/// macOS platform state
-pub struct MacOSPlatform {
+/// The macOS host's loop: the state every position of its table reads.
+///
+/// [`MacOSPlatform`](crate::MacOSPlatform) is its platform.
+pub struct MacOSLoop {
     /// The process-wide `NSApplication` singleton, retained.
     app: Retained<NSApplication>,
 
@@ -43,7 +48,7 @@ pub struct MacOSPlatform {
     /// before the source so native observation ends first.
     _preference_observers: super::preferences::PreferenceObservers,
 
-    preferences: Arc<super::preferences::PreferenceSource>,
+    preferences: Arc<PreferenceSource>,
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
@@ -94,14 +99,14 @@ fn debug_assert_appkit_main_thread(op: &'static str) {
 
 // SAFETY: the NSApplication pointer is a process-wide singleton only messaged
 // from the main thread (AppKit convention); all other fields are
-// `Arc`/`Mutex`-protected. `Platform: Send + Sync` requires the wrapper to be
-// shareable.
-unsafe impl Send for MacOSPlatform {}
+// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to
+// be shareable.
+unsafe impl Send for MacOSLoop {}
 // SAFETY: see `Send` above — interior mutability is Mutex-guarded and the raw
 // pointer is main-thread-affine by AppKit convention.
-unsafe impl Sync for MacOSPlatform {}
+unsafe impl Sync for MacOSLoop {}
 
-impl std::fmt::Debug for MacOSPlatform {
+impl std::fmt::Debug for MacOSLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
     // payloads with no useful Debug form.
     //
@@ -112,7 +117,7 @@ impl std::fmt::Debug for MacOSPlatform {
     // exactly where a lock is likely to be held. Same pattern
     // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("MacOSPlatform");
+        let mut out = f.debug_struct("MacOSLoop");
         match self.windows.try_lock() {
             Some(windows) => out.field("windows", &windows.len()),
             None => out.field("windows", &format_args!("<locked>")),
@@ -121,14 +126,12 @@ impl std::fmt::Debug for MacOSPlatform {
     }
 }
 
-impl MacOSPlatform {
-    /// Create a new macOS platform with default configuration
-    pub fn new() -> Result<Self, PlatformError> {
+impl MacOSLoop {
+    pub(crate) fn new() -> Result<Self, PlatformError> {
         Self::with_config(WindowConfiguration::default())
     }
 
-    /// Create a new macOS platform with custom configuration
-    pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
+    pub(crate) fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         // AppKit is touched below (`sharedApplication`,
         // `setActivationPolicy`), so the main-thread requirement starts HERE,
         // not at `run` — `MainThreadMarker::new()` both checks it and produces
@@ -175,7 +178,7 @@ impl MacOSPlatform {
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let (preferences, preference_observers) =
-                super::preferences::PreferenceSource::new(&loop_control.owner_signal);
+                PreferenceSource::new(&loop_control.owner_signal);
             let displays = Arc::new(display::MacosDisplays::new());
             let screen_observer =
                 display::ScreenObserver::new(&displays, &loop_control.owner_signal);
@@ -204,8 +207,7 @@ impl MacOSPlatform {
         }
     }
 
-    /// Get the NSApplication instance
-    pub fn app(&self) -> &Retained<NSApplication> {
+    pub(crate) fn app(&self) -> &Retained<NSApplication> {
         &self.app
     }
 
@@ -234,50 +236,18 @@ impl MacOSPlatform {
     }
 }
 
-impl Platform for MacOSPlatform {
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        super::window::window_capabilities()
+/// What the macOS platform offers beyond [`Platform`].
+impl<H: Host<Loop = MacOSLoop>> HostPlatform<H> {
+    /// Get the NSApplication instance
+    pub fn app(&self) -> &Retained<NSApplication> {
+        self.owner().app()
     }
+}
 
-    fn window_frame_inset(&self, _scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
-        self.affinity
-            .debug_assert_owner("MacOSPlatform::window_frame_inset");
-        debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
-        // AppKit measures a frame in points, so the scale does not enter.
-        let main = MainThreadMarker::new().expect(
-            "BUG: the owner thread is the AppKit main thread, which the assertions above check",
-        );
-        super::window::decorated_frame_inset(main)
-    }
-
-    fn on_session_end(
-        &self,
-        callback: Box<
-            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
-        >,
-    ) {
-        let previous = self.handlers.lock().session_end.replace(callback);
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>) {
-        self.notices.set_hook(callback);
-    }
-
-    fn release_session_end(&self) {
-        self.loop_control.session_end_released();
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        self.preferences.read()
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
-    }
-
+impl host::Loop for MacOSLoop {
     fn run(
-        self: Box<Self>,
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
         on_finish_launching: PlatformReadyCallback,
     ) -> Result<(), PlatformError> {
         // Idempotent when `with_config` already bound on this thread; trips
@@ -285,25 +255,19 @@ impl Platform for MacOSPlatform {
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");
 
-        // Clone the retained singleton before `self` moves into the
-        // `Arc<dyn Platform>` the capability needs.
-        let app = Retained::clone(&self.app);
-
         let ownership =
-            super::loop_control::LoopOwnership::acquire(&app, Arc::clone(&self.loop_control))?;
-        let signal = Arc::clone(&self.loop_control.owner_signal);
-        let loop_control = Arc::clone(&self.loop_control);
-        let notices = Arc::clone(&self.notices);
-        let platform: Arc<dyn Platform> = Arc::new(*self);
-        let hooks: Arc<dyn OwnerHooks> =
-            Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
+            super::loop_control::LoopOwnership::acquire(&self.app, Arc::clone(&self.loop_control))?;
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            Arc::clone(&platform),
+            Arc::clone(&self.loop_control.owner_signal),
+        ));
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
         // The sources start listening only now: the application has installed
         // its hooks while it bootstrapped, and a notice that arrived earlier
         // would find none and be lost.
         let notice_sources =
-            super::system_notices::SystemNoticeSources::new(&notices, &loop_control);
+            super::system_notices::SystemNoticeSources::new(&self.notices, &self.loop_control);
         ownership.run();
         drop(notice_sources);
         drop(ownership);
@@ -318,71 +282,9 @@ impl Platform for MacOSPlatform {
         self.loop_control.quit();
     }
 
-    fn open_window(
-        &self,
-        mut options: WindowOptions,
-    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        self.affinity
-            .debug_assert_owner("MacOSPlatform::open_window");
-        debug_assert_appkit_main_thread("MacOSPlatform::open_window");
-        if !self.loop_control.accepts_windows() {
-            return Err(OpenWindowError::OwnerGone {
-                rejected: Some(Box::new(options)),
-            });
-        }
-        self.measure_placement_globally(&mut options);
-        let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
-        self.notices.mark_stale_on_wake(window.state_cell());
-        // Installed immediately after construction, before the window can be
-        // handed to anyone who might redraw it — the slot is a `OnceLock`, so
-        // a later install would be silently ignored rather than racing.
-        window.install_loop_control(Arc::downgrade(&self.loop_control));
-        window.install_wake_pump(Arc::downgrade(&self.wake_pump));
-        window.bind_displays(Arc::clone(&self.displays));
-        let callbacks = window.callbacks();
-        callbacks.set_input_capabilities(crate::shared::input_availability::macos());
-        callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
-            &self.loop_control.owner_signal,
-            callbacks,
-        ));
-
-        Ok(window)
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        self.affinity
-            .debug_assert_owner("MacOSPlatform::active_window");
-        debug_assert_appkit_main_thread("MacOSPlatform::active_window");
-        // `keyWindow` answers `None` when no window is key. The window id is
-        // the native `NSWindow` pointer, the same identity `MacOSWindow`
-        // reports, so a caller can compare them.
-        let key_window = self.app.keyWindow()?;
-        let ptr = Retained::as_ptr(&key_window) as u64;
-        Some(WindowId(ptr))
-    }
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.affinity
-            .debug_assert_owner("MacOSPlatform::display_snapshot");
-        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
-        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "NSScreen sampling must run on the AppKit main thread".into(),
-        })?;
-        self.displays.snapshot(mtm)
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        Arc::new(super::MacOSClipboard::new())
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // No AppKit transport yet (NSDraggingDestination/NSPasteboard land
-        // with the native slices of ADR-0038): inert and honest.
-        Arc::new(NullDataTransferSource)
-    }
-
-    fn name(&self) -> &'static str {
-        "macOS (AppKit)"
+    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
+        let mut handlers = self.handlers.lock();
+        handlers.quit = Some(callback);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -392,20 +294,6 @@ impl Platform for MacOSPlatform {
 
     fn request_exit_policy_reevaluation(&self) {
         self.loop_control.request(false);
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        let mut handlers = self.handlers.lock();
-        handlers.quit = Some(callback);
-    }
-
-    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        self.loop_control.set_reopen(callback);
-    }
-
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        let mut handlers = self.handlers.lock();
-        handlers.window_event = Some(callback);
     }
 
     /// Unlike `winit`'s override (which hands the deadline to
@@ -427,20 +315,187 @@ impl Platform for MacOSPlatform {
         self.handlers.lock().wake_deadline = Some(Arc::from(hook));
         self.wake_pump.arm();
     }
+}
 
-    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
+impl host::Services for MacOSLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
+    }
+
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
         // `NSBundle.mainBundle` is the shared singleton; `bundlePath` is a
         // non-null `NSString` (Foundation returns an empty string, not nil,
         // for a bundle without a path), so there is no nil arm to guard.
         let bundle = objc2_foundation::NSBundle::mainBundle();
         let path = bundle.bundlePath();
-        Ok(std::path::PathBuf::from(path.to_string()))
+        Ok(PathBuf::from(path.to_string()))
+    }
+
+    // The macOS host opens no URL, path or file prompt and reports no
+    // compositor: those services move to the system capability crate.
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    fn reveal_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
     }
 }
 
-impl Drop for MacOSPlatform {
+impl host::Window<MacOSLoop> for MacOSWindow {
+    fn open(
+        owner: &MacOSLoop,
+        mut options: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::open_window");
+        debug_assert_appkit_main_thread("MacOSPlatform::open_window");
+        if !owner.loop_control.accepts_windows() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(Box::new(options)),
+            });
+        }
+        owner.measure_placement_globally(&mut options);
+        let window = MacOSWindow::new(options, Arc::clone(&owner.windows), owner.config.clone())?;
+        owner.notices.mark_stale_on_wake(window.state_cell());
+        // Installed immediately after construction, before the window can be
+        // handed to anyone who might redraw it — the slot is a `OnceLock`, so
+        // a later install would be silently ignored rather than racing.
+        window.install_loop_control(Arc::downgrade(&owner.loop_control));
+        window.install_wake_pump(Arc::downgrade(&owner.wake_pump));
+        window.bind_displays(Arc::clone(&owner.displays));
+        let callbacks = window.callbacks();
+        callbacks.set_input_capabilities(crate::shared::input_availability::macos());
+        callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            &owner.loop_control.owner_signal,
+            callbacks,
+        ));
+
+        Ok(window)
+    }
+
+    fn active(owner: &MacOSLoop) -> Option<WindowId> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::active_window");
+        debug_assert_appkit_main_thread("MacOSPlatform::active_window");
+        // `keyWindow` answers `None` when no window is key. The window id is
+        // the native `NSWindow` pointer, the same identity `MacOSWindow`
+        // reports, so a caller can compare them.
+        let key_window = owner.app.keyWindow()?;
+        let ptr = Retained::as_ptr(&key_window) as u64;
+        Some(WindowId(ptr))
+    }
+
+    fn capabilities(_: &MacOSLoop) -> WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
+    fn frame_inset(owner: &MacOSLoop, _scale_factor: f64) -> Size<f64> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::window_frame_inset");
+        debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
+        // AppKit measures a frame in points, so the scale does not enter.
+        let main = MainThreadMarker::new().expect(
+            "BUG: the owner thread is the AppKit main thread, which the assertions above check",
+        );
+        super::window::decorated_frame_inset(main)
+    }
+
+    fn on_event(owner: &MacOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        let mut handlers = owner.handlers.lock();
+        handlers.window_event = Some(callback);
+    }
+}
+
+impl host::Displays<MacOSLoop> for display::MacosDisplays {
+    fn snapshot(owner: &MacOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        owner.displays.snapshot(mtm)
+    }
+}
+
+impl host::Input<MacOSLoop> for MacOSLoop {
+    fn keyboard_layout(_: &MacOSLoop) -> String {
+        // The host does not read AppKit's input source: the layout is unknown.
+        String::new()
+    }
+
+    fn on_keyboard_layout_change(_: &MacOSLoop, callback: Box<dyn FnMut() + Send>) {
+        // No layout is read, so no change is ever reported.
+        drop(callback);
+    }
+}
+
+impl host::Preferences<MacOSLoop> for PreferenceSource {
+    fn sample(owner: &MacOSLoop) -> Result<SystemPreferences, PlatformError> {
+        owner.preferences.read()
+    }
+}
+
+impl host::Lifecycle<MacOSLoop> for MacOSLoop {
+    fn on_session_end(
+        owner: &MacOSLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        let previous = owner.handlers.lock().session_end.replace(callback);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+    }
+
+    fn on_host_notice(owner: &MacOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        owner.notices.set_hook(callback);
+    }
+
+    fn release_session_end(owner: &MacOSLoop) {
+        owner.loop_control.session_end_released();
+    }
+
+    fn on_reopen(owner: &MacOSLoop, callback: Box<dyn FnMut() + Send>) {
+        owner.loop_control.set_reopen(callback);
+    }
+
+    fn activate(_: &MacOSLoop, _: bool) {
+        // The application is activated once, as its loop starts; a later
+        // request is not acted on.
+    }
+}
+
+impl Drop for MacOSLoop {
     fn drop(&mut self) {
-        tracing::debug!("Dropping MacOSPlatform");
+        tracing::debug!("Dropping MacOSLoop");
         // NSApplication is a singleton, no need to release
     }
 }

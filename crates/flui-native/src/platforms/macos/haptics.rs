@@ -19,7 +19,7 @@ use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 /// The window's haptic actuator. Requests reach it on the owner thread, which
 /// on AppKit is the main thread.
 #[derive(Debug, Default)]
-pub(super) struct MacHaptics;
+pub struct MacHaptics;
 
 impl PlatformHaptics for MacHaptics {
     fn perform(&self, feedback: HapticFeedback) {

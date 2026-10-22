@@ -149,9 +149,15 @@ pub(crate) fn motion_device(
 /// the Java device objects its capability cache compares by identity. No
 /// user callback lives here.
 #[derive(Default)]
-pub(crate) struct AndroidInputState {
+pub struct AndroidInputState {
     motion: AndroidMotion,
     devices: HashMap<i32, CachedDevice>,
+}
+
+impl std::fmt::Debug for AndroidInputState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidInputState").finish_non_exhaustive()
+    }
 }
 
 impl AndroidInputState {
@@ -231,6 +237,18 @@ impl AndroidInputState {
             discovery,
             web_time::Instant::now(),
         )
+    }
+}
+
+impl crate::host::Input<super::AndroidLoop> for AndroidInputState {
+    fn keyboard_layout(_: &super::AndroidLoop) -> String {
+        // Android reports no keyboard layout identifier: empty means unknown.
+        String::new()
+    }
+
+    fn on_keyboard_layout_change(_: &super::AndroidLoop, callback: Box<dyn FnMut() + Send>) {
+        // Nothing signals a layout change, so the callback is never called.
+        drop(callback);
     }
 }
 
