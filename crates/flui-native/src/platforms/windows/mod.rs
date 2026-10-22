@@ -43,6 +43,7 @@ pub(crate) use host_events::HostEvents;
 pub(crate) use preferences::PreferenceSource;
 // The hooks the Windows host registers on FLUI's window class.
 pub(crate) use direct_manipulation::Touchpad;
+pub(crate) use drag::DropTargetRegistration;
 pub(crate) use platform::WindowProc;
 pub use window::WindowsWindow;
 pub use window_ext::{

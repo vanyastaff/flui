@@ -238,6 +238,9 @@ pub(crate) struct WindowContext {
     /// failed (the window then takes no drags) or after `WM_DESTROY`
     /// revoked it.
     pub(super) drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
+    /// The platform's OLE transfer, which the window's drop target serves;
+    /// the window class's drop-target hook registers it from here.
+    pub(super) drag: Arc<super::drag::OleTransfer>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -327,8 +330,8 @@ impl WindowContext {
         PublishHold(&self.publish_hold)
     }
 
-    /// The window moved on the screen or changed DPI: the focused field's
-    /// input method follows it.
+    /// The window changed DPI: once the new scale is applied, the focused
+    /// field's input method follows it (a move reaches TSF through its class hook).
     pub(super) fn text_layout_moved(&self) {
         let services = self.text_services.borrow().clone();
         if let Some(services) = services {
@@ -834,7 +837,6 @@ impl WindowProc {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
                         ctx.resume_touchpad();
-                        ctx.text_layout_moved();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1141,7 +1143,6 @@ impl WindowProc {
                             );
                         });
                         ctx.publish_window_state(hwnd);
-                        ctx.text_layout_moved();
                     }
 
                     LRESULT(0)

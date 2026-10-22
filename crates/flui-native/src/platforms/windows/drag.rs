@@ -580,9 +580,25 @@ impl PlatformDragSource for Win32DragSource {
     }
 }
 
+/// The hook on FLUI's window class that registers each window it creates as
+/// an OLE drop target, from then on taking drags from this process or another
+/// (ADR-0211).
+pub(crate) struct DropTargetRegistration;
+
+impl crate::owner::windows::WindowMessages for DropTargetRegistration {
+    fn created(&self, window: &crate::owner::windows::CreatedWindow) {
+        let this = WindowRef::new(window.hwnd, window.identity);
+        if let Some(transfer) =
+            this.with_context("drop target", |context| Arc::clone(&context.drag))
+        {
+            register_target(this, transfer);
+        }
+    }
+}
+
 /// Register the drop target of `window`, created on this thread, and keep it
 /// in the window's context. A window whose registration fails takes no drags.
-pub(super) fn register_target(window: WindowRef, transfer: Arc<OleTransfer>) {
+fn register_target(window: WindowRef, transfer: Arc<OleTransfer>) {
     let hwnd = window.hwnd();
     let target = ComObject::new(WindowDropTarget::new(window, transfer));
     let interface: IDropTarget = target.to_interface();

@@ -7,13 +7,13 @@
 //! - `tsf`: each window's TSF connection, its documents and their store, the
 //!   window's `TextStoreHost`;
 //! - [`Tsf`]: the text services' hook on FLUI's window class, which activates
-//!   each new window's connection.
+//!   each new window's connection and tells it when the window moved.
 //!
-//! The window keeps its connection in its context, so the window's own
-//! messages reach it there: a move, a size-and-move loop's end and a DPI
-//! change tell it the field's screen rectangles moved, and `WM_DESTROY`
-//! deactivates it between the close callbacks and the context's retirement
-//! (ADR-0135 §3).
+//! The window keeps its connection in its context. Two of the window's own
+//! messages still reach it from the window's procedure, because their order
+//! is the window's: a DPI change tells it the field's screen rectangles moved
+//! once the new scale is applied, and `WM_DESTROY` deactivates it between the
+//! close callbacks and the context's retirement (ADR-0135 §3).
 
 pub(crate) mod geometry;
 #[cfg(windows)]
@@ -25,8 +25,10 @@ pub(crate) use tsf::TextServices;
 #[cfg(windows)]
 use std::rc::Rc;
 
-#[cfg(all(windows, test))]
-use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+#[cfg(windows)]
+use windows::Win32::UI::WindowsAndMessaging::{WM_EXITSIZEMOVE, WM_MOVE};
 
 #[cfg(windows)]
 use crate::owner::windows::{CreatedWindow, WindowMessages};
@@ -40,6 +42,10 @@ use crate::platforms::windows::platform::{WindowRef, with_window_context};
 pub(crate) struct Tsf;
 
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "the window class's hook trait declares its message entry `unsafe`"
+)]
 impl WindowMessages for Tsf {
     /// Activate TSF for the window just installed, on its owner thread, and
     /// hold the connection in its context: from here on the window offers its
@@ -58,11 +64,7 @@ impl WindowMessages for Tsf {
             );
             return;
         };
-        let Some(this) = with_window_context(hwnd, "text_services", |context| {
-            WindowRef::new(hwnd, context.identity)
-        }) else {
-            return;
-        };
+        let this = WindowRef::new(hwnd, window.identity);
         #[cfg(test)]
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
@@ -86,6 +88,35 @@ impl WindowMessages for Tsf {
                 );
             }
         }
+    }
+
+    /// The window moved, or a size-and-move loop ended: the focused field's
+    /// text sits somewhere else on the screen, and TSF is told so. The
+    /// window's procedure still answers the message, after this hook: TSF
+    /// reads the window's position from the system and its scale from the
+    /// context, neither of which the procedure's own handling of these
+    /// messages changes. A DPI change is told from the window's own handling,
+    /// once the new scale is applied, which TSF's synchronous layout query
+    /// reads.
+    unsafe fn message(
+        &self,
+        hwnd: HWND,
+        msg: u32,
+        _wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        if matches!(msg, WM_MOVE | WM_EXITSIZEMOVE) {
+            // Cloned out of the context, so no borrow is held while TSF and
+            // the field's store run.
+            let services = with_window_context(hwnd, "text_services", |context| {
+                context.text_services.borrow().clone()
+            })
+            .flatten();
+            if let Some(services) = services {
+                services.window_moved();
+            }
+        }
+        None
     }
 }
 

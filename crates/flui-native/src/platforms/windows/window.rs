@@ -724,6 +724,7 @@ impl WindowsWindow {
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),
+                drag: Arc::clone(&drag),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
                 identity,
@@ -749,42 +750,37 @@ impl WindowsWindow {
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
                 haptics: super::haptics::WindowsHaptics::new(this),
-                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), this),
+                drag_source: super::drag::Win32DragSource::new(drag, this),
             });
-            // The wrapper owns the window from here: a panic out of what
-            // follows drops it, which destroys the window and retires its
-            // context.
-
-            // From here on the window takes drags, from this process or
-            // another (ADR-0211).
-            super::drag::register_target(this, drag);
+            // The wrapper owns the window from here: a panic out of a hook
+            // (or anything after it) drops it, which destroys the window and
+            // retires its context.
 
             // The hooks of the window class learn of the window: its text
-            // services activate and the precision touchpad's viewport is
-            // created there.
+            // services activate, it takes drags from this process or another
+            // (ADR-0211), and the precision touchpad's viewport is created.
             let mut client = windows::Win32::Foundation::RECT::default();
             let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 (client.right - client.left, client.bottom - client.top)
             } else {
                 (width, height)
             };
+            // A message a hook dispatched may have destroyed the window: no
+            // later hook runs on the dead handle, and the open fails instead
+            // of returning a wrapper around it.
             crate::owner::windows::window_created(
                 window_hooks,
                 &crate::owner::windows::CreatedWindow {
                     hwnd,
+                    identity,
                     client_size: size,
                     apartment,
                 },
-            );
-            // A message a hook dispatched may have destroyed the window: the
-            // open then fails instead of returning a wrapper around the dead
-            // handle.
-            if this.with_context("window_created", |_| ()).is_none() {
-                return Err(OpenWindowError::Backend {
-                    message: "the window was destroyed while its class's hooks learned of it"
-                        .into(),
-                });
-            }
+                || this.with_context("window_created", |_| ()).is_some(),
+            )
+            .map_err(|_gone| OpenWindowError::Backend {
+                message: "the window was destroyed while its class's hooks learned of it".into(),
+            })?;
 
             // The window is still hidden: put it where and in the mode it
             // opens, then show it now, later (first frame) or never (hidden).

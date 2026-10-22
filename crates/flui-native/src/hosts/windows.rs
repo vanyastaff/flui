@@ -13,8 +13,8 @@ use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
-    HostEvents, OleTransfer, PreferenceSource, Touchpad, WindowProc, WindowsClipboard,
-    WindowsDisplays, WindowsHaptics, WindowsWindow,
+    DropTargetRegistration, HostEvents, OleTransfer, PreferenceSource, Touchpad, WindowProc,
+    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
 use crate::text::windows::{TextServices, Tsf};
@@ -45,10 +45,12 @@ impl Host for Windows {
 }
 
 impl WindowsHost for Windows {
-    /// The window's procedure, then the text services and the precision
-    /// touchpad, which only learn of each window created: TSF activates
-    /// before the touchpad's viewport is made.
-    const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Tsf, &Touchpad];
+    /// The text services, which hear a window's moves before its procedure
+    /// answers them; the window's procedure; then the drop target and the
+    /// precision touchpad, which only learn of each window created. A created
+    /// window activates TSF, then registers its drop target, then gets its
+    /// touchpad viewport.
+    const WINDOW_HOOKS: WindowHooks = &[&Tsf, &WindowProc, &DropTargetRegistration, &Touchpad];
 
     /// The preferences (setting and display changes), then the lifecycle
     /// (session, power, lock and memory).
