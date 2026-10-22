@@ -14,7 +14,7 @@
 //! API a session runs with FLUI's own drop source, which answers OLE from the
 //! button state OLE passes it, so a case could not choose when and where it
 //! drops. The decidable rules behind these cases (`continue_drag`, the format
-//! and effect mapping) run beside `ole_model`, the modal frame pace beside
+//! and effect mapping) run beside `crossing`, the modal frame pace beside
 //! `owner::modal_pace`.
 
 use std::cell::{Cell, RefCell};
@@ -1057,7 +1057,7 @@ fn releasing_request(
 /// release leaves its captures alone (ADR-0127 §2). Red-check: put the
 /// panicked provider back in its slot.
 fn a_provider_that_panicked_is_retained_and_not_called_again() {
-    use crate::drag::windows::ole_model::NativeFormat;
+    use crate::drag::windows::crossing::NativeFormat;
 
     let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
     let calls = Rc::new(Cell::new(0_u32));

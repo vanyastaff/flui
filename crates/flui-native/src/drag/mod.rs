@@ -7,11 +7,17 @@
 //! `DataTransferSource` (the drag position of its table) and what a window
 //! needs to take and start drags:
 //!
-//! - `windows`: OLE, its decidable half checked on every host;
-//! - `android`: `FluiView`'s drag events and system drags, likewise;
-//! - `web`: HTML drag and drop, likewise;
+//! - `windows`: OLE;
+//! - `android`: `FluiView`'s drag events and system drags;
+//! - `web`: HTML drag and drop;
 //! - `winit`: the files winit reports dragged and dropped;
 //! - `headless`: a double that plays the operating system's side.
+//!
+//! What the first three decide with no OS call (what crosses OLE, what a
+//! clip offers and holds, how `DataTransfer` types map) is a module of the
+//! file under `forbid(unsafe_code)`, and the file is compiled under
+//! `cfg(any(<os>, test))` with its OS side under `cfg(<os>)`, so every host
+//! checks it.
 //!
 //! macOS and iOS have no drag and drop yet: their table names `Absent<Drag>`.
 

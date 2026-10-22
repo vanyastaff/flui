@@ -136,7 +136,7 @@ kind = "pump"
 names = ["pump"]
 
 [[allow]]
-path = "crates/flui-native/src/drag/windows/ole/tests.rs"
+path = "crates/flui-native/src/drag/windows/tests.rs"
 kind = "double"
 names = ["Scripted"]
 

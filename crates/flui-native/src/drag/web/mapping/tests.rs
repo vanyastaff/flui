@@ -1,5 +1,5 @@
 //! The decidable half of the web backend's HTML drag and drop
-//! (`drag::web::html_model`): effect names, what a hovering drag offers by
+//! (`drag::web::mapping`): effect names, what a hovering drag offers by
 //! its `DataTransfer` types and files, and how payloads travel as strings.
 //! The DOM side runs in Chrome (`tests/web_browser.rs`).
 
@@ -8,11 +8,11 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::drag::offers::{format_of, payload_of_bytes};
-use crate::drag::web::html_model::{
+use super::{
     DomSource, ProviderPanicked, action_of, allowed_of, drop_effect, effect_allowed_of, offered,
     payload_of, serve_stored, stored,
 };
+use crate::drag::offers::{format_of, payload_of_bytes};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,

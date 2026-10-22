@@ -1,13 +1,13 @@
 //! The decidable half of the Win32 OLE drag and drop backend: format mapping,
 //! the bytes each clipboard format carries, `DROPEFFECT` mapping and when the
-//! drop source ends the modal loop. The COM shell around it runs only on
-//! Windows (`drag::windows::ole`); how often that loop asks for frames
+//! drop source ends the modal loop. The COM side around it runs only on
+//! Windows (the rest of `drag::windows`); how often that loop asks for frames
 //! is the owner's (`owner::modal_pace`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::drag::windows::ole_model::{
+use super::{
     DragContinuation, NativeFormat, actions_of, continue_drag, decode, effect_bits, encode,
     encode_file_drop, encode_html, encode_text, identity_descriptor, native_format,
     offer_representations, os_loop_buttons, transfer_format,

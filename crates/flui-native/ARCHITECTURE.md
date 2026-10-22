@@ -172,11 +172,15 @@ trait depends on `flui-platform` instead.
   `clipboard::lock` (the Win32 session lock the Win32 and `arboard` clipboards
   share), `drag::offers` (what a media type offers and its bytes carry, shared
   by Android and the Web), `accessibility::bridge` and `haptics::degradation`.
-  A platform file whose decisions need no OS keeps them in a pure half under
-  `cfg(any(<os>, test))` with `forbid(unsafe_code)`, tested beside it on every
-  host (`drag::windows::ole_model`, `drag::android::view_model`,
-  `drag::web::html_model`), and its FFI half under `cfg(<os>)` (`ole`, `view`,
-  `html`). A position a platform does not have is `Absent`: drag on macOS and
+  A platform is one file. One whose decisions need no OS keeps them in a
+  module of the file under `forbid(unsafe_code)`, named for what it decides
+  (`drag::windows::crossing`, what crosses OLE; `drag::android::clip`, what a
+  clip offers, holds and answers; `drag::web::mapping`, how `DataTransfer`
+  types and effects map); the file is compiled under `cfg(any(<os>, test))`
+  and its OS side under `cfg(<os>)`, so every host tests that module. A child
+  file is a module's tests, the mechanism of one OS object
+  (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
+  position a platform does not have is `Absent`: drag on macOS and
   iOS, accessibility on Android, iOS and the Web (and everywhere without
   `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
@@ -706,7 +710,7 @@ Chrome keeps delivering, and a session the runtime starts later in that press
 is refused as `DragError::Unavailable` so it stays in its window. A waiting
 session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
 `dropEffect` is the end it reports. A provider that panics at `dragstart` is
-contained and reported (`drag::web::html_model::serve_stored`), its session
+contained and reported (`drag::web::mapping::serve_stored`), its session
 ends `Cancelled` and the `dragstart` is cancelled, since no `dragend` follows a
 refused drag. Close restores the canvas's draggable attribute and ends a
 waiting or running session cancelled.
@@ -3023,9 +3027,9 @@ one (`CF_UNICODETEXT`, CF_HTML, `CF_HDROP`, `PNG` and a registered format per
 media type); the session identity travels as the format registered under its
 bare media type, with its parameters in the data, because Win32 cannot register
 a format per session. The mapping, the byte layouts, the effect mapping and the
-drop source's decision are the pure half of the platform file,
-`drag::windows::ole_model`, checked on every host; the COM side is
-`drag::windows::ole`.
+drop source's decision are the platform file's pure module,
+`drag::windows::crossing`, checked on every host; the COM side is the rest of
+`drag::windows`, its COM objects in `drag::windows::com`.
 
 A window's drag source starts the session the runtime asks for, but not inside
 the call. The host calls it once its outermost runtime callback ends, which is
@@ -3102,7 +3106,7 @@ older snapshot than it published last (`replay_current`). A key the native queue
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DataTransferSource`: drags over the view mint offers from their
-`ClipDescription` (`drag::android::view_model::offered`) and drops are answered from the cached
+`ClipDescription` (`drag::android::clip::offered`) and drops are answered from the cached
 feedback; `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
 `ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
 window reports no drag source and `outgoing_drag()` `Unavailable`.
@@ -3119,7 +3123,7 @@ reads is offered to `InputMethod::pen_down`; stylus handwriting has not run on a
 S21 has no S Pen).
 
 `android_ime_adapter` (`src/text/android/ime/tests.rs`) and `android_drag_mapping` (beside
-`drag::android::view_model`) pin the pure halves in Linux CI, with the Android rows of
+`drag::android::clip`) pin the pure halves in Linux CI, with the Android rows of
 `backend_conformance` and `input_capabilities_contracts`. A run on a device
 covered the JNI half: a drag started there dropped on its own window, and the default
 keyboard composed, committed, passed Escape on while composing and sent its action key.

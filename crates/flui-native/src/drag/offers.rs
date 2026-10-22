@@ -62,3 +62,92 @@ pub(crate) fn payload_of_bytes(format: &TransferFormat, bytes: Vec<u8>) -> Trans
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
+
+    use super::{format_of, payload_of_bytes};
+
+    /// A media type offers its transfer format; a type FLUI does not announce
+    /// (the browser's `Files`, Chromium's private types, a name that is no
+    /// media type) offers none.
+    #[test]
+    fn a_media_type_offers_its_transfer_format() {
+        let image = |mime: &str| {
+            Some(TransferFormat::Image {
+                mime: Mime::new(mime),
+            })
+        };
+        let custom = |mime: &str| {
+            Some(TransferFormat::Custom {
+                mime: Mime::new(mime),
+            })
+        };
+        let rows = [
+            ("text/plain", Some(TransferFormat::Text)),
+            ("text/html", Some(TransferFormat::Html)),
+            ("text/uri-list", Some(TransferFormat::UriList)),
+            ("image/png", image("image/png")),
+            ("application/pdf", custom("application/pdf")),
+            (
+                "application/x-flui-drag; session=7",
+                custom("application/x-flui-drag; session=7"),
+            ),
+            ("Files", None),
+            ("chromium/x-renderer-taint", None),
+            ("text/", None),
+            ("/plain", None),
+            ("text plain", None),
+            ("text/pla in", None),
+        ];
+        for (media_type, format) in rows {
+            assert_eq!(format_of(media_type), format, "{media_type:?}");
+        }
+    }
+
+    /// Bytes carry the payload of their format: an image as it was announced,
+    /// any other format the raw bytes of its type's essence, and a format a
+    /// file never announces `application/octet-stream`.
+    #[test]
+    fn bytes_carry_the_payload_of_their_format() {
+        let carried = |format: &TransferFormat| match payload_of_bytes(format, b"bytes".to_vec()) {
+            TransferPayload::Image(image) => (
+                "image",
+                image.mime.as_str().to_owned(),
+                image.bytes.to_vec(),
+            ),
+            TransferPayload::Custom { mime, bytes } => {
+                ("custom", mime.as_str().to_owned(), bytes.to_vec())
+            }
+            other => panic!("bytes carried as {other:?}"),
+        };
+        let rows = [
+            (
+                TransferFormat::Image {
+                    mime: Mime::new("image/png"),
+                },
+                ("image", "image/png"),
+            ),
+            (
+                TransferFormat::Custom {
+                    mime: Mime::new("application/x-flui-drag; session=7"),
+                },
+                ("custom", "application/x-flui-drag"),
+            ),
+            (TransferFormat::Text, ("custom", "application/octet-stream")),
+            (TransferFormat::Html, ("custom", "application/octet-stream")),
+            (
+                TransferFormat::UriList,
+                ("custom", "application/octet-stream"),
+            ),
+        ];
+        for (format, (kind, mime)) in rows {
+            assert_eq!(
+                carried(&format),
+                (kind, mime.to_owned(), b"bytes".to_vec()),
+                "{format:?}"
+            );
+        }
+    }
+}

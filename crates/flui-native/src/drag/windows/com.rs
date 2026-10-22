@@ -38,14 +38,15 @@ use windows::Win32::{
 use windows_core::{BOOL, HRESULT, Ref};
 
 use super::{OleTransfer, clipboard_format, describe, global_format, write_global};
-use crate::drag::windows::ole_model::{
+use crate::drag::windows::crossing::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
 use crate::platforms::windows::platform::WindowRef;
 
-pub(crate) use objects::{
+pub(crate) use objects::WindowDropTarget;
+pub(super) use objects::{
     DropSource, DropSource_Impl, FormatList, FormatList_Impl, SourceData, SourceData_Impl,
-    WindowDropTarget, WindowDropTarget_Impl,
+    WindowDropTarget_Impl,
 };
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
@@ -85,7 +86,7 @@ mod objects {
     /// The data object of one outgoing session: its representations, served
     /// lazily through the session's provider.
     #[implement(IDataObject, Agile = false)]
-    pub(crate) struct SourceData {
+    pub(in crate::drag::windows) struct SourceData {
         pub(super) entries: Vec<SourceEntry>,
         /// Leased out while it runs, so a fetch from inside it is refused
         /// rather than reentering it.
@@ -94,14 +95,14 @@ mod objects {
 
     /// The formats a [`SourceData`] offers, enumerated.
     #[implement(IEnumFORMATETC, Agile = false)]
-    pub(crate) struct FormatList {
+    pub(in crate::drag::windows) struct FormatList {
         pub(super) formats: Rc<[u16]>,
         pub(super) next: Cell<usize>,
     }
 
     /// Ends the modal loop when the buttons that began it are released.
     #[implement(IDropSource, Agile = false)]
-    pub(crate) struct DropSource {
+    pub(in crate::drag::windows) struct DropSource {
         pub(super) began: u32,
     }
 
@@ -367,7 +368,7 @@ impl IDropSource_Impl for DropSource_Impl {
 
 impl WindowDropTarget {
     /// The drop target of `window`.
-    pub(crate) fn new(window: WindowRef, transfer: Arc<OleTransfer>) -> Self {
+    pub(super) fn new(window: WindowRef, transfer: Arc<OleTransfer>) -> Self {
         Self {
             window,
             transfer,
@@ -418,7 +419,7 @@ impl WindowDropTarget {
 
     /// The drag left the window (or its window is going): the offer is
     /// left and retired.
-    pub(crate) fn leave(&self) {
+    pub(super) fn leave(&self) {
         if let Some((id, _)) = self.over.take() {
             self.dispatch(|_| Some(DragDropEvent::Exited { id }), None);
             self.transfer.close_offer(id);

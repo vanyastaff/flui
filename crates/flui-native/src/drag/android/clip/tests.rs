@@ -1,5 +1,5 @@
 //! The decidable half of the Android backend's drag and drop
-//! (`drag::android::view_model`, ADR-0247, ADR-0211): what a `DragEvent`'s clip
+//! (`drag::android::clip`, ADR-0247, ADR-0211): what a `DragEvent`'s clip
 //! offers, what a drop holds and answers, what a FLUI drag puts in its
 //! `ClipData`, and how its source learns the end. The JNI side runs on a
 //! device.
@@ -7,7 +7,7 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use crate::drag::android::view_model::{
+use super::{
     ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts, held,
     incoming_allowed, offered, source_end, uri_bytes,
 };
