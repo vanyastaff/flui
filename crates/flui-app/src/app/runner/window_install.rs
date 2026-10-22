@@ -369,13 +369,23 @@ impl WindowInstall {
         self.initial.lifecycle = Some(lifecycle);
     }
 
+    /// Close the window when the platform quits, unless something closed it
+    /// first.
+    ///
+    /// The flag is set by the window's native close (the `on_close` that
+    /// [`new`](Self::new) registers) and by a cancelled installation, and each
+    /// owns the presentation's retirement. Android's `Destroy` fires that close
+    /// before its loop exits and runs this hook, and the close retires the sole
+    /// presentation together with its UI runtime, so a second close here would
+    /// only be refused by a runtime that no longer exists.
     #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
     pub(super) fn terminal_callbacks(&self, platform: &flui_native::SharedPlatform) {
         let closed = self.window.cancellation();
         let dispatcher = self.dispatcher();
         platform.on_quit(Box::new(move || {
-            closed.store(true, Ordering::Release);
-            super::owner_dispatch::close_this_window(dispatcher);
+            if !closed.swap(true, Ordering::AcqRel) {
+                super::owner_dispatch::close_this_window(dispatcher);
+            }
         }));
     }
 
