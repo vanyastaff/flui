@@ -11,8 +11,9 @@ use flui_native::{
     HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform, HostWindow, MockWindow,
     OwnerPlatform, Platform as _,
 };
+use flui_platform::Availability;
 use flui_platform::WindowOptions;
-use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerPress, PointerSample,

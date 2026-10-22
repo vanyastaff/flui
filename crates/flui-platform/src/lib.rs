@@ -23,7 +23,10 @@
 //!   operations return);
 //! - the window state contract: the [`WindowState`] snapshot a window
 //!   publishes, the [`WindowCommand`]s it takes and the
-//!   [`WindowCapabilities`] that say which (ADR-0237).
+//!   [`WindowCapabilities`] that say which (ADR-0237);
+//! - one vocabulary for absence: [`Unsupported`] and its
+//!   [`UnsupportedReason`], which every error that can mean "not here"
+//!   embeds, and [`Availability`] (ADR-0151 §4).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
@@ -121,6 +124,7 @@ mod system_chrome;
 mod target_platform;
 mod text_input;
 pub mod text_store;
+mod unsupported;
 mod window;
 mod window_state;
 
@@ -170,6 +174,7 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
+pub use unsupported::{Availability, Unsupported, UnsupportedReason};
 pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowEvent,
     WindowExecutionState, WindowId, WindowOptions, WindowReveal, WindowShowError,

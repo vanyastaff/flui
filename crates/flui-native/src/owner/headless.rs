@@ -559,7 +559,7 @@ impl host::Services for HeadlessLoop {
 
 /// What the headless backend implements unless a test says otherwise.
 const fn default_input_availability() -> flui_platform::input_capabilities::InputCapabilities {
-    use flui_platform::input_capabilities::Availability::Native;
+    use flui_platform::Availability::Native;
     flui_platform::input_capabilities::InputCapabilities::builder()
         .pen(Native)
         .precise_scroll(Native)

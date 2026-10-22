@@ -759,8 +759,8 @@ mod native_windows {
     // it needs the hardware (docs/platform-parity.md).
     #[expect(unsafe_code, reason = "owned Win32 messages to the fixture's own HWND")]
     fn touchpad_viewport_initialises_and_survives_its_messages() {
+        use flui_platform::Availability;
         use flui_platform::PlatformInput;
-        use flui_platform::input_capabilities::Availability;
         use windows::Win32::UI::WindowsAndMessaging::{
             DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
         };

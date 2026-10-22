@@ -77,6 +77,8 @@ pub mod platform {
     pub use flui_platform::SystemPreferences;
     pub use flui_platform::TargetPlatform;
     pub use flui_platform::TextWeightPreference;
+    pub use flui_platform::Unsupported;
+    pub use flui_platform::UnsupportedReason;
     pub use flui_platform::WheelPreferences;
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowCommandError;
@@ -88,7 +90,7 @@ pub mod platform {
     /// under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input_capabilities::Availability;
+        pub use flui_platform::Availability;
         pub use flui_platform::input_capabilities::InputCapabilities;
         pub use flui_platform::input_capabilities::PointerKindSet;
     }

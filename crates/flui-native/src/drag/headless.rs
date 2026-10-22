@@ -210,7 +210,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             state.input_availability = state
                 .input_availability
                 .to_builder()
-                .outgoing_drag(flui_platform::input_capabilities::Availability::Native)
+                .outgoing_drag(flui_platform::Availability::Native)
                 .build();
         });
         self

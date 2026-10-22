@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{HostWindow, Platform, WebPlatform};
+use flui_platform::Availability;
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
@@ -21,7 +22,6 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform::input_capabilities::Availability;
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{

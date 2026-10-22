@@ -383,9 +383,8 @@ fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     let _: fn(
         flui_platform::input_capabilities::InputCapabilities,
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
-    let _: fn(
-        flui_platform::input_capabilities::Availability,
-    ) -> flui_sdk::platform::input_capabilities::Availability = |x| x;
+    let _: fn(flui_platform::Availability) -> flui_sdk::platform::input_capabilities::Availability =
+        |x| x;
     let _: fn(
         flui_platform::input_capabilities::PointerKindSet,
     ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
@@ -524,6 +523,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
+        "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
         "pub use flui_platform::DurationScale;",
         "pub use flui_platform::EventTime;",
@@ -542,6 +542,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::SystemPreferences;",
         "pub use flui_platform::TargetPlatform;",
         "pub use flui_platform::TextWeightPreference;",
+        "pub use flui_platform::Unsupported;",
+        "pub use flui_platform::UnsupportedReason;",
         "pub use flui_platform::WheelPreferences;",
         "pub use flui_platform::WheelStep;",
         "pub use flui_platform::WindowCommandError;",
@@ -563,7 +565,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::haptics::PatternPlayback;",
         "pub use flui_platform::haptics::Sharpness;",
         "pub use flui_platform::haptics::UnitRangeError;",
-        "pub use flui_platform::input_capabilities::Availability;",
         "pub use flui_platform::input_capabilities::InputCapabilities;",
         "pub use flui_platform::input_capabilities::PointerKindSet;",
         "pub use flui_platform::text_store::TextInputPurpose;",

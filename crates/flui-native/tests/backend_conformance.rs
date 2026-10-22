@@ -38,13 +38,14 @@ use flui_native::input::availability::{
 use flui_native::input::keys::vk_to_key;
 use flui_native::input::web::keys::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
+use flui_platform::Availability;
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
-use flui_platform::input_capabilities::{Availability, InputCapabilities};
+use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
