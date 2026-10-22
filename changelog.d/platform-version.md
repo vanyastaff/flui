@@ -17,3 +17,9 @@
 - **`flui-native`**: the modules `flui_native::text::{android, ime, web}`, hidden from the
   documentation and not API: the rules the crate's own tests decoded with left them for
   `flui_native::input`, and nothing outside the crate named what stayed.
+
+### Fixed
+
+- **`flui-cli`**: `flui run --device <serial>` finds an Android device among the attached
+  ones before probing the other platforms, so it no longer starts every installed browser
+  to read its version, which on Linux could take ten seconds a browser.
