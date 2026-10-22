@@ -114,9 +114,15 @@ pub fn start() {
     web_sys::console::log_1(&"FLUI Web Demo ready! Try clicking and typing on the canvas.".into());
 
     platform
-        .run(Box::new(move |_owner| {
-            // Keep window alive via closure capture
-            let _window = window;
+        .run(Box::new(move |owner| {
+            // On the web `run` returns as soon as this callback has, while the
+            // page keeps running. The platform keeps its quit handler until it
+            // quits, so the handler owns the window: dropping the window
+            // retires the canvas and silences every callback above.
+            let mut window = Some(window);
+            owner
+                .shared()
+                .on_quit(Box::new(move || drop(window.take())));
             Ok(())
         }))
         .expect("platform event loop exited with an error");
