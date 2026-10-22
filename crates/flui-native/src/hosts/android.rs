@@ -10,13 +10,15 @@ use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::{Absent, Host, position};
-use crate::input::android::AndroidInputState;
+use crate::input::android::AndroidInput;
 use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::android::activity_callbacks::ActivityCallbacks;
 use crate::owner::android::java_view::{InputMethod, JavaView, ViewTransfer};
 use crate::owner::android::ndk::SymbolSource;
-use crate::owner::android::{ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::android::{
+    ActivityInput, ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays,
+};
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
@@ -35,7 +37,7 @@ impl Host for Android {
     type Loop = AndroidLoop;
     type Window = AndroidWindow;
     type Displays = AndroidLoop;
-    type Input = AndroidInputState;
+    type Input = AndroidLoop;
     type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     // The loop holds the clipboard and the transport `AndroidHost` makes.
@@ -88,6 +90,11 @@ impl AndroidHost for Android {
     /// The lifecycle feature's reading of the Activity's callbacks.
     fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks> {
         Box::new(ActivityRule::new(app))
+    }
+
+    /// The input feature's translation of the Activity's queue.
+    fn input() -> Box<dyn ActivityInput> {
+        Box::new(AndroidInput::default())
     }
 }
 

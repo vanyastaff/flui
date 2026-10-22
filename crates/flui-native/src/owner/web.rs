@@ -610,14 +610,3 @@ impl host::Lifecycle<WebLoop> for WebLoop {
         // A page cannot bring its tab to the front.
     }
 }
-
-impl host::Input<WebLoop> for WebLoop {
-    fn keyboard_layout(_: &WebLoop) -> String {
-        "en-US".to_string()
-    }
-
-    fn on_keyboard_layout_change(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
-        // The layout is the fixed "en-US" above; nothing changes it.
-        drop(callback);
-    }
-}

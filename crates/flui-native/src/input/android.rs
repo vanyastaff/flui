@@ -15,8 +15,8 @@
 #[doc(hidden)]
 pub mod keys {
     //! The decidable half of the Android backend's key translation: the named
-    //! keys the key-code table leaves unnamed, and which meta state a key's
-    //! character is looked up with.
+    //! keys the key-code table leaves unnamed, which meta state a key's
+    //! character is looked up with, and which key belongs to the input method.
     //!
     //! `KEYCODE_MENU` is the Menu key of a phone's keyboard and of every PC
     //! keyboard attached to it, the key that opens the focused item's context
@@ -33,7 +33,24 @@ pub mod keys {
     //! Cfg-free plain values, so Linux CI pins them; the FFI half below reads
     //! the map through JNI.
 
-    use flui_platform::keyboard::NamedKey;
+    #![forbid(unsafe_code)]
+
+    use flui_platform::keyboard::{ImeComposition, NamedKey};
+
+    /// A key the native queue delivers while the input method composes belongs
+    /// to the input method. Android hands every key to the input method before
+    /// native code (`NativePreImeInputStage` pre-dispatches it), so a key that
+    /// reaches FLUI during a composition is one the input method passed on; it
+    /// arrives marked [`ImeComposition::Active`] so no shortcut, focus traversal
+    /// or drag cancellation takes it from the composition.
+    #[must_use]
+    pub const fn key_composition(composing: bool) -> ImeComposition {
+        if composing {
+            ImeComposition::Active
+        } else {
+            ImeComposition::Inactive
+        }
+    }
 
     /// `KeyEvent.KEYCODE_MENU`.
     pub const KEYCODE_MENU: i32 = 82;
@@ -1166,7 +1183,11 @@ pub(crate) mod scroll {
 }
 
 #[cfg(target_os = "android")]
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 #[cfg(target_os = "android")]
 use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
@@ -1175,12 +1196,16 @@ use flui_platform::{EventTime, keyboard::Modifiers as OwnedModifiers};
 #[cfg(target_os = "android")]
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 #[cfg(target_os = "android")]
+use parking_lot::Mutex;
+#[cfg(target_os = "android")]
 use ui_events::keyboard::KeyboardEvent;
 
 #[cfg(target_os = "android")]
 use crate::{
-    input::assembly::NativeCancel, input::keys::adapter::keyboard_input,
-    owner::android::AndroidLoop,
+    input::assembly::NativeCancel,
+    input::keys::adapter::keyboard_input,
+    owner::android::{ActivityInput, AndroidLoop},
+    shared::os_version::android::AndroidApi,
 };
 #[cfg(target_os = "android")]
 use flui_platform::PlatformInput;
@@ -1208,7 +1233,7 @@ const FLAG_CANCELED: u32 = 0x20;
 
 #[derive(Clone)]
 #[cfg(target_os = "android")]
-pub(crate) struct CachedDevice {
+struct CachedDevice {
     capabilities: DeviceCapabilities,
     // The cache and a query snapshot share this global reference. Platform is
     // Send + Sync, so Rc cannot represent that ownership here.
@@ -1216,7 +1241,7 @@ pub(crate) struct CachedDevice {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) enum DeviceReading {
+enum DeviceReading {
     Present {
         cached: CachedDevice,
         replaced: bool,
@@ -1231,7 +1256,7 @@ pub(crate) enum DeviceReading {
 /// For a move the cached reading stands ([`needs_device_query`]): the
 /// per-event attach and lookup would run at the touch sample rate.
 #[cfg(target_os = "android")]
-pub(crate) fn motion_device(
+fn motion_device(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::MotionEvent<'_>,
     cached: Option<CachedDevice>,
@@ -1321,39 +1346,142 @@ pub(crate) fn motion_device(
     result.unwrap_or(DeviceReading::Unavailable)
 }
 
-/// Input state for the Android window owner: the shared translation, and
-/// the Java device objects its capability cache compares by identity. No
-/// user callback lives here.
+/// The Android host's input, as the loop holds it ([`ActivityInput`]): the
+/// translation of the Activity's queue with the Java device objects its
+/// capability cache compares by identity, and the scroll factors. No user
+/// callback lives here.
 #[derive(Default)]
 #[cfg(target_os = "android")]
-pub struct AndroidInputState {
+pub(crate) struct AndroidInput {
+    state: Mutex<AndroidInputState>,
+    scroll_factors: Mutex<scroll::FactorCache>,
+}
+
+#[cfg(target_os = "android")]
+impl ActivityInput for AndroidInput {
+    /// The first `MotionEvent` of the process is logged at `info`
+    /// (`FIRST_MOTION_SEEN`), every later one at `debug`.
+    fn motion(
+        &self,
+        app: &android_activity::AndroidApp,
+        event: &android_activity::input::MotionEvent<'_>,
+        scale: f64,
+    ) -> Vec<PlatformInput> {
+        /// Whether any `MotionEvent` has reached the input in this process.
+        static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
+
+        let scroll_policy = self.scroll_factors.lock().policy();
+        let cached = self.state.lock().capabilities(event.device_id());
+        let device = motion_device(app, event, cached);
+        let events = self
+            .state
+            .lock()
+            .convert_motion_event(event, scale, scroll_policy, device);
+        // The one place a touch is visible between the OS and the framework:
+        // a tap that changes nothing on screen is diagnosed from these lines
+        // (present → the framework's hit test or arena; absent → the queue
+        // never delivered it). The FIRST motion event of the process is an
+        // `info` line — a lifecycle fact like "first frame rendered", visible
+        // under the default `info` filter — and every one after it is
+        // `debug`, so a drag does not flood logcat.
+        let first = !FIRST_MOTION_SEEN.swap(true, Ordering::Relaxed);
+        let pointer = event.pointer_at_index(0);
+        // One field list, two levels: `tracing`'s callsite level must be a
+        // constant, so the level is pasted by a local macro rather than
+        // chosen at runtime.
+        macro_rules! motion_event {
+            ($level:expr) => {
+                tracing::event!(
+                    target: "flui_native::android::input",
+                    $level,
+                    action = ?event.action(),
+                    pointers = event.pointer_count(),
+                    converted = events.len(),
+                    x = pointer.x(),
+                    y = pointer.y(),
+                    scale_factor = scale,
+                    first,
+                    "motion event reached the input queue"
+                )
+            };
+        }
+        if first {
+            motion_event!(tracing::Level::INFO);
+        } else {
+            motion_event!(tracing::Level::DEBUG);
+        }
+        events
+    }
+
+    fn key(
+        &self,
+        app: &android_activity::AndroidApp,
+        event: &android_activity::input::KeyEvent<'_>,
+        composing: bool,
+    ) -> Option<PlatformInput> {
+        convert_key_event(app, event, composing)
+    }
+
+    fn finish_drain(&self) -> Vec<PlatformInput> {
+        self.state.lock().finish_drain()
+    }
+
+    fn focus_lost(&self) -> Vec<PlatformInput> {
+        self.state.lock().cancel_contacts(NativeCancel::FocusLost)
+    }
+
+    fn capture_lost(&self) -> Vec<PlatformInput> {
+        self.state.lock().cancel_contacts(NativeCancel::CaptureLost)
+    }
+
+    fn refresh_scroll_factors(&self, app: &android_activity::AndroidApp, api: AndroidApi) {
+        // Query outside the cache's guard. A failed refresh keeps accepted
+        // logical factors; only the never-observed case uses authored line
+        // normalization for compatibility with supported API21 devices.
+        let reading = scroll_factors(app, api).ok();
+        self.scroll_factors.lock().observe(reading);
+    }
+}
+
+/// The input position of the Android host's table: the loop answers it.
+#[cfg(target_os = "android")]
+impl crate::host::Input<AndroidLoop> for AndroidLoop {
+    fn keyboard_layout(_: &AndroidLoop) -> String {
+        // Android reports no keyboard layout identifier: empty means unknown.
+        String::new()
+    }
+
+    fn on_keyboard_layout_change(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
+        // Nothing signals a layout change, so the callback is never called.
+        drop(callback);
+    }
+}
+
+/// The translation of the Activity's queue, and the Java device objects its
+/// capability cache compares by identity.
+#[derive(Default)]
+#[cfg(target_os = "android")]
+struct AndroidInputState {
     motion: AndroidMotion,
     devices: HashMap<i32, CachedDevice>,
 }
 
 #[cfg(target_os = "android")]
-impl std::fmt::Debug for AndroidInputState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AndroidInputState").finish_non_exhaustive()
-    }
-}
-
-#[cfg(target_os = "android")]
 impl AndroidInputState {
-    pub(crate) fn cancel_contacts(&mut self, reason: NativeCancel) -> Vec<PlatformInput> {
+    fn cancel_contacts(&mut self, reason: NativeCancel) -> Vec<PlatformInput> {
         self.motion.cancel_contacts(reason)
     }
 
     /// What the translation held that is due by the end of this drain.
-    pub(crate) fn finish_drain(&mut self) -> Vec<PlatformInput> {
+    fn finish_drain(&mut self) -> Vec<PlatformInput> {
         self.motion.finish_drain(web_time::Instant::now())
     }
 
-    pub(crate) fn capabilities(&self, id: i32) -> Option<CachedDevice> {
+    fn capabilities(&self, id: i32) -> Option<CachedDevice> {
         self.devices.get(&id).cloned()
     }
 
-    pub(crate) fn convert_motion_event(
+    fn convert_motion_event(
         &mut self,
         event: &android_activity::input::MotionEvent<'_>,
         scale_factor: f64,
@@ -1416,19 +1544,6 @@ impl AndroidInputState {
             discovery,
             web_time::Instant::now(),
         )
-    }
-}
-
-#[cfg(target_os = "android")]
-impl crate::host::Input<AndroidLoop> for AndroidInputState {
-    fn keyboard_layout(_: &AndroidLoop) -> String {
-        // Android reports no keyboard layout identifier: empty means unknown.
-        String::new()
-    }
-
-    fn on_keyboard_layout_change(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
-        // Nothing signals a layout change, so the callback is never called.
-        drop(callback);
     }
 }
 
@@ -1501,38 +1616,11 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
     owned
 }
 
-/// The key presses an input method's editor action arrives as: `key`
-/// pressed and released at `uptime_ms`, with Shift when `shift`.
-#[cfg(target_os = "android")]
-pub(crate) fn editor_action_keys(
-    key: flui_platform::keyboard::NamedKey,
-    shift: bool,
-    uptime_ms: i64,
-) -> [PlatformInput; 2] {
-    use flui_platform::keyboard::{Code, Key as OwnedKey, KeyEvent, KeyState as OwnedState};
-    let time = EventTime::from_nanos(
-        u64::try_from(uptime_ms)
-            .unwrap_or(0)
-            .saturating_mul(1_000_000),
-    );
-    let modifiers = if shift {
-        OwnedModifiers::SHIFT
-    } else {
-        OwnedModifiers::NONE
-    };
-    [OwnedState::Down, OwnedState::Up].map(|state| {
-        PlatformInput::Keyboard(
-            KeyEvent::new(state, OwnedKey::Named(key), Code::Unidentified, time)
-                .with_modifiers(modifiers),
-        )
-    })
-}
-
 /// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
 /// the input method composes now: a key it passed on during a composition is
-/// still its own (`text::android::keys::key_composition`).
+/// still its own ([`keys::key_composition`]).
 #[cfg(target_os = "android")]
-pub fn convert_key_event(
+fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
     composing: bool,
@@ -1577,7 +1665,7 @@ pub fn convert_key_event(
             location,
             modifiers,
             repeat,
-            is_composing: crate::text::android::keys::key_composition(composing)
+            is_composing: keys::key_composition(composing)
                 == flui_platform::keyboard::ImeComposition::Active,
         },
         u64::try_from(event.event_time()).ok()?,
@@ -1698,7 +1786,7 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
 /// the same Activity resource metrics that produced the measurement. The loop
 /// reads it with the preferences, on the same events.
 #[cfg(target_os = "android")]
-pub(crate) fn scroll_factors(
+fn scroll_factors(
     app: &android_activity::AndroidApp,
     api: crate::shared::os_version::android::AndroidApi,
 ) -> Result<scroll::PixelFactors, flui_platform::PreferenceQueryError> {

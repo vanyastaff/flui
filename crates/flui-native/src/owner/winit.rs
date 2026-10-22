@@ -103,7 +103,6 @@ use std::{
 
 use flui_foundation::ClaimSlot;
 use parking_lot::Mutex;
-use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
     application::ApplicationHandler,
     event::{StartCause, WindowEvent as WinitWindowEvent},
@@ -114,8 +113,8 @@ use winit::{
 
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 
-use crate::input::winit as winit_events;
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
@@ -191,6 +190,60 @@ pub(crate) trait WinitHost: 'static {
     /// answers the table's drag position from it and tells it of the files
     /// winit reports dragged and dropped.
     fn drag() -> Arc<dyn FileDrops>;
+
+    /// The translation of winit's input, made once per loop: the loop holds
+    /// it and hands it every pointer, device and key event.
+    fn input() -> Box<dyn LoopInput>;
+}
+
+/// The translation of what winit reports of the input, as the loop holds it
+/// ([`WinitHost::input`]): the loop hands it each pointer, device and key
+/// event under its state lock and dispatches what comes back once the lock is
+/// released. Nothing here runs user code.
+pub(crate) trait LoopInput: Send {
+    /// A window opens in `event_loop`'s session: the input it has, with the
+    /// device kinds seen so far present.
+    fn opening(&mut self, event_loop: &ActiveEventLoop) -> InputCapabilities;
+
+    /// What `event` of `window` at `scale`, with `modifiers` held, delivers
+    /// after the move held before it, which may be another window's; `None`
+    /// when `event` is no pointer input.
+    fn window_event(
+        &mut self,
+        window: WindowId,
+        event: &WinitWindowEvent,
+        scale: f64,
+        modifiers: ModifiersState,
+    ) -> Option<Vec<(WindowId, PlatformInput)>>;
+
+    /// What each of `windows` hears of `event` of the system's `device`: an
+    /// arrival or a removal, which ends that device's contacts.
+    fn device_event(
+        &mut self,
+        device: winit::event::DeviceId,
+        event: &winit::event::DeviceEvent,
+        windows: &[WindowId],
+    ) -> Vec<(WindowId, PlatformInput)>;
+
+    /// The device kinds present, when they changed since the last call.
+    fn presence_change(&mut self) -> Option<PointerKindSet>;
+
+    /// The move held to see whether the next event replaces it: the loop turn
+    /// ended, or something else follows.
+    fn flush(&mut self) -> Vec<(WindowId, PlatformInput)>;
+
+    /// End every contact of `window`: it lost focus or went away.
+    fn focus_lost(&mut self, window: WindowId) -> Vec<PlatformInput>;
+
+    /// What a key event with `modifiers` held delivers, if anything.
+    fn key(
+        &self,
+        event: winit::event::KeyEvent,
+        modifiers: ModifiersState,
+    ) -> Option<PlatformInput>;
+
+    /// What an input method event delivers, if anything.
+    fn ime(&self, event: &winit::event::Ime) -> Option<PlatformInput>;
 }
 
 /// The clipboard position: the clipboard the host's [`WinitHost::clipboard`]
@@ -473,8 +526,10 @@ pub(crate) struct WinitLoopState {
     /// The source the owner keeps, once it resumed.
     #[cfg(target_os = "linux")]
     pub(crate) preferences: Option<std::sync::Weak<dyn PortalPreferences>>,
-    /// Native pointer identities and phase state are committed before dispatch.
-    native_pointer: winit_events::NativePointerState,
+    /// The translation of winit's input, as the table made it
+    /// ([`WinitHost::input`]); its identities and phases are committed before
+    /// dispatch.
+    input: Box<dyn LoopInput>,
     /// Callback handlers
     pub(crate) handlers: PlatformHandlers,
 
@@ -510,13 +565,11 @@ pub(crate) struct WinitLoopState {
 
     /// Current keyboard modifiers, held in winit's own raw form.
     ///
-    /// Not pre-converted to `keyboard_types::Modifiers`: the keyboard path
-    /// hands this straight to `keyboard_event` → `from_winit_keyboard_event`
-    /// (which does its own `from_winit_modifier_state` conversion as part
-    /// of assembling the whole event), and the pointer paths convert it at
-    /// the point of use via `from_winit_modifier_state` — one native value,
-    /// converted once per read site rather than cached in a second form
-    /// that could drift from what `ModifiersChanged` actually reported.
+    /// Not pre-converted: the input translation converts it with the event it
+    /// belongs to ([`LoopInput::key`], [`LoopInput::window_event`]) — one
+    /// native value, converted once per read site rather than cached in a
+    /// second form that could drift from what `ModifiersChanged` actually
+    /// reported.
     current_modifiers: ModifiersState,
 }
 
@@ -524,9 +577,10 @@ impl WinitLoopState {
     fn new(
         clipboard: Arc<dyn flui_platform::Clipboard>,
         data_transfer: Arc<dyn FileDrops>,
+        input: Box<dyn LoopInput>,
     ) -> Self {
         Self {
-            native_pointer: winit_events::NativePointerState::default(),
+            input,
             #[cfg(windows)]
             preferences: PreferenceObservation::Deferred,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -590,7 +644,11 @@ impl WinitLoop {
             preference_start: H::preferences(),
             #[cfg(target_os = "linux")]
             host_notice_start: H::host_notices(),
-            state: Arc::new(Mutex::new(WinitLoopState::new(H::clipboard(), H::drag()))),
+            state: Arc::new(Mutex::new(WinitLoopState::new(
+                H::clipboard(),
+                H::drag(),
+                H::input(),
+            ))),
         };
         #[cfg(target_os = "linux")]
         platform
@@ -823,8 +881,6 @@ impl WinitLoop {
         }) {
             window.observe_portal_appearance(source.appearance());
         }
-        let session = winit_session(event_loop);
-        let availability = crate::input::availability::winit(session);
         if let Some(signal) = signal {
             let resumed = Arc::downgrade(&window);
             window
@@ -839,11 +895,9 @@ impl WinitLoop {
                 ));
         }
         self.with_state(|state| {
-            state.native_pointer.observe_session(session);
             // The initial snapshot reflects the devices already seen.
-            window
-                .callbacks()
-                .set_input_capabilities(availability.with_present(state.native_pointer.present()));
+            let capabilities = state.input.opening(event_loop);
+            window.callbacks().set_input_capabilities(capabilities);
             state.register_window(window.inner().id(), id, Arc::clone(&window));
         });
         window.finish_opening();
@@ -1147,29 +1201,6 @@ pub(crate) struct WinitApp {
     self_close_route: SelfCloseRoute,
 }
 
-/// The OS session this event loop runs in.
-fn winit_session(event_loop: &ActiveEventLoop) -> crate::input::availability::WinitSession {
-    use crate::input::availability::WinitSession;
-    let _ = event_loop;
-    #[cfg(target_os = "linux")]
-    {
-        use winit::platform::wayland::ActiveEventLoopExtWayland;
-        if event_loop.is_wayland() {
-            WinitSession::Wayland
-        } else {
-            WinitSession::X11
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        WinitSession::MacOs
-    }
-    #[cfg(target_os = "windows")]
-    {
-        WinitSession::Windows
-    }
-}
-
 enum NativeDispatch {
     Input(PlatformInput),
     Hover(bool),
@@ -1197,7 +1228,7 @@ fn native_batch(
     inputs: Vec<(WindowId, flui_platform::PlatformInput)>,
 ) -> Vec<(Arc<dyn LoopWindow>, NativeDispatch)> {
     let mut batch = state
-        .native_pointer
+        .input
         .presence_change()
         .map(|present| presence_dispatch(state, present))
         .unwrap_or_default();
@@ -1420,9 +1451,7 @@ impl ApplicationHandler for WinitApp {
         let inputs = self.platform.with_state(|state| {
             let mut windows: Vec<_> = state.windows.keys().copied().collect();
             windows.sort_by_key(|window| window.0);
-            let inputs = state
-                .native_pointer
-                .device_event(device_id, &event, &windows);
+            let inputs = state.input.device_event(device_id, &event, &windows);
             let mut batch: Vec<_> = inputs
                 .into_iter()
                 .filter_map(|(window, input)| {
@@ -1434,7 +1463,7 @@ impl ApplicationHandler for WinitApp {
                 })
                 .collect();
             // A removal reports absence after the contacts it cancelled.
-            if let Some(present) = state.native_pointer.presence_change() {
+            if let Some(present) = state.input.presence_change() {
                 batch.extend(presence_dispatch(state, present));
             }
             batch
@@ -1489,10 +1518,9 @@ impl ApplicationHandler for WinitApp {
                 if let WinitWindowEvent::CursorMoved { position, .. } = &event {
                     state.cursor_positions.insert(platform_id, *position);
                 }
-                let modifiers = from_winit_modifier_state(state.current_modifiers);
                 let inputs = state
-                    .native_pointer
-                    .window_event(platform_id, &event, scale, modifiers)
+                    .input
+                    .window_event(platform_id, &event, scale, state.current_modifiers)
                     .unwrap_or_default();
                 native_batch(state, inputs)
             });
@@ -1511,11 +1539,9 @@ impl ApplicationHandler for WinitApp {
         // A held pointer move is delivered before anything that follows it.
         self.flush_native_pointer();
         if matches!(event, WinitWindowEvent::Focused(false)) {
-            let inputs = self.platform.with_state(|state| {
-                state
-                    .native_pointer
-                    .cancel_window(platform_id, crate::input::assembly::NativeCancel::FocusLost)
-            });
+            let inputs = self
+                .platform
+                .with_state(|state| state.input.focus_lost(platform_id));
             if let Some(window) = window.as_ref() {
                 dispatch_native_inputs(
                     inputs
@@ -1679,20 +1705,22 @@ impl ApplicationHandler for WinitApp {
                     );
                     return;
                 }
-                // Raw winit modifiers state, unconverted: `keyboard_event`
-                // hands it straight to `from_winit_keyboard_event`, which
-                // does its own `from_winit_modifier_state` conversion as
-                // part of assembling the whole `KeyboardEvent`.
-                let modifiers = self.platform.with_state(|s| s.current_modifiers);
-
                 if let Some(ref win) = window {
-                    let input = winit_events::keyboard_event(event, modifiers);
-                    win.callbacks().dispatch_input(input);
+                    // Raw winit modifiers state, unconverted: the translation
+                    // converts it as part of assembling the whole key event.
+                    let input = self
+                        .platform
+                        .with_state(|state| state.input.key(event, state.current_modifiers));
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::Ime(event) => {
-                let input = winit_events::ime_event(&event);
-                if let Some(ref win) = window {
+                let input = self.platform.with_state(|state| state.input.ime(&event));
+                if let Some(ref win) = window
+                    && let Some(input) = input
+                {
                     win.callbacks().dispatch_input(input);
                 }
             }
@@ -1931,7 +1959,7 @@ impl WinitApp {
     /// event replaces it: the loop turn ended, or something else follows.
     fn flush_native_pointer(&self) {
         let batch = self.platform.with_state(|state| {
-            let inputs = state.native_pointer.flush();
+            let inputs = state.input.flush();
             native_batch(state, inputs)
         });
         dispatch_native_inputs(batch);
@@ -2154,9 +2182,7 @@ impl WinitApp {
         let window = self.platform.with_state(|state| {
             let window = state.windows.remove(&window_id);
             state.cursor_positions.remove(&window_id);
-            state
-                .native_pointer
-                .cancel_window(window_id, crate::input::assembly::NativeCancel::FocusLost);
+            state.input.focus_lost(window_id);
             state.window_id_map.retain(|_, v| *v != window_id);
             window
         });
@@ -2311,9 +2337,7 @@ impl WinitApp {
             state.window_id_map.retain(|_, v| *v != platform_id);
             state.windows.remove(&platform_id);
             state.cursor_positions.remove(&platform_id);
-            state
-                .native_pointer
-                .cancel_window(platform_id, crate::input::assembly::NativeCancel::FocusLost);
+            state.input.focus_lost(platform_id);
             if state.active_window == Some(platform_id) {
                 state.active_window = None;
             }

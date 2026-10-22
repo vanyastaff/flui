@@ -1517,32 +1517,6 @@ impl host::Lifecycle<WindowsLoop> for WindowsLoop {
     }
 }
 
-impl host::Input<WindowsLoop> for WindowsLoop {
-    fn keyboard_layout(_: &WindowsLoop) -> String {
-        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
-        // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
-        // sized to `KL_NAMELENGTH`, the exact size this API requires;
-        // `&mut buffer` gives it a valid, correctly-sized out-parameter, and
-        // it is only read (`is_ok()` branch) after the call reports success.
-        unsafe {
-            let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
-            if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
-                String::from_utf16_lossy(
-                    &buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())],
-                )
-            } else {
-                String::new()
-            }
-        }
-    }
-
-    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
-        });
-    }
-}
-
 impl Drop for WindowsLoop {
     fn drop(&mut self) {
         tracing::debug!("Dropping WindowsLoop");

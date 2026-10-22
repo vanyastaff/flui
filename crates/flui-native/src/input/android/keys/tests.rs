@@ -1,11 +1,14 @@
 //! The decidable half of the Android backend's key translation
-//! (`input::android::keys`): the Menu key arrives named, and a key's
+//! (`input::android::keys`): the Menu key arrives named, a key's
 //! character is looked up without Control and Meta, so Ctrl+X reaches a
-//! shortcut as `x` with Control held. The JNI
+//! shortcut as `x` with Control held, and a key during a composition is the
+//! input method's. The JNI
 //! side runs on a device.
 
-use crate::input::android::keys::{KEYCODE_MENU, character_meta_state, unnamed_key};
-use flui_platform::keyboard::NamedKey;
+use crate::input::android::keys::{
+    KEYCODE_MENU, character_meta_state, key_composition, unnamed_key,
+};
+use flui_platform::keyboard::{ImeComposition, NamedKey};
 
 /// The Menu key opens the focused item's context menu on Android, so it
 /// must arrive named; character keys stay to the key map.
@@ -46,4 +49,12 @@ fn a_character_is_looked_up_without_control_and_meta() {
             "meta state {held:#x} looks its character up with {lookup:#x}"
         );
     }
+}
+
+/// A key the native queue delivers while the input method composes is the
+/// input method's: Escape cancels the composition, not a dialog.
+#[test]
+fn a_key_during_composition_is_the_input_methods() {
+    assert_eq!(key_composition(true), ImeComposition::Active);
+    assert_eq!(key_composition(false), ImeComposition::Inactive);
 }

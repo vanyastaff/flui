@@ -1192,6 +1192,19 @@ pub(crate) mod macos {
     #[allow(dead_code)]
     fn _typed_appkit_is_used(_r: Option<&NSResponder>, _p: Option<&AnyProtocol>, _e: NSRectEdge) {}
 
+    /// The input position of the macOS table: the loop answers it.
+    impl crate::host::Input<crate::owner::apple::MacOSLoop> for crate::owner::apple::MacOSLoop {
+        fn keyboard_layout(_: &Self) -> String {
+            // The host does not read AppKit's input source: the layout is unknown.
+            String::new()
+        }
+
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+            // No layout is read, so no change is ever reported.
+            drop(callback);
+        }
+    }
+
     mod events {
         //! AppKit input translated into the owned pointer vocabulary.
         //!
@@ -1967,6 +1980,19 @@ pub(crate) mod ios {
             contact_size: (radius > 0.0 && radius.is_finite())
                 .then_some((radius * 2.0, radius * 2.0)),
             ..RawSensors::default()
+        }
+    }
+
+    /// The input position of the iOS table: the loop answers it.
+    impl crate::host::Input<crate::owner::apple::IOSLoop> for crate::owner::apple::IOSLoop {
+        fn keyboard_layout(_: &Self) -> String {
+            // The host does not read the active keyboard: the layout is unknown.
+            String::new()
+        }
+
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+            // No layout is read, so no change is ever reported.
+            drop(callback);
         }
     }
 

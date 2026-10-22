@@ -486,10 +486,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
                 "InputLatency::Low is not supported on Android yet; input stays batched"
             );
         }
-        let cancelled = owner
-            .input_state
-            .lock()
-            .cancel_contacts(crate::input::assembly::NativeCancel::CaptureLost);
+        let cancelled = owner.input.capture_lost();
         let window = Arc::new(AndroidWindow::new(
             owner.app.clone(),
             Arc::clone(&owner.activity),

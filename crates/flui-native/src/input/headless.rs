@@ -3,14 +3,19 @@
 //! layout the loop keeps. A test injects pointer and key input already
 //! assembled, through a window's callbacks (`MockWindow`).
 
+use std::num::NonZeroU64;
 use std::sync::{Arc, Weak};
 
-use flui_platform::PlatformInput;
+use flui_foundation::IdMint;
+use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::pointer::{DeviceId, PointerDeviceChange, PointerKind};
+use flui_platform::{EventTime, PlatformInput};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
+use crate::input::assembly::{DeviceRegistry, NativeDevice};
 use crate::owner::call_point::{Field, install};
-use crate::owner::headless::{HeadlessLoop, HeadlessState};
+use crate::owner::headless::{HeadlessLoop, HeadlessState, SimulatedDevices};
 use crate::platform::HostPlatform;
 
 /// The headless platform's input controls: builders and handles taken before
@@ -78,18 +83,13 @@ impl HeadlessInputDevices {
     /// [`DeviceAdded`](flui_platform::pointer::PointerEvent::DeviceAdded),
     /// then the capability change. The id its events carry; `None` once the
     /// platform is gone or device ids are exhausted.
-    pub fn attach(
-        &self,
-        kind: flui_platform::pointer::PointerKind,
-    ) -> Option<flui_platform::pointer::DeviceId> {
+    pub fn attach(&self, kind: PointerKind) -> Option<DeviceId> {
         use flui_platform::pointer::PointerEvent;
         let state = self.state.upgrade()?;
         let (change, windows, present) = {
             let mut state = state.lock();
-            let label = state.device_labels.next().ok()?;
-            let native = crate::input::assembly::NativeDevice(label.get());
-            let time = flui_platform::EventTime::from_nanos(crate::input::event_timestamp_ns());
-            let change = state.devices.add_device(native, kind, time)?;
+            let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
+            let change = state.devices.attach(kind, time)?;
             let windows = state.windows.callbacks_of_all();
             (change, windows, state.devices.present())
         };
@@ -105,19 +105,15 @@ impl HeadlessInputDevices {
     /// then the capability change. A simulated device has no contacts of its
     /// own to cancel: a test injects its pointer input already assembled.
     /// `false` when it was not attached.
-    pub fn remove(&self, id: flui_platform::pointer::DeviceId) -> bool {
+    pub fn remove(&self, id: DeviceId) -> bool {
         use flui_platform::pointer::PointerEvent;
         let Some(state) = self.state.upgrade() else {
             return false;
         };
         let (removed, windows, present) = {
             let mut state = state.lock();
-            let time = flui_platform::EventTime::from_nanos(crate::input::event_timestamp_ns());
-            let Some(removed) = state
-                .devices
-                .native(id)
-                .and_then(|native| state.devices.remove_device(native, time))
-            else {
+            let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
+            let Some(removed) = state.devices.remove(id, time) else {
                 return false;
             };
             let windows = state.windows.callbacks_of_all();
@@ -128,5 +124,31 @@ impl HeadlessInputDevices {
             callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
         }
         true
+    }
+}
+
+/// The simulated system's pointer devices, as the headless loop holds them
+/// ([`SimulatedDevices`]): presence and device ids from one registry, and the
+/// native label each device is minted under, never one twice.
+#[derive(Default)]
+pub(crate) struct Devices {
+    registry: DeviceRegistry,
+    labels: IdMint<NonZeroU64>,
+}
+
+impl SimulatedDevices for Devices {
+    fn attach(&mut self, kind: PointerKind, time: EventTime) -> Option<PointerDeviceChange> {
+        let label = self.labels.next().ok()?;
+        self.registry
+            .add_device(NativeDevice(label.get()), kind, time)
+    }
+
+    fn remove(&mut self, id: DeviceId, time: EventTime) -> Option<PointerDeviceChange> {
+        let native = self.registry.native(id)?;
+        self.registry.remove_device(native, time)
+    }
+
+    fn present(&self) -> PointerKindSet {
+        self.registry.present()
     }
 }

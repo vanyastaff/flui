@@ -35,7 +35,7 @@ use windows::Win32::{
 };
 
 #[cfg(windows)]
-use crate::owner::windows::WindowMessages;
+use crate::owner::windows::{WindowMessages, WindowsLoop};
 #[cfg(windows)]
 use crate::window::windows::proc::{WindowContext, with_message_context};
 
@@ -44,6 +44,35 @@ use keystroke_queue::{
     drain_dead_char, drain_translated_chars, restore_translated_sys_chars,
     take_translated_sys_chars,
 };
+
+/// The input position of the Windows host's table: the loop answers it, with
+/// the active keyboard layout and the platform handler its change reaches.
+#[cfg(windows)]
+impl crate::host::Input<WindowsLoop> for WindowsLoop {
+    fn keyboard_layout(_: &WindowsLoop) -> String {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
+        // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
+        // sized to `KL_NAMELENGTH`, the exact size this API requires;
+        // `&mut buffer` gives it a valid, correctly-sized out-parameter, and
+        // it is only read (`is_ok()` branch) after the call reports success.
+        unsafe {
+            let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
+            if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
+                String::from_utf16_lossy(
+                    &buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())],
+                )
+            } else {
+                String::new()
+            }
+        }
+    }
+
+    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
+        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
+            &mut handlers.keyboard_layout_changed
+        });
+    }
+}
 
 /// The input part of FLUI's window procedure: it answers the input messages
 /// and passes every other message on.

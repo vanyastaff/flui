@@ -732,18 +732,6 @@ impl host::Displays<IOSLoop> for IOSLoop {
     }
 }
 
-impl host::Input<IOSLoop> for IOSLoop {
-    fn keyboard_layout(_: &IOSLoop) -> String {
-        // The host does not read the active keyboard: the layout is unknown.
-        String::new()
-    }
-
-    fn on_keyboard_layout_change(_: &IOSLoop, callback: Box<dyn FnMut() + Send>) {
-        // No layout is read, so no change is ever reported.
-        drop(callback);
-    }
-}
-
 /// The preference position is the loop's: it reads the source the table made
 /// ([`IosHost::preferences`]), on the main thread.
 impl host::Preferences<IOSLoop> for IOSLoop {

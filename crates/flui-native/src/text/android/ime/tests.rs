@@ -1,12 +1,11 @@
 //! The decidable half of the Android backend's input method
 //! (`text::android::ime`, ADR-0247): how `FluiView`'s mirror reports become
 //! ordered edits of the field's store, which edits a newer owner snapshot
-//! drops, and what a key, an editor action and a stylus press become. The JNI
+//! drops, and what an editor action and a stylus press become. The JNI
 //! side runs on a device.
 
 use std::rc::Rc;
 
-use super::super::keys::key_composition;
 use super::{
     IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
     IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER,
@@ -17,7 +16,7 @@ use super::{
 use crate::owner::android::EditorState;
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::keyboard::{ImeComposition, NamedKey};
+use flui_platform::keyboard::NamedKey;
 use flui_platform::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
     TextStoreStatus, Utf16Offset, Utf16Range,
@@ -264,13 +263,6 @@ fn a_snapshot_hands_the_view_its_offsets() {
     assert_eq!(snapshot(&store, 2).java_offsets(), [3, 1, 1, 3]);
 }
 
-/// A key the native queue delivers while the input method composes is the
-/// input method's: Escape cancels the composition, not a dialog (P14).
-fn a_key_during_composition_is_the_input_methods() {
-    assert_eq!(key_composition(true), ImeComposition::Active);
-    assert_eq!(key_composition(false), ImeComposition::Inactive);
-}
-
 fn the_editor_info_follows_the_store_status() {
     let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
     assert_eq!(editor_info(single), (TYPE_CLASS_TEXT, IME_ACTION_DONE));
@@ -416,10 +408,6 @@ fn android_ime_adapter() {
             (
                 "a_snapshot_hands_the_view_its_offsets",
                 a_snapshot_hands_the_view_its_offsets,
-            ),
-            (
-                "a_key_during_composition_is_the_input_methods",
-                a_key_during_composition_is_the_input_methods,
             ),
             (
                 "the_purpose_picks_the_keyboard",

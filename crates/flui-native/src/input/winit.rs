@@ -27,10 +27,13 @@
 //!   mid-press (a grab, a drag) sends no release, so the mouse's sequence is
 //!   cancelled at the leave; on X11 the implicit grab keeps delivering it.
 
+use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{EventTime, pointer as owned};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use std::collections::HashMap;
+use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
+use winit::event_loop::ActiveEventLoop;
 
 use crate::host;
 use crate::input::assembly::{
@@ -41,7 +44,7 @@ use crate::input::assembly::{
 use crate::input::availability::WinitSession;
 use crate::input::event_timestamp_ns;
 use crate::input::keys::adapter::keyboard_input;
-use crate::owner::winit::WinitLoop;
+use crate::owner::winit::{LoopInput, WinitLoop};
 use flui_platform::PlatformInput;
 
 /// The cursor of a device on a window. Touch labels are the platform's touch
@@ -656,7 +659,7 @@ impl NativePointerState {
 /// [`flui_platform::ImeEvent`]'s reference shape (see that type's module doc),
 /// so this is a direct variant-for-variant translation with no coordinate
 /// or encoding conversion.
-pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
+fn ime_event(event: &winit::event::Ime) -> PlatformInput {
     use winit::event::Ime;
 
     let ime_event = match event {
@@ -690,7 +693,7 @@ pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
 /// tables instead of also delegating here, and the tests of
 /// `input::apple::keys` (`cross_backend_physical_key_agreement`) for what
 /// keeps the three in agreement.
-pub fn keyboard_event(
+fn keyboard_event(
     event: winit::event::KeyEvent,
     modifiers: winit::keyboard::ModifiersState,
 ) -> PlatformInput {
@@ -698,6 +701,86 @@ pub fn keyboard_event(
         ui_events_winit::keyboard::from_winit_keyboard_event(event, modifiers),
         event_timestamp_ns(),
     )
+}
+
+/// The OS session `event_loop` runs in.
+fn session(event_loop: &ActiveEventLoop) -> WinitSession {
+    let _ = event_loop;
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        if event_loop.is_wayland() {
+            WinitSession::Wayland
+        } else {
+            WinitSession::X11
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        WinitSession::MacOs
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WinitSession::Windows
+    }
+}
+
+/// The translation the winit loop holds ([`WinitHost::input`](crate::owner::winit::WinitHost::input)).
+impl LoopInput for NativePointerState {
+    fn opening(&mut self, event_loop: &ActiveEventLoop) -> InputCapabilities {
+        let session = session(event_loop);
+        self.observe_session(session);
+        crate::input::availability::winit(session).with_present(self.present())
+    }
+
+    fn window_event(
+        &mut self,
+        window: flui_platform::WindowId,
+        event: &winit::event::WindowEvent,
+        scale: f64,
+        modifiers: winit::keyboard::ModifiersState,
+    ) -> Option<Vec<(flui_platform::WindowId, PlatformInput)>> {
+        Self::window_event(
+            self,
+            window,
+            event,
+            scale,
+            from_winit_modifier_state(modifiers),
+        )
+    }
+
+    fn device_event(
+        &mut self,
+        device: winit::event::DeviceId,
+        event: &winit::event::DeviceEvent,
+        windows: &[flui_platform::WindowId],
+    ) -> Vec<(flui_platform::WindowId, PlatformInput)> {
+        Self::device_event(self, device, event, windows)
+    }
+
+    fn presence_change(&mut self) -> Option<flui_platform::input_capabilities::PointerKindSet> {
+        Self::presence_change(self)
+    }
+
+    fn flush(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
+        Self::flush(self)
+    }
+
+    fn focus_lost(&mut self, window: flui_platform::WindowId) -> Vec<PlatformInput> {
+        self.cancel_window(window, NativeCancel::FocusLost)
+    }
+
+    fn key(
+        &self,
+        event: winit::event::KeyEvent,
+        modifiers: winit::keyboard::ModifiersState,
+    ) -> Option<PlatformInput> {
+        Some(keyboard_event(event, modifiers))
+    }
+
+    fn ime(&self, event: &winit::event::Ime) -> Option<PlatformInput> {
+        Some(ime_event(event))
+    }
 }
 
 /// The input position of the winit host's table.

@@ -1966,4 +1966,16 @@ pub(crate) mod events {
                     || combining_classes.get_u8(character) != 0)
         }) && ComposingNormalizerBorrowed::new_nfc().is_normalized(key)
     }
+
+    /// The input position of the web table: the loop answers it.
+    impl crate::host::Input<crate::owner::web::WebLoop> for crate::owner::web::WebLoop {
+        fn keyboard_layout(_: &Self) -> String {
+            "en-US".to_string()
+        }
+
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+            // The layout is the fixed "en-US" above; nothing changes it.
+            drop(callback);
+        }
+    }
 }
