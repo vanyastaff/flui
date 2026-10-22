@@ -667,106 +667,115 @@ graph LR
   менялись. Не запускалось: `cross-typecheck` локально (нет `zig`; его job — в CI); Mac и iPhone —
   в очереди vanyastaff/flui#1840.
 - [x] **LY30** — ветка `platform/text`. Фича текста — каталог `text/` (`git mv`, тела без правок,
-  кроме путей, `use` и видимости): модель — `shared/ime_text` → `text/ime.rs`, `text_sizing.rs` →
-  `text/sizing.rs`, `text/mod.rs` (трейт позиции и корень); Windows — `shared/text_geometry` →
-  `text/windows/geometry.rs` (чистая половина, `forbid(unsafe_code)`), `windows/text_services/*` →
-  `text/windows/tsf/*`, `text/windows/mod.rs` — корень и хук класса окна `Tsf`; Apple —
-  `macos/text_input.rs` → `text/apple/macos.rs`, `ios/text_sizing.rs` → `text/apple/ios.rs`, корень
-  группы `text/apple/mod.rs`; Android — `shared/android_ime` → `text/android/ime.rs` (чистая),
-  `android/text_input.rs` → `text/android/input.rs`, `android/text_sizing.rs` →
-  `text/android/sizing.rs`; Web — `shared/web_text` → `text/web/ime.rs` (чистая),
-  `web/text_input.rs` → `text/web/input.rs`; `FakeTextInput` → `text/headless.rs`, `WinitTextInput`
-  (и конструктор `new`) → `text/winit.rs`; таблицы называют их оттуда. Тесты рядом: `tests/android_ime.rs`
-  → `text/android/ime/tests.rs` (`android_ime_adapter`, 14 случаев), `tests/web_text.rs` →
-  `text/web/ime/tests.rs` (`web_text_table`), `tests/text_input_mapping.rs` →
-  `text/windows/geometry/tests.rs` (2 теста), `android_capture_delivery_receipt` идёт как
-  `text::android::sizing::tests` (модуль собирается под `cfg(any(target_os = "android", test))`,
-  трюк `#[path]` в `text_sizing.rs` ушёл); Win32 `tsf/{probe,tests}.rs` — только пути
-  (`BEFORE_TSF_ACTIVATION` теперь в `text/windows/mod.rs`, `super::super` ведёт туда). Решения:
-  (1) платформы с несколькими файлами — каталог с `mod.rs` и подмодулями, а не один файл (как LY27
-  с `owner/<os>`): переносы остаются переименованиями; `diff`/`TextDiff` вынесены отдельным
-  коммитом, чтобы `ime_text` и `web_text` тоже читались как переименования; (2) `diff` и `TextDiff`
-  ушли из правил Web в модель `text::ime`: зеркало Android сравнивает отчёты тем же `diff`, а файл
-  платформы не называет файл другой платформы; (3) трейт позиции `Text` — `text::TextInput` вместо
-  маркера `host::Text`: две грани, которые платформы дают сегодня, — `ime(self: Arc<Self>) ->
-  Option<Arc<dyn PlatformTextInput>>` (разрешение IME и область курсора: AppKit, winit, headless) и
-  `store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>>` (хранилище поля, которое TSF читает,
-  а Android и Web зеркалят); каждый тип отвечает одной, `Absent<position::Text>` — ни одной;
-  production-вызывающего нет: окна отдают свою грань сами, связь «окно отдаёт `H::Text`» — LY38
-  (правило 6: потребитель назван); trybuild `host_table_names_every_position` без правок;
-  (4) Windows: `WM_IME_*` в `WindowProc` нет (TSF, IMM32 не используется — ADR-0135 §7);
-  активация TSF ушла из `WindowsWindow::new` в `created` хука `Tsf`, `WINDOW_HOOKS = [WindowProc,
-  Tsf, Touchpad]` — TSF по-прежнему раньше viewport'а, но теперь после регистрации drop target
-  (порядок создания: drop target, TSF, viewport, показ; был TSF, drop target, …): прямой вызов
-  `register_target` стоит до `window_created`, и место перед TSF drop target получит, когда LY32
-  сделает его хуком; проверка «окно живо» переехала после хуков (тот же `OpenWindowError::Backend`,
-  новый текст) — `a_window_destroyed_during_activation_fails_the_open` зелёный; уведомления TSF о
-  сдвиге (`WM_MOVE`, `WM_EXITSIZEMOVE`, `WM_DPICHANGED`) и деактивация в `WM_DESTROY` остались шагами
-  `WindowProc`: это шаги внутри собственных сообщений окна, и ADR-0135 §3 ставит деактивацию между
-  close-колбэками и ретайром контекста — отдельный хук до или после `WindowProc` этот порядок не
-  держит; ADR-0135 получил строку `Amended`; (5) Android: `owner/` не называет типов текста.
-  `JavaView` держит `Arc<dyn FieldMirror>` (трейт рядом с ним: `hold(generation, text)` и
-  `report(view, generation, text, selection, composition)`), его создаёт таблица
-  (`owner::android::AndroidHost::field_mirror`, `AndroidLoop::new::<Android>`), реализует
-  `text::android::ViewMirror` (`Mutex<Mirror>`, `Mirror::hold` добавлен, `install` вызывает его);
-  `ViewEvent::Ime(ImeEdit)` → `ViewEvent::Window(Box<dyn FnOnce(&AndroidWindow) + Send>)`, который
-  цикл выполняет над текущим окном (без окна — отброшен, как прежде); лок зеркала теперь свой, а не
-  лок состояния view, и, как прежде, отпускается до `push_event`; editor action — метод
-  `AndroidWindow::editor_action` (поле коммитит composition, затем клавиша), рукописный ввод —
-  `AndroidTextInput::offer_pen`; (6) `OwnerPlatform::capture_text_sizing` реализован блоком
-  `impl OwnerPlatform` в `text::sizing`: `owner/mod.rs` больше не называет типы размера текста,
-  публичный путь тот же; (7) чистые половины Android и Web (`ime`) собираются на любой цели и
-  публичны (`#[doc(hidden)] pub mod text`): conformance-таблица в `tests/` декодирует составляющую
-  клавишу их `key_composition`, а `cfg(test)` до интеграционных тестов не доходит; станут
-  `cfg(any(<os>, test))`, когда LY34 переведёт conformance на публичный API; `text::windows` —
-  `cfg(any(windows, test))`; (8) `forbid(unsafe_code)` — на `text::ime`, `android::ime`,
-  `web::ime`, `windows::geometry`; `expect(unsafe_code)` (и `expect(deprecated)` у
-  `apple::macos`, `objc2::runtime::Protocol`) переехали с прежних родителей на `tsf`,
-  `apple::macos`, `apple::ios`; (9) записей `globals` у текста нет: оба `thread_local!`
-  (`SHUTDOWN_IN_APARTMENT`, `BEFORE_TSF_ACTIVATION`) — под `cfg(test)`; итого по-прежнему 55;
-  (10) видимость `pub(super)` → `pub(crate)` у того, что текст называет в `platforms/`: `WindowRef`,
-  `ViewContext::text_input`, `get_context`, `with_view_context`, `dispatch_input_event`,
-  `handle_input_event`, `route_on_owner` macOS, `KeyRoute::{composing, deliver}`,
-  `Listener::install{,_in_phase}`, `EditorSlot::set`, `FocusSync::sync` Web, `Acquisition` Android;
-  (11) корневые реэкспорты (`FakeTextInput`, `CapturedTextSizing`, …) не изменились;
-  скрытые `shared::{android_ime, ime_text, text_geometry, web_text}` и `host::Text` («не API»)
-  ушли, conformance импортирует `flui_native::text::{android::ime, web::ime}`; `flui-app` не
-  тронут, фрагмента changelog нет; ADR-0090, 0247, 0255 цитируют новые пути, ADR-0135 и 0142 —
-  тесты по пути `text::windows::tsf::tests`. `module-dag`: `features = ["text"]`, без исключений;
-  ребра `text → platforms` и `platforms → text` сегодня свободны (`platforms` — модуль уровня
-  крейта) и станут рёбрами «фича → файл платформы другой фичи», когда LY28 и LY29 перенесут окна
-  и ввод: `text::windows` ↔ окно Win32 (`WindowRef`, `with_window_context`,
-  `WindowContext::text_services`, `retire_with_window`, `window_moved`), `text::apple::macos` ↔
-  view и окно AppKit, `text::android::input` → `AndroidWindow` (замыкание `ViewMirror`) и окно и ввод
-  Android → `text::android`, `text::web::input` ↔ события, регистрация и окно Web, окна winit и
-  headless → `text::{winit, headless}`; кто сливается вторым, решает форму (например, `WindowRef` и
-  шлюз контекста — в `owner/windows`, грань окна — тип модели). Проверки на Windows: `cargo fmt
-  --check`; clippy `-p flui-native -p flui-app -p flui-testing --all-targets -D warnings` и `-p
-  flui-native --all-targets --features winit-backend,a11y`; nextest `-p flui-native -p flui-app`
-  — 278 (2 пропущены), с `--features flui-native/winit-backend` — 305 (2 пропущены; в первом
-  прогоне под нагрузкой один раз упал случай `maximized_and_fullscreen_windows_report_their_normal_rectangle`
-  `open_real_window`, повтор и полный перезапуск зелёные); clippy Android (`-p flui-native -p
-  flui-app --all-targets`), macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`), wasm32 lib;
-  `wasm-check`; rustdoc `--document-private-items` с `winit-backend,a11y` (`-D warnings`) чистый,
-  для Android — только две старые битые ссылки в `shared/`; `module-dag` (258 модулей, 1 фича с 8
-  файлами платформ, 1 base, 78 рёбер, 0 исключений) и самотест (52); `globals` (55) и самотест (15);
-  `file-length`, `markers`, `testing` (73 в 60 записях), `docs-paths` (330), `checks`, `doc-strict`,
-  `workspace`, `reach`, `android-dex`. WSL Ubuntu 24.04 (cargo без heli, его в WSL нет): clippy
-  `-p flui-native -p flui-app --all-targets` и `-p flui-native --all-targets --features
-  winit-backend,a11y`; nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 170, из них перенесённые и
-  conformance — 8 зелёные; с `winit-backend` под xvfb — 257 из 257 (строка RandR в этот раз
-  прошла); `linux_preferences` — 16. Galaxy S21 (Android 15), проба `flui create --template counter
-  --local` с `RawTextField` и эхом его `on_changed`: касание поля — Samsung Keyboard (русская
-  раскладка); `adb shell input text hello` — в поле и в эхе «hello»; пробел и «п», «р», «и» на
-  клавиатуре — составление «при» подчёркнуто, эхо его не содержит; подсказка «привет» — в поле и эхе
-  «hello привет » (замена составляемого отрезка через зеркало); «м», «и», «р» и Done во время
-  составления — «hello привет мир» в поле и эхе (составление закоммичено до действия); Back ×2 —
+  кроме путей, `use` и видимости; правки ревью PR — в решениях): модель — `shared/ime_text` →
+  `text/ime.rs` (с `diff`/`TextDiff` из правил Web, тесты — `text/ime/tests.rs`,
+  `mirror_text_table`), `text_sizing.rs` → `text/sizing.rs`, `text/mod.rs` (трейт позиции и
+  корень); Windows — `windows/text_services/*` → `text/windows/tsf/*`, `shared/text_geometry` —
+  модуль `geometry` в `text/windows/mod.rs` (тесты `text/windows/geometry/tests.rs`, 2), там же хук
+  класса окна `Tsf`; Apple — `macos/text_input.rs` → `text/apple/macos.rs`, `ios/text_sizing.rs` →
+  `text/apple/ios.rs`, корень группы `text/apple/mod.rs`; Android — один файл `text/android.rs`:
+  `keys` (правило клавиши), `ime` (из `shared/android_ime`, тесты `text/android/ime/tests.rs`,
+  `android_ime_adapter`, 14 случаев), `input` (из `android/text_input.rs`), `sizing` (из
+  `android/text_sizing.rs`, тесты `text::android::sizing::tests` с
+  `android_capture_delivery_receipt`, трюк `#[path]` ушёл); Web — один файл `text/web.rs`: `ime`
+  (из `shared/web_text`, тесты `text/web/ime/tests.rs`, `web_text_table`, 2 строки; случаи
+  `TextDiff` — в `mirror_text_table`), `input` (из `web/text_input.rs`); `FakeTextInput` →
+  `text/headless.rs`, `WinitTextInput` (и `new`) → `text/winit.rs`; Win32 `tsf/{probe,tests}.rs` —
+  только пути. Решения: (1) платформа — один файл `text/<os>.rs`, его чистая половина — модуль в
+  нём (`cfg(any(<os>, test))`, `forbid(unsafe_code)`), тесты — дочерний `tests.rs`; каталог —
+  только у Windows (`tsf/`, пять файлов) и группы `apple`; (2) `diff` и `TextDiff` — модель
+  `text::ime`: зеркало Android сравнивает отчёты тем же `diff`, файл платформы не называет файл
+  другой; (3) позиция `Text` — трейт `text::TextInput { fn window_text_input(&self) ->
+  Option<WindowTextInput>; }`, `pub enum WindowTextInput { Ime(Arc<dyn PlatformTextInput>),
+  Store(Rc<dyn TextStoreHost>) }` с `ime(self)` и `store_host(self)`; в таблицах Windows
+  `Rc<TextServices>`, Android `Rc<AndroidTextInput>`, Web `Rc<WebTextInput>` (`Store`), macOS
+  `Arc<MacOSTextInput>`, winit `Arc<WinitTextInput>`, headless `Arc<FakeTextInput>` (`Ime`),
+  `Absent<position::Text>` — `None`. Production-вызывающие — окна всех платформ:
+  `PlatformWindow::text_input` и `HostWindow::text_store_host` отдают свой ввод через этот метод.
+  Пути `HostPlatform` → `H::Text` нет (окно строит ввод само): «таблица строит, окно держит
+  `H::Text`» — LY38; trybuild `host_table_names_every_position` без правок; (4) Windows:
+  `WINDOW_HOOKS = [Tsf, WindowProc, DropTargetRegistration, Touchpad]`, порядок создания прежний —
+  TSF, drop target, viewport, показ; `DropTargetRegistration` (`platforms/windows/drag.rs`) —
+  переходный хук, регистрирующий OLE drop target, уходит с drag в LY32. `CreatedWindow` несёт
+  `identity: WindowIdentity` (`Tsf::created` строит `WindowRef::new(hwnd, identity)`, поиска по
+  hwnd нет); `window_created(hooks, &window, alive) -> Result<(), WindowGone>` проверяет окно после
+  каждого хука и на первом мёртвом останавливается, открытие отвечает `OpenWindowError::Backend`.
+  TSF узнаёт о сдвиге в своём `message` (`WM_MOVE`, `WM_EXITSIZEMOVE` → `window_moved`, ответ
+  `None`, сообщение идёт дальше в `WindowProc`). В `WindowProc` остались `WM_DPICHANGED` (TSF
+  узнаёт о сдвиге после того, как окно применило новый масштаб: `GetTextExt` читает его синхронно,
+  а хук `Tsf` стоит до `WindowProc`) и деактивация в `WM_DESTROY` (между close-колбэками и ретайром
+  контекста, ADR-0135 §3). `WM_IME_*` нет (TSF, IMM32 не используется — ADR-0135 §7). ADR-0135 —
+  строка `Amended` с инвариантом, §6 называет `text::windows::geometry`; (5) Android:
+  `owner/android` не называет предметов текста. Хук `owner::android::java_view::InputMethod: Send
+  + Sync` — `hold(generation, &str)`, `edited(generation, EditorState) ->
+  Option<InputMethodReply>`, `editor_action(action, uptime_ms) -> InputMethodReply`,
+  `cursor_updates(mode) -> InputMethodReply`, `pen_down(&AndroidWindow, Point<f64>)`;
+  `InputMethodReply { composing: Option<bool>, work: WindowWork }`, `WindowWork = Box<dyn
+  FnOnce(&AndroidWindow) + Send>`. Его создаёт таблица (`AndroidHost::input_method() -> Box<dyn
+  InputMethod>`, `AndroidLoop::new::<Android>`), реализует `text::android::ViewInputMethod`
+  (`Mutex<Mirror>`). `JavaView` ставит флаг составления из ответа и шлёт
+  `ViewEvent::RunOnWindow(work)`; цикл выполняет работу над текущим окном (без окна — отброшена, как
+  прежде); `ViewEvent::{CursorUpdates, EditorAction}` и `AndroidWindow::editor_action` ушли (коммит
+  composition и клавиши действия — в `ViewInputMethod::editor_action`). `EditorState` (текст,
+  выделение, составление) — тип `owner::android`, передаётся целиком; `Mirror::report(generation,
+  &EditorState) -> Option<ImeEdit>` возвращает правку, применяет её работа ответа. Стилус: цикл
+  проверяет `StylusHandwriting` и зовёт `pen_down` для касания пером, `AndroidTextInput::offer_pen`
+  решает по своему фильтру. Ребро `owner/android` → `AndroidWindow` (`WindowWork`, `pen_down`)
+  остаётся: окно в `platforms/android/window.rs` — уйдёт с окном в LY28; (6) размер текста: трейт
+  модели `NativeTextSize { fn query(&self, TextSizeRequest) -> Result<TextSize,
+  TextSizingCaptureError>; }`, `CapturedTextSizing` держит `Arc<dyn NativeTextSize>`, реализуют
+  `text::android::sizing` и `text::apple::ios` (`Snapshot`) — модель не называет файлов платформ;
+  `OwnerPlatform::capture_text_sizing(&window)` → `flui_native::capture_text_sizing(&owner,
+  &window)` (функция фичи, `owner/` не называет текста), `flui-app` переведён, фрагмент
+  `changelog.d/platform-text.md` (`### Changed`); (7) для conformance-таблицы в `tests/` публичны и
+  скрыты `text::web::ime` и `text::android::keys` (`key_composition`), их doc говорит «пока таблица
+  не дойдёт до хостов через публичный API» — LY34; `text::android::ime` — `pub(crate)`; (8)
+  `forbid(unsafe_code)` — `text::ime`, `android::{keys, ime}`, `web::ime`, `windows::geometry`;
+  `expect(unsafe_code)` — `tsf`, `apple::{macos, ios}`, `impl WindowMessages for Tsf`;
+  `expect(deprecated)` — `apple::macos` (`objc2::runtime::Protocol`); (9) записей `globals` у
+  текста нет (`SHUTDOWN_IN_APARTMENT`, `BEFORE_TSF_ACTIVATION` — `cfg(test)`), итого 55; (10)
+  `pub(super)` → `pub(crate)` у того, что текст называет в `platforms/`: `WindowRef::{new, hwnd,
+  with_context}`, `ViewContext::text_input`, `get_context`, `with_view_context`,
+  `dispatch_input_event`, `handle_input_event`, `route_on_owner` macOS, `KeyRoute::{composing,
+  deliver}`, `Listener::install{,_in_phase}`, `EditorSlot::set`, `FocusSync::sync` Web,
+  `Acquisition` Android; (11) скрытые `shared::{android_ime, ime_text, text_geometry, web_text}`
+  и `host::Text` ушли; ADR-0090, 0247, 0255 цитируют новые пути, ADR-0135 и 0142 — тесты
+  `text::windows::tsf::tests`. `module-dag`: черри-пик механизма `retiring` (`1ca40f30b`, он же
+  `8ed043411` на `platform/display`; выпадет при rebase после LY31), `features = ["text"]`,
+  `retiring = ["platforms"]`, 8 исключений (`exit = "ADR-0151"`, `since = "2026-10-22"`):
+  `text::android` → `platforms::android::input` (`editor_action_keys`, LY29) и
+  `platforms::android::window` (`AndroidWindow`, LY28); `text::apple::macos` →
+  `platforms::macos::view` (методы `NSTextInputClient` на классе view, LY29) и
+  `platforms::macos::window` (`route_on_owner`, LY28); `text::web` → `platforms::web::events`
+  (`KeyRoute`, `is_focus_handoff`, LY29), `platforms::web::registration` (`EditorSlot`,
+  `Listener`, LY28) и `platforms::web::window` (`FocusSync`, LY28); `text::windows` →
+  `platforms::windows::platform` (`WindowRef`, `with_window_context`, LY28). Тесты ревью:
+  `owner::windows::tests::a_window_a_hook_destroyed_is_announced_to_no_later_hook` (хуки `[First,
+  Destroys, Second]`, жив ли — `IsWindow`; без проверки после каждого хука падает «left: ["first
+  created", "destroys created", "second created"]»), `a_window_message_reaches_the_hooks_in_order`
+  обновлён, `a_window_destroyed_during_activation_fails_the_open` зелёный. Проверки на Windows
+  (ветка @ `dd7d318c3`): `cargo fmt --check`; clippy `-p flui-native -p flui-app -p flui-testing
+  --all-targets -D warnings` и `-p flui-native --all-targets --features winit-backend,a11y`, `-p
+  xtask --all-targets`; nextest `-p flui-native -p flui-app` — 280 (2 пропущены), с
+  `flui-native/winit-backend` — 307 (2 пропущены); clippy Android (`-p flui-native -p flui-app
+  --all-targets`), macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`), wasm32 lib;
+  `wasm-check`, `wasm-test` (49 утверждений); `module-dag` (259 модулей, 1 фича с 8 файлами
+  платформ, 1 base, 469 рёбер, 8 исключений) и самотест (54); `globals` (55) и самотест (15);
+  `file-length`, `markers`, `testing` (73 в 60 записях), `docs-paths` (330), `checks`,
+  `doc-strict`, `workspace`, `reach`, `android-dex`. WSL Ubuntu 24.04 (cargo без heli): nextest
+  `-p flui-native` (`FLUI_HEADLESS=1`) — 171; до ревью — clippy и с `winit-backend` под xvfb 257
+  из 257. Galaxy S21 (Android 15), проба `flui create --template counter --local` с `RawTextField`
+  и эхом его `on_changed`, сборка из ветки после ревью: касание поля — Samsung Keyboard (русская
+  раскладка); `adb shell input text hello` — «hello» в поле и эхе; пробел, «п», «р», «и» —
+  составление «при» подчёркнуто, эхо его не содержит; подсказка «привет» — в поле и эхе «hello
+  привет »; «м», «и», «р» и Done во время составления — «hello привет мир» в поле и эхе; Back ×2 —
   «Android platform event loop finished», `FATAL`, паник и ANR нет. Предупреждение «a composition
-  could not be committed in place» на выходе есть и на базе `e86d0d5b4` (та же проба, `input text
-  abc`, Back ×2) — не регрессия. Проба удалена, настройки устройства не менялись. Web: `wasm-test`
-  — 49 утверждений; набор `web_browser` собран для wasm32, но не запускался: на хосте нет
-  chromedriver. Не запускалось: `cross-typecheck` локально (нет `zig`; job — в CI); Mac и iPhone —
-  в очереди vanyastaff/flui#1840.
+  could not be committed in place» на выходе есть и на базе `e86d0d5b4` — не регрессия. Стилус
+  (`offer_pen`) не проверен: у S21 нет S Pen. Проба удалена, настройки устройства не менялись. Web
+  (прогон координатора в браузерной панели, проба для wasm32 из ветки @ `812c24249`): «hello web» —
+  в поле и эхе; три Backspace, затем « мир» — «hello  мир» в обоих; ошибок в консоли нет; набор
+  `web_browser` не запускался — на хосте нет chromedriver. Не запускалось: `cross-typecheck`
+  локально (нет `zig`; job — в CI); Mac и iPhone — в очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
