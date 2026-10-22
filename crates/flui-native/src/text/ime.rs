@@ -104,3 +104,6 @@ const fn is_high_surrogate(unit: u16) -> bool {
 const fn is_low_surrogate(unit: u16) -> bool {
     matches!(unit, 0xDC00..=0xDFFF)
 }
+
+#[cfg(test)]
+mod tests;
