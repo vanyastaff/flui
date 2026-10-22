@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::WindowsPlatform;
+use crate::owner::windows::broadcast::send_for_test;
 use crate::platform::Platform;
 use flui_platform::WindowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,13 +15,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
     let platform = WindowsPlatform::new().expect("native platform");
     let displays = Arc::clone(&platform.owner().displays);
-    let source = platform
+    let receiver = platform
         .owner()
         .owner_control
         .gate()
         .shares("display message fixture")
         .expect("owner")
-        .preferences;
+        .broadcast_receiver;
     platform.display_snapshot().expect("first sample");
     let sampled = displays.sample_count();
     platform.display_snapshot().expect("cached answer");
@@ -59,7 +60,7 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
                     }
                 }))
                 .expect("watchdog handle");
-            source.send_message_for_test(WM_DISPLAYCHANGE, 32);
+            send_for_test(receiver, WM_DISPLAYCHANGE, 32, 0);
             // SendMessage returned: the handler ran to completion.
             message.store(counted.sample_count(), Ordering::Release);
             Ok(())
@@ -86,16 +87,16 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
 #[test]
 fn work_area_change_invalidates_the_snapshot() {
     let platform = WindowsPlatform::new().expect("native platform");
-    let source = platform
+    let receiver = platform
         .owner()
         .owner_control
         .gate()
         .shares("work area fixture")
         .expect("owner")
-        .preferences;
+        .broadcast_receiver;
     platform.display_snapshot().expect("first sample");
     let sampled = platform.owner().displays.sample_count();
-    source.send_message_for_test(WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize);
+    send_for_test(receiver, WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize, 0);
     platform
         .display_snapshot()
         .expect("sample after the change");
@@ -105,7 +106,7 @@ fn work_area_change_invalidates_the_snapshot() {
         "a work-area change left the snapshot cached"
     );
     // Any other setting leaves the displays alone.
-    source.send_message_for_test(WM_SETTINGCHANGE, 0);
+    send_for_test(receiver, WM_SETTINGCHANGE, 0, 0);
     platform.display_snapshot().expect("cached answer");
     assert_eq!(platform.owner().displays.sample_count(), sampled + 1);
 }

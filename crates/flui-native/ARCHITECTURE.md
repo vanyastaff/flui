@@ -66,16 +66,33 @@ trait depends on `flui-platform` instead.
   `ApplicationHandler`; `owner::headless` the test double's owner turns. The
   hosts' tables name these loops. A multiplexer of the operating system that
   serves several features dispatches through a hook declared beside it, which
-  each feature's file implements and the host registers: the window class's
-  procedure holds the panic boundary and offers each message to the
-  `owner::windows::WindowMessages` hooks `hosts/windows.rs` registers, in order
-  (the window's procedure, `platforms::windows::WindowProc`, which still answers
-  every message, then the precision touchpad, whose `created` gives each new
-  window its DirectManipulation viewport), and the broadcast receiver tells its
-  `owner::windows::broadcast::Subscriber`s, in order, until one answers (the
-  preferences' invalidation, which also invalidates the displays, then the
-  lifecycle's `HostEvents`). The Win32 hooks are a write-once `static`: Windows
-  registers the class, and the procedure that reads them, once per process.
+  each feature's file implements and the host's table names: on Windows the
+  table implements `owner::windows::WindowsHost`, whose `WINDOW_HOOKS` and
+  `broadcast_subscribers` list, in order, what the owner dispatches to.
+  - FLUI's window class has `window_proc::<H>` as its procedure, so the hook
+    set is a type: the procedure holds the panic boundary and offers each
+    message to `H::WINDOW_HOOKS` in order — the first `Some` ends the
+    dispatch, `None` passes it on, and a message no hook answers goes to
+    `DefWindowProcW`. A created window announces itself to the same hooks
+    through the owner's state (`OwnerShares::window_hooks`). Windows holds the
+    class once per process, so the class registration records its host and a
+    loop for another host is refused with `PlatformError::Init`. Today the
+    hooks are the window's procedure (`platforms::windows::WindowProc`, which
+    still answers every message, its default included) and the precision
+    touchpad, whose `created` gives each new window its DirectManipulation
+    viewport. Tests: `a_window_message_reaches_the_hooks_in_order`,
+    `a_second_host_is_refused_the_window_class`.
+  - The owner control owns the broadcast receiver and builds it from the
+    subscribers the host names over its objects (`OwnerObjects`): the
+    preference source's `PreferenceBroadcasts` (setting and display changes;
+    the displays share the source's admission until the display feature takes
+    its own state), then the lifecycle's `HostEvents`. The receiver tells them
+    a message in order until one answers; a subscriber's panic is contained,
+    and the message is answered what a subscriber gives for that case
+    (`answer_after_panic`: the lifecycle grants a session-end query), 0
+    otherwise. winit on Windows builds a receiver of its own for its
+    preference source. Test: `broadcast_subscribers_hear_a_message_in_order`.
+
   Until each feature takes its own state, a loop still holds the state the
   table's positions read (windows, displays, preferences, drag, notices) and
   calls that feature's code by name.
@@ -713,7 +730,7 @@ native reads and subsequent native window creation. Its independent `UISettings`
 reader compares the public motion observation with the current Windows animation
 setting; merely returning a present value cannot satisfy the assertion.
 
-UI languages use `GetUserPreferredUILanguages`, sharing this source's receiver,
+UI languages use `GetUserPreferredUILanguages`, sharing this source's broadcasts,
 cache and retry lifetime (ADR-0173). The private
 `preferred_language_buffer_contract` injects capacity races and malformed UTF-16
 lists that cannot be produced deterministically through the public OS API. It

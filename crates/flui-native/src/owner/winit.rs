@@ -478,6 +478,8 @@ impl WinitLoop {
             owner_platform: platform,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(windows)]
+            preference_broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]
@@ -894,6 +896,10 @@ fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> 
 pub(crate) struct WinitApp {
     #[cfg(windows)]
     preference_source: Option<crate::platforms::windows::preferences::PreferenceSource>,
+    /// The hidden top-level window that tells the preference source the
+    /// system's setting and display broadcasts; owner-thread only.
+    #[cfg(windows)]
+    preference_broadcasts: Option<super::windows::broadcast::Receiver>,
     #[cfg(target_os = "macos")]
     preference_source: Option<Arc<crate::platforms::macos::PreferenceSource>>,
     /// Wakes the owner when AppKit reports a preference change; owner-thread only.
@@ -1773,6 +1779,21 @@ impl WinitApp {
                 )?,
             );
         }
+        // The system's broadcasts reach the source through a receiver of its
+        // own: winit has no lifecycle subscriber on Windows.
+        if self.preference_broadcasts.is_none()
+            && let Some(source) = &self.preference_source
+        {
+            let subscriber: std::rc::Rc<dyn super::windows::broadcast::Subscriber> =
+                std::rc::Rc::new(source.broadcasts());
+            self.preference_broadcasts = Some(
+                super::windows::broadcast::Receiver::new([subscriber]).map_err(|error| {
+                    PlatformError::Preferences {
+                        message: error.to_string(),
+                    }
+                })?,
+            );
+        }
         self.refresh_preferences();
         Ok(())
     }
@@ -2303,6 +2324,10 @@ impl WinitApp {
         drop(preference_observers);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         drop(preference_source);
+        // After the source, which closes its admission as it drops: a broadcast
+        // the receiver still hears while it is destroyed wakes nobody.
+        #[cfg(windows)]
+        drop(self.preference_broadcasts.take());
         #[cfg(target_os = "linux")]
         drop(host_notices);
         self.release_open_window_callbacks();
@@ -2355,6 +2380,8 @@ impl WinitApp {
             drop(self.preference_observers.take());
             let source = self.preference_source.take();
             drop(source);
+            #[cfg(windows)]
+            drop(self.preference_broadcasts.take());
             #[cfg(target_os = "linux")]
             self.platform.displays.stop();
             #[cfg(target_os = "macos")]
@@ -2942,6 +2969,8 @@ mod tests {
             owner_platform: host,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(windows)]
+            preference_broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]

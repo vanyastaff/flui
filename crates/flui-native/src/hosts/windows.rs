@@ -1,10 +1,14 @@
 //! The Windows host: Win32 windows, OLE drag and drop, TSF text input and the
 //! Win32 message loop.
 
+use std::rc::Rc;
+
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
-use crate::owner::windows::{WindowHooks, WindowsLoop};
+use crate::owner::windows::broadcast::Subscriber;
+use crate::owner::windows::control::OwnerObjects;
+use crate::owner::windows::{WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
@@ -13,11 +17,6 @@ use crate::platforms::windows::{
     WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
-
-/// The hooks on FLUI's window class, in the order a message reaches them: the
-/// window's procedure, then the precision touchpad, which only learns of each
-/// window created.
-const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
 
 /// The Windows host's table.
 #[derive(Debug)]
@@ -42,6 +41,21 @@ impl Host for Windows {
     type Lifecycle = HostEvents;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
+}
+
+impl WindowsHost for Windows {
+    /// The window's procedure, then the precision touchpad, which only learns
+    /// of each window created.
+    const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
+
+    /// The preferences (setting and display changes), then the lifecycle
+    /// (session, power, lock and memory).
+    fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
+        vec![
+            Rc::new(owner.preferences.broadcasts()),
+            Rc::clone(owner.lifecycle) as Rc<dyn Subscriber>,
+        ]
+    }
 }
 
 /// The native Windows platform: Win32 windows and message loop, OLE drag and
@@ -78,9 +92,8 @@ impl HostPlatform<Windows> {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WindowsLoop::with_config(
+        Ok(Self::from_loop(WindowsLoop::with_config::<Windows>(
             config,
-            WINDOW_HOOKS,
         )?))
     }
 }

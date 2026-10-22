@@ -448,6 +448,7 @@ impl WindowsWindow {
             exit_policy,
             displays,
             notices,
+            window_hooks,
             ..
         } = shares;
         // Admission refuses identity exhaustion before creating an HWND
@@ -473,6 +474,7 @@ impl WindowsWindow {
             normal,
             apartment,
             drag,
+            window_hooks,
         )
     }
 
@@ -575,6 +577,7 @@ impl WindowsWindow {
         normal: Option<RECT>,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<super::drag::OleTransfer>,
+        window_hooks: crate::owner::windows::WindowHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -770,11 +773,14 @@ impl WindowsWindow {
             } else {
                 (width, height)
             };
-            crate::owner::windows::window_created(&crate::owner::windows::CreatedWindow {
-                hwnd,
-                client_size: size,
-                apartment: touchpad_apartment,
-            });
+            crate::owner::windows::window_created(
+                window_hooks,
+                &crate::owner::windows::CreatedWindow {
+                    hwnd,
+                    client_size: size,
+                    apartment: touchpad_apartment,
+                },
+            );
 
             // The window is still hidden: put it where and in the mode it
             // opens, then show it now, later (first frame) or never (hidden).

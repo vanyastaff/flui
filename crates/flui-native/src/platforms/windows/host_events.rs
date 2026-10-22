@@ -93,78 +93,6 @@ impl HostEvents {
         }
     }
 
-    /// Start listening on `receiver`, the hidden window that hears the
-    /// messages. A source that cannot start is reported once and the others
-    /// go on.
-    pub(super) fn attach(&self, receiver: HWND) {
-        // SAFETY: `receiver` is the live window the caller just created on this
-        // thread; the flag asks for this session's notifications only.
-        match unsafe { WTSRegisterSessionNotification(receiver, NOTIFY_FOR_THIS_SESSION) } {
-            Ok(()) => self.session_notification.set(Some(receiver)),
-            Err(error) => {
-                tracing::warn!(%error, "session lock and unlock notices are unavailable");
-            }
-        }
-        match LowMemoryWait::start(receiver) {
-            Ok(wait) => *self.memory.borrow_mut() = Some(wait),
-            Err(error) => tracing::warn!(%error, "low-memory notices are unavailable"),
-        }
-    }
-
-    /// Stop listening and give back what was taken, before `receiver` is
-    /// destroyed.
-    pub(super) fn detach(&self, receiver: HWND) {
-        self.release_block();
-        let memory = self.memory.borrow_mut().take();
-        drop(memory);
-        if self.session_notification.take() == Some(receiver) {
-            // SAFETY: registered on this live window by `attach`.
-            if let Err(error) = unsafe { WTSUnRegisterSessionNotification(receiver) } {
-                tracing::debug!(%error, "session notification was already gone");
-            }
-        }
-    }
-
-    /// Answer `message` if it is one of the system's. `None` leaves it to the
-    /// default window procedure.
-    pub(super) fn handle(
-        &self,
-        hwnd: HWND,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> Option<LRESULT> {
-        if self.rearm_timer_owed.get() {
-            self.arm_rearm_timer(hwnd);
-        }
-        let post_failed = self
-            .memory
-            .borrow()
-            .as_ref()
-            .is_some_and(|wait| wait.shared.post_failed.swap(false, Ordering::AcqRel));
-        if post_failed {
-            self.low_memory(hwnd);
-        }
-        if message == LOW_MEMORY {
-            self.low_memory(hwnd);
-            return Some(LRESULT(0));
-        }
-        if message == WM_TIMER && wparam.0 == REARM_TIMER {
-            self.rearm_low_memory(hwnd);
-            return Some(LRESULT(0));
-        }
-        match windows_host_messages::classify(message, wparam.0, lparam.0) {
-            HostMessage::Query { critical } => Some(self.query_session_end(hwnd, critical)),
-            HostMessage::Event(event) => {
-                self.report(event);
-                // `WM_POWERBROADCAST` grants a query with TRUE; the others
-                // define no result.
-                Some(LRESULT(1))
-            }
-            HostMessage::Ignored => None,
-        }
-    }
-
     fn report(&self, event: HostEvent) {
         match event {
             HostEvent::SessionEnded => {
@@ -343,16 +271,75 @@ impl HostEvents {
 /// The lifecycle hears the receiver's session, power, lock and memory
 /// messages, and pays its own debts on any message it gets.
 impl Subscriber for HostEvents {
+    /// Start listening on `receiver`, the hidden window that hears the
+    /// messages. A source that cannot start is reported once and the others
+    /// go on.
     fn attach(&self, receiver: HWND) {
-        Self::attach(self, receiver);
+        // SAFETY: `receiver` is the live window the caller just created on this
+        // thread; the flag asks for this session's notifications only.
+        match unsafe { WTSRegisterSessionNotification(receiver, NOTIFY_FOR_THIS_SESSION) } {
+            Ok(()) => self.session_notification.set(Some(receiver)),
+            Err(error) => {
+                tracing::warn!(%error, "session lock and unlock notices are unavailable");
+            }
+        }
+        match LowMemoryWait::start(receiver) {
+            Ok(wait) => *self.memory.borrow_mut() = Some(wait),
+            Err(error) => tracing::warn!(%error, "low-memory notices are unavailable"),
+        }
     }
 
+    /// Stop listening and give back what was taken, before `receiver` is
+    /// destroyed.
     fn detach(&self, receiver: HWND) {
-        Self::detach(self, receiver);
+        self.release_block();
+        let memory = self.memory.borrow_mut().take();
+        drop(memory);
+        if self.session_notification.take() == Some(receiver) {
+            // SAFETY: registered on this live window by `attach`.
+            if let Err(error) = unsafe { WTSUnRegisterSessionNotification(receiver) } {
+                tracing::debug!(%error, "session notification was already gone");
+            }
+        }
     }
 
+    /// A contained panic must not answer a session-end query with a refusal.
+    fn answer_after_panic(&self, message: u32) -> Option<LRESULT> {
+        (message == windows_host_messages::WM_QUERYENDSESSION).then_some(LRESULT(1))
+    }
+
+    /// Answer `message` if it is one of the system's. `None` leaves it to the
+    /// default window procedure.
     fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        self.handle(hwnd, message, wparam, lparam)
+        if self.rearm_timer_owed.get() {
+            self.arm_rearm_timer(hwnd);
+        }
+        let post_failed = self
+            .memory
+            .borrow()
+            .as_ref()
+            .is_some_and(|wait| wait.shared.post_failed.swap(false, Ordering::AcqRel));
+        if post_failed {
+            self.low_memory(hwnd);
+        }
+        if message == LOW_MEMORY {
+            self.low_memory(hwnd);
+            return Some(LRESULT(0));
+        }
+        if message == WM_TIMER && wparam.0 == REARM_TIMER {
+            self.rearm_low_memory(hwnd);
+            return Some(LRESULT(0));
+        }
+        match windows_host_messages::classify(message, wparam.0, lparam.0) {
+            HostMessage::Query { critical } => Some(self.query_session_end(hwnd, critical)),
+            HostMessage::Event(event) => {
+                self.report(event);
+                // `WM_POWERBROADCAST` grants a query with TRUE; the others
+                // define no result.
+                Some(LRESULT(1))
+            }
+            HostMessage::Ignored => None,
+        }
     }
 }
 

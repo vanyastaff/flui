@@ -324,7 +324,7 @@ fn receiver_of_this_thread() -> HWND {
             )
         };
         let length = usize::try_from(length).unwrap_or(0);
-        if String::from_utf16_lossy(&title[..length]) == "FLUI system preferences" {
+        if String::from_utf16_lossy(&title[..length]) == "FLUI system broadcasts" {
             *found = Some(window);
             BOOL::from(false)
         } else {

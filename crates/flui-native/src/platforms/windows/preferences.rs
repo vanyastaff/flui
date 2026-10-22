@@ -32,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, RuntimeName};
 
 use crate::PlatformError;
-use crate::owner::windows::broadcast::{Receiver, Subscriber};
+use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 
 mod languages;
@@ -76,9 +76,13 @@ impl Invalidation {
     }
 }
 
-/// The preferences and the displays hear the system's setting and display
-/// broadcasts.
-impl Subscriber for Invalidation {
+/// The preference source's part of the system's broadcasts: setting and
+/// display changes, which mark the preferences and the displays stale and wake
+/// the owner. It shares the source's admission, so once the source is gone a
+/// receiver that outlives it marks nothing pending and wakes nobody.
+pub(crate) struct PreferenceBroadcasts(Arc<Invalidation>);
+
+impl Subscriber for PreferenceBroadcasts {
     fn message(
         &self,
         _hwnd: HWND,
@@ -87,17 +91,17 @@ impl Subscriber for Invalidation {
         _lparam: LPARAM,
     ) -> Option<LRESULT> {
         if message == WM_SETTINGCHANGE {
-            self.notify();
+            self.0.notify();
             // A work-area change (taskbar moved or resized) alters a
             // display's usable bounds, which the snapshot carries.
             if wparam.0 == SPI_SETWORKAREA.0 as usize {
-                self.notify_displays();
+                self.0.notify_displays();
             }
             Some(LRESULT(0))
         } else if message == WM_DISPLAYCHANGE {
             // Only invalidates and wakes: the message can arrive inside
             // a COM call of ours, so no sampling happens here.
-            self.notify_displays();
+            self.0.notify_displays();
             Some(LRESULT(0))
         } else {
             None
@@ -106,10 +110,11 @@ impl Subscriber for Invalidation {
 }
 
 /// Native subscriptions and interfaces belong to the owner context, not its
-/// Send + Sync platform wrapper. Interfaces and receiver retire before WinRT.
+/// Send + Sync platform wrapper. Interfaces retire before WinRT. The system's
+/// setting and display broadcasts reach it through the owner's broadcast
+/// receiver ([`Self::broadcasts`]).
 pub struct PreferenceSource {
     invalidation: Arc<Invalidation>,
-    _receiver: Receiver,
     ui: UISettings,
     accessibility: AccessibilitySettings,
     text_token: Option<i64>,
@@ -140,21 +145,11 @@ impl crate::host::Preferences<crate::owner::windows::WindowsLoop> for Preference
 }
 
 impl PreferenceSource {
-    #[cfg(feature = "winit-backend")]
+    /// A source that wakes the owner behind `signal` when a preference
+    /// changes, and invalidates `displays` when the displays do.
     pub(crate) fn new(
         signal: &Arc<OwnerSignal>,
         displays: &Arc<super::display::WindowsDisplays>,
-    ) -> Result<Self, PlatformError> {
-        Self::with_host(signal, displays, None)
-    }
-
-    /// A source whose receiver also tells `host` the messages the source does
-    /// not answer (the lifecycle's session end, power, lock and memory);
-    /// `None` for the winit backend, which has none of them on Windows.
-    pub(crate) fn with_host(
-        signal: &Arc<OwnerSignal>,
-        displays: &Arc<super::display::WindowsDisplays>,
-        host: Option<Rc<dyn Subscriber>>,
     ) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
@@ -173,10 +168,8 @@ impl PreferenceSource {
             signal: Arc::downgrade(signal),
             displays: Arc::clone(displays),
         });
-        let receiver = Receiver::new(Arc::clone(&invalidation), host).map_err(native_error)?;
         let mut source = Self {
             invalidation,
-            _receiver: receiver,
             ui,
             accessibility,
             text_token: None,
@@ -211,27 +204,15 @@ impl PreferenceSource {
         self.invalidation.pending.load(Ordering::Acquire)
     }
 
+    /// What the owner's broadcast receiver tells this source: setting and
+    /// display changes.
+    pub(crate) fn broadcasts(&self) -> PreferenceBroadcasts {
+        PreferenceBroadcasts(Arc::clone(&self.invalidation))
+    }
+
     #[cfg(test)]
     pub(super) fn invalidate_for_retry_test(&self) {
         self.invalidation.pending.store(true, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    #[expect(
-        clippy::used_underscore_binding,
-        reason = "native ingress test addresses the receiver retained only for its lifetime in production"
-    )]
-    pub(crate) fn send_setting_change_for_test(&self) {
-        self._receiver.send_setting_change();
-    }
-
-    #[cfg(test)]
-    #[expect(
-        clippy::used_underscore_binding,
-        reason = "native ingress test addresses the receiver retained only for its lifetime in production"
-    )]
-    pub(crate) fn send_message_for_test(&self, message: u32, wparam: usize) {
-        self._receiver.send_for_test(message, wparam);
     }
 
     pub(crate) fn sample(&self) -> Result<SystemPreferences, PlatformError> {

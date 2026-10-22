@@ -74,8 +74,23 @@ pub(crate) struct OwnerControlContext {
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<crate::platforms::windows::preferences::PreferenceSource>,
-    /// The system events the preferences receiver forwards.
+    /// The hidden top-level window that hears the system's broadcasts and
+    /// tells the host's subscribers. Declared after the preference source,
+    /// which closes its admission as it drops, so a message the receiver still
+    /// hears while it is destroyed wakes nobody.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "held for its lifetime: the receiver window lives as long as the owner's state"
+        )
+    )]
+    broadcasts: super::broadcast::Receiver,
+    /// The system events the broadcast receiver tells the lifecycle.
     host: Rc<crate::platforms::windows::host_events::HostEvents>,
+    /// The hooks of the host's window class, which each window it opens tells
+    /// of its creation.
+    window_hooks: super::WindowHooks,
     /// Where system notices go; see [`SystemNotices`].
     notices: Arc<SystemNotices>,
     displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
@@ -106,6 +121,12 @@ pub(crate) struct OwnerShares {
     pub(crate) preferences: Rc<crate::platforms::windows::preferences::PreferenceSource>,
     /// The system events the receiver forwards to the owner.
     pub(crate) host: Rc<crate::platforms::windows::host_events::HostEvents>,
+    /// The hooks of the host's window class; a window tells them of its
+    /// creation.
+    pub(crate) window_hooks: super::WindowHooks,
+    /// The broadcast receiver's window, which a test sends messages to.
+    #[cfg(test)]
+    pub(crate) broadcast_receiver: HWND,
     /// Where the platform hands system notices to the host.
     pub(crate) notices: Arc<SystemNotices>,
     /// The platform's monitors; a window invalidates them on a DPI change and
@@ -161,6 +182,16 @@ pub(crate) struct OwnerGate {
     exit_policy_pending: Arc<AtomicBool>,
 }
 
+/// The owner's objects a host makes its broadcast subscribers from
+/// ([`WindowsHost::broadcast_subscribers`](super::WindowsHost::broadcast_subscribers)).
+/// The owner holds the features' state until each feature takes its own.
+pub(crate) struct OwnerObjects<'a> {
+    /// The system preference source.
+    pub(crate) preferences: &'a Rc<crate::platforms::windows::preferences::PreferenceSource>,
+    /// The session, power, lock and memory events of the lifecycle.
+    pub(crate) lifecycle: &'a Rc<crate::platforms::windows::host_events::HostEvents>,
+}
+
 pub(crate) struct OwnerControl {
     pub(crate) signal: Arc<OwnerSignal>,
     pub(crate) wake: Arc<wake::OwnerWake>,
@@ -169,8 +200,9 @@ pub(crate) struct OwnerControl {
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
-    /// `WindowsLoop::with_config`).
-    pub(crate) fn new(
+    /// `WindowsLoop::with_config`), with the broadcast subscribers and window
+    /// hooks `H` names.
+    pub(crate) fn new<H: super::WindowsHost>(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
         drag: Arc<crate::platforms::windows::drag::OleTransfer>,
@@ -222,20 +254,26 @@ impl OwnerControl {
             Rc::clone(&handlers),
             Arc::clone(&notices),
         ));
+        let preferences = Rc::new(
+            crate::platforms::windows::preferences::PreferenceSource::new(&signal, &displays)?,
+        );
+        let broadcasts = super::broadcast::Receiver::new(H::broadcast_subscribers(&OwnerObjects {
+            preferences: &preferences,
+            lifecycle: &host,
+        }))
+        .map_err(|error| PlatformError::Init {
+            message: format!("the broadcast receiver: {error}"),
+        })?;
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
             handlers,
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
-            preferences: Rc::new(
-                crate::platforms::windows::preferences::PreferenceSource::with_host(
-                    &signal,
-                    &displays,
-                    Some(Rc::clone(&host) as Rc<dyn super::broadcast::Subscriber>),
-                )?,
-            ),
+            preferences,
+            broadcasts,
             host,
+            window_hooks: H::WINDOW_HOOKS,
             notices,
             displays,
             windows,
@@ -392,6 +430,9 @@ impl OwnerGate {
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
                     host: Rc::clone(&context.host),
+                    window_hooks: context.window_hooks,
+                    #[cfg(test)]
+                    broadcast_receiver: context.broadcasts.hwnd_for_test(),
                     notices: Arc::clone(&context.notices),
                     displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),

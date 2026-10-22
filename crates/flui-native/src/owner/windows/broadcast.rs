@@ -3,9 +3,10 @@
 //! The system broadcasts its setting, display, session, power and memory
 //! messages to top-level windows. The preferences, the displays and the
 //! lifecycle each hear part of them, so the receiver is the owner's and names
-//! none of them: it tells its [`Subscriber`]s, in order, until one answers.
+//! none of them: it tells the [`Subscriber`]s its host names, in order, until
+//! one answers.
 
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -13,8 +14,7 @@ use windows::{
         UI::WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
             GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WINDOW_STYLE,
-            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WM_QUERYENDSESSION, WNDCLASSW, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW,
+            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         },
     },
     core::{PCWSTR, w},
@@ -32,22 +32,33 @@ pub(crate) trait Subscriber {
     /// The receiver's window is about to be destroyed.
     fn detach(&self, _receiver: HWND) {}
 
+    /// What `message` is answered when a subscriber panics while the receiver
+    /// dispatches it: the panic is contained and an answer still goes back to
+    /// Windows. `None` leaves it to the subscribers after this one; with none
+    /// it is 0.
+    fn answer_after_panic(&self, _message: u32) -> Option<LRESULT> {
+        None
+    }
+
     /// Hears one message of the receiver's window; `Some` answers it, and no
     /// subscriber after this one hears it.
     fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT>;
 }
 
-impl<S: Subscriber + ?Sized> Subscriber for Arc<S> {
-    fn attach(&self, receiver: HWND) {
-        S::attach(self, receiver);
-    }
-
-    fn detach(&self, receiver: HWND) {
-        S::detach(self, receiver);
-    }
-
-    fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        S::message(self, hwnd, message, wparam, lparam)
+/// Sends a pointer-free message to the receiver window `receiver` and returns
+/// its procedure's answer.
+#[cfg(test)]
+pub(crate) fn send_for_test(receiver: HWND, message: u32, wparam: usize, lparam: isize) -> isize {
+    // SAFETY: the message carries no pointer, and a test sends it only to a
+    // receiver whose context its owner keeps alive.
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::SendMessageW(
+            receiver,
+            message,
+            Some(WPARAM(wparam)),
+            Some(LPARAM(lparam)),
+        )
+        .0
     }
 }
 
@@ -68,28 +79,14 @@ pub(crate) struct Receiver {
 }
 
 impl Receiver {
-    #[cfg(test)]
-    pub(crate) fn send_for_test(&self, message: u32, wparam: usize) {
-        self.send_with_for_test(message, wparam, 0);
-    }
-
     /// Send a pointer-free message to this receiver and return the window
     /// procedure's result.
     #[cfg(test)]
     pub(crate) fn send_with_for_test(&self, message: u32, wparam: usize, lparam: isize) -> isize {
-        // SAFETY: this test sends a pointer-free notification only to this
-        // receiver, whose context is retained by the borrowed owner.
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::SendMessageW(
-                self.hwnd_for_test(),
-                message,
-                Some(WPARAM(wparam)),
-                Some(LPARAM(lparam)),
-            )
-            .0
-        }
+        send_for_test(self.hwnd_for_test(), message, wparam, lparam)
     }
 
+    /// The receiver's window, while it lives.
     #[cfg(test)]
     pub(crate) fn hwnd_for_test(&self) -> HWND {
         self.context
@@ -98,36 +95,15 @@ impl Receiver {
             .expect("live receiver")
     }
 
-    #[cfg(test)]
-    pub(crate) fn send_setting_change(&self) {
-        let hwnd = self
-            .context
-            .as_ref()
-            .and_then(|context| context.hwnd.get())
-            .expect("live receiver");
-        // SAFETY: this test sends a pointer-free generic settings notification
-        // only to this receiver, whose context is retained by the borrowed owner.
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::SendMessageW(
-                hwnd,
-                windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
-                Some(WPARAM(0)),
-                Some(LPARAM(0)),
-            );
-        }
-    }
-
-    /// A receiver whose messages `first` hears, then `then` when there is one.
+    /// A receiver whose messages `subscribers` hear, in this order.
     pub(crate) fn new(
-        first: impl Subscriber + 'static,
-        then: Option<Rc<dyn Subscriber>>,
+        subscribers: impl IntoIterator<Item = Rc<dyn Subscriber>>,
     ) -> windows::core::Result<Self> {
-        let first: Rc<dyn Subscriber> = Rc::new(first);
         let context = Box::new(Context {
-            subscribers: std::iter::once(first).chain(then).collect(),
+            subscribers: subscribers.into_iter().collect(),
             hwnd: Cell::new(None),
         });
-        let class: Vec<_> = format!("FLUIPreferences_{:p}\0", &*context)
+        let class: Vec<_> = format!("FLUIBroadcasts_{:p}\0", &*context)
             .encode_utf16()
             .collect();
         // SAFETY: the executable module remains loaded for the process lifetime.
@@ -157,7 +133,7 @@ impl Receiver {
             CreateWindowExW(
                 WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
                 PCWSTR(receiver.class.as_ptr()),
-                w!("FLUI system preferences"),
+                w!("FLUI system broadcasts"),
                 WINDOW_STYLE(0),
                 0,
                 0,
@@ -233,14 +209,14 @@ impl Receiver {
                 // OS still owns the HWND. The already-closed source is inert.
                 std::mem::forget(context);
                 contain_owner_callback(
-                    || tracing::error!(%error, "preference receiver retained after failed destruction"),
+                    || tracing::error!(%error, "broadcast receiver retained after failed destruction"),
                 );
                 return;
             }
         }
         if let Err(error) = unregister(PCWSTR(self.class.as_ptr()), self.instance) {
             contain_owner_callback(
-                || tracing::warn!(%error, "preference receiver class retirement failed"),
+                || tracing::warn!(%error, "broadcast receiver class retirement failed"),
             );
         }
     }
@@ -252,8 +228,8 @@ unsafe extern "system" fn procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // A contained panic must not answer a session-end query with a refusal.
-    let mut result = LRESULT(isize::from(message == WM_QUERYENDSESSION));
+    // A contained panic answers what the subscribers set below, 0 otherwise.
+    let result = Cell::new(LRESULT(0));
     contain_owner_callback(|| {
         // SAFETY: this class receives only its own boxed Context during native
         // creation. Only this owner reaches userdata. It is detached before
@@ -279,16 +255,22 @@ unsafe extern "system" fn procedure(
                     // platform, and nothing borrowed from userdata survives
                     // user code.
                     let subscribers = Rc::clone(&(*context).subscribers);
+                    result.set(
+                        subscribers
+                            .iter()
+                            .find_map(|subscriber| subscriber.answer_after_panic(message))
+                            .unwrap_or(LRESULT(0)),
+                    );
                     for subscriber in subscribers.iter() {
                         if let Some(answer) = subscriber.message(hwnd, message, wparam, lparam) {
-                            result = answer;
+                            result.set(answer);
                             return;
                         }
                     }
                 }
             }
-            result = DefWindowProcW(hwnd, message, wparam, lparam);
+            result.set(DefWindowProcW(hwnd, message, wparam, lparam));
         }
     });
-    result
+    result.get()
 }

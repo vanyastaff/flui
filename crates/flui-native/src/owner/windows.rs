@@ -22,9 +22,12 @@ pub(crate) mod control;
 #[cfg(test)]
 mod modal_frame_tests;
 pub(crate) mod modal_loop;
+#[cfg(test)]
+mod tests;
 mod wake_deadline;
 
 use std::{
+    any::TypeId,
     cell::RefCell,
     collections::HashMap,
     rc::Rc,
@@ -63,6 +66,7 @@ use crate::{
     platform::PlatformExecutor, platform::PlatformReadyCallback,
     shared::hwnd_affinity::UserDataRefusal,
 };
+use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 pub(crate) use wake_deadline::{FrameCount, ModalDelivery};
@@ -70,28 +74,38 @@ pub(crate) use wake_deadline::{FrameCount, ModalDelivery};
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
 
-/// Ensures window class is registered exactly once (sound replacement for
-/// `static mut bool`).
-static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
-
-/// The hooks of FLUI's window class, written once by the first
-/// [`WindowsLoop::with_config`]. Windows registers the class once per process,
-/// and its procedure carries no pointer of its own, so the hooks are the
-/// process's too.
-static CLASS_HOOKS: OnceLock<WindowHooks> = OnceLock::new();
+/// Windows' registration of FLUI's window class: the host whose hooks the
+/// class's procedure dispatches to, or why the registration failed. Windows
+/// holds the class, and the procedure it was registered with, once per
+/// process; a second host is refused rather than silently given the first
+/// one's hooks.
+static WINDOW_CLASS: OnceLock<Result<TypeId, String>> = OnceLock::new();
 
 /// The hooks of FLUI's window class, in the order a message reaches them.
 pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
+
+/// What a Windows host's table names for its owner thread (ADR-0151 §10): the
+/// hooks of FLUI's window class and the subscribers of the broadcast receiver,
+/// each in the order a message reaches them. The owner dispatches through
+/// them and names no feature.
+pub(crate) trait WindowsHost: 'static {
+    /// The hooks of FLUI's window class; its procedure is
+    /// `window_proc::<Self>`.
+    const WINDOW_HOOKS: WindowHooks;
+
+    /// The broadcast receiver's subscribers, made from the owner's objects.
+    fn broadcast_subscribers(owner: &control::OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>>;
+}
 
 /// One feature's part of the procedure of FLUI's window class.
 ///
 /// The class and its raw procedure are the owner's: the procedure holds the
 /// panic boundary and offers each message to the hooks in the order the host
-/// gave them to [`WindowsLoop::with_config`]; the first that answers ends the
+/// names them ([`WindowsHost::WINDOW_HOOKS`]); the first that answers ends the
 /// message's dispatch, and a message no hook answers goes to `DefWindowProcW`.
 /// A window of the class, once created, is announced to every hook
 /// ([`Self::created`]).
-pub(crate) trait WindowMessages: Sync {
+pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
 
@@ -122,30 +136,27 @@ pub(crate) struct CreatedWindow {
     pub(crate) apartment: Option<Rc<ComApartment>>,
 }
 
-/// Announces `window`, which FLUI's class just created, to every hook.
-pub(crate) fn window_created(window: &CreatedWindow) {
-    for hook in class_hooks() {
+/// Announces `window`, which FLUI's class just created, to every one of
+/// `hooks`: the host's, which the owner's state hands every window it opens.
+pub(crate) fn window_created(hooks: WindowHooks, window: &CreatedWindow) {
+    for hook in hooks {
         hook.created(window);
     }
 }
 
-/// The hooks of FLUI's window class. The class exists only once a loop was
-/// built, so a window of it never meets the class without its hooks.
-fn class_hooks() -> WindowHooks {
-    CLASS_HOOKS
-        .get()
-        .copied()
-        .expect("BUG: `WindowsLoop::with_config` writes the class's hooks before the class exists")
-}
-
-/// Offers one message of a window of FLUI's class to the hooks, in order; a
+/// Offers one message of a window of FLUI's class to `H`'s hooks, in order; a
 /// message no hook answers goes to `DefWindowProcW`.
 ///
 /// # Safety
 ///
 /// As [`WindowMessages::message`].
-unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    for hook in class_hooks() {
+unsafe fn dispatch_window_message<H: WindowsHost>(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    for hook in H::WINDOW_HOOKS {
         // SAFETY: the arguments as Win32 delivered them, per this function's
         // `# Safety` contract.
         if let Some(result) = unsafe { hook.message(hwnd, msg, wparam, lparam) } {
@@ -307,7 +318,7 @@ impl WindowsLoop {
         let source = AtomicU64::new(0);
         for attempt in 0..3 {
             let refused = std::panic::catch_unwind(|| {
-                Self::admit_with_config(WindowConfiguration::default(), &source)
+                Self::admit_with_config::<tests::TestHost>(WindowConfiguration::default(), &source)
             });
             assert!(
                 refused.is_err(),
@@ -420,21 +431,23 @@ impl std::fmt::Debug for WindowsLoop {
 
 impl WindowsLoop {
     /// A loop whose windows follow `config` (hotkeys, debouncing, fullscreen
-    /// behavior) and whose window class dispatches through `hooks`. The class
-    /// and its hooks are the process's: the first loop's hooks stand.
-    pub(crate) fn with_config(
+    /// behavior) and dispatch through the hooks and subscribers `H` names.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] when the process's window class is already
+    /// registered for another host, and whatever the native setup refuses.
+    pub(crate) fn with_config<H: WindowsHost>(
         config: WindowConfiguration,
-        hooks: WindowHooks,
     ) -> Result<Self, PlatformError> {
-        CLASS_HOOKS.get_or_init(|| hooks);
-        Self::admit_with_config(config, WindowIdentity::source())
+        Self::admit_with_config::<H>(config, WindowIdentity::source())
     }
 
     /// [`Self::with_config`] with the identity drawn from `source`. The
     /// owner control's identity is reserved first: exhaustion refuses before
     /// COM is initialized or any HWND exists, so a refusal (and every caught
     /// retry) leaves nothing to release.
-    fn admit_with_config(
+    fn admit_with_config<H: WindowsHost>(
         config: WindowConfiguration,
         source: &std::sync::atomic::AtomicU64,
     ) -> Result<Self, PlatformError> {
@@ -465,14 +478,8 @@ impl WindowsLoop {
             }
         }
 
-        // SAFETY: `register_window_class`'s own `# Safety` contract (below)
-        // is discharged by `REGISTER_WINDOW_CLASS: Once` making the call
-        // race-free and idempotent regardless of caller thread.
-        //
         // Register window class
-        unsafe {
-            Self::register_window_class()?;
-        }
+        Self::register_window_class::<H>()?;
 
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
@@ -481,7 +488,7 @@ impl WindowsLoop {
         let displays = Arc::new(WindowsDisplays::new());
         let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
         notices.mark_stale_on_wake(&displays);
-        let owner_control = control::OwnerControl::new(
+        let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
             Arc::clone(&drag),
@@ -546,83 +553,74 @@ impl WindowsLoop {
         Ok(platform)
     }
 
-    /// Register the window class for all FLUI windows (idempotent via `Once`).
-    ///
-    /// # Safety
-    ///
-    /// `Self::window_proc` is registered as the class's `WNDPROC` — its
-    /// `extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT` signature
-    /// must exactly match what Win32 calls through that slot, or every
-    /// dispatch to a window of this class is an ABI-mismatched call. The
-    /// caller must not register a different, incompatible callback under
-    /// the same `WINDOW_CLASS_NAME` afterward — `REGISTER_WINDOW_CLASS: Once`
-    /// enforces that this body runs at most once per process, so subsequent
-    /// calls are no-ops rather than a re-registration race.
-    unsafe fn register_window_class() -> Result<(), PlatformError> {
-        // SAFETY: per the `# Safety` contract above, `Self::window_proc`'s
-        // signature matches `WNDPROC`. `GetModuleHandleW(None)` takes no
-        // pointer arguments. `wc.lpszClassName`/`wc.hCursor` reference
-        // process-lifetime statics (`WINDOW_CLASS_NAME`, the loaded cursor
-        // resource); `&raw const wc` gives `RegisterClassW` a valid pointer
-        // to the fully-initialized, stack-local `WNDCLASSW`. `call_once`
-        // guarantees this body executes at most once, so there is no
-        // concurrent registration to race.
-        unsafe {
-            let mut result: Result<(), PlatformError> = Ok(());
+    /// Register FLUI's window class with `window_proc::<H>` as its procedure,
+    /// once per process: Windows holds one class of a name, so a second host
+    /// is refused rather than silently given the first one's hooks, and a
+    /// failed registration is the answer of every later call too.
+    fn register_window_class<H: WindowsHost>() -> Result<(), PlatformError> {
+        let registered = WINDOW_CLASS.get_or_init(|| {
+            // SAFETY: `window_proc::<H>`'s signature is exactly `WNDPROC`'s
+            // `extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT`, so
+            // every dispatch to a window of the class is an ABI-matched call.
+            // `GetModuleHandleW(None)` takes no pointer arguments.
+            // `wc.lpszClassName`/`wc.hCursor` reference process-lifetime
+            // statics (`WINDOW_CLASS_NAME`, the loaded cursor resource);
+            // `&raw const wc` gives `RegisterClassW` a valid pointer to the
+            // fully-initialized, stack-local `WNDCLASSW`. `get_or_init` runs
+            // this body at most once, so there is no concurrent registration
+            // to race.
+            unsafe {
+                let hinstance = GetModuleHandleW(None)
+                    .map_err(|e| format!("Failed to get module handle: {e}"))?;
 
-            REGISTER_WINDOW_CLASS.call_once(|| {
-                let reg = (|| -> Result<(), PlatformError> {
-                    let hinstance = GetModuleHandleW(None).map_err(|e| PlatformError::Init {
-                        message: format!("Failed to get module handle: {e}"),
-                    })?;
+                let wc = WNDCLASSW {
+                    // No `CS_HREDRAW`/`CS_VREDRAW`: a flip-model surface is
+                    // presented whole, and `WM_SIZE` asks for the frame itself.
+                    style: CS_OWNDC,
+                    lpfnWndProc: Some(Self::window_proc::<H>),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: hinstance.into(),
+                    hIcon: HICON::default(),
+                    hCursor: load_cursor_style(IDC_ARROW)
+                        .map_err(|e| format!("Failed to load the default cursor: {e}"))?,
+                    hbrBackground: HBRUSH(std::ptr::null_mut()),
+                    lpszMenuName: PCWSTR::null(),
+                    lpszClassName: WINDOW_CLASS_NAME,
+                };
 
-                    let wc = WNDCLASSW {
-                        // No `CS_HREDRAW`/`CS_VREDRAW`: a flip-model surface is
-                        // presented whole, and `WM_SIZE` asks for the frame itself.
-                        style: CS_OWNDC,
-                        lpfnWndProc: Some(Self::window_proc),
-                        cbClsExtra: 0,
-                        cbWndExtra: 0,
-                        hInstance: hinstance.into(),
-                        hIcon: HICON::default(),
-                        hCursor: load_cursor_style(IDC_ARROW).map_err(|e| PlatformError::Init {
-                            message: format!("Failed to load the default cursor: {e}"),
-                        })?,
-                        hbrBackground: HBRUSH(std::ptr::null_mut()),
-                        lpszMenuName: PCWSTR::null(),
-                        lpszClassName: WINDOW_CLASS_NAME,
-                    };
-
-                    let atom = RegisterClassW(&raw const wc);
-                    if atom == 0 {
-                        return Err(PlatformError::Init {
-                            message: format!(
-                                "Failed to register the window class: {}",
-                                windows::core::Error::from_thread()
-                            ),
-                        });
-                    }
-
-                    tracing::info!("Registered Windows window class");
-                    Ok(())
-                })();
-
-                if let Err(e) = reg {
-                    result = Err(e);
+                let atom = RegisterClassW(&raw const wc);
+                if atom == 0 {
+                    return Err(format!(
+                        "Failed to register the window class: {}",
+                        windows::core::Error::from_thread()
+                    ));
                 }
-            });
 
-            result
+                tracing::info!("Registered Windows window class");
+                Ok(TypeId::of::<H>())
+            }
+        });
+        match registered {
+            Ok(host) if *host == TypeId::of::<H>() => Ok(()),
+            Ok(_) => Err(PlatformError::Init {
+                message: "FLUI's window class is already registered for another host's hooks; \
+                          a process has one"
+                    .into(),
+            }),
+            Err(message) => Err(PlatformError::Init {
+                message: message.clone(),
+            }),
         }
     }
 
     /// Main window procedure for all FLUI windows: a panic boundary around
-    /// [`dispatch_window_message`], which offers the message to the hooks
-    /// that hold the actual message handling.
+    /// [`dispatch_window_message`], which offers the message to `H`'s hooks,
+    /// which hold the actual message handling.
     ///
     /// The hooks dispatch framework-supplied callbacks (a window's callbacks,
-    /// the platform's window-event handler) that can panic. A panic must not unwind across
-    /// this `extern "system"` frame: unwinding across a non-unwind ABI
+    /// the platform's window-event handler) that can panic. A panic must not
+    /// unwind across this `extern "system"` frame: unwinding across a non-unwind ABI
     /// boundary is a guaranteed process abort since Rust 1.81, and was
     /// undefined behavior before that (Rust Reference, *Panic* chapter,
     /// "unwinding across FFI boundaries") — and that language-imposed abort
@@ -642,7 +640,7 @@ impl WindowsLoop {
     /// registered as this exact function in `register_window_class`; that
     /// provenance is exactly what [`dispatch_window_message`]'s own `# Safety`
     /// contract requires, so forwarding the arguments verbatim discharges it.
-    unsafe extern "system" fn window_proc(
+    unsafe extern "system" fn window_proc<H: WindowsHost>(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
@@ -653,7 +651,7 @@ impl WindowsLoop {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // SAFETY: arguments forwarded verbatim from Win32's dispatch of
             // this registered `WNDPROC` — see `# Safety` above.
-            unsafe { dispatch_window_message(hwnd, msg, wparam, lparam) }
+            unsafe { dispatch_window_message::<H>(hwnd, msg, wparam, lparam) }
         }));
         match outcome {
             Ok(result) => result,
