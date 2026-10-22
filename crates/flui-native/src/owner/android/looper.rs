@@ -63,31 +63,32 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::android::java_view;
-use crate::owner::android::{AndroidHost, HostDisplays};
+use crate::owner::android::{ActivityPreferences, AndroidHost, HostDisplays};
 use crate::platform::HostPlatform;
 use crate::platforms::android::window::ActivityFlags;
-use crate::platforms::android::{AndroidWindow, MockClipboard, input, memory, preferences};
+use crate::platforms::android::{AndroidWindow, MockClipboard, input};
 use crate::{
     error::BootstrapError,
     error::PlatformError,
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
+    owner::android::activity_callbacks::ActivityCallbacks,
+    owner::android::activity_callbacks::ActivityEvent,
+    owner::android::activity_callbacks::ActivityTarget,
+    owner::android::activity_callbacks::Reaction,
     owner::android::ndk::LoadedLibraries,
     owner::android::ndk::SymbolSource,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
     owner::call_point::{Field, SharedField, call, install},
-    owner::handlers::PlatformHandlers,
+    owner::handlers::{PlatformHandlers, SessionEndHook},
+    owner::notices::{LifecycleHooks, NoticeChannel},
     owner::redraw_poll::RedrawPoll,
     owner::signal::OwnerSignal,
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
-    shared::android_lifecycle::ActivityEvent,
-    shared::android_lifecycle::ActivityLifecycle,
-    shared::android_lifecycle::ActivityTarget,
-    shared::android_lifecycle::Reaction,
     shared::os_version::android::AndroidApi,
     shared::os_version::android::StylusHandwriting,
 };
@@ -132,15 +133,20 @@ pub struct AndroidLoop {
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
     pub(crate) activity: Arc<ActivityFlags>,
-    lifecycle: Mutex<ActivityLifecycle>,
-    notices: crate::shared::system_notice::SystemNotices,
+    /// What each of the Activity's lifecycle callbacks means, as the table
+    /// made it ([`AndroidHost::activity`]).
+    activity_callbacks: Box<dyn ActivityCallbacks>,
+    /// Where the trim level and the low-memory call hand system notices.
+    notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     pub(crate) clipboard: Arc<MockClipboard>,
     pub(crate) input_state: Mutex<input::AndroidInputState>,
     pub(crate) owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
-    preference_admission: crate::shared::preference_read::ReadAdmission,
+    /// The system preference source the table made
+    /// ([`AndroidHost::preferences`]).
+    preferences: Box<dyn ActivityPreferences>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
@@ -176,8 +182,9 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    /// The loop of host `H`, whose table makes the displays and names what
-    /// `FluiView` reports to.
+    /// The loop of host `H`, whose table makes the displays, the preference
+    /// source, the notice channel and the meaning of the Activity's
+    /// callbacks, and names what `FluiView` reports to.
     pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
@@ -201,21 +208,23 @@ impl AndroidLoop {
             H::input_method(),
         );
         let owner = Arc::downgrade(&owner_signal);
+        let preferences = H::preferences(&app, api, &owner_signal);
+        let activity_callbacks = H::activity(&app);
         Self {
             java_view,
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
             activity: Arc::new(ActivityFlags::default()),
-            lifecycle: Mutex::new(ActivityLifecycle::default()),
-            notices: crate::shared::system_notice::SystemNotices::default(),
+            activity_callbacks,
+            notices: H::notices(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
-            preference_admission: crate::shared::preference_read::ReadAdmission::default(),
+            preferences,
             displays: H::displays(api, library, owner),
             api,
         }
@@ -236,6 +245,8 @@ impl AndroidLoop {
         }
     }
 
+    /// Read the system preferences on the live owner thread, through the source
+    /// the table made.
     fn refresh_preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
         if !self.owner_signal.accepting() {
             return Err(PlatformError::Preferences {
@@ -247,19 +258,7 @@ impl AndroidLoop {
                 message: "Android preferences require the activity owner thread".into(),
             });
         }
-        let (current, needs_delivery) =
-            self.preference_admission
-                .read_observation(web_time::Instant::now(), || {
-                    preferences::sample(&self.app, self.api).map_err(|error| {
-                        PlatformError::Preferences {
-                            message: error.to_string(),
-                        }
-                    })
-                })?;
-        if needs_delivery {
-            let _ = self.owner_signal.wake();
-        }
-        Ok(current)
+        self.preferences.sample()
     }
 
     /// When the loop reads preferences, scroll factors and insets next: the
@@ -267,7 +266,7 @@ impl AndroidLoop {
     /// owes, whichever comes first. Nothing else would come back for that
     /// retry: a change reported during its backoff is deferred, not queued.
     fn next_sample(&self, cadence: Option<web_time::Instant>) -> Option<web_time::Instant> {
-        [cadence, self.preference_admission.retry_deadline()]
+        [cadence, self.preferences.retry_deadline()]
             .into_iter()
             .flatten()
             .min()
@@ -281,7 +280,7 @@ impl AndroidLoop {
         // Query outside the owner-local cache guard. A failed refresh keeps
         // accepted logical factors; only the never-observed case uses authored
         // line normalization for compatibility with supported API21 devices.
-        let reading = preferences::scroll_factors(&self.app, self.api).ok();
+        let reading = input::scroll_factors(&self.app, self.api).ok();
         self.scroll_factors.lock().observe(reading);
     }
 
@@ -688,18 +687,15 @@ impl host::Loop for AndroidLoop {
                     );
                     self.app.poll_events(timeout, |event| {
                 if let PollEvent::Main(main_event) = event {
-                    // What the Activity callback means (`shared::android_lifecycle`).
-                    // An arm that must act around its signal takes and delivers it
-                    // itself; what is left of the reaction (the signal of every other
-                    // callback, then the memory pressure) is delivered after the match.
-                    let mut reaction = ActivityEvent::from_main_event(&main_event).map_or_else(
-                        Reaction::default,
-                        |event| {
-                            self.lifecycle.lock().react(event, || {
-                                memory::last_trim_level(&self.app)
-                            })
-                        },
-                    );
+                    // What the Activity callback means, as the table's hook
+                    // answers. An arm that must act around its signal takes and
+                    // delivers it itself; what is left of the reaction (the signal
+                    // of every other callback, then the memory pressure) is
+                    // delivered after the match.
+                    let mut reaction = ActivityEvent::from_main_event(&main_event)
+                        .map_or_else(Reaction::default, |event| {
+                            self.activity_callbacks.react(event)
+                        });
                     match main_event {
                         // Visibility, focus gained and the end of the session
                         // have nothing to do besides delivering their signal.
@@ -1136,35 +1132,27 @@ impl host::Preferences<AndroidLoop> for AndroidLoop {
     }
 }
 
-impl host::Lifecycle<AndroidLoop> for AndroidLoop {
-    fn on_session_end(
-        owner: &AndroidLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform::SessionEndAnswer + Send>,
-    ) {
-        install(
-            &owner.handler(|handlers| &mut handlers.session_end),
-            callback,
-        );
+/// The Activity's callbacks arrive at the looper: a stop or a saved state ends
+/// the session, the system does not wait for an answer, and it starts or
+/// recreates an Activity itself rather than reopening one. The lifecycle
+/// feature's position reaches the hooks through this.
+impl LifecycleHooks for AndroidLoop {
+    fn notices(&self) -> &dyn NoticeChannel {
+        &*self.notices
     }
 
-    fn on_host_notice(owner: &AndroidLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        owner.notices.set_hook(callback);
+    fn set_session_end_hook(&self, hook: SessionEndHook) {
+        install(&self.handler(|handlers| &mut handlers.session_end), hook);
     }
 
-    fn release_session_end(_: &AndroidLoop) {
+    fn release_session_end(&self) {
         // The system does not wait for an answer to a session end, so no end
         // is held open.
     }
 
-    fn on_reopen(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
-        // Android has no reopen signal: the system starts or recreates the
-        // Activity.
-        drop(callback);
-    }
-
-    fn activate(_: &AndroidLoop, _: bool) {
-        // The system decides which app is in front; an Activity cannot bring
-        // itself there.
+    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
+        // Android has no reopen signal.
+        drop(hook);
     }
 }
 

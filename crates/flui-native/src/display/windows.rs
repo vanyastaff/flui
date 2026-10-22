@@ -298,7 +298,7 @@ pub(crate) mod source {
         }
     }
 
-    impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
+    impl crate::owner::notices::StaleOnWake for WindowsDisplays {
         fn mark_stale(&self) {
             self.source.invalidate();
         }

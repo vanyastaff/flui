@@ -49,8 +49,14 @@ trait depends on `flui-platform` instead.
   the owner-thread storage for a value that is not `Send`, and
   `owner::panic_boundary` the containment a panic in user code meets before it
   reaches the operating system, `owner::call_point` the one point where the
-  platform calls a handler, and `owner::handlers` the application's handler set
-  and a window's callbacks. `owner` is the `base` of
+  platform calls a handler, `owner::handlers` the application's handler set
+  and a window's callbacks, `owner::notices` the trait a loop pushes system
+  notices through (`NoticeChannel`, which the lifecycle feature implements; a
+  wake marks the display and window caches that registered `StaleOnWake`
+  first) and the lifecycle hooks a loop keeps (`LifecycleHooks`),
+  `owner::sources` what a loop keeps of a feature's source
+  (`SystemPreferenceSource`), and `owner::watch` an observation a feature
+  started for a loop. `owner` is the `base` of
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
   crate root only.
@@ -68,7 +74,14 @@ trait depends on `flui-platform` instead.
   serves several features dispatches through a hook declared beside it, which
   each feature's file implements and the host's table names: on Windows the
   table implements `owner::windows::WindowsHost`, whose `WINDOW_HOOKS` and
-  `broadcast_subscribers` list, in order, what the owner dispatches to.
+  `broadcast_subscribers` list, in order, what the owner dispatches to. A
+  loop keeps a feature's state the same way: each `owner` module declares one
+  host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
+  `WebHost`, `WinitHost`, `HeadlessHost`) whose methods the table implements
+  to make what the loop holds, each through a hook trait declared beside the
+  loop, and the loop is the table's position for that feature, so the table
+  cannot name one type and build another (the displays, the preferences and
+  the lifecycle below).
   - FLUI's window class has `window_proc::<H>` as its procedure, so the hook
     set is a type: the procedure holds the panic boundary and offers each
     message to `H::WINDOW_HOOKS` in order — the first `Some` ends the
@@ -90,9 +103,10 @@ trait depends on `flui-platform` instead.
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class`.
   - The owner control owns the broadcast receiver and builds it from the
-    subscribers the host names over its objects (`OwnerObjects`): the
-    displays' `DisplayBroadcasts` (`WM_DISPLAYCHANGE` and a work-area change,
-    `WM_SETTINGCHANGE` with `SPI_SETWORKAREA`), the preference source's
+    subscribers the host names over its objects (`OwnerObjects`, with the
+    sources `WindowsHost::{preferences, lifecycle}` built from `OwnerSeeds`):
+    the displays' `DisplayBroadcasts` (`WM_DISPLAYCHANGE` and a work-area
+    change, `WM_SETTINGCHANGE` with `SPI_SETWORKAREA`), the preference source's
     `PreferenceBroadcasts` (setting changes) and the lifecycle's `HostEvents`.
     The receiver tells them a message in order until one answers; a
     subscriber's panic is contained, and the message is answered what a
@@ -112,14 +126,16 @@ trait depends on `flui-platform` instead.
     `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
-  the displays the loop holds (`displays`) and names the features' objects
-  `FluiView` hands its reports: today the text feature's `InputMethod`
-  (`input_method`), which answers the input method's calls through the view.
+  what the loop holds (the displays, the preference source, the notice channel
+  and what the Activity's callbacks mean: `displays`, `preferences`, `notices`,
+  `activity`) and names the features' objects `FluiView` hands its reports:
+  today the text feature's `InputMethod` (`input_method`), which answers the
+  input method's calls through the view.
 
   Until each feature takes its own state, a loop still holds the state the
-  table's positions read (windows, preferences, drag, notices) and calls that
-  feature's code by name. The text input and the displays already took theirs
-  (below).
+  table's positions read (windows, drag) and calls that feature's code by name.
+  The text input, the displays, the preferences and the lifecycle already took
+  theirs (below).
 - **A feature is a directory of `flui-native`: its model beside one file per
   platform (ADR-0151 §10).** `text` is the first. The model is `ime` (what
   the Android and web hosts mirror of a focused field, and the one edit
@@ -185,9 +201,66 @@ trait depends on `flui-platform` instead.
   (`owner::android::poll`).
   `platforms` is `retiring` in `[package.metadata.flui.modules]`: a feature
   reaches a module under it only through a named exception, and the display
-  feature has two, the Android source's `with_activity`
-  (`platforms::android::preferences`) and the iOS source's version read
-  (`platforms::ios::os_version`).
+  feature has one, the iOS source's version read (`platforms::ios::os_version`).
+- **The preferences and the lifecycle are feature directories,
+  `preferences/` and `lifecycle/` (ADR-0151 §10).**
+  - `preferences`: the model is `read` (the bounded read admission the Android
+    and AppKit sources take) and `locales` (preferred languages from the forms
+    the systems spell them in); the platform files are `windows` (WinRT and
+    Win32, told of changes by the broadcast receiver), `apple::{macos, ios}`,
+    `android` (`configuration`, and the rules `contrast` and `text_weight`),
+    `web` (`browser`, and the rule `media`), `linux` (the Settings portal,
+    whose watch names no winit type, so the Wayland and X11 hosts start it as
+    the winit host does) and `headless`.
+  - `lifecycle`: the notice channel (`notice`) and the one position of the
+    loops that hear the lifecycle themselves; the platform files are `windows`
+    (`host_events`, and the rules `messages` and `memory_watch`),
+    `apple::macos` (`notices`, and the rule `memory_pressure`), `android` (the
+    Activity's callbacks, and the rule `rule`), `web`, `linux` (the inbox, and
+    beside it `logind` and `pressure`, each with its rule, `signals` and
+    `triggers`) and `headless`.
+  - One file per platform, as for the displays: a child file holds only a
+    mechanism tied to one OS object (`lifecycle::linux::{logind, pressure}`),
+    or a module's tests (`lifecycle/windows/tests.rs`).
+  - A loop holds what the two features made through the hooks its `owner`
+    module declares, which the table fills through the same host trait as the
+    displays (`WindowsHost::{preferences, notices, lifecycle}`,
+    `MacosHost::{preferences, notices, notice_sources}`,
+    `IosHost::{preferences, notices}`, `AndroidHost::{preferences, notices,
+    activity}`, `WebHost::{preferences, page}`, `WinitHost::{notices,
+    preferences, host_notices}`, `HeadlessHost::notices`): the preference
+    source as `owner::sources::SystemPreferenceSource` or a loop's own trait
+    over it (`OwnerPreferences`, `UIKitPreferences`, `ActivityPreferences`,
+    `PortalPreferences`), the notice channel as
+    `owner::notices::NoticeChannel` (`lifecycle::notice::SystemNotices`
+    implements it), the Windows lifecycle as `OwnerLifecycle`, and what the
+    Activity's callbacks mean as `ActivityCallbacks`. A source the loop starts
+    only once it runs is an object the table makes with a method that starts
+    it (`NoticeSources::listen` and `PageLifecycle::listen`, which return a
+    `Watch`; `PreferenceStart` and `HostNoticeStart` under winit, whose signal
+    exists only once it runs).
+  - Each loop is its table's preference position, and its lifecycle position
+    on every host but headless, whose position is its test handle
+    (`HeadlessPreferences`, `HeadlessHostEvents`). The loops that hear the
+    lifecycle in their own callbacks (AppKit's and UIKit's delegates, the
+    Activity's, the winit loop's turns on Linux) implement
+    `owner::notices::LifecycleHooks`, and one generic impl in
+    `lifecycle/mod.rs` makes them the position; the Windows and web loops
+    answer their own. winit on Windows and macOS hears no session end or
+    notice, so its lifecycle is `Absent<Lifecycle>`, and each registration is
+    dropped as it is made
+    (`winit_lifecycle_registrations_drop_their_captures_without_a_source`).
+  - What the Activity's callbacks mean is the lifecycle feature's
+    (`lifecycle::android`, with the trim level it reads), behind the looper's
+    `ActivityCallbacks` hook; the looper keeps their vocabulary
+    (`owner::android::activity_callbacks`). What else a loop hears in its own
+    callbacks stays in `owner/`: the macOS reply to
+    `applicationShouldTerminate:` (`owner::apple::terminate_gate`) and UIKit's
+    scene-destruction error block (`owner::apple::ios`). The JNI access to the
+    Activity every feature uses is `owner::android::activity::with_activity`,
+    and the observer on an AppKit notification centre the macOS sources
+    register through is `owner::apple::macos::observation`; Android's scroll
+    factors are input's (`platforms::android::input`).
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -270,17 +343,19 @@ trait depends on `flui-platform` instead.
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
   run beside the owner and never run application code: an async logind task
-  (`linux::host_notices::logind`) and a kernel-pressure thread
-  (`linux::host_notices::pressure`). Each posts a `HostEvent` to one `Inbox`
-  and wakes the owner, which drains it in its next turn
-  (`platforms/winit/linux_notices.rs`). logind's sleep and shutdown carry a
+  (`lifecycle::linux::logind`) and a kernel-pressure thread
+  (`lifecycle::linux::pressure`). Each posts a `HostEvent` to one `Inbox` and
+  wakes the owner, which drains it in its next turn through the winit loop's
+  `HostNotices` hook. logind's sleep and shutdown carry a
   completion: the delay inhibitor is held until the owner has delivered the
   event (a panic in a subscriber drops the completion too) and is released
   after at most four seconds, inside logind's own `InhibitDelayMaxSec`.
   Shutdown on Linux is a notification: the answer to the session-end query is
   not read, because logind cannot be asked to wait for the user. The decisions
-  (signal decoding, trigger requests, X11 atoms to mode) are pure models in
-  `linux::lifecycle_model`, checked on every host.
+  (signal decoding, trigger requests) are pure rules beside their sources
+  (`lifecycle::linux::logind::signals`, `lifecycle::linux::pressure::triggers`),
+  and the X11 atoms to mode in `platforms::linux::lifecycle_model`, checked on
+  every host.
 - **The X11 window probe uses two connections on purpose.** One queries from
   whichever thread asks and sets the properties a client sets on an unmapped
   window; the other is read only by the watch thread, which records which
@@ -3257,8 +3332,8 @@ moves the work area, so they are converted with the monitor's work-area offset.
 **System events** arrive on the hidden top-level receiver (`owner/windows/broadcast.rs`), which a
 message-only window could not be: `WM_QUERYENDSESSION` and `WM_ENDSESSION`, `WM_POWERBROADCAST`,
 `WM_WTSSESSION_CHANGE`, and a posted message from a pool thread waiting on the low-memory event
-(`platforms::windows::host_events`; rules in `shared::windows_host_messages` and
-`shared::windows_memory_watch`). A session-end query the host answers with a block is refused and
+(`lifecycle::windows::host_events`; rules in `lifecycle::windows::messages` and
+`lifecycle::windows::memory_watch`). A session-end query the host answers with a block is refused and
 registered as a shutdown reason on the first visible window of the thread (the receiver otherwise);
 `Platform::release_session_end` withdraws it. The host's answer carries no reason text, so the system is given
 a fixed neutral one. A critical session end is never blocked, and a panicking hook answers
@@ -3280,13 +3355,13 @@ Remote Desktop Services at logon), lock and unlock stay unreported for the proce
 ### Android reads the Activity's lifecycle as three facts and a cycle
 
 **Rule:** an Activity callback is mapped by one pure rule
-(`shared/android_lifecycle.rs`) and delivered through `ActivityTarget`, which
+(`lifecycle/android.rs`, behind the looper's `ActivityCallbacks`) and delivered through `ActivityTarget`, which
 `AndroidLoop` implements; nothing in the event loop decides what a callback
 means. The window's published state is refreshed before its observer is told.
 
 **Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
 state, `onWindowFocusChanged` focus; none implies another. NativeActivity has no
-`onTrimMemory`, so `lastTrimLevel` is read through JNI (`android/memory.rs`) on
+`onTrimMemory`, so `lastTrimLevel` is read through JNI (`owner/android/memory.rs`) on
 `LowMemory`, `Pause`, `Stop` and `Resume`, never on a timer, and a level is
 remembered when it is read: notices are not replayed, so a level seen before the
 host listens is not announced later. The session ends once per start-to-stop

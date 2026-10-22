@@ -164,7 +164,7 @@ impl AndroidWindow {
     /// Report a night-mode change from the configuration that just changed.
     /// A failed read keeps the night mode last reported.
     pub(crate) fn settle_appearance(&self) {
-        let appearance = match super::preferences::night_mode(&self.app) {
+        let appearance = match crate::preferences::android::night_mode(&self.app) {
             Ok(night) => appearance_of(night),
             Err(error) => {
                 tracing::warn!(%error, "Android night-mode query failed");
@@ -385,7 +385,7 @@ fn native_extent(app: &AndroidApp) -> (i32, i32) {
 
 /// Device pixels per logical pixel, from the configuration's density.
 fn native_scale(app: &AndroidApp) -> f64 {
-    if let Ok(ratio) = super::preferences::pixel_ratio(app) {
+    if let Ok(ratio) = crate::preferences::android::pixel_ratio(app) {
         return ratio.get();
     }
     // android-activity config returns density as DPI / 160
@@ -398,7 +398,7 @@ fn native_scale(app: &AndroidApp) -> f64 {
 /// The Activity's lifecycle as its callbacks reported it, shared by the
 /// platform's event loop and the window it opened.
 ///
-/// Three independent facts (see `shared::android_lifecycle`): the Activity is on
+/// Three independent facts (see `lifecycle::android`): the Activity is on
 /// screen (`onStart` to `onStop`), it may run (`onResume` to `onPause`), and its
 /// window has input focus. None implies another: a dialog takes focus from a
 /// running, visible Activity. All three are false until their first callback.
@@ -534,7 +534,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
 /// until the first change the Activity handles in place.
 fn night_mode(app: &AndroidApp) -> WindowAppearance {
     appearance_of(
-        super::preferences::night_mode(app)
+        crate::preferences::android::night_mode(app)
             .unwrap_or_else(|_| app.config().ui_mode_night() == UiModeNight::Yes),
     )
 }
@@ -604,7 +604,7 @@ impl PlatformWindow for AndroidWindow {
         {
             return Err(flui_platform::PreferenceQueryError::Unavailable);
         }
-        super::preferences::geometry(&self.app).map(Some)
+        crate::preferences::android::geometry(&self.app).map(Some)
     }
 
     fn execution_state(&self) -> WindowExecutionState {

@@ -302,8 +302,10 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 # AT-SPI bridge for Linux, behind the `a11y` feature. Off by default because it
-# brings the AT-SPI bridge and its async stack. Linux winit preferences also
-# use D-Bus, independently of whether the screen-reader bridge is enabled.
+# brings the AT-SPI bridge and its async stack. The Settings portal
+# (`preferences::linux`) and logind (`lifecycle::linux`) also use D-Bus,
+# whether or not the screen-reader bridge is enabled; the host that reads them
+# (`winit-backend` today) brings `zbus`.
 [target.'cfg(target_os = "linux")'.dependencies]
 # The display source's protocol clients and descriptor primitives, behind the
 # `wayland` and `x11` features (`winit-backend` enables both on Linux).
@@ -440,6 +442,8 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
 winit-backend = [
+    # The Settings portal and logind this host reads on Linux
+    # (`preferences::linux`, `lifecycle::linux`).
     "dep:zbus",
     "dep:futures-util",
     "dep:winit",
@@ -595,7 +599,7 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = ["display", "text"]
+features = ["display", "text", "preferences", "lifecycle"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
@@ -609,7 +613,6 @@ retiring = ["platforms"]
 # each edge from a feature into `platforms/`.
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
-    { from = "display::android", to = "platforms::android::preferences", exit = "ADR-0151", since = "2026-10-22", reason = "the Android display source samples through `with_activity`, the JNI Activity helper the preference file holds; it goes when the preferences become a feature directory and the helper moves into owner/android (ADR-0151 §10)" },
     { from = "display::apple::ios", to = "platforms::ios::os_version", exit = "ADR-0151", since = "2026-10-22", reason = "the iOS display source reads the OS version through `platforms::ios::os_version::read`, widened to `pub(crate)` for it; it goes when the version gates become `version/` (ADR-0151 §10)" },
     { from = "text::android", to = "platforms::android::input", exit = "ADR-0151", since = "2026-10-22", reason = "the input method's editor action arrives as the key the Android input decoder builds (`editor_action_keys`); it goes when the input becomes a feature directory and the key reaches the text input through the input feature's model (ADR-0151 §10)" },
     { from = "text::android", to = "platforms::android::window", exit = "ADR-0151", since = "2026-10-22", reason = "the work the input method's calls hand the owner runs against `AndroidWindow`, which holds the window's text input; it goes when the window becomes a feature directory and hands out its text input through the text position (ADR-0151 §10)" },

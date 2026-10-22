@@ -41,7 +41,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
-use crate::platforms::android::preferences::with_activity;
+use crate::owner::android::activity::with_activity;
 use crate::platforms::android::{AndroidTransfer, AndroidWindow};
 
 /// The view's classes, compiled from `android/java` (see the module doc).

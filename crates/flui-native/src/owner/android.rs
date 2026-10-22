@@ -5,16 +5,25 @@
 //!   positions of the host table that read the loop's own state;
 //! - `java_view`: `FluiView`, the Java side, and the queue of what it
 //!   reported since the loop's last turn (ADR-0247);
+//! - `activity`: the Activity reached through JNI, which every feature asks
+//!   through the same call;
+//! - [`activity_callbacks`]: the Activity's lifecycle callbacks as the looper
+//!   hands them to the hook the table registers, and what it delivers for
+//!   each;
 //! - [`ndk`]: the API level and the NDK functions that exist only from a given
 //!   level on, found by name when the platform is built;
 //! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
-//! Window, input, drag, haptics and preferences stay in `platforms::android`;
-//! the loop reaches them there. The displays and the text input are their
-//! features': the loop holds the displays through the hook the host's table
-//! fills, and the view serves several features, so what it hands a feature's
-//! state is named by the host's table (`AndroidHost`), not by the view.
+//! Window, input, drag and haptics stay in `platforms::android`; the loop
+//! reaches them there. The displays, the text input, the preferences and the
+//! lifecycle are their features': the loop holds what they made through the
+//! hooks the host's table fills (`AndroidHost`), and the view serves several
+//! features, so what it hands a feature's state is named by the table, not by
+//! the view.
 
+#[cfg(target_os = "android")]
+pub(crate) mod activity;
+pub(crate) mod activity_callbacks;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]
@@ -26,7 +35,7 @@ pub(crate) mod poll;
 pub(crate) use looper::AndroidLoop;
 
 #[cfg(target_os = "android")]
-pub(crate) use hooks::{AndroidHost, HostDisplays};
+pub(crate) use hooks::{ActivityPreferences, AndroidHost, HostDisplays};
 
 /// What the host's table fills for the loop.
 #[cfg(target_os = "android")]
@@ -37,17 +46,21 @@ mod hooks {
     use android_activity::ndk::native_window::NativeWindow;
     use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 
+    use super::activity_callbacks::ActivityCallbacks;
     use super::java_view::InputMethod;
     use super::ndk::SymbolSource;
     use crate::error::PlatformError;
+    use crate::owner::notices::NoticeChannel;
     use crate::owner::signal::OwnerSignal;
+    use crate::owner::sources::SystemPreferenceSource;
     use crate::owner::watch::Watch;
     use crate::shared::os_version::android::AndroidApi;
 
     /// What an Android host's table names for its owner thread (ADR-0151
-    /// §10): the displays the loop holds and the features' objects `FluiView`
-    /// hands what it reports. The owner reaches them through the hooks and
-    /// names no feature.
+    /// §10): the displays, the preference source, the notice channel and the
+    /// meaning of the Activity's callbacks the loop holds, and the features'
+    /// objects `FluiView` hands what it reports. The owner reaches them
+    /// through the hooks and names no feature.
     pub(crate) trait AndroidHost: 'static {
         /// What answers the input method's calls through a new view, one per
         /// view.
@@ -62,6 +75,31 @@ mod hooks {
             library: Arc<dyn SymbolSource>,
             owner: Weak<OwnerSignal>,
         ) -> Arc<dyn HostDisplays>;
+
+        /// The system preference source of `app`'s Activity at `api`, for the
+        /// table's preference position; `signal` wakes the owner when a read
+        /// owes the application a delivery.
+        fn preferences(
+            app: &AndroidApp,
+            api: AndroidApi,
+            signal: &Arc<OwnerSignal>,
+        ) -> Box<dyn ActivityPreferences>;
+
+        /// The channel the trim level and the low-memory call take to the
+        /// application.
+        fn notices() -> Arc<dyn NoticeChannel>;
+
+        /// What each of the Activity's lifecycle callbacks means for `app`.
+        fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks>;
+    }
+
+    /// The system preference source the Android loop keeps (ADR-0172): read
+    /// again on a configuration change, on `Resume` and when `FluiView`
+    /// reports a changed setting, and by the table's preference position.
+    pub(crate) trait ActivityPreferences: SystemPreferenceSource + Send + Sync {
+        /// When a read that failed is due again; the looper polls no longer
+        /// than that.
+        fn retry_deadline(&self) -> Option<web_time::Instant>;
     }
 
     /// The device's displays as the loop and its window reach them, which the

@@ -548,6 +548,52 @@ fn replaced_winit_handlers_reach_the_platform() {
     });
 }
 
+/// Where winit reports no lifecycle (Windows, and macOS alike) the host's
+/// lifecycle position is absent: each registration is dropped as it is made,
+/// captures and all, instead of kept for a call that never comes.
+#[cfg(all(feature = "winit-backend", target_os = "windows"))]
+#[test]
+fn winit_lifecycle_registrations_drop_their_captures_without_a_source() {
+    /// Records that it was dropped.
+    struct Capture(Arc<AtomicBool>);
+
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn capture() -> (Arc<AtomicBool>, Capture) {
+        let dropped = Arc::new(AtomicBool::new(false));
+        (Arc::clone(&dropped), Capture(dropped))
+    }
+
+    let platform = flui_native::WinitPlatform::new();
+    let (session_end, held) = capture();
+    platform.on_session_end(Box::new(move |_| {
+        let _ = &held;
+        SessionEndAnswer::Proceed
+    }));
+    let (notice, held) = capture();
+    platform.on_host_notice(Box::new(move |_| {
+        let _ = &held;
+    }));
+    let (reopen, held) = capture();
+    platform.on_reopen(Box::new(move || {
+        let _ = &held;
+    }));
+    for (registration, dropped) in [
+        ("session end", session_end),
+        ("host notice", notice),
+        ("reopen", reopen),
+    ] {
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the {registration} registration was dropped at registration"
+        );
+    }
+}
+
 // --- Win32 ----------------------------------------------------------------
 
 #[cfg(target_os = "windows")]

@@ -107,7 +107,7 @@ impl AndroidHaptics {
     fn vibrator(&self) -> &AndroidVibrator {
         self.vibrator.get_or_init(|| {
             let api = self.api;
-            super::preferences::with_activity(&self.app, |env, activity| {
+            crate::owner::android::activity::with_activity(&self.app, |env, activity| {
                 let permission = env.new_string("android.permission.VIBRATE")?;
                 let granted = env
                     .call_method(
@@ -184,7 +184,7 @@ impl AndroidHaptics {
 
     /// Play `plan` on the vibrator; `false` when the call failed.
     fn vibrate(&self, plan: &AndroidPatternPlan) -> bool {
-        let played = super::preferences::with_activity(&self.app, |env, activity| {
+        let played = crate::owner::android::activity::with_activity(&self.app, |env, activity| {
             let vibrator = system_vibrator(env, activity)?;
             let effect = match plan {
                 AndroidPatternPlan::Envelope {
@@ -422,7 +422,7 @@ fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAns
     let answering = Answering(Some(Arc::clone(answers)));
     let app = app.clone();
     app.clone().run_on_java_main_thread(Box::new(move || {
-        let result = super::preferences::with_activity(&app, |env, activity| {
+        let result = crate::owner::android::activity::with_activity(&app, |env, activity| {
             let window = env
                 .call_method(
                     activity,

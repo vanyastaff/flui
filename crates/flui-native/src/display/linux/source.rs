@@ -74,7 +74,7 @@ struct State {
 /// A wake from sleep marks the snapshot stale and the outputs held old: a
 /// layout change made while the machine slept sent the process no event, so the
 /// next sample reads the compositor again.
-impl crate::shared::system_notice::StaleOnWake for LinuxDisplays {
+impl crate::owner::notices::StaleOnWake for LinuxDisplays {
     fn mark_stale(&self) {
         self.state.lock().reread = true;
         self.source.invalidate();

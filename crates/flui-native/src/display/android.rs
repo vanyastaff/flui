@@ -602,7 +602,7 @@ pub(crate) mod source {
     }
 
     fn sample(app: &AndroidApp, api: AndroidApi) -> Result<Sample, PreferenceQueryError> {
-        crate::platforms::android::preferences::with_activity(app, |env, activity| {
+        crate::owner::android::activity::with_activity(app, |env, activity| {
             env.with_local_frame(64, |env| -> jni::errors::Result<Sample> {
                 let activity_display_id = activity_display_id(env, activity, api)?;
                 let service = env
