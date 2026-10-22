@@ -9,8 +9,6 @@ use crate::accessibility::apple::MacosAccessibility;
 use crate::clipboard::apple::IOSClipboard;
 #[cfg(target_os = "macos")]
 use crate::clipboard::apple::MacOSClipboard;
-#[cfg(target_os = "macos")]
-use crate::config::WindowConfiguration;
 #[cfg(target_os = "ios")]
 use crate::display::apple::ios::IosDisplays;
 #[cfg(target_os = "macos")]
@@ -38,16 +36,18 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
-use crate::platforms::ios::{IOSSystemChrome, IOSWindow};
-#[cfg(target_os = "macos")]
-use crate::platforms::macos::MacOSWindow;
-#[cfg(target_os = "ios")]
 use crate::preferences::apple::ios::IOSPreferences;
 #[cfg(target_os = "macos")]
 use crate::preferences::apple::macos::AppKitPreferences;
 use crate::storage::UserDataDirs;
 #[cfg(target_os = "macos")]
 use crate::text::apple::macos::MacOSTextInput;
+#[cfg(target_os = "ios")]
+use crate::window::apple::ios::{IOSSystemChrome, IOSWindow, IOSWindows};
+#[cfg(target_os = "macos")]
+use crate::window::apple::macos::{MacOSWindow, MacOSWindows};
+#[cfg(target_os = "macos")]
+use crate::window::config::WindowConfiguration;
 
 /// The Apple host's table.
 #[derive(Debug)]
@@ -176,12 +176,14 @@ impl IosHost for Apple {
 impl HostPlatform<Apple> {
     /// Create a new macOS platform with default configuration
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(MacOSLoop::new::<Apple>()?))
+        Self::with_config(WindowConfiguration::default())
     }
 
     /// Create a new macOS platform with custom configuration
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(MacOSLoop::with_config::<Apple>(config)?))
+        // The loop keeps the open windows itself; what they share is the
+        // configuration they open with.
+        Self::try_from_parts(MacOSWindows::new(config), |_| MacOSLoop::new::<Apple>())
     }
 }
 
@@ -194,6 +196,8 @@ impl HostPlatform<Apple> {
     /// Returns [`PlatformError::Init`] if called off the main thread, which is
     /// where UIKit requires every window and view operation to run.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(IOSLoop::new::<Apple>()?))
+        Self::try_from_parts(IOSWindows, |windows| {
+            IOSLoop::new::<Apple>(Arc::clone(windows) as _)
+        })
     }
 }

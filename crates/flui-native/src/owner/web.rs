@@ -39,7 +39,6 @@ use flui_platform::{
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
-use crate::platforms::web::registration::Registration;
 use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
@@ -88,8 +87,39 @@ pub(crate) trait HostDrag: DataTransferSource {
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasListeners,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
+}
+
+/// The DOM listeners a canvas's window keeps, which a feature listening beside
+/// the window adds to: they run only while the window accepts input, and go
+/// when it retires or its opening rolls back.
+pub(crate) trait CanvasListeners {
+    /// Listen for `kind` events on `target`.
+    ///
+    /// # Errors
+    /// What the browser reports when the listener cannot be added.
+    fn add_listener(
+        &mut self,
+        target: &web_sys::EventTarget,
+        kind: &'static str,
+        body: Box<dyn Fn(web_sys::Event)>,
+    ) -> Result<(), crate::OpenWindowError>;
+}
+
+impl dyn CanvasListeners + '_ {
+    /// [`add_listener`](CanvasListeners::add_listener) with any closure.
+    ///
+    /// # Errors
+    /// What the browser reports when the listener cannot be added.
+    pub(crate) fn listen(
+        &mut self,
+        target: &web_sys::EventTarget,
+        kind: &'static str,
+        body: impl Fn(web_sys::Event) + 'static,
+    ) -> Result<(), crate::OpenWindowError> {
+        self.add_listener(target, kind, Box::new(body))
+    }
 }
 
 /// What a canvas's drag registration leaves its window.

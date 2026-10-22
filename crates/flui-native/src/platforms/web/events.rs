@@ -35,19 +35,15 @@ use icu_properties::{CodePointMapData, props::GeneralCategory};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use crate::owner::handlers::WindowCallbacks;
-use flui_platform::{PlatformInput, WindowExecutionState};
-
-use super::{
-    registration::{Registration, effective_focus},
-    window::WebWindow,
-};
 use crate::display::web::PixelRatioWatch;
+use crate::owner::handlers::WindowCallbacks;
+use crate::window::web::{Registration, WebWindow, effective_focus};
+use flui_platform::{PlatformInput, WindowExecutionState};
 
 /// Register all DOM event listeners on the canvas.
 ///
 /// Failure rolls back the installed prefix through the registration's Drop.
-pub(super) fn register_event_listeners(
+pub(crate) fn register_event_listeners(
     window: &WebWindow,
     input_latency: flui_platform::InputLatency,
     transfer: &Arc<dyn crate::owner::web::HostDrag>,
@@ -121,9 +117,9 @@ pub(super) fn register_event_listeners(
 
 /// What a canvas registration serves beside its listeners: its drag source
 /// and target, and its text input.
-pub(super) struct CanvasServices {
-    pub(super) drag: Box<dyn crate::owner::web::CanvasDrag>,
-    pub(super) text: Rc<crate::text::web::WebTextInput>,
+pub(crate) struct CanvasServices {
+    pub(crate) drag: Box<dyn crate::owner::web::CanvasDrag>,
+    pub(crate) text: Rc<crate::text::web::WebTextInput>,
 }
 
 /// How a DOM key event reaches the window: from the canvas, or from the
@@ -201,7 +197,7 @@ fn register_appearance_events(
     callbacks: &Arc<WindowCallbacks>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
-    let Some(query) = super::window::dark_scheme_query() else {
+    let Some(query) = crate::window::web::dark_scheme_query() else {
         return Ok(());
     };
     let callbacks = Arc::clone(callbacks);
@@ -587,7 +583,7 @@ struct PointerLoss {
     contacts: Rc<RefCell<ContactRegistry>>,
     pinch: Rc<Pinch>,
     active: Rc<RefCell<std::collections::HashMap<i32, u16>>>,
-    custody: super::registration::PointerCaptureOwner,
+    custody: crate::window::web::PointerCaptureOwner,
     /// A menu answer the ended press left is not a later menu's.
     menu: Rc<MenuAnswer>,
 }
@@ -666,14 +662,14 @@ pub(crate) fn is_focus_handoff(
         && event
             .dyn_ref::<web_sys::FocusEvent>()
             .and_then(web_sys::FocusEvent::related_target)
-            .is_some_and(|next| super::registration::is_owned_focus(canvas, &next))
+            .is_some_and(|next| crate::window::web::is_owned_focus(canvas, &next))
 }
 
 fn register_focus_events(
     window: &WebWindow,
     loss: &Rc<PointerLoss>,
     registration: &mut Registration,
-) -> Result<Rc<super::window::FocusSync>, crate::OpenWindowError> {
+) -> Result<Rc<crate::window::web::FocusSync>, crate::OpenWindowError> {
     let focus = Rc::new(window.focus_sync());
     let browser = web_sys::window().expect("BUG: construction verified browser");
     for target in [window.canvas().as_ref(), browser.as_ref()] {
@@ -940,7 +936,7 @@ extern "C" {
 }
 
 /// Whether this browser dispatches WebKit gesture events.
-pub(super) fn has_gesture_events() -> bool {
+pub(crate) fn has_gesture_events() -> bool {
     web_sys::window().is_some_and(|window| {
         js_sys::Reflect::has(&window, &JsValue::from_str("GestureEvent")).unwrap_or(false)
     })

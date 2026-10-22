@@ -15,7 +15,7 @@ use flui_platform::{
 
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
-    Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
+    self, Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
     Preferences as _, Services as _, Storage as _, Window as _,
 };
 use crate::host_window::HostWindow;
@@ -508,23 +508,64 @@ impl Default for PathPromptOptions {
 /// (`WindowsPlatform`, `HeadlessPlatform`, …) are this type over each table.
 pub struct HostPlatform<H: Host> {
     owner: Arc<H::Loop>,
+    window_shared: Arc<WindowShared<H>>,
     host: PhantomData<fn() -> H>,
 }
 
+/// What the windows of host `H` share: its window position's
+/// [`Shared`](host::Window::Shared).
+pub(crate) type WindowShared<H> = <<H as Host>::Window as host::Window<<H as Host>::Loop>>::Shared;
+
 impl<H: Host> HostPlatform<H> {
-    /// The platform over `owner`, the host's loop: what each host's
-    /// constructor returns.
-    pub(crate) fn from_loop(owner: H::Loop) -> Self {
+    /// The platform over `window_shared`, what the host's windows share, and
+    /// the loop `owner` builds over the same instance (the loop holds it as
+    /// the hook it declares): what each host's constructor returns. The loop
+    /// gets the one instance the platform keeps, so the two cannot see
+    /// different windows.
+    pub(crate) fn from_parts(
+        window_shared: WindowShared<H>,
+        owner: impl FnOnce(&Arc<WindowShared<H>>) -> H::Loop,
+    ) -> Self {
+        let window_shared = Arc::new(window_shared);
         Self {
-            owner: Arc::new(owner),
+            owner: Arc::new(owner(&window_shared)),
+            window_shared,
             host: PhantomData,
         }
+    }
+
+    /// [`Self::from_parts`] for a loop whose construction can fail.
+    ///
+    /// # Errors
+    /// What `owner` reports.
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32"
+    ))]
+    pub(crate) fn try_from_parts<E>(
+        window_shared: WindowShared<H>,
+        owner: impl FnOnce(&Arc<WindowShared<H>>) -> Result<H::Loop, E>,
+    ) -> Result<Self, E> {
+        let window_shared = Arc::new(window_shared);
+        Ok(Self {
+            owner: Arc::new(owner(&window_shared)?),
+            window_shared,
+            host: PhantomData,
+        })
     }
 
     /// The host's loop, for what a host offers beyond [`Platform`] (test
     /// controls, a scene registration).
     pub(crate) fn owner(&self) -> &H::Loop {
         &self.owner
+    }
+
+    /// What the host's windows share, for what its window position offers
+    /// beyond [`Platform`] (headless test controls).
+    pub(crate) fn window_shared(&self) -> &Arc<WindowShared<H>> {
+        &self.window_shared
     }
 
     /// A handle on the host's loop, for a host whose loop runs as an `Arc`.
@@ -538,10 +579,11 @@ where
     H::Loop: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // What the windows share is the loop's to show: it holds it too.
         f.debug_struct("HostPlatform")
             .field("host", &H::NAME)
             .field("loop", &self.owner)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -578,11 +620,11 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        H::Window::open(&self.owner, options)
+        H::Window::open(&self.owner, &self.window_shared, options)
     }
 
     fn active_window(&self) -> Option<WindowId> {
-        H::Window::active(&self.owner)
+        H::Window::active(&self.owner, &self.window_shared)
     }
 
     fn preferences(&self) -> Result<SystemPreferences, PlatformError> {
@@ -665,11 +707,11 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn window_capabilities(&self) -> WindowCapabilities {
-        H::Window::capabilities(&self.owner)
+        H::Window::capabilities(&self.owner, &self.window_shared)
     }
 
     fn window_frame_inset(&self, scale_factor: f64) -> Size<f64> {
-        H::Window::frame_inset(&self.owner, scale_factor)
+        H::Window::frame_inset(&self.owner, &self.window_shared, scale_factor)
     }
 
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {

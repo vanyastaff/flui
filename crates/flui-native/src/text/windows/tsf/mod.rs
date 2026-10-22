@@ -75,8 +75,8 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
+use crate::owner::windows::WindowRef;
 use crate::owner::windows::com_apartment::ComApartment;
-use crate::platforms::windows::platform::WindowRef;
 
 #[cfg(test)]
 thread_local! {
@@ -243,7 +243,7 @@ impl TextServices {
     ///
     /// The COM error of the step that failed; the caller falls back to the
     /// `WM_CHAR` path.
-    pub(super) fn activate(
+    pub(crate) fn activate(
         window: WindowRef,
         apartment: Rc<ComApartment>,
     ) -> windows_core::Result<Rc<Self>> {

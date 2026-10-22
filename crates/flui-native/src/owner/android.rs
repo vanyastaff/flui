@@ -14,12 +14,14 @@
 //!   level on, found by name when the platform is built;
 //! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
-//! Window, input and haptics stay in `platforms::android`; the loop reaches
-//! them there. The displays, the text input, the preferences, the lifecycle,
-//! the clipboard and drag and drop are their features': the loop holds what
-//! they made through the hooks the host's table fills (`AndroidHost`), and the
-//! view serves several features, so what it hands a feature's state is named
-//! by the table, not by the view.
+//! The window is the window feature's (`window::android`): the loop holds it as
+//! an `ActivityWindow`, with the Activity's lifecycle facts (`ActivityFlags`)
+//! it records. Input and haptics stay in `platforms::android`; the loop
+//! reaches them there. The displays, the text input, the preferences, the
+//! lifecycle, the clipboard and drag and drop are their features': the loop
+//! holds what they made through the hooks the host's table fills
+//! (`AndroidHost`), and the view serves several features, so what it hands a
+//! feature's state is named by the table, not by the view.
 
 #[cfg(target_os = "android")]
 pub(crate) mod activity;
@@ -32,7 +34,7 @@ pub(crate) mod ndk;
 pub(crate) mod poll;
 
 #[cfg(target_os = "android")]
-pub(crate) use looper::AndroidLoop;
+pub(crate) use looper::{ActivityFlags, ActivityWindow, AndroidLoop};
 
 #[cfg(target_os = "android")]
 pub(crate) use hooks::{ActivityPreferences, AndroidHost, HostDisplays};

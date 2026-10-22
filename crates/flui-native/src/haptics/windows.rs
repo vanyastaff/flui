@@ -38,7 +38,7 @@ use super::degradation::{
     PenCommand, PenController, PenWaveform, actuator_for, pen_feedback_step, pen_timeline,
     windows_capabilities, windows_feedback, windows_pattern,
 };
-use crate::platforms::windows::platform::WindowRef;
+use crate::owner::windows::WindowRef;
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 
@@ -529,10 +529,10 @@ mod tests {
     use crate::platform::Platform as _;
     use crate::platforms::windows::WindowsWindow;
     use crate::platforms::windows::events::SURFACE;
-    use crate::platforms::windows::platform::{WindowRef, with_window_context};
     use crate::shared::pointer_assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
+    use crate::window::windows::proc::{WindowRef, with_window_context};
     use flui_platform::HapticFeedback;
     use flui_platform::WindowOptions;
 

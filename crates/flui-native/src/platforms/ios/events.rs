@@ -27,7 +27,7 @@ use flui_platform::PlatformInput;
 
 /// Which native callback delivered a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TouchPhase {
+pub(crate) enum TouchPhase {
     Down,
     Move,
     Up,
@@ -42,7 +42,7 @@ const PENCIL: NativeContact = NativeContact(0);
 const CURSOR: NativeContact = NativeContact(1);
 
 /// Contacts admitted by one UIKit view; no address arithmetic mints identities.
-pub(super) struct TouchInputState {
+pub(crate) struct TouchInputState {
     contacts: ContactRegistry,
     /// The touch the primary Pencil's contact is, while its tip is down.
     pencil_touch: Option<usize>,
@@ -68,7 +68,7 @@ impl Default for TouchInputState {
 impl TouchInputState {
     /// The recognizer is restricted to Stylus at registration; a mouse cannot
     /// acquire Pencil sensors through this path.
-    pub(super) fn hover(
+    pub(crate) fn hover(
         &mut self,
         recognizer: &UIHoverGestureRecognizer,
         view: &UIView,
@@ -126,7 +126,7 @@ impl TouchInputState {
         events
     }
 
-    pub(super) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
+    pub(crate) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
         let address = std::ptr::from_ref(touch) as usize;
         let kind = pointer_kind(touch);
         let contact = if kind == PointerKind::Mouse {

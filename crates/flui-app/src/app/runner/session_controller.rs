@@ -4,7 +4,7 @@ use super::installed_host::Installation;
 use super::owner_dispatch::{PresentationDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_native::HostWindow;
-use flui_native::shared::window_installation::WindowInstallation;
+use flui_native::WindowInstallation;
 use flui_runtime::dev_agent::DevAgentAttachment;
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 

@@ -33,7 +33,6 @@ mod wake_deadline;
 use std::{
     any::TypeId,
     cell::RefCell,
-    collections::HashMap,
     rc::Rc,
     sync::{Arc, OnceLock, Weak},
 };
@@ -41,7 +40,6 @@ use std::{
 use flui_platform::CursorError;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use parking_lot::Mutex;
 use windows::{
     Win32::{
         Foundation::{
@@ -54,10 +52,10 @@ use windows::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             WindowsAndMessaging::{
                 CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                HCURSOR, HICON, HWND_MESSAGE, IDC_ARROW, IsWindowVisible, LoadCursorW, MSG,
-                MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SW_SHOWNORMAL, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_QUIT, WNDCLASSW,
+                HCURSOR, HICON, HWND_MESSAGE, IDC_ARROW, LoadCursorW, MSG, MWMO_INPUTAVAILABLE,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SW_SHOWNORMAL, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_QUIT, WNDCLASSW,
             },
         },
     },
@@ -66,12 +64,17 @@ use windows::{
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
-use crate::platforms::windows::platform::{WindowMap, WindowRef};
 use crate::{
-    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
-    owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
-    shared::hwnd_affinity::UserDataRefusal,
+    error::PlatformError,
+    executor::BackgroundExecutor,
+    host,
+    owner::OwnerHooks,
+    owner::OwnerPlatform,
+    owner::handlers::{OpenWindows, PlatformHandlers},
+    owner::hwnd_affinity::UserDataRefusal,
+    platform::Platform,
+    platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -159,6 +162,36 @@ pub(crate) trait HostDisplays: StaleOnWake {
     fn sample_count(&self) -> usize;
 }
 
+/// One window as an object that outlives its borrow of the window names it:
+/// the handle and the identity of the context created with it. The OS
+/// recycles handles, so a handle alone can name a later window; the window
+/// feature's `with_context` reaches only the context this window was created
+/// with. Plain values, so an `Arc`-shared object can hold one on any thread,
+/// and the owner's, so a hook that is handed a window names no feature.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct WindowRef {
+    hwnd: isize,
+    identity: WindowIdentity,
+}
+
+impl WindowRef {
+    pub(crate) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
+        Self {
+            hwnd: hwnd.0 as isize,
+            identity,
+        }
+    }
+
+    pub(crate) fn hwnd(self) -> HWND {
+        HWND(self.hwnd as *mut core::ffi::c_void)
+    }
+
+    /// The identity of the context the window was created with.
+    pub(crate) fn identity(self) -> WindowIdentity {
+        self.identity
+    }
+}
+
 /// The host's drag-and-drop transport as the loop, its owner window and the
 /// windows it opens reach it, which the table makes ([`WindowsHost::drag`]):
 /// the platform's one data-transfer source, and its part of the owner window's
@@ -180,6 +213,25 @@ impl host::Drag<WindowsLoop> for WindowsLoop {
     }
 }
 
+/// The windows of FLUI's class, which the window feature opens and keeps
+/// (ADR-0151 §10).
+///
+/// The loop holds them without naming them: the host builds the window
+/// feature's object and hands it to [`WindowsLoop::new`]. The loop asks it
+/// whether a window is left (the exit policy), and delivers to it what the main
+/// loop and the modal loops pace: a wake deadline's frames and the paints a
+/// modal drag-and-drop loop would otherwise hold back.
+pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
+    /// Asks every window for the frame a delivered wake deadline is due. A
+    /// window's frame request runs user code, which may open or close
+    /// windows; nothing of the set is held while it runs.
+    fn redraw_for_deadline(&self);
+
+    /// Paints every window with an invalid region now, as the main loop would
+    /// while a modal loop stands in for it.
+    fn paint_invalid(&self);
+}
+
 /// One feature's part of the procedure of FLUI's window class.
 ///
 /// The class and its raw procedure are the owner's: the procedure holds the
@@ -188,9 +240,24 @@ impl host::Drag<WindowsLoop> for WindowsLoop {
 /// message's dispatch, and a message no hook answers goes to `DefWindowProcW`.
 /// A window of the class, once created, is announced to every hook
 /// ([`Self::created`]).
+///
+/// Each hook lists the messages it answers ([`Self::answers`]) and answers no
+/// other, so a host whose hooks list disjoint sets gets the same answer to a
+/// message in any order. A hook may also hear a message it does not answer
+/// and pass it on; the order then decides only that it hears the message
+/// before the hook that answers it.
 pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
+
+    /// Whether this hook answers `msg`, with `wparam` telling apart the
+    /// messages that share one number (the timer a `WM_TIMER` names, the
+    /// command a `WM_SYSCOMMAND` carries). [`Self::message`] answers only what
+    /// this lists; the default lists nothing, for a hook that only hears
+    /// [`Self::created`].
+    fn answers(&self, _msg: u32, _wparam: WPARAM) -> bool {
+        false
+    }
 
     /// Answers `msg` for `hwnd`, or passes it on with `None`.
     ///
@@ -261,6 +328,10 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
         // SAFETY: the arguments as Win32 delivered them, per this function's
         // `# Safety` contract.
         if let Some(result) = unsafe { hook.message(hwnd, msg, wparam, lparam) } {
+            debug_assert!(
+                hook.answers(msg, wparam),
+                "BUG: a window hook answered message {msg:#x}, which its `answers` does not list"
+            );
             return result;
         }
     }
@@ -288,13 +359,13 @@ unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
     }
 }
 
-/// Identity of one native window's context, minted once per
-/// [`WindowsWindow::new`](crate::platforms::windows::WindowsWindow::new) and
-/// held by both the context and every wrapper clone. Unlike the context's
-/// address it is never reused, so a wrapper can tell its own window from one
-/// the OS built behind a recycled handle. The owner's message-only window has
-/// one too, drawn from the same source.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Identity of one native window's context, minted once per window the window
+/// feature opens and held by both the context and every wrapper clone. Unlike
+/// the context's address it is never reused, so a wrapper can tell its own
+/// window from one the OS built behind a recycled handle. The owner's
+/// message-only window has one too, drawn from the same source. Identities are
+/// minted in increasing order, so they order windows by when they opened.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {
@@ -419,8 +490,8 @@ impl WindowsLoop {
         let source = AtomicU64::new(0);
         for attempt in 0..3 {
             let refused = std::panic::catch_unwind(|| {
-                Self::admit_with_config::<tests::TestHost>(
-                    WindowConfiguration::default(),
+                Self::admit::<tests::TestHost>(
+                    Arc::new(tests::NoWindows),
                     &source,
                     tests::TestHost::drag,
                 )
@@ -459,17 +530,15 @@ pub struct WindowsLoop {
     /// Message-only window for platform messages
     message_window: HWND,
 
-    /// All created windows (keyed by HWND)
-    pub(crate) windows: Arc<WindowMap>,
+    /// The windows of FLUI's class: the window feature's, which opens and
+    /// keeps them.
+    pub(crate) windows: Arc<dyn ClassWindows>,
 
     // The platform-level handlers (callbacks from platform to framework)
     // are not a field: they live in the owner control context, reachable
     // only on the owner thread through `owner_control.shares`.
     /// Background executor for async tasks
     background_executor: Arc<BackgroundExecutor>,
-
-    /// Window configuration (shared across all windows)
-    pub(crate) config: WindowConfiguration,
 
     /// The monitors this platform last sampled and the registry of their ids,
     /// as the table made them.
@@ -488,14 +557,13 @@ pub struct WindowsLoop {
     pub(crate) apartment: com_apartment::ApartmentHold,
 }
 
-// SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
-// only an `Arc`-shared signal and a locked address (its owner-thread state,
-// callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
-// reached only through the owner-thread gate `OwnerControl::shares`), the
-// executors are `Arc`-shared and internally synchronized, `displays` is
-// `Send + Sync` by its trait's bound, and `config` is plain data. The
-// only non-`Sync` member is `message_window: HWND`, a bare address that is
-// never dereferenced here.
+// SAFETY, per field: `windows` and `displays` are `Send + Sync` by their
+// traits' bounds, `owner_control` holds only an `Arc`-shared signal and a
+// locked address (its owner-thread state, callbacks included, sits behind the
+// owner window's `GWLP_USERDATA` and is reached only through the owner-thread
+// gate `OwnerControl::shares`), and the executors are `Arc`-shared and
+// internally synchronized. The only non-`Sync` member is
+// `message_window: HWND`, a bare address that is never dereferenced here.
 //
 // NOT claimed — an earlier version of this comment claimed both, wrongly: that
 // an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
@@ -504,9 +572,9 @@ pub struct WindowsLoop {
 // address alone aliases nothing; any Win32 call made through it still owes the
 // thread-affinity obligation. The soundness-relevant slice of that obligation
 // — dereferencing per-window `GWLP_USERDATA` contexts, and `DestroyWindow` —
-// is discharged by the `with_window_context`/`teardown_route` gates of
-// `platforms::windows::platform` (see `WindowsWindow`'s `Send`/`Sync` docs);
-// the remaining affine calls here
+// is discharged by the window feature's `with_window_context`/`teardown_route`
+// gates over `hwnd_affinity` (see `WindowsWindow`'s `Send`/`Sync` docs); the
+// remaining affine calls here
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
@@ -520,54 +588,43 @@ unsafe impl Sync for WindowsLoop {}
 impl std::fmt::Debug for WindowsLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
     // payloads with no useful Debug form.
-    //
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds `windows` would deadlock silently — and a Debug
-    // impl gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("WindowsLoop");
-        match self.windows.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
-        };
-        out.finish_non_exhaustive()
+        f.debug_struct("WindowsLoop")
+            .field("windows", &self.windows)
+            .finish_non_exhaustive()
     }
 }
 
 impl WindowsLoop {
-    /// A loop whose windows follow `config` (hotkeys, debouncing, fullscreen
-    /// behavior) and dispatch through the hooks and subscribers `H` names.
+    /// A loop whose windows are `windows`, the window feature's, and that
+    /// dispatches through the hooks and subscribers `H` names.
     ///
     /// # Errors
     ///
     /// [`PlatformError::Init`] when the process's window class is already
     /// registered for another host, and whatever the native setup refuses.
-    pub(crate) fn with_config<H: WindowsHost>(
-        config: WindowConfiguration,
+    pub(crate) fn new<H: WindowsHost>(
+        windows: Arc<dyn ClassWindows>,
     ) -> Result<Self, PlatformError> {
-        Self::admit_with_config::<H>(config, WindowIdentity::source(), H::drag)
+        Self::admit::<H>(windows, WindowIdentity::source(), H::drag)
     }
 
-    /// [`Self::with_config`] holding `drag` in place of the transport `H`
-    /// makes, for a test that drives the transport through a handle of its
-    /// own.
+    /// [`Self::new`] holding `drag` in place of the transport `H` makes, for
+    /// a test that drives the transport through a handle of its own.
     #[cfg(test)]
     pub(crate) fn with_drag<H: WindowsHost>(
-        config: WindowConfiguration,
+        windows: Arc<dyn ClassWindows>,
         drag: Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
-        Self::admit_with_config::<H>(config, WindowIdentity::source(), move || drag)
+        Self::admit::<H>(windows, WindowIdentity::source(), move || drag)
     }
 
-    /// [`Self::with_config`] with the identity drawn from `source` and the
-    /// transport `drag` makes. The owner control's identity is reserved first:
+    /// [`Self::new`] with the identity drawn from `source` and the transport
+    /// `drag` makes. The owner control's identity is reserved first:
     /// exhaustion refuses before COM is initialized or any HWND exists, so a
     /// refusal (and every caught retry) leaves nothing to release.
-    fn admit_with_config<H: WindowsHost>(
-        config: WindowConfiguration,
+    fn admit<H: WindowsHost>(
+        windows: Arc<dyn ClassWindows>,
         source: &std::sync::atomic::AtomicU64,
         drag: impl FnOnce() -> Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
@@ -603,7 +660,6 @@ impl WindowsLoop {
 
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
-        let windows = Arc::new(Mutex::new(HashMap::new()));
         let drag = drag();
         let displays = H::displays();
         let notices = H::notices();
@@ -659,7 +715,6 @@ impl WindowsLoop {
             message_window,
             windows,
             background_executor,
-            config,
             displays,
             affinity: flui_foundation::OwnerAffinity::new(),
             apartment: com_apartment::ApartmentHold::new(apartment),
@@ -839,7 +894,7 @@ impl WindowsLoop {
                         .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
                     {
                         let before = frame_count();
-                        Self::redraw_deadline_windows(&self.windows);
+                        self.windows.redraw_for_deadline();
                         delivered = Some(DeadlineDelivery {
                             arm,
                             frames: before,
@@ -965,60 +1020,6 @@ impl WindowsLoop {
             |hook| Some((hook(), Arc::downgrade(hook))),
         )
         .or_resume(None)
-    }
-
-    /// Ask every window of `windows` for the frame a delivered wake deadline
-    /// is due: the main loop's delivery, and the modal drag loop's.
-    pub(crate) fn redraw_deadline_windows(windows: &WindowMap) {
-        // Traverse a bounded identity snapshot without a per-frame Vec.
-        // A minimized window's frame request runs user code, which may open
-        // or close windows; each owning Arc is cloned under the registry
-        // lock and used only after releasing it.
-        let limit = windows
-            .lock()
-            .values()
-            .map(|window| window.identity.0.get())
-            .max()
-            .unwrap_or(0);
-        let mut after = 0;
-        loop {
-            let next = windows
-                .lock()
-                .values()
-                .filter(|window| {
-                    let identity = window.identity.0.get();
-                    identity > after && identity <= limit
-                })
-                .min_by_key(|window| window.identity.0.get())
-                .cloned();
-            let Some(window) = next else {
-                break;
-            };
-            after = window.identity.0.get();
-            let _ = crate::platforms::windows::platform::with_window_context_checked(
-                window.hwnd(),
-                "deadline redraw",
-                |context| {
-                    if context.identity != window.identity {
-                        return;
-                    }
-                    // SAFETY: a query of the live HWND this context belongs to,
-                    // on its creating thread.
-                    let shown = unsafe { IsWindowVisible(window.hwnd()) }.as_bool();
-                    if context.mode.get().is_minimized() || !shown {
-                        // WM_PAINT skips a minimized window's frame request,
-                        // Windows rarely paints one at all, and never paints a
-                        // hidden one, so an invalidation would strand the
-                        // delivered deadline until unrelated input. Request the
-                        // frame directly instead: its frame services timers and
-                        // gestures for a window nothing can see.
-                        context.request_frame();
-                    } else {
-                        flui_platform::PlatformWindow::request_redraw(window.as_ref());
-                    }
-                },
-            );
-        }
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.

@@ -2,12 +2,14 @@
 //! the owner lane every thread-affine AppKit call travels through, and the wake
 //! pump that actuates the registered wake deadline.
 //!
-//! [`MacOSLoop`] is the loop of the macOS host's table; windows, the
-//! clipboard and the other features keep their code under `platforms::macos`
-//! and reach the owner thread through what this module re-exports. The loop
-//! holds the displays, the preference source, the notice channel and the
-//! notice sources through the hooks the table makes ([`MacosHost`]), and is
-//! the table's displays, preference and lifecycle position.
+//! [`MacOSLoop`] is the loop of the macOS host's table. It tracks the open
+//! windows as [`CallbackWindow`]s, the window feature's, without naming them
+//! ([`WindowRegistry`]); the clipboard and the other features keep their code
+//! under `platforms::macos` and reach the owner thread through what this
+//! module re-exports. The loop holds the displays, the preference source, the
+//! notice channel and the notice sources through the hooks the table makes
+//! ([`MacosHost`]), and is the table's displays, preference and lifecycle
+//! position.
 
 // `NSApplication.activateIgnoringOtherApps`, which the loop calls as the
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
@@ -91,10 +93,9 @@ use objc2_app_kit::{NSApplication, NSScreen};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
+use crate::owner::handlers::CallbackWindow;
 use crate::platform::HostPlatform;
-use crate::platforms::macos::MacOSWindow;
 use crate::{
-    config::WindowConfiguration,
     error::PlatformError,
     executor::BackgroundExecutor,
     owner::DirectOwnerHooks,
@@ -111,7 +112,14 @@ use crate::{
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences, WindowOptions};
+use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences};
+
+/// The windows the macOS loop tracks, keyed by `NSWindow` pointer: the window
+/// feature's, which the loop holds without naming them (ADR-0151 §10). Each
+/// window adds itself when it opens and removes itself when it goes; the loop
+/// asks them for frames from the wake pump and closes them when the
+/// application stops.
+pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn CallbackWindow>>>>;
 
 /// The macOS host's loop: the state every position of its table reads.
 ///
@@ -121,7 +129,7 @@ pub struct MacOSLoop {
     pub(crate) app: Retained<NSApplication>,
 
     /// Open windows (keyed by NSWindow pointer as u64)
-    pub(crate) windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
+    pub(crate) windows: WindowRegistry,
 
     /// Platform event handlers
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -143,9 +151,6 @@ pub struct MacOSLoop {
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
-
-    /// Window configuration
-    pub(crate) config: WindowConfiguration,
 
     /// The id registry and last snapshot of the displays, as the table made
     /// them; shared with every window so each names its screen by the same
@@ -224,10 +229,6 @@ impl std::fmt::Debug for MacOSLoop {
 }
 
 impl MacOSLoop {
-    pub(crate) fn new<H: MacosHost>() -> Result<Self, PlatformError> {
-        Self::with_config::<H>(WindowConfiguration::default())
-    }
-
     /// One of the application's handlers, as a slot of the handler set.
     pub(crate) fn handler<H>(
         &self,
@@ -236,9 +237,12 @@ impl MacOSLoop {
         Field::new(&*self.handlers, project)
     }
 
-    pub(crate) fn with_config<H: MacosHost>(
-        config: WindowConfiguration,
-    ) -> Result<Self, PlatformError> {
+    /// A loop over the displays `H` makes.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] off the AppKit main thread.
+    pub(crate) fn new<H: MacosHost>() -> Result<Self, PlatformError> {
         // AppKit is touched below (`sharedApplication`,
         // `setActivationPolicy`), so the main-thread requirement starts HERE,
         // not at `run` — `MainThreadMarker::new()` both checks it and produces
@@ -259,7 +263,7 @@ impl MacOSLoop {
             // Bind the fields the wake pump needs as locals first: the pump is
             // passed a wake closure over the window map, and both must exist
             // before the struct literal that owns them.
-            let windows = Arc::new(Mutex::new(HashMap::new()));
+            let windows: WindowRegistry = Arc::new(Mutex::new(HashMap::new()));
             let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
             let wake_pump = wake_pump::WakePump::new(Arc::clone(&handlers), {
                 let windows = Arc::clone(&windows);
@@ -269,7 +273,8 @@ impl MacOSLoop {
                     // reaches the owner lane, and ADR-0038 §5's
                     // discipline for re-entrant calls applies to a lock
                     // held across one just as it does to the handler lock.
-                    let open: Vec<Arc<MacOSWindow>> = windows.lock().values().cloned().collect();
+                    let open: Vec<Arc<dyn CallbackWindow>> =
+                        windows.lock().values().cloned().collect();
                     for window in open {
                         // A frame for a window whose surface is already
                         // gone is the renderer's to decline — this only
@@ -301,7 +306,6 @@ impl MacOSLoop {
                 handlers,
                 wake_pump,
                 background_executor,
-                config,
                 displays,
                 _screen_observer: screen_observer,
                 notices,
@@ -317,30 +321,6 @@ impl MacOSLoop {
 
     pub(crate) fn app(&self) -> &Retained<NSApplication> {
         &self.app
-    }
-
-    /// Turn a position and a normal rectangle measured on a display into
-    /// global logical pixels, which is all a window knows how to place. A
-    /// display that is gone leaves them global, as the options document.
-    pub(crate) fn measure_placement_globally(&self, options: &mut WindowOptions) {
-        let Some(display) = options.display.take() else {
-            return;
-        };
-        let Some(mtm) = MainThreadMarker::new() else {
-            return;
-        };
-        let Ok(snapshot) = self.displays.snapshot(mtm) else {
-            return;
-        };
-        let display = snapshot.get(display);
-        options.position = options
-            .position
-            .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
-        if let Some(normal) = options.normal_geometry.as_mut() {
-            normal.position = normal
-                .position
-                .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
-        }
     }
 }
 

@@ -1,15 +1,12 @@
-//! The Android host's features: window, input, system chrome and safe area.
+//! The Android host's input.
 //!
 //! The loop that polls `AndroidApp`, the Java view and the NDK lookup are the
-//! owner thread's (`crate::owner::android`); the features here read the
-//! Activity through it.
+//! owner thread's (`crate::owner::android`), the window with its safe area
+//! and system chrome is the window feature's (`crate::window::android`), and
+//! the displays, the text input, the preferences, the lifecycle, the
+//! clipboard, drag and drop and haptics are their features'; the input here
+//! reads the Activity through the loop.
 
-mod gesture_exclusion;
 pub mod input;
-mod safe_area;
-mod system_chrome;
-pub mod window;
 
 pub(crate) use input::AndroidInputState;
-pub(crate) use system_chrome::AndroidSystemChrome;
-pub use window::AndroidWindow;

@@ -305,9 +305,8 @@ use crate::{
     drag::offers::payload_of_bytes,
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
-    owner::web::{CanvasDrag, HostDrag},
+    owner::web::{CanvasDrag, CanvasListeners, HostDrag},
     platforms::web::events::{answer, pointer_position},
-    platforms::web::registration::Registration,
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -463,7 +462,7 @@ impl HostDrag for WebTransfer {
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasListeners,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
         Ok(Box::new(register(canvas, &self, callbacks, registration)?))
     }
@@ -798,7 +797,7 @@ fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
     callbacks: &Arc<WindowCallbacks>,
-    registration: &mut Registration,
+    registration: &mut dyn CanvasListeners,
 ) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
     let source = Arc::new(WebDragSource::new());

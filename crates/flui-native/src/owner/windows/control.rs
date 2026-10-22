@@ -13,8 +13,7 @@
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
 use super::modal_loop::ModalFrames;
-use super::{FrameCount, WindowIdentity};
-use crate::platforms::windows::platform::WindowMap;
+use super::{ClassWindows, FrameCount, WindowIdentity};
 use crate::{
     PlatformError, WakeRegistrationError,
     owner::DirectOwnerHooks,
@@ -24,15 +23,15 @@ use crate::{
     owner::WindowOpen,
     owner::call_point::{Called, Field, call},
     owner::handlers::PlatformHandlers,
+    owner::hwnd_affinity::UserDataRefusal,
+    owner::hwnd_affinity::UserDataVerdict,
+    owner::hwnd_affinity::classify_user_data_access,
     owner::notices::NoticeChannel,
     owner::panic_boundary::contain_owner_callback,
     owner::signal::OwnerSignal,
     owner::signal::OwnerTurnSlot,
     owner::sources::SystemPreferenceSource,
     platform::Platform,
-    shared::hwnd_affinity::UserDataRefusal,
-    shared::hwnd_affinity::UserDataVerdict,
-    shared::hwnd_affinity::classify_user_data_access,
 };
 use flui_platform::WindowOptions;
 use parking_lot::Mutex;
@@ -99,7 +98,7 @@ pub(crate) struct OwnerControlContext {
     displays: Arc<dyn super::HostDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
-    windows: Weak<WindowMap>,
+    windows: Weak<dyn ClassWindows>,
     /// Set while an [`EXIT_POLICY`] message is queued; see
     /// [`ExitPolicyRequest`].
     exit_policy_pending: Arc<AtomicBool>,
@@ -343,7 +342,7 @@ impl OwnerControl {
     /// hooks `H` names and the owner window's `owner_hooks`.
     pub(crate) fn new<H: super::WindowsHost>(
         identity: WindowIdentity,
-        windows: Weak<WindowMap>,
+        windows: Weak<dyn ClassWindows>,
         owner_hooks: Vec<Arc<dyn OwnerMessages>>,
         displays: Arc<dyn super::HostDisplays>,
         notices: Arc<dyn NoticeChannel>,
@@ -657,7 +656,7 @@ fn names_owner_class(hwnd: HWND) -> bool {
     // measured without its terminator, the convention `class_name_matches`
     // expects.
     let (copied, expected) = unsafe { (GetClassNameW(hwnd, &mut name), OWNER_CLASS.as_wide()) };
-    crate::shared::hwnd_affinity::class_name_matches(&name, copied, expected)
+    crate::owner::hwnd_affinity::class_name_matches(&name, copied, expected)
 }
 
 /// Ends the owner's message loop, as `Platform::quit` does: admission and
@@ -682,9 +681,9 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
     handlers: &RefCell<PlatformHandlers>,
-    windows: &Weak<WindowMap>,
+    windows: &Weak<dyn ClassWindows>,
 ) -> bool {
-    let no_windows = || windows.upgrade().is_some_and(|map| map.lock().is_empty());
+    let no_windows = || windows.upgrade().is_some_and(|windows| windows.is_empty());
     if !signal.accepting() || !no_windows() {
         return false;
     }

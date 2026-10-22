@@ -19,7 +19,11 @@
 //! loop keeps is the loop itself: the owner's host trait makes the object
 //! (`WindowsHost::drag`, `WebHost::clipboard`, ...), the loop keeps it in a
 //! typed field and answers the position from it, so a table cannot name one
-//! type and build another. The window-level positions
+//! type and build another. The window position has an object of its own,
+//! what the platform's windows share ([`Window::Shared`]): the platform holds
+//! it beside the loop, and the loop, which names no feature, reaches what it
+//! needs of it through a hook its own module declares. The window-level
+//! positions
 //! (text, accessibility, haptics, system chrome) are what every window of the
 //! host hands out; the table names their type, and a window that has none
 //! answers as the window contract says today (no object), until the absence
@@ -165,20 +169,34 @@ pub trait Services {
 /// The window position: opening windows, and what is known of them before
 /// one exists.
 pub trait Window<O> {
+    /// What the windows of one platform share beside the loop `O`: what a
+    /// window opens with and what the windows keep in common (the Win32
+    /// handle map and configuration, the macOS configuration, the UIKit window
+    /// factory, the winit frame inset and window manager's view, the headless
+    /// window model), `()` where the loop keeps it all. The host's constructor
+    /// builds one, hands it to the loop as the hook the loop declares and to
+    /// the platform, which passes it to every call of this position: one
+    /// instance for both (`HostPlatform::from_parts`).
+    type Shared: Send + Sync + 'static;
+
     /// [`Platform::open_window`].
     ///
     /// # Errors
     /// What [`Platform::open_window`] reports.
-    fn open(owner: &O, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    fn open(
+        owner: &O,
+        shared: &Arc<Self::Shared>,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
 
     /// [`Platform::active_window`].
-    fn active(owner: &O) -> Option<WindowId>;
+    fn active(owner: &O, shared: &Self::Shared) -> Option<WindowId>;
 
     /// [`Platform::window_capabilities`].
-    fn capabilities(owner: &O) -> WindowCapabilities;
+    fn capabilities(owner: &O, shared: &Self::Shared) -> WindowCapabilities;
 
     /// [`Platform::window_frame_inset`].
-    fn frame_inset(owner: &O, scale_factor: f64) -> Size<f64>;
+    fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
 
     /// [`Platform::on_window_event`].
     fn on_event(owner: &O, callback: Box<dyn FnMut(WindowEvent) + Send>);
@@ -326,22 +344,25 @@ impl<F> std::fmt::Debug for Absent<F> {
 }
 
 impl<O> Window<O> for Absent<position::Window> {
-    fn open(_: &O, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    /// No window is ever opened, so nothing is shared.
+    type Shared = ();
+
+    fn open(_: &O, _: &Arc<()>, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         // Not `Unavailable`, which promises a later call may succeed.
         Err(OpenWindowError::Backend {
             message: "this platform opens no windows".to_owned(),
         })
     }
 
-    fn active(_: &O) -> Option<WindowId> {
+    fn active(_: &O, (): &()) -> Option<WindowId> {
         None
     }
 
-    fn capabilities(_: &O) -> WindowCapabilities {
+    fn capabilities(_: &O, (): &()) -> WindowCapabilities {
         WindowCapabilities::NONE
     }
 
-    fn frame_inset(_: &O, _: f64) -> Size<f64> {
+    fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
         Size::new(0.0, 0.0)
     }
 

@@ -196,7 +196,7 @@ text-input paths its platform requires.
      ([slint-ui/slint@277e7676ce
      internal/backends/android-activity/java/SlintAndroidJavaHelper.java:465-482](https://github.com/slint-ui/slint/blob/277e7676ce/internal/backends/android-activity/java/SlintAndroidJavaHelper.java#L465-L482)), replace the
      polled `safe_area::sample` (one `getRootWindowInsets` read after a resize,
-     system bars and cutout only: `crates/flui-native/src/platforms/android/safe_area.rs:69-73`)
+     system bars and cutout only: `safe_area` in `crates/flui-native/src/window/android.rs`)
      and add the IME inset, which exists nowhere in the pipeline today.
      Each change is posted to the owner.
 
@@ -405,7 +405,7 @@ text-input paths its platform requires.
   | `crates/flui-cli/templates/platforms/android/build.gradle.kts` | Host sources through a generated directory or `sourceSets`; keep rules; the `proguard-rules.pro` it names but the template set lacks |
   | `crates/flui-native/src/owner/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
   | `crates/flui-native/android/java/` | `FluiActivity`, the host queue, the accessibility delegate, back registration, the inset and IME-animation listeners |
-  | `crates/flui-native/src/platforms/android/safe_area.rs` | Event-driven, and includes the IME inset |
+  | `crates/flui-native/src/window/android.rs` (`safe_area`) | Event-driven, and includes the IME inset |
   | `crates/flui-native/src/platforms/android/` | A `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
   | `platform-support.toml` and the generated floors | `targetSdk` |
   | `crates/flui-native/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |

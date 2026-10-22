@@ -28,7 +28,7 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
 };
-use flui_platform::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
+use flui_platform::{DragDropEvent, PlatformInput, WindowId};
 use parking_lot::Mutex;
 
 use crate::host;
@@ -222,17 +222,13 @@ impl HeadlessDragAndDrop {
     /// Deliver `event` to `window`, when it is still open.
     fn deliver(&self, window: WindowId, event: DragDropEvent) {
         let system = self.system.upgrade();
-        let window = system.and_then(|system| {
-            system
-                .lock()
-                .windows
-                .iter()
-                .find(|candidate| PlatformWindow::id(*candidate) == window)
-                .cloned()
-        });
-        if let Some(window) = window {
+        // The windows are the window feature's, which the loop holds without
+        // naming them: their callbacks are what the drag reaches.
+        let windows = system.map(|system| Arc::clone(&system.lock().windows));
+        let callbacks = windows.and_then(|windows| windows.callbacks_of(window));
+        if let Some(callbacks) = callbacks {
             // No lock is held: the window's callback reenters the runtime.
-            window.inject_event(PlatformInput::DragDrop(event));
+            callbacks.dispatch_input(PlatformInput::DragDrop(event));
         }
     }
 

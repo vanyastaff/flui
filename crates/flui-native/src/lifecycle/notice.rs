@@ -221,7 +221,7 @@ mod tests {
         use flui_platform::{WindowGeometry, WindowState};
 
         use crate::display::source::DisplaySource;
-        use crate::shared::window_state::WindowStateCell;
+        use crate::window::state::WindowStateCell;
 
         let displays = Arc::new(DisplaySource::new());
         displays

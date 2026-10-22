@@ -41,8 +41,8 @@ use crate::owner::signal::OwnerSignal;
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
+use super::ActivityWindow;
 use crate::owner::android::activity::with_activity;
-use crate::platforms::android::AndroidWindow;
 
 /// The view's classes, compiled from `android/java` (see the module doc).
 const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
@@ -119,7 +119,7 @@ pub(crate) enum ViewEvent {
 }
 
 /// Work a feature hands the owner to run against the window.
-pub(crate) type WindowWork = Box<dyn FnOnce(&AndroidWindow) + Send>;
+pub(crate) type WindowWork = Box<dyn FnOnce(&dyn ActivityWindow) + Send>;
 
 /// The input method's calls through `FluiView`, which the text feature answers.
 ///
@@ -149,7 +149,7 @@ pub(crate) trait InputMethod: Send + Sync {
     /// thread: inside the focused field, the input method's handwriting may
     /// take the stroke. Android's own initiation sees only the stylus events
     /// native code leaves unhandled.
-    fn pen_down(&self, window: &AndroidWindow, at: flui_foundation::geometry::Point<f64>);
+    fn pen_down(&self, window: &dyn ActivityWindow, at: flui_foundation::geometry::Point<f64>);
 }
 
 /// What the text feature made of one of the input method's calls through the

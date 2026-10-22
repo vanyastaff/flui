@@ -24,13 +24,12 @@ use super::control::{
     OwnerSeeds, OwnerWindow,
 };
 use super::{
-    CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages,
-    WindowsHost, WindowsLoop, dispatch_window_message, window_created,
+    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity,
+    WindowMessages, WindowRef, WindowsHost, WindowsLoop, dispatch_window_message, window_created,
 };
-use crate::config::WindowConfiguration;
 use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
-use crate::platforms::windows::platform::WindowRef;
+use crate::owner::handlers::OpenWindows;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -53,6 +52,10 @@ impl WindowMessages for First {
         hear("first created");
     }
 
+    fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
+        msg == BOTH_ANSWER
+    }
+
     unsafe fn message(
         &self,
         _hwnd: HWND,
@@ -70,6 +73,10 @@ struct Second;
 impl WindowMessages for Second {
     fn created(&self, _window: &CreatedWindow) {
         hear("second created");
+    }
+
+    fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
+        matches!(msg, BOTH_ANSWER | SECOND_ANSWERS)
     }
 
     unsafe fn message(
@@ -169,6 +176,22 @@ impl HostDrag for NoDrag {
     }
 
     fn register_target(self: Arc<Self>, _window: WindowRef) {}
+}
+
+/// No window, for a loop the tests build only to see it refused.
+#[derive(Debug)]
+pub(super) struct NoWindows;
+
+impl OpenWindows for NoWindows {
+    fn is_empty(&self) -> bool {
+        true
+    }
+}
+
+impl ClassWindows for NoWindows {
+    fn redraw_for_deadline(&self) {}
+
+    fn paint_invalid(&self) {}
 }
 
 /// The class's procedure offers a message to the hooks in order: the first
@@ -409,7 +432,7 @@ impl OwnerMessages for Ending {
 fn every_owner_hook_hears_the_window_go_after_one_panics() {
     let control = OwnerControl::new::<TestHost>(
         WindowIdentity::mint_from(WindowIdentity::source()),
-        Weak::new(),
+        Weak::<NoWindows>::new(),
         vec![
             Arc::new(Ending {
                 name: "first",
@@ -435,7 +458,7 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
 #[test]
 fn a_second_host_is_refused_the_window_class() {
     let _platform = crate::WindowsPlatform::new().expect("native platform");
-    match WindowsLoop::with_config::<TestHost>(WindowConfiguration::default()) {
+    match WindowsLoop::new::<TestHost>(Arc::new(NoWindows)) {
         Err(PlatformError::Init { message }) => assert!(
             message.contains("another host"),
             "the refusal names the class's other host: {message}"

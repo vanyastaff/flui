@@ -457,8 +457,18 @@ mod input {
     use crate::shared::os_version::Since;
     use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
 
+    use crate::owner::android::ActivityWindow;
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
-    use crate::platforms::android::AndroidWindow;
+    use crate::window::android::AndroidWindow;
+
+    /// The text input of the window the owner runs an input method's work
+    /// against: the Android window holds it.
+    fn text_input_of(window: &dyn ActivityWindow) -> Option<Rc<AndroidTextInput>> {
+        window
+            .as_any()
+            .downcast_ref::<AndroidWindow>()?
+            .text_input()
+    }
 
     /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
     const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
@@ -484,8 +494,8 @@ mod input {
             let edit = self.mirror.lock().report(generation, &state)?;
             Some(InputMethodReply {
                 composing: Some(edit.composes()),
-                work: Box::new(move |window: &AndroidWindow| {
-                    if let Some(input) = window.text_input() {
+                work: Box::new(move |window: &dyn ActivityWindow| {
+                    if let Some(input) = text_input_of(window) {
                         input.apply(edit);
                     }
                 }),
@@ -495,8 +505,8 @@ mod input {
         fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply {
             InputMethodReply {
                 composing: None,
-                work: Box::new(move |window: &AndroidWindow| {
-                    if let Some(input) = window.text_input() {
+                work: Box::new(move |window: &dyn ActivityWindow| {
+                    if let Some(input) = text_input_of(window) {
                         input.editor_action();
                     }
                     // The action arrives as the key it stands for, which a field
@@ -514,16 +524,16 @@ mod input {
         fn cursor_updates(&self, mode: i32) -> InputMethodReply {
             InputMethodReply {
                 composing: None,
-                work: Box::new(move |window: &AndroidWindow| {
-                    if let Some(input) = window.text_input() {
+                work: Box::new(move |window: &dyn ActivityWindow| {
+                    if let Some(input) = text_input_of(window) {
                         input.cursor_updates(mode);
                     }
                 }),
             }
         }
 
-        fn pen_down(&self, window: &AndroidWindow, at: Point<f64>) {
-            if let Some(input) = window.text_input() {
+        fn pen_down(&self, window: &dyn ActivityWindow, at: Point<f64>) {
+            if let Some(input) = text_input_of(window) {
                 input.offer_pen(at);
             }
         }

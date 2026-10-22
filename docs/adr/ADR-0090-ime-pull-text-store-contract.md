@@ -45,9 +45,9 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
   (Win+H) and the candidate window all go through these queries. FLUI's Win32 backend has no IME
   code at all: no `WM_IME*`, `ITextStore*`, `ITfThreadMgr` or `ImmGetContext` anywhere under
   `crates/`, no `text_input()` override (the implementations are headless, macOS and winit only:
-  `crates/flui-native/src/platforms/headless/platform.rs:1250`,
-  `crates/flui-native/src/platforms/macos/window.rs:944`,
-  `crates/flui-native/src/platforms/winit/window.rs:313`), and no text-services feature of the
+  `crates/flui-native/src/window/headless.rs:1078`,
+  `crates/flui-native/src/window/apple/macos.rs:1337`,
+  `crates/flui-native/src/window/winit.rs:793`), and no text-services feature of the
   `windows` crate enabled (`crates/flui-native/Cargo.toml:89-105`).
 - **macOS.** `NSTextInputClient` is a pull protocol too, and the backend already implements the
   query half with nothing to answer from: `attributedSubstringForProposedRange:actualRange:` returns

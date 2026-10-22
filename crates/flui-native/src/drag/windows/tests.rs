@@ -55,12 +55,12 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
-use crate::config::WindowConfiguration;
 use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
 use crate::owner::windows::{HostDrag, WindowsLoop};
 use crate::platforms::windows::WindowsWindow;
-use crate::platforms::windows::platform::with_window_context;
+use crate::window::config::WindowConfiguration;
+use crate::window::windows::proc::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};
 use flui_platform::WindowOptions;
 
@@ -520,13 +520,16 @@ fn raise(hwnd: HWND) -> POINTL {
 /// The Windows platform whose loop holds `transport`, which the test drives
 /// where the platform reaches it only as a `HostDrag`.
 fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
-    WindowsPlatform::from_loop(
-        WindowsLoop::with_drag::<Windows>(
-            WindowConfiguration::default(),
-            Arc::clone(transport) as Arc<dyn HostDrag>,
-        )
-        .expect("platform"),
+    WindowsPlatform::try_from_parts(
+        crate::window::windows::WindowSet::new(WindowConfiguration::default()),
+        |windows| {
+            WindowsLoop::with_drag::<Windows>(
+                Arc::clone(windows) as _,
+                Arc::clone(transport) as Arc<dyn HostDrag>,
+            )
+        },
     )
+    .expect("platform")
 }
 
 fn owner_window(transport: &OleTransfer) -> HWND {
@@ -1152,7 +1155,7 @@ fn a_pending_session_is_retained_when_its_platform_unwinds() {
 /// a window the OS later built behind the same handle. Red-check: read the
 /// context by handle alone in `contact_kind`.
 fn a_drag_source_reads_only_its_own_windows_contacts() {
-    use crate::platforms::windows::platform::WindowRef;
+    use crate::owner::windows::WindowRef;
     use flui_platform::pointer::{PenTool, PointerKind};
 
     let transport = OleTransfer::new();

@@ -6,7 +6,8 @@
 //! # Architecture
 //!
 //! - **NSApplication**: Main application and event loop
-//! - **NSWindow**: Window management
+//! - **NSWindow**: Window management, the window feature's
+//!   (`window/apple/macos.rs`), re-exported here
 //! - **NSScreen**: Display enumeration and info (`display::apple::macos`)
 //! - **NSRunLoop**: Owner-thread application event loop
 //!   (`owner/apple/macos.rs`)
@@ -63,18 +64,14 @@
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-mod display_pass;
 mod events;
-mod liquid_glass;
-mod positions;
 pub(crate) mod view;
-pub(crate) mod window;
-mod window_ext;
-mod window_tiling;
 
-pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
-pub use window::MacOSWindow;
-pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
-pub use window_tiling::{
-    TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState,
+// The window lives in the window feature; its public names stay here.
+pub use crate::window::apple::liquid_glass::{
+    BlendingMode, LiquidGlassConfig, LiquidGlassMaterial,
+};
+pub use crate::window::apple::macos::{
+    MacOSCollectionBehavior, MacOSWindow, MacOSWindowExt, MacOSWindowLevel, TilePosition,
+    TilingConfiguration, TilingError, TilingLayout, TilingState,
 };

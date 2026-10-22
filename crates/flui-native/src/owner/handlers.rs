@@ -266,6 +266,29 @@ impl std::fmt::Debug for PlatformHandlers {
 // Per-Window Callbacks
 // ============================================================================
 
+/// A window whose callbacks its loop dispatches to: the window feature's, which
+/// a loop holds as a trait object without naming it (ADR-0151 §10). Each
+/// loop's window hook extends it with what that loop asks of a window.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "android",
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "linux")
+    )
+))]
+pub(crate) trait CallbackWindow: crate::host_window::HostWindow {
+    /// The window's callbacks.
+    fn callbacks(&self) -> &WindowCallbacks;
+}
+
+/// The windows a loop holds through its hook, as one object: the window
+/// feature's. Each loop's hook extends it with what that loop asks of them.
+pub(crate) trait OpenWindows: Send + Sync {
+    /// Whether no window is open.
+    fn is_empty(&self) -> bool;
+}
+
 #[expect(clippy::type_complexity)]
 /// Per-window callback storage with one causal reentry queue.
 ///
@@ -328,7 +351,7 @@ pub struct WindowCallbacks {
     /// own `WindowEvent::Occluded` doc). The native Win32 backend derives
     /// its own signal from `WM_SIZE` minimize/restore plus `WM_SHOWWINDOW`
     /// hide/show, and the native AppKit backend from
-    /// `windowDidChangeOcclusionState:` — rules in `shared::visibility`.
+    /// `windowDidChangeOcclusionState:` — rules in `window::visibility`.
     /// The native Web backend samples the canvas document's `hidden` value
     /// and observes Document `visibilitychange`, separately from canvas focus.
     /// Where no signal is ever delivered, this callback simply never fires
@@ -695,11 +718,11 @@ impl WindowCallbacks {
     /// `WinitApp::release_open_window_callbacks` (same file, the quit route
     /// `complete_window_close` never runs for — every window still tracked
     /// when `event_loop.run_app` returns), `WinitWindow::drop`
-    /// (`platforms/winit/window.rs`, a last-resort guarantee for a window
+    /// (`window/winit.rs`, a last-resort guarantee for a window
     /// whose final `Arc` unwinds anywhere else), the headless backend's
-    /// `complete_close` (`platforms/headless/platform.rs`), Win32's
-    /// `WM_DESTROY` arm (`platforms/windows/platform.rs`), AppKit's
-    /// `handle_close` (`platforms/macos/window.rs`, reached from the
+    /// `complete_close` (`window/headless.rs`), Win32's
+    /// `WM_DESTROY` arm (`window/windows/proc.rs`), AppKit's
+    /// `handle_close` (`window/apple/macos/delegate.rs`, reached from the
     /// `windowWillClose:` delegate), and the Android backend's loop exit
     /// (`owner/android/looper.rs`, `AndroidLoop::run` after its `loop`,
     /// reached by `Destroy`, `quit()` and a failed bootstrap; a panic out of
@@ -1771,7 +1794,6 @@ mod tests {
     use std::sync::atomic::{AtomicU32, AtomicUsize};
 
     use crate::owner::signal::OwnerSignal;
-    use crate::shared::hwnd_affinity;
 
     use super::*;
 
@@ -2116,35 +2138,6 @@ mod tests {
         clear_multiple_panicking_captures(false);
     }
 
-    const HW_OWNER: u32 = 7;
-    const HW_FOREIGN: u32 = 8;
-
-    fn refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot() {
-        // All four conditions failing at once report the highest-precedence
-        // refusal, walking down as each earlier condition is repaired.
-        assert_eq!(
-            hwnd_affinity::classify_user_data_access(
-                hwnd_affinity::OWNER_GONE,
-                HW_FOREIGN,
-                false,
-                0
-            ),
-            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::WindowGone)
-        );
-        assert_eq!(
-            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_FOREIGN, false, 0),
-            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::ForeignThread)
-        );
-        assert_eq!(
-            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_OWNER, false, 0),
-            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::ForeignClass)
-        );
-        assert_eq!(
-            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_OWNER, true, 0),
-            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::EmptySlot)
-        );
-    }
-
     fn worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
@@ -2307,11 +2300,11 @@ mod tests {
     /// The owner-thread machinery's contracts: hostile callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
-    /// existing unwind), the HWND user-data refusal precedence holds, and the
-    /// owner signal coalesces a burst and gives a re-entrant wake a later turn,
-    /// gives a wake that lands while the loop reads a turn that reads again,
-    /// posts the next turn when a begun turn is dropped undriven, and runs
-    /// work a read owes to its turn without posting another.
+    /// existing unwind), and the owner signal coalesces a burst and gives a
+    /// re-entrant wake a later turn, gives a wake that lands while the loop
+    /// reads a turn that reads again, posts the next turn when a begun turn is
+    /// dropped undriven, and runs work a read owes to its turn without posting
+    /// another.
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
@@ -2344,10 +2337,6 @@ mod tests {
             (
                 "owner callback and capture panic priority",
                 owner_callback_and_capture_panics_do_not_replace_an_existing_unwind,
-            ),
-            (
-                "refusal precedence",
-                refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot,
             ),
             (
                 "worker burst and reentrant wake",

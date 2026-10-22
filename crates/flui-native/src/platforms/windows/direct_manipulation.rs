@@ -51,7 +51,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::DirectManipulation::{
     DIRECTMANIPULATION_CONFIGURATION_INTERACTION, DIRECTMANIPULATION_CONFIGURATION_SCALING,
     DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA,
@@ -66,17 +66,17 @@ use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Input::Pointer::GetPointerType;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer,
+    DM_POINTERHITTEST, GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer, WM_TIMER,
 };
 
 use super::events::SURFACE;
-use super::platform::WindowContext;
 use crate::owner::windows::com_apartment::ComApartment;
 use crate::owner::windows::{CreatedWindow, WindowMessages};
 use crate::shared::direct_manipulation::{
     TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
 };
 use crate::shared::pointer_assembly::{NativeTime, QpcTicks, ReadingTime};
+use crate::window::windows::proc::WindowContext;
 use flui_platform::PlatformInput;
 
 /// The timer that paces a window's viewport; the value spells "DM".
@@ -412,7 +412,7 @@ fn now() -> ReadingTime {
 
 impl WindowContext {
     /// Whether this window's viewport initialised, for its capability table.
-    pub(super) fn has_touchpad(&self) -> bool {
+    pub(crate) fn has_touchpad(&self) -> bool {
         self.touchpad.host.borrow().is_some()
     }
 
@@ -446,7 +446,7 @@ impl WindowContext {
 
     /// The system offered a contact (`DM_POINTERHITTEST`): give it to the
     /// viewport when it is a touchpad's, and start pumping.
-    pub(super) fn offer_touchpad_contact(&self, hwnd: HWND, pointer: u32) {
+    pub(crate) fn offer_touchpad_contact(&self, hwnd: HWND, pointer: u32) {
         let mut kind = POINTER_INPUT_TYPE::default();
         // SAFETY: `kind` is a live, writable local.
         if unsafe { GetPointerType(pointer, &raw mut kind) }.is_err() || kind != PT_TOUCHPAD {
@@ -466,7 +466,7 @@ impl WindowContext {
 
     /// The frame's pump: only a viewport that runs or coasts has anything
     /// to deliver, so a resting one costs the frame nothing.
-    pub(super) fn pump_touchpad_for_frame(&self, hwnd: HWND) {
+    pub(crate) fn pump_touchpad_for_frame(&self, hwnd: HWND) {
         if self
             .touchpad
             .host
@@ -480,7 +480,7 @@ impl WindowContext {
 
     /// Run the viewport, reset it if it stopped, schedule the next pump while
     /// it moves, and deliver what it reported.
-    pub(super) fn pump_touchpad(&self, hwnd: HWND) {
+    pub(crate) fn pump_touchpad(&self, hwnd: HWND) {
         let Some(viewport) = self.touchpad.accepting() else {
             return;
         };
@@ -591,7 +591,7 @@ impl WindowContext {
     }
 
     /// The window's client area changed size.
-    pub(super) fn resize_touchpad(&self, size: (i32, i32)) {
+    pub(crate) fn resize_touchpad(&self, size: (i32, i32)) {
         let viewport = self.touchpad.viewport();
         if let Some(viewport) = viewport
             && let Err(error) = viewport.set_rect(size)
@@ -602,7 +602,7 @@ impl WindowContext {
 
     /// `WM_ENTERSIZEMOVE`: end what is open as cancelled and decline contacts
     /// until the loop ends.
-    pub(super) fn pause_touchpad(&self, hwnd: HWND) {
+    pub(crate) fn pause_touchpad(&self, hwnd: HWND) {
         self.abandon_touchpad(hwnd, true);
     }
 
@@ -610,12 +610,12 @@ impl WindowContext {
     /// and return the content to the origin. Contacts are still accepted, so
     /// an inactive window scrolls under the cursor as Windows' do; a paused
     /// viewport stays paused.
-    pub(super) fn cancel_touchpad(&self, hwnd: HWND) {
+    pub(crate) fn cancel_touchpad(&self, hwnd: HWND) {
         self.abandon_touchpad(hwnd, false);
     }
 
     /// `WM_EXITSIZEMOVE`: accept contacts again.
-    pub(super) fn resume_touchpad(&self) {
+    pub(crate) fn resume_touchpad(&self) {
         if let Some(host) = self.touchpad.host.borrow_mut().as_mut() {
             host.paused = false;
         }
@@ -634,7 +634,7 @@ impl WindowContext {
 
     /// The viewport failed or the window is going away: end what is open as
     /// cancelled and release every interface.
-    pub(super) fn release_touchpad(&self, hwnd: HWND) {
+    pub(crate) fn release_touchpad(&self, hwnd: HWND) {
         // Taken first, so a pump that user code runs while the cancellation
         // is delivered finds no viewport. Dropping the host releases the
         // viewport once no call holds it; the apartment it holds outlives its
@@ -691,25 +691,63 @@ impl WindowContext {
     }
 
     /// Whether `timer` is the viewport's pacing timer.
-    pub(super) fn is_touchpad_timer(timer: usize) -> bool {
+    pub(crate) fn is_touchpad_timer(timer: usize) -> bool {
         timer == PUMP_TIMER
     }
 }
 
 /// The precision touchpad's hook on FLUI's window class: a window it creates
-/// gets its DirectManipulation viewport.
+/// gets its DirectManipulation viewport, a contact the system offers the
+/// window goes to that viewport, and the viewport's pacing timer pumps it.
 pub(crate) struct Touchpad;
 
 impl WindowMessages for Touchpad {
+    fn answers(&self, msg: u32, wparam: WPARAM) -> bool {
+        match msg {
+            DM_POINTERHITTEST => true,
+            WM_TIMER => WindowContext::is_touchpad_timer(wparam.0),
+            _ => false,
+        }
+    }
+
+    unsafe fn message(
+        &self,
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        if !self.answers(msg, wparam) {
+            return None;
+        }
+        // SAFETY: the arguments as Win32 delivered them to the class's
+        // procedure, which is `with_message_context`'s contract too.
+        unsafe {
+            crate::window::windows::proc::with_message_context(hwnd, |ctx, _| {
+                if let Some(ctx) = ctx {
+                    if msg == DM_POINTERHITTEST {
+                        // The system offers a contact to the window under it;
+                        // a touchpad's goes to the DirectManipulation viewport.
+                        ctx.offer_touchpad_contact(hwnd, (wparam.0 & 0xffff) as u32);
+                    } else {
+                        ctx.pump_touchpad(hwnd);
+                    }
+                }
+                Some(LRESULT(0))
+            })
+        }
+    }
+
     fn created(&self, window: &CreatedWindow) {
         // The precision touchpad's viewport. Without one the window
         // reports no precise scrolling or trackpad gestures
         // (`input_availability::windows`).
         let hwnd = window.hwnd;
         if let Some(host) = create_host(hwnd, window.client_size, window.apartment.clone()) {
-            let installed = super::platform::with_window_context(hwnd, "touchpad", |context| {
-                context.touchpad.install(host);
-            });
+            let installed =
+                crate::window::windows::proc::with_window_context(hwnd, "touchpad", |context| {
+                    context.touchpad.install(host);
+                });
             debug_assert!(
                 installed.is_some(),
                 "BUG: the window's context is installed"
@@ -742,7 +780,7 @@ fn create_host(
 
 /// The context field holding a window's precision touchpad.
 #[derive(Default)]
-pub(super) struct TouchpadSlot {
+pub(crate) struct TouchpadSlot {
     /// The viewport and its assembler; `None` when DirectManipulation did
     /// not initialise, after it failed, or once the window is destroyed.
     host: RefCell<Option<TouchpadHost>>,
