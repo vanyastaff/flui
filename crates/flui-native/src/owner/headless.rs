@@ -7,18 +7,24 @@
 //! opens it defers.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
 
-use flui_foundation::{ClaimSlot, claim_slot};
+use flui_foundation::geometry::Point;
+use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::InMemoryClipboard;
+use flui_platform::data_transfer::{
+    DropFeedback, OfferTable, RepresentationDescriptor, TransferActions,
+};
+use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
-use crate::owner::positions::PositionObjects;
+use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
     DisplaySpec, HeadlessDisplays, HeadlessWindowPolicy, MockWindow, TextStoreHostFactory,
@@ -49,10 +55,45 @@ pub struct HeadlessLoop {
     pub(crate) state: Arc<Mutex<HeadlessState>>,
 }
 
+/// What the simulated system keeps of drag and drop (ADR-0211): the offers it
+/// holds open and the session in flight. The loop holds it as it holds the
+/// rest of the simulated system; `drag::headless` plays the sessions over it
+/// and is the platform's one data-transfer source over it.
+#[derive(Default)]
+pub(crate) struct OsDrags {
+    pub(crate) table: OfferTable,
+    pub(crate) session: Option<OsDragSession>,
+    /// The providers behind offers still open at the system, by id, so a
+    /// target may fetch after the drop until it concludes it.
+    pub(crate) open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
+}
+
+/// One drag session in flight at the simulated system.
+pub(crate) struct OsDragSession {
+    pub(crate) representations: Arc<[RepresentationDescriptor]>,
+    pub(crate) allowed: TransferActions,
+    pub(crate) provider: Arc<OwnerSlot<OsDragProvider>>,
+    /// Told once how the session ended; absent for a drag from another
+    /// application.
+    pub(crate) on_end: Option<OwnerSlot<OsDragEndHook>>,
+    pub(crate) over: Option<DragOver>,
+}
+
+/// The window the simulated pointer is over.
+pub(crate) struct DragOver {
+    pub(crate) window: WindowId,
+    pub(crate) offer: DataTransferId,
+    pub(crate) feedback: DropFeedback,
+    pub(crate) position: Point<f64>,
+}
+
 pub(crate) struct HeadlessState {
-    /// The objects the table's positions keep: the simulated OS drag session
-    /// and the platform's one data-transfer source (ADR-0211).
-    pub(crate) positions: PositionObjects,
+    /// What the simulated system keeps of drag and drop.
+    pub(crate) drags: Arc<Mutex<OsDrags>>,
+    /// When a window opened from now on may start a drag session at the
+    /// system; `None`, the default: its windows have no drag source
+    /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
+    pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
@@ -119,11 +160,10 @@ pub(crate) struct HeadlessState {
 }
 
 impl HeadlessLoop {
-    /// A loop whose state keeps `positions`, the objects the table's
-    /// positions keep for its life.
-    pub(crate) fn new(positions: PositionObjects) -> Self {
+    pub(crate) fn new() -> Self {
         let state = HeadlessState {
-            positions,
+            drags: Arc::default(),
+            os_drag_start: None,
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
@@ -737,7 +777,7 @@ mod tests {
                     .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
             }
         }
-        let platform = Arc::new(HeadlessLoop::new(PositionObjects::default()));
+        let platform = Arc::new(HeadlessLoop::new());
         platform.state.lock().is_running = true;
         let calls = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicBool::new(false));

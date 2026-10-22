@@ -12,6 +12,4 @@ mod ole_model;
 mod ole;
 
 #[cfg(windows)]
-pub(crate) use ole::{
-    DropTargetRegistration, OleTransfer, Win32DragSource, WindowDropTarget, revoke_target,
-};
+pub(crate) use ole::{DropTargetRegistration, OleTransfer, WindowDropTarget, revoke_target};

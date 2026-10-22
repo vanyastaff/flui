@@ -8,9 +8,6 @@ use parking_lot::Mutex;
 
 use flui_platform::Clipboard;
 
-use crate::host;
-use crate::owner::winit::WinitLoop;
-
 /// Arboard-based clipboard implementation
 ///
 /// Thread-safe wrapper around arboard::Clipboard. The inner slot is `None`
@@ -86,12 +83,6 @@ fn clipboard_session<R>(call: impl FnOnce() -> R) -> R {
     #[cfg(not(windows))]
     {
         call()
-    }
-}
-
-impl host::Clipboard<WinitLoop> for ArboardClipboard {
-    fn clipboard(owner: &WinitLoop) -> Arc<dyn Clipboard> {
-        owner.with_state(|state| state.clipboard.clone())
     }
 }
 

@@ -239,9 +239,9 @@ pub(crate) struct WindowContext {
     /// revoked it.
     pub(crate) drop_target:
         RefCell<Option<windows_core::ComObject<crate::drag::windows::WindowDropTarget>>>,
-    /// The platform's OLE transfer, which the window's drop target serves;
-    /// the window class's drop-target hook registers it from here.
-    pub(crate) drag: Arc<crate::drag::windows::OleTransfer>,
+    /// The platform's drag-and-drop transport, which the window's drop target
+    /// serves; the window class's drop-target hook registers it from here.
+    pub(crate) drag: Arc<dyn crate::owner::windows::HostDrag>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,

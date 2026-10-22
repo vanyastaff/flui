@@ -12,10 +12,9 @@ use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
 use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
-use crate::owner::positions::PositionObjects;
 use crate::owner::windows::broadcast::Subscriber;
-use crate::owner::windows::control::{OwnerMessages, OwnerObjects};
-use crate::owner::windows::{LoopParts, WindowHooks, WindowsHost, WindowsLoop};
+use crate::owner::windows::control::OwnerObjects;
+use crate::owner::windows::{HostDrag, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::windows::{
     HostEvents, PreferenceSource, Touchpad, WindowProc, WindowsDisplays, WindowsWindow,
@@ -40,7 +39,7 @@ impl Host for Windows {
     #[cfg(not(feature = "a11y"))]
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WindowsClipboard;
-    type Drag = OleTransfer;
+    type Drag = WindowsLoop;
     type Haptics = WindowsHaptics;
     type Preferences = PreferenceSource;
     type Lifecycle = HostEvents;
@@ -65,14 +64,9 @@ impl WindowsHost for Windows {
         ]
     }
 
-    /// OLE drag and drop: the platform's one data-transfer source, whose
-    /// sessions run from the owner window.
-    fn loop_parts() -> LoopParts {
-        let drag = OleTransfer::new();
-        LoopParts {
-            positions: PositionObjects::default().with(Arc::clone(&drag)),
-            owner_hooks: vec![drag as Arc<dyn OwnerMessages>],
-        }
+    /// OLE drag and drop, whose sessions run from the owner window.
+    fn drag() -> Arc<dyn HostDrag> {
+        OleTransfer::new()
     }
 }
 

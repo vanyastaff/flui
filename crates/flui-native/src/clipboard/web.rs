@@ -15,14 +15,9 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use std::sync::Arc;
-
 use parking_lot::Mutex;
 
 use flui_platform::Clipboard;
-
-use crate::host;
-use crate::owner::web::WebLoop;
 
 pub struct WebClipboard {
     /// In-memory fallback: caches the last written text for synchronous reads.
@@ -48,12 +43,6 @@ impl WebClipboard {
         Self {
             fallback: Mutex::new(None),
         }
-    }
-}
-
-impl host::Clipboard<WebLoop> for WebClipboard {
-    fn clipboard(owner: &WebLoop) -> Arc<dyn Clipboard> {
-        owner.with_state(|s| s.clipboard.clone())
     }
 }
 

@@ -12,4 +12,4 @@ mod html_model;
 mod html;
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use html::{CanvasDrag, WebTransfer, register};
+pub(crate) use html::WebTransfer;

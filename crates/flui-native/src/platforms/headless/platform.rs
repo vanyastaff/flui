@@ -105,7 +105,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_os_drag(self, timing: flui_platform::drag::OsDragStart) -> Self {
         self.owner().with_state(|state| {
-            crate::drag::headless::DragDouble::of(state).enable(timing);
+            state.os_drag_start = Some(timing);
             state.input_availability = state
                 .input_availability
                 .to_builder()
@@ -132,10 +132,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// The simulated OS side of drag-and-drop, valid across [`Platform::run`](crate::Platform::run).
     #[must_use]
     pub fn drag_and_drop(&self) -> crate::drag::headless::HeadlessDragAndDrop {
-        crate::drag::headless::HeadlessDragAndDrop::new(
-            self.owner()
-                .with_state(|state| crate::drag::headless::DragDouble::of(state)),
-        )
+        crate::drag::headless::HeadlessDragAndDrop::of(&self.owner().state)
     }
 
     /// A handle that attaches and removes simulated input devices, valid
@@ -436,12 +433,7 @@ pub(crate) fn create_mock_window(
         },
     );
 
-    let double = crate::drag::headless::DragDouble::of(state);
-    window.drag = double.timing().map(|timing| {
-        Arc::new(crate::drag::headless::HeadlessDragSource::new(
-            double, timing,
-        )) as Arc<dyn flui_platform::drag::PlatformDragSource>
-    });
+    window.drag = crate::drag::headless::HeadlessDragSource::of(state);
     // The initial snapshot reflects the devices already attached (ADR-0213 §3).
     window.callbacks.set_input_capabilities(
         state

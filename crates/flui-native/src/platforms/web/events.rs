@@ -50,7 +50,7 @@ use super::{
 pub(super) fn register_event_listeners(
     window: &WebWindow,
     input_latency: flui_platform::InputLatency,
-    transfer: &Arc<crate::drag::web::WebTransfer>,
+    transfer: &Arc<dyn crate::owner::web::HostDrag>,
     registration: &mut Registration,
 ) -> Result<CanvasServices, crate::OpenWindowError> {
     let canvas = window.canvas();
@@ -75,7 +75,7 @@ pub(super) fn register_event_listeners(
 
     // The drag source learns of a press before the press is dispatched: the
     // runtime may start a session from inside that dispatch.
-    let drag = crate::drag::web::register(canvas, transfer, &callbacks, registration)?;
+    let drag = Arc::clone(transfer).register(canvas, &callbacks, registration)?;
     let menu = Rc::new(MenuAnswer::default());
     let loss = register_pointer_events(
         canvas,
@@ -122,7 +122,7 @@ pub(super) fn register_event_listeners(
 /// What a canvas registration serves beside its listeners: its drag source
 /// and target, and its text input.
 pub(super) struct CanvasServices {
-    pub(super) drag: crate::drag::web::CanvasDrag,
+    pub(super) drag: Box<dyn crate::owner::web::CanvasDrag>,
     pub(super) text: Rc<crate::text::web::WebTextInput>,
 }
 

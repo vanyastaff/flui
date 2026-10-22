@@ -44,9 +44,7 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
-use crate::host;
-use crate::owner::winit::WinitLoop;
-use crate::owner::winit::file_drops::FileDrops;
+use crate::owner::winit::FileDrops;
 use flui_platform::{DragDropEvent, WindowId};
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
@@ -306,14 +304,6 @@ impl WinitDataTransfer {
         };
         drop(stale_pending);
         Some(event)
-    }
-}
-
-impl host::Drag<WinitLoop> for WinitDataTransfer {
-    fn data_transfer(owner: &WinitLoop) -> Arc<dyn DataTransferSource> {
-        // Clones of the ONE source constructed at platform init (ADR-0038
-        // §2): every id it mints stays redeemable at every clone.
-        owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
     }
 }
 

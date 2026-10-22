@@ -55,7 +55,10 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
+use crate::config::WindowConfiguration;
+use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
+use crate::owner::windows::{HostDrag, WindowsLoop};
 use crate::platforms::windows::WindowsWindow;
 use crate::platforms::windows::platform::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};
@@ -514,8 +517,20 @@ fn raise(hwnd: HWND) -> POINTL {
     screen_point(hwnd)
 }
 
-fn owner_window(platform: &WindowsPlatform) -> HWND {
-    OleTransfer::of(platform.owner())
+/// The Windows platform whose loop holds `transport`, which the test drives
+/// where the platform reaches it only as a `HostDrag`.
+fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
+    WindowsPlatform::from_loop(
+        WindowsLoop::with_drag::<Windows>(
+            WindowConfiguration::default(),
+            Arc::clone(transport) as Arc<dyn HostDrag>,
+        )
+        .expect("platform"),
+    )
+}
+
+fn owner_window(transport: &OleTransfer) -> HWND {
+    transport
         .owner_window
         .get()
         .and_then(OwnerPost::hwnd)
@@ -775,7 +790,8 @@ fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
 /// unavailable and stays in its window, instead of starting a session that
 /// OLE's first question cancels (ADR-0211 §11).
 fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let source = open(&platform, "flui drag source", |_| {});
     let drag = source
         .host
@@ -794,14 +810,15 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     assert_eq!(pen_started, Err(DragError::Unavailable), "a pen contact");
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert_eq!(ended.get(), None, "a refused start is not told it ended");
-    assert!(!OleTransfer::of(platform.owner()).is_running());
+    assert!(!transport.is_running());
 }
 
 /// A window's drag source only accepts the session: `DoDragDrop` runs from
 /// the owner window's next turn, not inside the call, one session at a time,
 /// and the session is told how it ended.
 fn a_start_is_deferred_to_the_owner_turn() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let source = open(&platform, "flui drag source", |_| {});
     let drag = source
         .host
@@ -826,13 +843,14 @@ fn a_start_is_deferred_to_the_owner_turn() {
     );
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
     assert_eq!(second.get(), None, "a refused start is not told it ended");
-    assert!(!OleTransfer::of(platform.owner()).is_running());
+    assert!(!transport.is_running());
 }
 
 /// While `DoDragDrop` runs with the pointer resting, a due wake deadline
 /// still reaches a second window, which repaints.
 fn a_second_window_repaints_while_the_modal_loop_rests() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let source = open(&platform, "flui drag source", |_| {});
     let second = open(&platform, "flui second window", |_| {});
     let frames = Arc::new(AtomicU64::new(0));
@@ -865,12 +883,10 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
         DRAGDROP_S_CANCEL
     };
     let ended = Rc::new(Cell::new(None));
-    let owner = OleTransfer::of(platform.owner())
-        .owner()
-        .expect("owner state");
+    let owner = transport.owner().expect("owner state");
     OleTransfer::run_session(
         &owner,
-        owner_window(&platform),
+        owner_window(&transport),
         request(&ended),
         scripted(decide),
     );
@@ -888,7 +904,8 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
 /// loop: the window is entered, answers, gets the drop and fetches the data,
 /// and the source hears the action.
 fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -914,12 +931,10 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     };
     let _poke = Poke::new(Arc::new(AtomicBool::new(true)), at);
     let ended = Rc::new(Cell::new(None));
-    let owner = OleTransfer::of(platform.owner())
-        .owner()
-        .expect("owner state");
+    let owner = transport.owner().expect("owner state");
     OleTransfer::run_session(
         &owner,
-        owner_window(&platform),
+        owner_window(&transport),
         request(&ended),
         scripted(decide),
     );
@@ -975,7 +990,8 @@ fn hostile_request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
 /// or the session's own end releases it, and the session is still told how
 /// it ended.
 fn a_provider_whose_capture_panics_on_drop_is_contained() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -995,12 +1011,10 @@ fn a_provider_whose_capture_panics_on_drop_is_contained() {
 
     let at = raise(target.hwnd);
     let _poke = Poke::new(Arc::new(AtomicBool::new(true)), at);
-    let owner = OleTransfer::of(platform.owner())
-        .owner()
-        .expect("owner state");
+    let owner = transport.owner().expect("owner state");
     OleTransfer::run_session(
         &owner,
-        owner_window(&platform),
+        owner_window(&transport),
         hostile_request(&ended),
         scripted(|| DRAGDROP_S_CANCEL),
     );
@@ -1141,7 +1155,8 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     use crate::platforms::windows::platform::WindowRef;
     use flui_platform::pointer::{PenTool, PointerKind};
 
-    let platform = WindowsPlatform::new().expect("platform");
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
     let first = open(&platform, "flui drag source a", |_| {});
     let second = open(&platform, "flui drag source b", |_| {});
     let identity = |window: &Window| {
@@ -1154,7 +1169,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     };
     let pen = pen_pressed(second.hwnd);
     let own = super::Win32DragSource::new(
-        OleTransfer::of(platform.owner()),
+        Arc::clone(&transport),
         WindowRef::new(second.hwnd, identity(&second)),
     );
     assert_eq!(
@@ -1164,7 +1179,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     // The second window's handle with the first's identity, as for a source
     // whose window closed and whose handle the OS recycled.
     let recycled = super::Win32DragSource::new(
-        OleTransfer::of(platform.owner()),
+        Arc::clone(&transport),
         WindowRef::new(second.hwnd, identity(&first)),
     );
     assert_eq!(recycled.contact_kind(Some(pen)), None);

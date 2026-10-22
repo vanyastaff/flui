@@ -1,12 +1,7 @@
-//! The Android host's clipboard position: an in-process stand-in.
-
-use std::sync::Arc;
+//! The Android host's clipboard: an in-process stand-in.
 
 use flui_platform::Clipboard;
 use parking_lot::Mutex;
-
-use crate::host;
-use crate::owner::android::AndroidLoop;
 
 /// Mock clipboard for Android MVP
 pub struct MockClipboard {
@@ -40,11 +35,5 @@ impl Clipboard for MockClipboard {
 
     fn write_text(&self, text: String) {
         *self.content.lock() = Some(text);
-    }
-}
-
-impl host::Clipboard<AndroidLoop> for MockClipboard {
-    fn clipboard(owner: &AndroidLoop) -> Arc<dyn Clipboard> {
-        owner.clipboard.clone()
     }
 }

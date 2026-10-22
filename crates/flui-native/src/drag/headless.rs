@@ -10,61 +10,36 @@
 //! the pointer as a [`DragDropEvent`], the target's answer is cached as drop
 //! feedback exactly as a native backend caches it, and the drop's action is
 //! resolved from that cache.
+//!
+//! What the simulated system keeps of drag and drop (the offers it holds open
+//! and the session in flight) is the loop's, as the rest of that system is
+//! ([`OsDrags`]); the source, a window's drag source and the test's side all
+//! play over it.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferFormat,
-    TransferLimits, TransferPayload, TransferRequest,
+    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, RepresentationDescriptor,
+    RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
+    TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{
-    DragError, OsDragEnd, OsDragEndHook, OsDragProvider, OsDragRequest, OsDragStart,
-    PlatformDragSource,
+    DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use flui_platform::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
 use parking_lot::Mutex;
 
 use crate::host;
-use crate::owner::headless::{HeadlessLoop, HeadlessState};
+use crate::owner::headless::{DragOver, HeadlessLoop, HeadlessState, OsDragSession, OsDrags};
 use crate::owner::slot::OwnerSlot;
 
-/// One OS drag session in flight.
-struct Session {
-    representations: Arc<[RepresentationDescriptor]>,
-    allowed: TransferActions,
-    provider: Arc<OwnerSlot<OsDragProvider>>,
-    /// Told once how the session ended; absent for a drag from another application.
-    on_end: Option<OwnerSlot<OsDragEndHook>>,
-    over: Option<Over>,
-}
-
-/// The window the simulated pointer is over.
-struct Over {
-    window: WindowId,
-    offer: DataTransferId,
-    feedback: DropFeedback,
-    position: Point<f64>,
-}
-
-#[derive(Default)]
-struct Inner {
-    table: OfferTable,
-    session: Option<Session>,
-    /// The providers behind offers still open at the OS, by id, so a target
-    /// may fetch after the drop until it concludes it.
-    open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
-}
-
-/// The headless host's drag-and-drop transport and the OS drag session it
-/// simulates.
+/// The headless host's drag-and-drop transport: the platform's one
+/// data-transfer source, over the drag state of the simulated system, which
+/// the loop holds.
 pub struct DragDouble {
-    inner: Mutex<Inner>,
-    windows: Mutex<Weak<Mutex<HeadlessState>>>,
-    start: Mutex<Option<OsDragStart>>,
+    drags: Arc<Mutex<OsDrags>>,
 }
 
 impl std::fmt::Debug for DragDouble {
@@ -73,59 +48,17 @@ impl std::fmt::Debug for DragDouble {
     }
 }
 
-impl DragDouble {
-    pub(crate) fn new() -> Self {
-        Self {
-            inner: Mutex::new(Inner::default()),
-            windows: Mutex::new(Weak::new()),
-            start: Mutex::new(None),
-        }
-    }
-
-    /// The double of the loop whose state is `state`, which the headless
-    /// table built.
-    pub(crate) fn of(state: &HeadlessState) -> Arc<Self> {
-        state
-            .positions
-            .get::<Self>()
-            .expect("BUG: the headless table builds its loop with the drag double")
-    }
-
-    /// Deliver the session's events to the windows of `platform`'s state.
-    pub(crate) fn attach(&self, platform: Weak<Mutex<HeadlessState>>) {
-        *self.windows.lock() = platform;
-    }
-
-    pub(crate) fn enable(&self, timing: OsDragStart) {
-        *self.start.lock() = Some(timing);
-    }
-
-    pub(crate) fn timing(&self) -> Option<OsDragStart> {
-        *self.start.lock()
-    }
-
-    fn deliver(&self, window: WindowId, event: DragDropEvent) {
-        let platform = self.windows.lock().upgrade();
-        let window = platform.and_then(|platform| {
-            platform
-                .lock()
-                .windows
-                .iter()
-                .find(|candidate| PlatformWindow::id(*candidate) == window)
-                .cloned()
-        });
-        if let Some(window) = window {
-            // No lock is held: the window's callback reenters the runtime.
-            window.inject_event(PlatformInput::DragDrop(event));
-        }
-    }
-}
-
 impl host::Drag<HeadlessLoop> for DragDouble {
     fn data_transfer(owner: &HeadlessLoop) -> Arc<dyn DataTransferSource> {
         // The headless backend's one source: it serves the drags the test plays
         // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
-        owner.with_state(|state| Self::of(state) as Arc<dyn DataTransferSource>)
+        // Every handle reads the one state, so an id one minted stays
+        // redeemable at every other.
+        owner.with_state(|state| {
+            Arc::new(Self {
+                drags: Arc::clone(&state.drags),
+            }) as Arc<dyn DataTransferSource>
+        })
     }
 }
 
@@ -140,7 +73,7 @@ impl DataTransferSource for DragDouble {
         representation: RepresentationIndex,
         limits: TransferLimits,
     ) -> TransferRequest {
-        let provider = self.inner.lock().open.get(&id).cloned();
+        let provider = self.drags.lock().open.get(&id).cloned();
         let Some(provider) = provider else {
             return TransferRequest::ready(Err(TransferError::StaleOffer(id)));
         };
@@ -182,7 +115,7 @@ impl DataTransferSource for DragDouble {
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.drags.lock();
         if let Some(over) = inner
             .session
             .as_mut()
@@ -195,7 +128,7 @@ impl DataTransferSource for DragDouble {
 
     fn conclude_drop(&self, id: DataTransferId) {
         let concluded = {
-            let mut inner = self.inner.lock();
+            let mut inner = self.drags.lock();
             let _ = inner.table.retire(id);
             inner.open.remove(&id)
         };
@@ -205,15 +138,22 @@ impl DataTransferSource for DragDouble {
     }
 }
 
-/// The drag source a headless window offers.
+/// The drag source a headless window offers, once a test let the windows
+/// start sessions ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
 pub(crate) struct HeadlessDragSource {
-    double: Arc<DragDouble>,
+    drags: Arc<Mutex<OsDrags>>,
     timing: OsDragStart,
 }
 
 impl HeadlessDragSource {
-    pub(crate) fn new(double: Arc<DragDouble>, timing: OsDragStart) -> Self {
-        Self { double, timing }
+    /// The drag source of a window opened now in `state`'s system: none
+    /// until a test let the windows start sessions.
+    pub(crate) fn of(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>> {
+        let timing = state.os_drag_start?;
+        Some(Arc::new(Self {
+            drags: Arc::clone(&state.drags),
+            timing,
+        }))
     }
 }
 
@@ -237,13 +177,13 @@ impl PlatformDragSource for HeadlessDragSource {
         if slot.replace(provider).is_err() || on_end_slot.replace(on_end).is_err() {
             return Err(DragError::Unavailable);
         }
-        let mut inner = self.double.inner.lock();
+        let mut inner = self.drags.lock();
         if inner.session.is_some() {
             // One OS session at a time, as on a desktop.
             drop(inner);
             return Err(DragError::Unavailable);
         }
-        inner.session = Some(Session {
+        inner.session = Some(OsDragSession {
             representations: Arc::from(representations),
             allowed,
             provider: slot,
@@ -257,7 +197,9 @@ impl PlatformDragSource for HeadlessDragSource {
 /// Plays the operating system's side of a drag on a [`HeadlessPlatform`](crate::HeadlessPlatform).
 #[derive(Clone)]
 pub struct HeadlessDragAndDrop {
-    double: Arc<DragDouble>,
+    drags: Arc<Mutex<OsDrags>>,
+    /// The system whose windows a step reaches.
+    system: Weak<Mutex<HeadlessState>>,
 }
 
 impl std::fmt::Debug for HeadlessDragAndDrop {
@@ -269,21 +211,41 @@ impl std::fmt::Debug for HeadlessDragAndDrop {
 }
 
 impl HeadlessDragAndDrop {
-    pub(crate) fn new(double: Arc<DragDouble>) -> Self {
-        Self { double }
+    /// The OS side of the simulated system whose state is `system`.
+    pub(crate) fn of(system: &Arc<Mutex<HeadlessState>>) -> Self {
+        Self {
+            drags: Arc::clone(&system.lock().drags),
+            system: Arc::downgrade(system),
+        }
+    }
+
+    /// Deliver `event` to `window`, when it is still open.
+    fn deliver(&self, window: WindowId, event: DragDropEvent) {
+        let system = self.system.upgrade();
+        let window = system.and_then(|system| {
+            system
+                .lock()
+                .windows
+                .iter()
+                .find(|candidate| PlatformWindow::id(*candidate) == window)
+                .cloned()
+        });
+        if let Some(window) = window {
+            // No lock is held: the window's callback reenters the runtime.
+            window.inject_event(PlatformInput::DragDrop(event));
+        }
     }
 
     /// Whether an OS drag session is running.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.double.inner.lock().session.is_some()
+        self.drags.lock().session.is_some()
     }
 
     /// The representations the running session offers.
     #[must_use]
     pub fn offered(&self) -> Option<Vec<RepresentationDescriptor>> {
-        self.double
-            .inner
+        self.drags
             .lock()
             .session
             .as_ref()
@@ -293,8 +255,7 @@ impl HeadlessDragAndDrop {
     /// The actions the running session advertises to its targets.
     #[must_use]
     pub fn advertised(&self) -> Option<TransferActions> {
-        self.double
-            .inner
+        self.drags
             .lock()
             .session
             .as_ref()
@@ -305,14 +266,13 @@ impl HeadlessDragAndDrop {
     /// every dropped one whose target has not concluded it yet.
     #[must_use]
     pub fn open_offers(&self) -> usize {
-        self.double.inner.lock().open.len()
+        self.drags.lock().open.len()
     }
 
     /// The answer the window under the pointer cached for the OS.
     #[must_use]
     pub fn cached_feedback(&self) -> Option<DropFeedback> {
-        self.double
-            .inner
+        self.drags
             .lock()
             .session
             .as_ref()
@@ -352,11 +312,11 @@ impl HeadlessDragAndDrop {
             // The slot was made on this thread: only exhausted slot keys refuse it.
             return Err(DragError::Unavailable);
         }
-        let mut inner = self.double.inner.lock();
+        let mut inner = self.drags.lock();
         if inner.session.is_some() {
             return Err(DragError::Unavailable);
         }
-        inner.session = Some(Session {
+        inner.session = Some(OsDragSession {
             representations: Arc::from(representations),
             allowed,
             provider: slot,
@@ -374,8 +334,8 @@ impl HeadlessDragAndDrop {
     /// [`DragError::SessionClosed`] when no session is running.
     pub fn hover(&self, window: WindowId, position: Point<f64>) -> Result<(), DragError> {
         let (left, event) = {
-            let mut inner = self.double.inner.lock();
-            let Inner {
+            let mut inner = self.drags.lock();
+            let OsDrags {
                 table,
                 session,
                 open,
@@ -400,7 +360,7 @@ impl HeadlessDragAndDrop {
                     }
                     let id = table.mint(OfferRecord::new(Arc::clone(&session.representations)));
                     open.insert(id, Arc::clone(&session.provider));
-                    session.over = Some(Over {
+                    session.over = Some(DragOver {
                         window,
                         offer: id,
                         feedback: DropFeedback::default(),
@@ -415,17 +375,17 @@ impl HeadlessDragAndDrop {
             (left, event)
         };
         if let Some((window, id)) = left {
-            self.double.deliver(window, DragDropEvent::Exited { id });
+            self.deliver(window, DragDropEvent::Exited { id });
         }
-        self.double.deliver(window, event);
+        self.deliver(window, event);
         Ok(())
     }
 
     /// The pointer is over no window of the platform.
     pub fn leave(&self) {
         let left = {
-            let mut inner = self.double.inner.lock();
-            let Inner {
+            let mut inner = self.drags.lock();
+            let OsDrags {
                 table,
                 session,
                 open,
@@ -439,7 +399,7 @@ impl HeadlessDragAndDrop {
             })
         };
         if let Some((window, id)) = left {
-            self.double.deliver(window, DragDropEvent::Exited { id });
+            self.deliver(window, DragDropEvent::Exited { id });
         }
     }
 
@@ -454,7 +414,7 @@ impl HeadlessDragAndDrop {
     /// [`DragError::SessionClosed`] when no session is running.
     pub fn drop_here(&self) -> Result<Option<TransferActions>, DragError> {
         let over = {
-            let inner = self.double.inner.lock();
+            let inner = self.drags.lock();
             let session = inner.session.as_ref().ok_or(DragError::SessionClosed)?;
             session.over.as_ref().and_then(|over| {
                 let action = over.feedback.resolve(session.allowed)?;
@@ -465,7 +425,7 @@ impl HeadlessDragAndDrop {
             self.cancel();
             return Ok(None);
         };
-        self.double.deliver(
+        self.deliver(
             window,
             DragDropEvent::Dropped {
                 id,
@@ -485,8 +445,8 @@ impl HeadlessDragAndDrop {
     }
 
     fn finish(&self, end: OsDragEnd) {
-        let session = self.double.inner.lock().session.take();
-        let Some(Session { on_end, .. }) = session else {
+        let session = self.drags.lock().session.take();
+        let Some(OsDragSession { on_end, .. }) = session else {
             return;
         };
         if let Some(hook) = on_end.and_then(|slot| slot.take()) {

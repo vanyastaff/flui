@@ -107,7 +107,7 @@ pub struct WindowsWindow {
     haptics: Arc<crate::haptics::windows::WindowsHaptics>,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
-    drag_source: Arc<crate::drag::windows::Win32DragSource>,
+    drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
@@ -440,7 +440,7 @@ impl WindowsWindow {
         shares: crate::owner::windows::control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<crate::drag::windows::OleTransfer>,
+        drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
             handlers,
@@ -576,7 +576,7 @@ impl WindowsWindow {
         scale_factor: f64,
         normal: Option<RECT>,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<crate::drag::windows::OleTransfer>,
+        drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
@@ -756,7 +756,7 @@ impl WindowsWindow {
                     hwnd,
                 )),
                 haptics: crate::haptics::windows::WindowsHaptics::new(this),
-                drag_source: crate::drag::windows::Win32DragSource::new(drag, this),
+                drag_source: drag.drag_source(this),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -1711,7 +1711,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             shares,
             owner.config.clone(),
             owner.apartment.share(),
-            crate::drag::windows::OleTransfer::of(owner),
+            Arc::clone(&owner.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
         let this = WindowRef::new(window.hwnd(), window.identity);
@@ -1813,7 +1813,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform::drag::PlatformDragSource>)
+        Some(Arc::clone(&self.drag_source))
     }
 
     fn window_at(&self, position: Point<f64>) -> flui_platform::WindowAt {

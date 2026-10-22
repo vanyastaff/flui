@@ -100,33 +100,44 @@ trait depends on `flui-platform` instead.
     otherwise. winit on Windows builds a receiver of its own for its
     preference source. Test: `broadcast_subscribers_hear_a_message_in_order`.
   - The owner's message-only window answers its own messages (the wake, the
-    exit policy) and offers any other to the `OwnerMessages` hooks the table
-    makes with the loop (`WindowsHost::loop_parts`), in order. OLE drag and
-    drop's transport is one: it answers `START_DRAG`, from which a session's
+    exit policy) and offers any other, in order, to the `OwnerMessages` hooks
+    of the objects the loop holds: today the drag transport the table makes
+    (`WindowsHost::drag`). It answers `START_DRAG`, from which a session's
     `DoDragDrop` runs on a fresh owner turn, and `MODAL_FRAME`, for which the
     owner delivers the frames due while the modal loop runs
-    (`OwnerWindow::deliver_modal_frames`, which holds the owner's state weakly),
-    and it cancels a session that has not started when the window is
-    destroyed. The modal pace is the owner's (`owner::modal_pace`),
-    shared with `DefWindowProc`'s move and size loops. Tests:
+    (`owner::windows::modal_loop::ModalFrames`, which the owner window holds
+    and hands a hook weakly), and it cancels a session that has not started
+    when the window is destroyed. Every hook hears that end, each in a
+    boundary of its own, so one that panics leaves the next told. A window's
+    `DefWindowProc` move and size loops deliver through a `ModalFrames` of
+    their own, at the owner's modal pace (`owner::modal_pace`). Tests:
     `ole_drag_and_drop_on_real_windows`,
-    `a_replaced_wake_hook_gets_its_modal_frame`.
+    `a_replaced_wake_hook_gets_its_modal_frame`,
+    `every_owner_hook_hears_the_window_go_after_one_panics`.
 
   On Android the table implements `owner::android::AndroidHost`, which names
   the features' objects `FluiView` hands its reports: today the text
   feature's `InputMethod` (`input_method`), which answers the input method's
   calls through the view.
 
-  A loop keeps the objects of its table's positions without naming them. What
-  only a feature reads back is in `owner::positions::PositionObjects`, which
-  the table fills as it builds the loop and the feature reads by type (the
-  OLE, HTML and headless drag transports, since a window still names them);
-  what the loop itself calls is a hook trait declared beside the loop (the
-  owner window's `OwnerMessages`, winit's `FileDrops`, `FluiView`'s
-  `ViewTransfer`); a clipboard the loop keeps is an `Arc<dyn Clipboard>` the
-  table made. Until each remaining feature takes its own state, a loop still
-  holds the state the table's positions read (windows, displays, preferences,
-  notices) and calls that feature's code by name.
+  A loop keeps a feature's object in a field typed by a hook trait declared
+  beside the loop, which says what the loop and the windows it opens ask of
+  the object, and the owner's host trait makes it: `WindowsHost::drag`
+  (`HostDrag`: the owner window's `OwnerMessages`, a window's drag source and
+  drop target), `WebHost::clipboard` and `WebHost::drag` (`HostDrag`: a
+  canvas's registration, `CanvasDrag`), `WinitHost::clipboard` and
+  `WinitHost::drag` (`FileDrops`), `AndroidHost::clipboard` and
+  `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`). The table
+  names the loop as such a position (`type Drag = WindowsLoop`), and the loop
+  answers it from that field, so a table cannot name one type and build
+  another. The headless loop holds the simulated system's drag state
+  (`owner::headless::OsDrags`) as it holds the rest of that system;
+  `drag::headless` is the data-transfer source, a window's drag source and the
+  test's side over it. A position whose object is made per call (the Win32,
+  AppKit and UIKit clipboards) stays the feature's type. Until each remaining
+  feature takes its own state, a loop still holds the state the table's
+  positions read (windows, displays, preferences, notices) and calls that
+  feature's code by name.
 - **A feature is a directory of `flui-native`: its model beside one file per
   platform (ADR-0151 §10).** `text` is the first. The model is `ime` (what
   the Android and web hosts mirror of a focused field, and the one edit
@@ -170,9 +181,11 @@ trait depends on `flui-platform` instead.
   `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
 
-  The window still makes the accessibility adapter, the actuator and the drag
-  source it hands out by naming the feature's platform file, and the Win32 drag
-  transport and actuator reach a window through
+  The window still makes the accessibility adapter and the actuator it hands
+  out by naming the feature's platform file, as the Android and headless
+  windows make their drag source (the Win32 and Web windows reach theirs
+  through the loop's `HostDrag`), and the Win32 drag transport and actuator
+  reach a window through
   `platforms::windows::platform::WindowRef`; the Web drag answers through the
   input file's `answer`. These are edges between two features' platform files.
   `platforms` is `retiring` in `[package.metadata.flui.modules]`, so each edge

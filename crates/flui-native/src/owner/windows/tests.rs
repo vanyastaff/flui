@@ -11,16 +11,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
+use flui_foundation::DataTransferId;
+use flui_platform::data_transfer::{
+    DataTransferOffer, DataTransferSource, DropFeedback, NullDataTransferSource,
+    RepresentationIndex, TransferLimits, TransferRequest,
+};
+use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+
 use super::broadcast::Subscriber;
 use super::control::{OwnerControl, OwnerMessages, OwnerObjects, OwnerPost, OwnerWindow};
 use super::{
-    CreatedWindow, LoopParts, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
+    CreatedWindow, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
     WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
-use crate::owner::positions::PositionObjects;
 use crate::platforms::windows::display::WindowsDisplays;
+use crate::platforms::windows::platform::WindowRef;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -78,8 +85,8 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks, no broadcast subscriber and no
-/// position object or owner-window hook.
+/// A host of the tests' own: two hooks, no broadcast subscriber, and a drag
+/// position that takes no drags.
 pub(super) struct TestHost;
 
 impl WindowsHost for TestHost {
@@ -89,12 +96,60 @@ impl WindowsHost for TestHost {
         Vec::new()
     }
 
-    fn loop_parts() -> LoopParts {
-        LoopParts {
-            positions: PositionObjects::default(),
-            owner_hooks: Vec::new(),
-        }
+    fn drag() -> Arc<dyn HostDrag> {
+        Arc::new(NoDrag)
     }
+}
+
+/// A transport that takes and starts no drags, and leaves the owner window's
+/// messages to the rest.
+struct NoDrag;
+
+impl OwnerMessages for NoDrag {
+    fn attach(&self, _owner: OwnerPost) {}
+
+    fn message(&self, _owner: &OwnerWindow, _message: u32) -> Option<LRESULT> {
+        None
+    }
+
+    fn destroyed(&self) {}
+}
+
+impl DataTransferSource for NoDrag {
+    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
+        None
+    }
+
+    fn request(
+        &self,
+        id: DataTransferId,
+        representation: RepresentationIndex,
+        limits: TransferLimits,
+    ) -> TransferRequest {
+        NullDataTransferSource.request(id, representation, limits)
+    }
+
+    fn update_drop_feedback(&self, _id: DataTransferId, _feedback: DropFeedback) {}
+
+    fn conclude_drop(&self, _id: DataTransferId) {}
+}
+
+impl PlatformDragSource for NoDrag {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
+        Err(DragError::Unavailable)
+    }
+}
+
+impl HostDrag for NoDrag {
+    fn drag_source(self: Arc<Self>, _window: WindowRef) -> Arc<dyn PlatformDragSource> {
+        self
+    }
+
+    fn register_target(self: Arc<Self>, _window: WindowRef) {}
 }
 
 /// The class's procedure offers a message to the hooks in order: the first

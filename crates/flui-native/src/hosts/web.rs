@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
+use flui_platform::Clipboard;
+
 use crate::clipboard::web::WebClipboard;
 use crate::drag::web::WebTransfer;
 use crate::error::PlatformError;
 use crate::haptics::web::WebHaptics;
 use crate::host::{Absent, Host, position};
-use crate::owner::positions::PositionObjects;
-use crate::owner::web::WebLoop;
+use crate::owner::web::{HostDrag, WebHost, WebLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::web::{PageObservers, WebDisplays, WebPreferences, WebWindow};
 use crate::storage::UserDataDirs;
@@ -27,13 +28,25 @@ impl Host for Web {
     type Input = WebLoop;
     type Text = std::rc::Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
-    type Clipboard = WebClipboard;
-    type Drag = WebTransfer;
+    type Clipboard = WebLoop;
+    type Drag = WebLoop;
     type Haptics = WebHaptics;
     type Preferences = WebPreferences;
     type Lifecycle = PageObservers;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
+}
+
+impl WebHost for Web {
+    /// The page's own clipboard, which reads only its own writes.
+    fn clipboard() -> Arc<dyn Clipboard> {
+        Arc::new(WebClipboard::new())
+    }
+
+    /// HTML drag and drop.
+    fn drag() -> Arc<dyn HostDrag> {
+        Arc::new(WebTransfer::default())
+    }
 }
 
 /// The web platform: a canvas window on the browser's event loop, over
@@ -47,9 +60,6 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WebLoop::new(
-            Arc::new(WebClipboard::new()),
-            PositionObjects::default().with(Arc::new(WebTransfer::default())),
-        )?))
+        Ok(Self::from_loop(WebLoop::new::<Web>()?))
     }
 }

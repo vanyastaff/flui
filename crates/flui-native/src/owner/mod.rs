@@ -11,15 +11,16 @@
 //!   window handler, with no lock or borrow held;
 //! - [`handlers`]: the application's handler set and a window's callbacks,
 //!   called through it;
-//! - [`positions`]: the objects a host's positions keep for the life of its
-//!   loop, which the loop holds without naming them;
 //! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
 //!   decision around one native poll, and `modal_pace`, how often a Windows
 //!   modal loop asks for frames, both pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
-//!   dispatches through hooks declared beside it, which the host registers.
+//!   dispatches through hooks declared beside it, which the host registers. A
+//!   loop that keeps a feature's object (a clipboard, a drag-and-drop
+//!   transport) holds it in a field typed by a hook declared beside it, which
+//!   its host trait makes, and answers that object's position itself.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -55,7 +56,6 @@ pub(crate) mod headless;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod panic_boundary;
-pub(crate) mod positions;
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;

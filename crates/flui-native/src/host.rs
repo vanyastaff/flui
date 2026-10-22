@@ -15,7 +15,11 @@
 //!
 //! The application-level positions take the host's loop as their owner `O`:
 //! the loop holds what the operating system hands out once per process, and a
-//! position reaches its own object through it. The window-level positions
+//! position reaches its own object through it. A position whose object the
+//! loop keeps is the loop itself: the owner's host trait makes the object
+//! (`WindowsHost::drag`, `WebHost::clipboard`, ...), the loop keeps it in a
+//! typed field and answers the position from it, so a table cannot name one
+//! type and build another. The window-level positions
 //! (text, accessibility, haptics, system chrome) are what every window of the
 //! host hands out; the table names their type, and a window that has none
 //! answers as the window contract says today (no object), until the absence

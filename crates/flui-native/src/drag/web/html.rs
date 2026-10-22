@@ -49,10 +49,9 @@ use super::html_model::{
     serve_stored,
 };
 use crate::drag::offers::payload_of_bytes;
-use crate::host;
 use crate::owner::handlers::WindowCallbacks;
 use crate::owner::panic_boundary::contain_owner_callback;
-use crate::owner::web::WebLoop;
+use crate::owner::web::{CanvasDrag, HostDrag};
 use crate::platforms::web::events::{answer, pointer_position};
 use crate::platforms::web::registration::Registration;
 use flui_platform::PlatformInput;
@@ -103,14 +102,6 @@ unsafe impl Send for WebTransfer {}
 unsafe impl Sync for WebTransfer {}
 
 impl WebTransfer {
-    /// The transport of the loop the web table built.
-    pub(crate) fn of(owner: &WebLoop) -> Arc<Self> {
-        owner
-            .positions
-            .get::<Self>()
-            .expect("BUG: the web table builds its loop with the HTML transport")
-    }
-
     fn open_offer(&self, offered: Vec<(DomSource, RepresentationDescriptor)>) -> DataTransferOffer {
         let (sources, representations): (Vec<_>, Vec<_>) = offered.into_iter().unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
@@ -197,14 +188,21 @@ impl WebTransfer {
     }
 }
 
-impl host::Drag<WebLoop> for WebTransfer {
-    fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
-        // HTML drag and drop; `clipboard_offer` stays `None`, since the
-        // clipboard reads only its own writes.
-        Self::of(owner)
+/// What the window asks of the transport: its canvas's drop target and drag
+/// source.
+impl HostDrag for WebTransfer {
+    fn register(
+        self: Arc<Self>,
+        canvas: &web_sys::HtmlCanvasElement,
+        callbacks: &Arc<WindowCallbacks>,
+        registration: &mut Registration,
+    ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
+        Ok(Box::new(register(canvas, &self, callbacks, registration)?))
     }
 }
 
+// HTML drag and drop; `clipboard_offer` stays `None`, since the clipboard
+// reads only its own writes.
 impl DataTransferSource for WebTransfer {
     fn clipboard_offer(&self) -> Option<DataTransferOffer> {
         None
@@ -327,7 +325,7 @@ enum Outgoing {
 }
 
 /// A canvas's HTML drag source (see the module doc).
-pub(crate) struct WebDragSource {
+struct WebDragSource {
     outgoing: RefCell<Outgoing>,
     /// A mouse or pen button is down on the canvas.
     pressed: Cell<bool>,
@@ -356,7 +354,7 @@ impl WebDragSource {
     }
 
     /// End whatever session waits or runs, told it was cancelled.
-    pub(crate) fn retire(&self) {
+    fn retire(&self) {
         self.open.set(false);
         self.end(OsDragEnd::Cancelled);
     }
@@ -458,20 +456,22 @@ fn page_draggable(canvas: &web_sys::HtmlCanvasElement) -> bool {
 }
 
 /// The source and target of one canvas, from registration to retirement.
-pub(crate) struct CanvasDrag {
-    pub(crate) source: Arc<WebDragSource>,
+struct HtmlCanvasDrag {
+    source: Arc<WebDragSource>,
     canvas: web_sys::HtmlCanvasElement,
     was_draggable: bool,
 }
 
-impl CanvasDrag {
-    /// Make the canvas draggable, once its whole registration succeeded.
-    pub(crate) fn arm(&self) {
+impl CanvasDrag for HtmlCanvasDrag {
+    fn source(&self) -> Arc<dyn PlatformDragSource> {
+        Arc::clone(&self.source) as Arc<dyn PlatformDragSource>
+    }
+
+    fn arm(&self) {
         self.canvas.set_draggable(true);
     }
 
-    /// Put the canvas's draggable attribute back as the page had it.
-    pub(crate) fn retire(&self) {
+    fn retire(&self) {
         self.source.retire();
         self.canvas.set_draggable(self.was_draggable);
     }
@@ -511,12 +511,12 @@ fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, Representatio
 }
 
 /// Register the canvas's drop target and drag source listeners.
-pub(crate) fn register(
+fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
     callbacks: &Arc<WindowCallbacks>,
     registration: &mut Registration,
-) -> Result<CanvasDrag, crate::OpenWindowError> {
+) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
     let source = Arc::new(WebDragSource::new());
 
@@ -665,7 +665,7 @@ pub(crate) fn register(
             });
         })?;
     }
-    Ok(CanvasDrag {
+    Ok(HtmlCanvasDrag {
         source,
         canvas: canvas.clone(),
         was_draggable: page_draggable(canvas),

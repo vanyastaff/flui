@@ -111,6 +111,7 @@ use winit::{
 };
 
 use flui_foundation::geometry::Point;
+use flui_platform::data_transfer::DataTransferSource;
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
 #[cfg(target_os = "linux")]
@@ -135,9 +136,40 @@ use flui_platform::{
 };
 
 pub(crate) mod control;
-pub(crate) mod file_drops;
+mod file_drops;
 
-use file_drops::FileDrops;
+pub(crate) use file_drops::FileDrops;
+
+/// What the winit host's table names for its owner thread (ADR-0151 §10): the
+/// clipboard and the drag-and-drop transport the loop holds. The owner reaches
+/// them through hooks and names no feature.
+pub(crate) trait WinitHost: 'static {
+    /// The clipboard, made once per loop: the loop holds it and answers the
+    /// table's clipboard position from it.
+    fn clipboard() -> Arc<dyn flui_platform::Clipboard>;
+
+    /// The drag-and-drop transport, made once per loop: the loop holds it,
+    /// answers the table's drag position from it and tells it of the files
+    /// winit reports dragged and dropped.
+    fn drag() -> Arc<dyn FileDrops>;
+}
+
+/// The clipboard position: the clipboard the host's [`WinitHost::clipboard`]
+/// made, which the loop holds.
+impl host::Clipboard<WinitLoop> for WinitLoop {
+    fn clipboard(owner: &WinitLoop) -> Arc<dyn flui_platform::Clipboard> {
+        owner.with_state(|state| Arc::clone(&state.clipboard))
+    }
+}
+
+/// The drag position: the transport the host's [`WinitHost::drag`] made,
+/// which the loop holds. Every answer is a clone of that one source (ADR-0038
+/// §2), so every id it mints stays redeemable at every clone.
+impl host::Drag<WinitLoop> for WinitLoop {
+    fn data_transfer(owner: &WinitLoop) -> Arc<dyn DataTransferSource> {
+        owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
+    }
+}
 
 /// Convert a tracked physical cursor position to logical pixels.
 fn logical_cursor_point(
@@ -342,12 +374,7 @@ impl WinitLoopState {
 }
 
 impl WinitLoop {
-    /// A loop that has not run yet, with the host table's `clipboard` and its
-    /// drag-and-drop transport, `data_transfer`.
-    pub(crate) fn new(
-        clipboard: Arc<dyn flui_platform::Clipboard>,
-        data_transfer: Arc<dyn FileDrops>,
-    ) -> Self {
+    pub(crate) fn new<H: WinitHost>() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
             displays: WinitDisplaySource::new(),
@@ -355,7 +382,7 @@ impl WinitLoop {
             notices: Arc::new(SystemNotices::default()),
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
-            state: Arc::new(Mutex::new(WinitLoopState::new(clipboard, data_transfer))),
+            state: Arc::new(Mutex::new(WinitLoopState::new(H::clipboard(), H::drag()))),
         };
         #[cfg(target_os = "linux")]
         platform

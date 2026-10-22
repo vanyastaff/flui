@@ -31,11 +31,72 @@ use crate::{
     owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
+use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::drag::PlatformDragSource;
 use flui_platform::{Clipboard, WindowEvent, WindowId};
 
-use crate::owner::positions::PositionObjects;
+use crate::platforms::web::registration::Registration;
 use crate::platforms::web::{DisplayObservers, PageObservers, WebDisplays, WebPreferences};
 use executor::WebExecutor;
+
+/// What the web host's table names for its owner thread (ADR-0151 §10): the
+/// clipboard and the drag-and-drop transport the loop holds. The owner reaches
+/// them through hooks and names no feature.
+pub(crate) trait WebHost: 'static {
+    /// The clipboard, made once per loop: the loop holds it and answers the
+    /// table's clipboard position from it.
+    fn clipboard() -> Arc<dyn Clipboard>;
+
+    /// The drag-and-drop transport, made once per loop: the loop holds it and
+    /// answers the table's drag position from it, and the window it opens
+    /// registers its canvas through it.
+    fn drag() -> Arc<dyn HostDrag>;
+}
+
+/// The page's drag-and-drop transport as the loop and its window reach it,
+/// which the table makes ([`WebHost::drag`]): the platform's one
+/// data-transfer source.
+pub(crate) trait HostDrag: DataTransferSource {
+    /// Listen, in `registration`, for drags over `canvas` and for the drags
+    /// its window starts, dispatching to the window's `callbacks`.
+    ///
+    /// # Errors
+    /// What the registration of a listener reports.
+    fn register(
+        self: Arc<Self>,
+        canvas: &web_sys::HtmlCanvasElement,
+        callbacks: &Arc<WindowCallbacks>,
+        registration: &mut Registration,
+    ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
+}
+
+/// What a canvas's drag registration leaves its window.
+pub(crate) trait CanvasDrag {
+    /// The drag source the window hands out.
+    fn source(&self) -> Arc<dyn PlatformDragSource>;
+
+    /// Make the canvas draggable, once its whole registration succeeded.
+    fn arm(&self);
+
+    /// Put the canvas's draggable attribute back as the page had it.
+    fn retire(&self);
+}
+
+/// The clipboard position: the clipboard the host's [`WebHost::clipboard`]
+/// made, which the loop holds.
+impl host::Clipboard<WebLoop> for WebLoop {
+    fn clipboard(owner: &WebLoop) -> Arc<dyn Clipboard> {
+        owner.with_state(|state| Arc::clone(&state.clipboard))
+    }
+}
+
+/// The drag position: the transport the host's [`WebHost::drag`] made, which
+/// the loop holds.
+impl host::Drag<WebLoop> for WebLoop {
+    fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
+        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    }
+}
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
@@ -49,9 +110,9 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
-    /// The objects the table's positions keep: the one HTML drag-and-drop
-    /// transport every canvas shares.
-    pub(crate) positions: PositionObjects,
+    /// The one HTML drag-and-drop transport every canvas shares, as the table
+    /// made it.
+    pub(crate) drag: Arc<dyn HostDrag>,
     pub(crate) signal: Arc<OwnerSignal>,
     pub(crate) preferences: RefCell<Option<WebPreferences>>,
     pub(crate) displays: Arc<WebDisplays>,
@@ -88,18 +149,13 @@ impl std::fmt::Debug for WebLoop {
 }
 
 impl WebLoop {
-    /// A loop over the page with the table's `clipboard`, and `positions`, the
-    /// objects the table's positions keep for its life.
-    pub(crate) fn new(
-        clipboard: Arc<dyn Clipboard>,
-        positions: PositionObjects,
-    ) -> Result<Self, PlatformError> {
+    pub(crate) fn new<H: WebHost>() -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
 
         let state = WebState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
-            clipboard,
+            clipboard: H::clipboard(),
             is_running: false,
             window_callbacks: None,
             owner: Weak::new(),
@@ -125,7 +181,7 @@ impl WebLoop {
         let preferences = WebPreferences::new(&signal)?;
         Ok(Self {
             state,
-            positions,
+            drag: H::drag(),
             signal,
             preferences: RefCell::new(Some(preferences)),
             displays: WebDisplays::new(),

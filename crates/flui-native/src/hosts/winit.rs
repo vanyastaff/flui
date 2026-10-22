@@ -3,12 +3,14 @@
 
 use std::sync::Arc;
 
+use flui_platform::Clipboard;
+
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::accessibility::linux::UnixAccessibility;
 use crate::clipboard::winit::ArboardClipboard;
 use crate::drag::winit::WinitDataTransfer;
 use crate::host::{Absent, Host, position};
-use crate::owner::winit::WinitLoop;
+use crate::owner::winit::{FileDrops, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::winit::{WinitDisplaySource, WinitWindow};
 use crate::storage::UserDataDirs;
@@ -36,14 +38,27 @@ impl Host for Winit {
     type Accessibility = UnixAccessibility;
     #[cfg(not(all(target_os = "linux", feature = "a11y")))]
     type Accessibility = Absent<position::Accessibility>;
-    type Clipboard = ArboardClipboard;
-    type Drag = WinitDataTransfer;
+    type Clipboard = WinitLoop;
+    type Drag = WinitLoop;
     // Desktop winit targets have no haptic hardware to drive.
     type Haptics = Absent<position::Haptics>;
     type Preferences = WinitLoop;
     type Lifecycle = WinitLoop;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
+}
+
+impl WinitHost for Winit {
+    /// The system clipboard through `arboard`, or an inert one where it
+    /// cannot open (a headless session).
+    fn clipboard() -> Arc<dyn Clipboard> {
+        ArboardClipboard::or_inert()
+    }
+
+    /// The files winit reports dragged and dropped.
+    fn drag() -> Arc<dyn FileDrops> {
+        Arc::new(WinitDataTransfer::new())
+    }
 }
 
 /// The winit platform: the Linux host until the native Wayland and X11 host
@@ -66,10 +81,7 @@ pub type WinitPlatform = HostPlatform<Winit>;
 impl HostPlatform<Winit> {
     /// Create a new winit platform
     pub fn new() -> Self {
-        Self::from_loop(WinitLoop::new(
-            ArboardClipboard::or_inert(),
-            Arc::new(WinitDataTransfer::new()),
-        ))
+        Self::from_loop(WinitLoop::new::<Winit>())
     }
 }
 

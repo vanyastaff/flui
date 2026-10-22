@@ -62,6 +62,7 @@ use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowEx
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
+use crate::owner::android::AndroidHost;
 use crate::owner::android::java_view;
 use crate::platform::HostPlatform;
 use crate::platforms::android::window::ActivityFlags;
@@ -173,14 +174,9 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    /// The loop of host `H`, whose table names what `FluiView` reports to,
-    /// over `app`, with the table's `clipboard`, and `transfer`, which makes
-    /// its drag-and-drop transport for the Java view.
-    pub(crate) fn new<H: super::AndroidHost>(
-        app: AndroidApp,
-        clipboard: Arc<dyn flui_platform::Clipboard>,
-        transfer: java_view::TransferFor,
-    ) -> Self {
+    /// The loop of host `H`, whose table names what `FluiView` reports to and
+    /// makes the clipboard and drag-and-drop transport the loop holds.
+    pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -201,7 +197,7 @@ impl AndroidLoop {
             Arc::downgrade(&owner_signal),
             api,
             H::input_method(),
-            transfer,
+            H::transfer,
         );
         let owner = Arc::downgrade(&owner_signal);
         Self {
@@ -214,7 +210,7 @@ impl AndroidLoop {
             notices: crate::shared::system_notice::SystemNotices::default(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
-            clipboard,
+            clipboard: H::clipboard(),
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
@@ -1119,6 +1115,25 @@ impl host::Services for AndroidLoop {
 impl host::Preferences<AndroidLoop> for AndroidLoop {
     fn sample(owner: &AndroidLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
         owner.refresh_preferences()
+    }
+}
+
+/// The clipboard position: the clipboard the host's
+/// [`AndroidHost::clipboard`] made, which the loop holds.
+impl host::Clipboard<AndroidLoop> for AndroidLoop {
+    fn clipboard(owner: &AndroidLoop) -> Arc<dyn flui_platform::Clipboard> {
+        Arc::clone(&owner.clipboard)
+    }
+}
+
+/// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0247), the
+/// transport the host's [`AndroidHost::transfer`] made for the view.
+impl host::Drag<AndroidLoop> for AndroidLoop {
+    fn data_transfer(
+        owner: &AndroidLoop,
+    ) -> Arc<dyn flui_platform::data_transfer::DataTransferSource> {
+        Arc::clone(owner.java_view.transfer())
+            as Arc<dyn flui_platform::data_transfer::DataTransferSource>
     }
 }
 

@@ -1,7 +1,7 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 
@@ -9,7 +9,7 @@ use crate::clipboard::android::MockClipboard;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::{Absent, Host, position};
-use crate::owner::android::java_view::InputMethod;
+use crate::owner::android::java_view::{InputMethod, JavaView, ViewTransfer};
 use crate::owner::android::{AndroidHost, AndroidLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
@@ -30,9 +30,9 @@ impl Host for Android {
     type Input = AndroidInputState;
     type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
-    // An in-process stand-in until the system clipboard is reached through JNI.
-    type Clipboard = MockClipboard;
-    type Drag = AndroidTransfer;
+    // The loop holds the clipboard and the transport `AndroidHost` makes.
+    type Clipboard = AndroidLoop;
+    type Drag = AndroidLoop;
     type Haptics = AndroidHaptics;
     type Preferences = AndroidLoop;
     type Lifecycle = AndroidLoop;
@@ -44,6 +44,17 @@ impl AndroidHost for Android {
     /// The text feature's answer to the input method's calls.
     fn input_method() -> Box<dyn InputMethod> {
         Box::new(ViewInputMethod::default())
+    }
+
+    /// An in-process stand-in until the system clipboard is reached through
+    /// JNI.
+    fn clipboard() -> Arc<dyn flui_platform::Clipboard> {
+        Arc::new(MockClipboard::new())
+    }
+
+    /// `FluiView`'s drag and drop.
+    fn transfer(view: Weak<JavaView>) -> Arc<dyn ViewTransfer> {
+        AndroidTransfer::for_view(view)
     }
 }
 
@@ -71,10 +82,6 @@ impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new::<Android>(
-            app,
-            Arc::new(MockClipboard::new()),
-            AndroidTransfer::for_view,
-        ))
+        Self::from_loop(AndroidLoop::new::<Android>(app))
     }
 }

@@ -8,10 +8,11 @@
 //! - [`ndk`]: the API level and the NDK functions that exist only from a given
 //!   level on, found by name when the platform is built.
 //!
-//! Window, input, display, drag, haptics and preferences stay in
-//! `platforms::android`; the loop reaches them there. The view serves several
-//! features, so what it hands a feature's state is named by the host's table
-//! ([`AndroidHost`]), not by the view.
+//! Window, input, display, haptics and preferences stay in `platforms::android`;
+//! the loop reaches them there. The view serves several features, so what it
+//! hands a feature's state is named by the host's table ([`AndroidHost`]), not
+//! by the view; the clipboard and the drag-and-drop transport the loop holds
+//! are made there too.
 
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
@@ -23,12 +24,25 @@ pub(crate) mod ndk;
 pub(crate) use looper::AndroidLoop;
 
 /// What an Android host's table names for its owner thread (ADR-0151 §10):
-/// the features' objects `FluiView` hands what it reports.
+/// the features' objects `FluiView` hands what it reports, and the clipboard
+/// and drag-and-drop transport the loop holds. The owner reaches them through
+/// these hooks and names no feature.
 #[cfg(target_os = "android")]
 pub(crate) trait AndroidHost: 'static {
     /// What answers the input method's calls through a new view, one per
     /// view.
     fn input_method() -> Box<dyn java_view::InputMethod>;
+
+    /// The clipboard, made once per loop: the loop holds it and answers the
+    /// table's clipboard position from it.
+    fn clipboard() -> std::sync::Arc<dyn flui_platform::Clipboard>;
+
+    /// The drag-and-drop transport of `view`, `FluiView`'s Rust side, made as
+    /// the view starts: the view hands it the drag events its Java side
+    /// reports, and the loop answers the table's drag position from it.
+    fn transfer(
+        view: std::sync::Weak<java_view::JavaView>,
+    ) -> std::sync::Arc<dyn java_view::ViewTransfer>;
 }
 
 /// What `FluiView` reports of its editor after an input method edit

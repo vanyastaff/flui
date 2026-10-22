@@ -76,11 +76,11 @@ use windows_core::{ComObject, HSTRING};
 use super::ole_model::{
     NativeFormat, actions_of, decode, effect_bits, offer_representations, os_loop_buttons,
 };
+use crate::owner::modal_pace::MODAL_FRAME_PACE_MS;
 use crate::owner::panic_boundary::{contain_owner_callback, owner_callback_panicked};
 use crate::owner::slot::OwnerSlot;
-use crate::owner::windows::WindowsLoop;
+use crate::owner::windows::HostDrag;
 use crate::owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow};
-use crate::owner::modal_pace::MODAL_FRAME_PACE_MS;
 use crate::platforms::windows::platform::WindowRef;
 use flui_platform::pointer::PointerKind;
 
@@ -192,14 +192,6 @@ impl OleTransfer {
             owner,
             owner_window: OnceLock::new(),
         })
-    }
-
-    /// The transport of the loop the Windows table built.
-    pub(crate) fn of(owner: &WindowsLoop) -> Arc<Self> {
-        owner
-            .positions
-            .get::<Self>()
-            .expect("BUG: the Windows table builds its loop with the OLE transport")
     }
 
     /// The owner-thread state; `None` off the owner thread.
@@ -500,9 +492,14 @@ impl OwnerMessages for OleTransfer {
     }
 }
 
-impl crate::host::Drag<WindowsLoop> for OleTransfer {
-    fn data_transfer(owner: &WindowsLoop) -> Arc<dyn DataTransferSource> {
-        Self::of(owner)
+/// What a window asks of the transport: its drag source, and its drop target.
+impl HostDrag for OleTransfer {
+    fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource> {
+        Win32DragSource::new(self, window)
+    }
+
+    fn register_target(self: Arc<Self>, window: WindowRef) {
+        register_target(window, self);
     }
 }
 
@@ -580,7 +577,7 @@ impl DataTransferSource for OleTransfer {
 }
 
 /// The drag source a Win32 window offers: the platform's one transport.
-pub(crate) struct Win32DragSource {
+struct Win32DragSource {
     transfer: Arc<OleTransfer>,
     /// The window, reached only on its owner thread and only while its
     /// handle still names it.
@@ -588,7 +585,7 @@ pub(crate) struct Win32DragSource {
 }
 
 impl Win32DragSource {
-    pub(crate) fn new(transfer: Arc<OleTransfer>, window: WindowRef) -> Arc<Self> {
+    fn new(transfer: Arc<OleTransfer>, window: WindowRef) -> Arc<Self> {
         Arc::new(Self { transfer, window })
     }
 
@@ -627,7 +624,7 @@ impl crate::owner::windows::WindowMessages for DropTargetRegistration {
         if let Some(transfer) =
             this.with_context("drop target", |context| Arc::clone(&context.drag))
         {
-            register_target(this, transfer);
+            transfer.register_target(this);
         }
     }
 }

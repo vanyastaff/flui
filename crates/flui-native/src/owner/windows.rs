@@ -9,8 +9,9 @@
 //! message to the [`WindowMessages`] hooks the host registers, the receiver
 //! tells its [`broadcast::Subscriber`]s what the system broadcast, and the owner
 //! window hands the messages a feature posts or sends it to that feature's
-//! [`control::OwnerMessages`] hook (ADR-0151 §10). What the host's positions
-//! keep for the loop's life, the loop holds as [`PositionObjects`].
+//! [`control::OwnerMessages`] hook (ADR-0151 §10). The drag-and-drop transport,
+//! which the loop holds, the host makes ([`WindowsHost::drag`]); the loop names
+//! it by what it asks of it ([`HostDrag`]).
 
 // This module (and its submodules) is one of the workspace's sanctioned
 // `unsafe` FFI islands — direct Win32 calls have no safe wrapper. The
@@ -38,6 +39,8 @@ use std::{
 };
 
 use flui_platform::CursorError;
+use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::drag::PlatformDragSource;
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -62,8 +65,8 @@ use windows::{
 };
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
-use crate::owner::positions::PositionObjects;
-use crate::platforms::windows::{display::WindowsDisplays, platform::WindowMap};
+use crate::platforms::windows::display::WindowsDisplays;
+use crate::platforms::windows::platform::{WindowMap, WindowRef};
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
     owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers, platform::Platform,
@@ -72,9 +75,9 @@ use crate::{
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
-use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 pub(crate) use wake_deadline::FrameCount;
 use wake_deadline::ModalDelivery;
+use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -90,10 +93,9 @@ static WINDOW_CLASS: OnceLock<Result<TypeId, String>> = OnceLock::new();
 pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
-/// hooks of FLUI's window class, the subscribers of the broadcast receiver and
-/// the hooks of the owner's message-only window, each in the order a message
-/// reaches them, and the objects its positions keep. The owner dispatches
-/// through them and names no feature.
+/// hooks of FLUI's window class and the subscribers of the broadcast receiver,
+/// each in the order a message reaches them, and the drag-and-drop transport
+/// the loop holds. The owner dispatches through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
     /// The hooks of FLUI's window class; its procedure is
     /// `window_proc::<Self>`.
@@ -102,19 +104,32 @@ pub(crate) trait WindowsHost: 'static {
     /// The broadcast receiver's subscribers, made from the owner's objects.
     fn broadcast_subscribers(owner: &control::OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>>;
 
-    /// What the host's positions give the loop, made on the owner thread as
-    /// the loop is built.
-    fn loop_parts() -> LoopParts;
+    /// The drag-and-drop transport, made once per loop on the owner thread.
+    /// The loop holds it and answers the table's drag position from it, the
+    /// owner window hands it the transport's own messages, and every window
+    /// the loop opens takes and starts drags through it.
+    fn drag() -> Arc<dyn HostDrag>;
 }
 
-/// What a Windows host's positions give its loop
-/// ([`WindowsHost::loop_parts`]).
-pub(crate) struct LoopParts {
-    /// The objects the positions keep for the loop's life.
-    pub(crate) positions: PositionObjects,
-    /// The hooks of the owner window's procedure, in the order a message
-    /// reaches them.
-    pub(crate) owner_hooks: Vec<Arc<dyn control::OwnerMessages>>,
+/// The host's drag-and-drop transport as the loop, its owner window and the
+/// windows it opens reach it, which the table makes ([`WindowsHost::drag`]):
+/// the platform's one data-transfer source, and its part of the owner window's
+/// procedure.
+pub(crate) trait HostDrag: control::OwnerMessages + DataTransferSource {
+    /// The drag source `window`, created on this thread, hands out.
+    fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource>;
+
+    /// Make `window`, created on this thread, a drop target until it is
+    /// destroyed.
+    fn register_target(self: Arc<Self>, window: WindowRef);
+}
+
+/// The drag position: the transport the host's [`WindowsHost::drag`] made,
+/// which the loop holds.
+impl host::Drag<WindowsLoop> for WindowsLoop {
+    fn data_transfer(owner: &WindowsLoop) -> Arc<dyn DataTransferSource> {
+        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    }
 }
 
 /// One feature's part of the procedure of FLUI's window class.
@@ -356,7 +371,11 @@ impl WindowsLoop {
         let source = AtomicU64::new(0);
         for attempt in 0..3 {
             let refused = std::panic::catch_unwind(|| {
-                Self::admit_with_config::<tests::TestHost>(WindowConfiguration::default(), &source)
+                Self::admit_with_config::<tests::TestHost>(
+                    WindowConfiguration::default(),
+                    &source,
+                    tests::TestHost::drag,
+                )
             });
             assert!(
                 refused.is_err(),
@@ -386,9 +405,9 @@ impl WindowsLoop {
 /// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
 pub struct WindowsLoop {
     pub(crate) owner_control: control::OwnerControl,
-    /// The objects the table's positions keep (OLE drag and drop: the
-    /// platform's one data-transfer source).
-    pub(crate) positions: PositionObjects,
+    /// The drag-and-drop transport, as the table made it: the platform's one
+    /// data-transfer source, which every window it opens shares.
+    pub(crate) drag: Arc<dyn HostDrag>,
     /// Message-only window for platform messages
     message_window: HWND,
 
@@ -442,8 +461,8 @@ pub struct WindowsLoop {
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate, and `positions` holds only `Send + Sync` objects (the
-// drag transport keeps its COM objects in an owner slot).
+// own owner-thread gate, and `drag` is `Send + Sync` by its trait's bound
+// (the OLE transport keeps its COM objects in an owner slot).
 unsafe impl Send for WindowsLoop {}
 // SAFETY: as for `Send` — `&WindowsLoop` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -480,16 +499,28 @@ impl WindowsLoop {
     pub(crate) fn with_config<H: WindowsHost>(
         config: WindowConfiguration,
     ) -> Result<Self, PlatformError> {
-        Self::admit_with_config::<H>(config, WindowIdentity::source())
+        Self::admit_with_config::<H>(config, WindowIdentity::source(), H::drag)
     }
 
-    /// [`Self::with_config`] with the identity drawn from `source`. The
-    /// owner control's identity is reserved first: exhaustion refuses before
-    /// COM is initialized or any HWND exists, so a refusal (and every caught
-    /// retry) leaves nothing to release.
+    /// [`Self::with_config`] holding `drag` in place of the transport `H`
+    /// makes, for a test that drives the transport through a handle of its
+    /// own.
+    #[cfg(test)]
+    pub(crate) fn with_drag<H: WindowsHost>(
+        config: WindowConfiguration,
+        drag: Arc<dyn HostDrag>,
+    ) -> Result<Self, PlatformError> {
+        Self::admit_with_config::<H>(config, WindowIdentity::source(), move || drag)
+    }
+
+    /// [`Self::with_config`] with the identity drawn from `source` and the
+    /// transport `drag` makes. The owner control's identity is reserved first:
+    /// exhaustion refuses before COM is initialized or any HWND exists, so a
+    /// refusal (and every caught retry) leaves nothing to release.
     fn admit_with_config<H: WindowsHost>(
         config: WindowConfiguration,
         source: &std::sync::atomic::AtomicU64,
+        drag: impl FnOnce() -> Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
         let owner_identity = WindowIdentity::mint_from(source);
 
@@ -524,17 +555,14 @@ impl WindowsLoop {
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
-        let LoopParts {
-            positions,
-            owner_hooks,
-        } = H::loop_parts();
+        let drag = drag();
         let displays = Arc::new(WindowsDisplays::new());
         let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
         notices.mark_stale_on_wake(&displays);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
-            owner_hooks,
+            vec![Arc::clone(&drag) as Arc<dyn control::OwnerMessages>],
             Arc::clone(&displays),
             notices,
         )?;
@@ -578,7 +606,7 @@ impl WindowsLoop {
 
         let platform = Self {
             owner_control,
-            positions,
+            drag,
             message_window,
             windows,
             background_executor,

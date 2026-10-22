@@ -114,9 +114,9 @@ pub(crate) struct OwnerControlContext {
 /// turn, with no window callback in progress, and the window's end.
 ///
 /// The procedure answers its own messages (the wake, the exit policy) and
-/// offers any other to the hooks the host names
-/// ([`LoopParts::owner_hooks`](super::LoopParts::owner_hooks)) in order: the
-/// first that answers ends the message's dispatch, and a message no hook
+/// offers any other to its hooks in order (the loop's: the drag-and-drop
+/// transport the host makes, [`WindowsHost::drag`](super::WindowsHost::drag)):
+/// the first that answers ends the message's dispatch, and a message no hook
 /// answers goes to `DefWindowProcW`. A feature's messages are `WM_APP`
 /// messages of its own, distinct from every other hook's and the owner's.
 pub(crate) trait OwnerMessages {

@@ -39,7 +39,6 @@ use super::view_model::{
     ClipSource, DroppedClip, Held, clip_parts, held, incoming_allowed, offered, source_end,
     uri_bytes,
 };
-use crate::owner::android::AndroidLoop;
 use crate::owner::android::java_view::{JavaView, ViewEvent, ViewTransfer};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerSlot;
@@ -377,13 +376,6 @@ impl DataTransferSource for AndroidTransfer {
                 .map(drop)
             });
         }
-    }
-}
-
-impl crate::host::Drag<AndroidLoop> for AndroidTransfer {
-    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn DataTransferSource> {
-        // FluiView's drag and drop (ADR-0211, ADR-0247).
-        Arc::clone(owner.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
 }
 
