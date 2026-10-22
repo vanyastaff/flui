@@ -968,7 +968,7 @@ fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
     let woke_while_reading = Arc::new(AtomicBool::new(false));
     // A later turn read again.
     let read_again = Arc::new(AtomicBool::new(false));
-    *platform.read_during_turn.lock() = Some(Box::new({
+    *platform.turn_read_hook_for_test.lock() = Some(Box::new({
         let armed = Arc::clone(&armed);
         let woke_while_reading = Arc::clone(&woke_while_reading);
         let read_again = Arc::clone(&read_again);

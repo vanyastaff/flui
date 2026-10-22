@@ -216,7 +216,7 @@ pub struct WinitLoop {
     /// Run where a turn reads what wakes asked of it, before the
     /// application's turn: a test wakes the owner from here.
     #[cfg(test)]
-    pub(crate) read_during_turn: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    pub(crate) turn_read_hook_for_test: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     state: Arc<Mutex<WinitLoopState>>,
 }
@@ -366,7 +366,7 @@ impl WinitLoop {
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
             #[cfg(test)]
-            read_during_turn: Mutex::new(None),
+            turn_read_hook_for_test: Mutex::new(None),
             state: Arc::new(Mutex::new(WinitLoopState::new())),
         };
         #[cfg(target_os = "linux")]
@@ -378,8 +378,8 @@ impl WinitLoop {
 
     /// Run the test's read, as the loop's own reads run in a turn.
     #[cfg(test)]
-    fn read_during_turn_for_test(&self) {
-        if let Some(read) = self.read_during_turn.lock().as_mut() {
+    fn run_turn_read_hook_for_test(&self) {
+        if let Some(read) = self.turn_read_hook_for_test.lock().as_mut() {
             read();
         }
     }
@@ -1809,11 +1809,21 @@ impl WinitApp {
                 })?,
             );
         }
-        self.refresh_preferences();
+        // Outside any turn: an accepted reading asks for one.
+        if self.refresh_preferences() {
+            let signal = self.platform.owner_signal.lock().clone();
+            if let Some(signal) = signal {
+                let _ = signal.wake();
+            }
+        }
         Ok(())
     }
 
     /// Publishes before owner delivery; errors retain the native source's retry.
+    /// `true` when a reading was accepted, which the application's turn must
+    /// see: the caller owes it that turn, inside a turn it has begun
+    /// ([`OwnerTurn::owe`](crate::owner::signal::OwnerTurn::owe)) or with a
+    /// wake.
     #[cfg(windows)]
     fn refresh_preferences(&self) -> bool {
         let Some(source) = &self.preference_source else {
@@ -1830,22 +1840,23 @@ impl WinitApp {
         let accepted = matches!(&observation, PreferenceObservation::Observed(_));
         self.platform
             .with_state(|state| state.preferences = observation);
-        if accepted {
-            let signal = self.platform.owner_signal.lock().clone();
-            if let Some(signal) = signal {
-                let _ = signal.wake();
-            }
-        }
         accepted
     }
 
+    /// Read the preferences and, when a reading was accepted, run the
+    /// application's turn that sees it: owed to a turn begun here, so the
+    /// reading costs no posted turn of its own.
     #[cfg(windows)]
     fn deliver_preferences(&self) -> bool {
         if !self.refresh_preferences() {
             return false;
         }
         let signal = self.platform.owner_signal.lock().clone();
-        signal.is_some_and(|signal| signal.drive() || signal.quitting())
+        signal.is_some_and(|signal| {
+            let turn = signal.begin_turn();
+            turn.owe();
+            turn.drive() || signal.quitting()
+        })
     }
 
     /// Shared body of the `HoveredFile`/`DroppedFile` arms: feed the path
@@ -2009,8 +2020,14 @@ impl WinitApp {
             }
         }
 
+        // An accepted reading is owed to this turn's drive, not a wake: a
+        // wake now would post a turn of its own with nothing left to read.
         #[cfg(windows)]
-        self.refresh_preferences();
+        if self.refresh_preferences()
+            && let Some(turn) = &turn
+        {
+            turn.owe();
+        }
         #[cfg(target_os = "linux")]
         self.deliver_portal_appearance();
         #[cfg(target_os = "linux")]
@@ -2018,7 +2035,7 @@ impl WinitApp {
         #[cfg(target_os = "linux")]
         self.refresh_x11_windows();
         #[cfg(test)]
-        self.platform.read_during_turn_for_test();
+        self.platform.run_turn_read_hook_for_test();
         if let Some(turn) = turn
             && turn.drive()
         {

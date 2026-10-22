@@ -1958,10 +1958,16 @@ lands while it reads posts the next turn, which reads again, instead of being
 settled by the drive with its change unread. `drive` and `drive_in` begin and
 drive at once, for loops that read nothing first (Win32, AppKit, UIKit, web,
 headless) or read only after the drive (Android's view events, UIKit's scene
-installation). A wake that finds no callback stays owed, and a registration
-posts it. Tests: `a_wake_while_the_loop_reads_gets_a_turn_that_reads_again`
-(the winit loop and the signal itself),
-`a_wake_with_no_callback_is_owed_to_the_registration`.
+installation). A begun turn dropped before it is driven (a read that unwinds,
+a loop that returns early) posts the next turn for the work still owed. A read
+on the owner thread that finds work for the application's turn owes it to the
+turn it runs in (`OwnerTurn::owe`, the winit loop's Windows preferences) rather
+than waking, which would post a turn with nothing left to read. A wake that
+finds no callback stays owed, and a registration posts it. Tests:
+`a_wake_while_the_loop_reads_gets_a_turn_that_reads_again` (the winit loop and
+the signal itself), `an_undriven_turn_posts_the_next_one`,
+`a_turn_owed_by_its_read_posts_nothing`,
+`a_change_with_no_turn_callback_reaches_the_next_one_registered`.
 
 macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
