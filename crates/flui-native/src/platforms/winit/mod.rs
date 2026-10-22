@@ -11,10 +11,8 @@ mod clipboard;
 mod data_transfer;
 pub(crate) mod events;
 #[cfg(target_os = "linux")]
-pub(crate) mod linux_notices;
+pub(crate) mod linux_unreported;
 mod positions;
-#[cfg(target_os = "linux")]
-pub(crate) mod preferences;
 pub(crate) mod window;
 pub(crate) mod window_plan;
 

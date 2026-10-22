@@ -31,19 +31,43 @@ use crate::{
     owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplayId, DisplaySnapshot, WindowEvent, WindowId};
+use flui_platform::{
+    DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences, WindowEvent, WindowId,
+};
 
+use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
-use crate::platforms::web::{PageObservers, WebClipboard, WebPreferences, WebTransfer};
+use crate::platforms::web::{WebClipboard, WebTransfer};
 use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
-/// displays the loop holds. The owner reaches them through the hook and names
-/// no feature.
+/// displays, the preference source and the page's lifecycle the loop holds.
+/// The owner reaches them through the hooks and names no feature.
 pub(crate) trait WebHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to the window it opens.
     fn displays() -> Arc<dyn HostDisplays>;
+
+    /// The system preference source, for the table's preference position,
+    /// kept until the loop quits; it wakes the owner behind `signal` when what
+    /// it reads changes.
+    ///
+    /// # Errors
+    /// [`PlatformError::Preferences`] when the browser's preference queries
+    /// cannot be observed.
+    fn preferences(
+        signal: &Arc<OwnerSignal>,
+    ) -> Result<Rc<dyn SystemPreferenceSource>, PlatformError>;
+
+    /// The page's lifecycle, which the loop observes while it runs.
+    fn page() -> Box<dyn PageLifecycle>;
+}
+
+/// The page's lifecycle as the web loop observes it while it runs.
+pub(crate) trait PageLifecycle {
+    /// Observe the page until the returned watch is dropped; `report` hears
+    /// each phase of the session end the page goes through.
+    fn listen(&self, report: Box<dyn Fn(SessionEndPhase)>) -> Watch;
 }
 
 /// The page's screens as the loop and its window reach them, which the table
@@ -82,15 +106,19 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
     pub(crate) signal: Arc<OwnerSignal>,
-    pub(crate) preferences: RefCell<Option<WebPreferences>>,
+    /// The system preference source the table made; present until the platform
+    /// quits.
+    preferences: RefCell<Option<Rc<dyn SystemPreferenceSource>>>,
     /// The screens, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
     display_observers: RefCell<Option<Watch>>,
+    /// The page's lifecycle, as the table made it.
+    page: Box<dyn PageLifecycle>,
     /// The listeners that report the page being hidden and shown again; present
     /// while the platform runs.
-    page_observers: RefCell<Option<PageObservers>>,
+    page_observers: RefCell<Option<Watch>>,
 }
 
 pub(crate) struct WebState {
@@ -150,13 +178,14 @@ impl WebLoop {
             });
             Ok(())
         }));
-        let preferences = WebPreferences::new(&signal)?;
+        let preferences = H::preferences(&signal)?;
         Ok(Self {
             state,
             signal,
             preferences: RefCell::new(Some(preferences)),
             displays: H::displays(),
             display_observers: RefCell::new(None),
+            page: H::page(),
             page_observers: RefCell::new(None),
         })
     }
@@ -302,11 +331,11 @@ impl host::Loop for WebLoop {
         // The page being hidden is the end of the session: the browser may
         // discard it without another event.
         let state = Arc::downgrade(&self.state);
-        *self.page_observers.borrow_mut() = Some(PageObservers::start(move |phase| {
+        *self.page_observers.borrow_mut() = Some(self.page.listen(Box::new(move |phase| {
             if let Some(state) = state.upgrade() {
                 Self::report_session_phase(&state, phase);
             }
-        }));
+        })));
 
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
@@ -434,6 +463,66 @@ impl host::Services for WebLoop {
 impl host::Displays<WebLoop> for WebLoop {
     fn snapshot(owner: &WebLoop) -> Result<DisplaySnapshot, PlatformError> {
         owner.displays.snapshot()
+    }
+}
+
+/// The preference position is the loop's: it reads the source the table made
+/// ([`WebHost::preferences`]) while the platform runs.
+impl host::Preferences<WebLoop> for WebLoop {
+    fn sample(owner: &WebLoop) -> Result<SystemPreferences, PlatformError> {
+        if !owner.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner has stopped".into(),
+            });
+        }
+        // Sample outside the borrow: the browser's answers must not observe
+        // the host's own state held.
+        let Some(source) = owner.preferences.borrow().clone() else {
+            return Err(PlatformError::Preferences {
+                message: "browser preference source is closed".into(),
+            });
+        };
+        let preferences = source.sample()?;
+        if !owner.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner stopped during sampling".into(),
+            });
+        }
+        Ok(preferences)
+    }
+}
+
+/// The lifecycle position is the loop's: the page reports the end of its
+/// session (`WebHost::page`) and nothing else.
+impl host::Lifecycle<WebLoop> for WebLoop {
+    fn on_session_end(
+        owner: &WebLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        install(
+            &WebLoop::handler(&owner.state, |state| &mut state.handlers.session_end),
+            callback,
+        );
+    }
+
+    fn on_host_notice(_: &WebLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        // A page is told of none of sleep, wake, session lock or memory
+        // pressure, so nothing calls the callback.
+        drop(callback);
+    }
+
+    fn release_session_end(_: &WebLoop) {
+        // A page cannot be asked to wait, so the hook's answer is never read
+        // and no session end is held open.
+    }
+
+    fn on_reopen(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
+        // Only AppKit reports a reopen.
+        drop(callback);
+    }
+
+    fn activate(_: &WebLoop, _: bool) {
+        // A page cannot bring its tab to the front.
     }
 }
 

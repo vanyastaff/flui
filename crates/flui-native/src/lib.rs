@@ -24,6 +24,10 @@
 //!   │                         beside one file per platform
 //!   ├─ text/                - Text input and the system text size: the
 //!   │                         model and one module per platform
+//!   ├─ preferences/         - System preferences: the model and one source
+//!   │                         per platform
+//!   ├─ lifecycle/           - Session end and system notices, one source per
+//!   │                         platform
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │
@@ -156,10 +160,11 @@
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, `platforms::android::memory`, the loops
-// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, the display
-// sources `display::windows::source`, `display::apple::{macos, ios}`, and the
-// text services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios`)
+// `platforms::winit`, the loops `owner::windows`, `owner::apple`, `owner::web`,
+// `owner::winit`, the display sources `display::windows::source`,
+// `display::apple::{macos, ios}`, the text services `text::windows::tsf`,
+// `text::apple::macos`, `text::apple::ios`, and a preference or lifecycle
+// platform file that calls the OS itself, such as `preferences::windows`)
 // carries its own module-level `expect(unsafe_code)` where it is declared, and
 // the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
@@ -185,9 +190,11 @@ pub mod executor;
 pub mod host;
 mod host_window;
 mod hosts;
+mod lifecycle;
 mod owner;
 mod platform;
 pub mod platforms;
+mod preferences;
 pub mod shared;
 pub mod storage;
 #[cfg(test)]

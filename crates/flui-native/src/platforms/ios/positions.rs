@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use objc2::MainThreadMarker;
 
-use super::{IOSClipboard, IOSPreferences, IOSWindow};
-use crate::PlatformError;
+use super::{IOSClipboard, IOSWindow};
 use crate::host;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
@@ -13,8 +12,7 @@ use crate::owner::apple::IOSLoop;
 use crate::owner::call_point::install;
 use flui_foundation::geometry::Size;
 use flui_platform::{
-    Clipboard, PlatformWindow, SystemPreferences, WindowCapabilities, WindowEvent, WindowId,
-    WindowOptions,
+    Clipboard, PlatformWindow, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
 };
 
 impl host::Window<IOSLoop> for IOSWindow {
@@ -46,14 +44,5 @@ impl host::Window<IOSLoop> for IOSWindow {
 impl host::Clipboard<IOSLoop> for IOSClipboard {
     fn clipboard(owner: &IOSLoop) -> Arc<dyn Clipboard> {
         owner.clipboard.clone()
-    }
-}
-
-impl host::Preferences<IOSLoop> for IOSPreferences {
-    fn sample(owner: &IOSLoop) -> Result<SystemPreferences, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
-            message: "UIKit preference sampling must run on the main thread".into(),
-        })?;
-        owner.preferences.get(marker).sample(marker)
     }
 }

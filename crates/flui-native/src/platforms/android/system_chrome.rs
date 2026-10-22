@@ -62,7 +62,7 @@ fn apply(
     api: AndroidApi,
     dark_icons: bool,
 ) -> Result<(), flui_platform::PreferenceQueryError> {
-    super::preferences::with_activity(app, |env, activity| {
+    crate::owner::android::activity::with_activity(app, |env, activity| {
         let window = env
             .call_method(
                 activity,

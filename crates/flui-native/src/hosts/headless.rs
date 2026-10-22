@@ -1,15 +1,20 @@
 //! The headless host: every position simulated in memory for tests.
 
+use std::sync::Arc;
+
 use flui_platform::{InMemoryClipboard, haptics::FakeHaptics};
 
 use crate::display::headless::{DisplaySpec, laid_out};
 use crate::host::Host;
+use crate::lifecycle::headless::HeadlessHostEvents;
+use crate::lifecycle::notice::SystemNotices;
 use crate::owner::headless::{HeadlessHost, HeadlessLoop};
+use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessPreferences, MockWindow,
+    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessInputDevices, MockWindow,
 };
+use crate::preferences::headless::HeadlessPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::headless::FakeTextInput;
 
@@ -39,6 +44,10 @@ impl HeadlessHost for Headless {
     /// One display, 1920 by 1080 at scale 1.
     fn displays() -> flui_platform::DisplaySnapshot {
         laid_out(vec![DisplaySpec::default()])
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
     }
 }
 

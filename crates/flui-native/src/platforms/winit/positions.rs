@@ -7,15 +7,11 @@
 use std::{cell::Cell, sync::Arc, thread};
 
 use flui_platform::{
-    SessionEndAnswer, SessionEndPhase, SystemNotice, SystemPreferences, WindowCapabilities,
-    WindowEvent, WindowId, WindowOptions, data_transfer::DataTransferSource,
+    WindowCapabilities, WindowEvent, WindowId, WindowOptions, data_transfer::DataTransferSource,
 };
 
-#[cfg(windows)]
-use crate::owner::winit::PreferenceObservation;
 use crate::owner::winit::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
 use crate::{
-    error::PlatformError,
     host,
     host_window::HostWindow,
     owner::OpenWindowError,
@@ -170,98 +166,5 @@ impl host::Drag<WinitLoop> for WinitDataTransfer {
         // Clones of the ONE source constructed at platform init (ADR-0038
         // §2): every id it mints stays redeemable at every clone.
         owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
-    }
-}
-
-impl host::Preferences<WinitLoop> for WinitLoop {
-    #[cfg(target_os = "linux")]
-    fn sample(owner: &WinitLoop) -> Result<SystemPreferences, PlatformError> {
-        let signal = owner.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "Linux preferences require the live winit event-loop owner".into(),
-            });
-        }
-        let source = owner.with_state(|state| state.preferences.upgrade());
-        source
-            .map(|source| source.read())
-            .ok_or(PlatformError::PreferencesDeferred)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn sample(owner: &WinitLoop) -> Result<SystemPreferences, PlatformError> {
-        let signal = owner.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "AppKit preferences require the live winit event-loop owner".into(),
-            });
-        }
-        let source = owner.with_state(|state| state.preferences.upgrade());
-        source.ok_or(PlatformError::PreferencesDeferred)?.read()
-    }
-
-    #[cfg(windows)]
-    fn sample(owner: &WinitLoop) -> Result<SystemPreferences, PlatformError> {
-        let signal = owner.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "Windows preferences require the live winit event-loop owner".into(),
-            });
-        }
-        match owner.with_state(|state| state.preferences.clone()) {
-            PreferenceObservation::Observed(values) => Ok(values),
-            PreferenceObservation::Deferred => Err(PlatformError::PreferencesDeferred),
-            PreferenceObservation::Failed(message) => Err(PlatformError::Preferences { message }),
-        }
-    }
-}
-
-impl host::Lifecycle<WinitLoop> for WinitLoop {
-    #[cfg(target_os = "linux")]
-    fn on_session_end(
-        owner: &WinitLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &owner.handler(|state| &mut state.handlers.session_end),
-            callback,
-        );
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn on_session_end(
-        _: &WinitLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        // Only Linux's login manager reports a session end through winit; on
-        // this OS nothing will call the callback.
-        drop(callback);
-    }
-
-    fn on_host_notice(owner: &WinitLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        owner.notices.set_hook(callback);
-    }
-
-    fn release_session_end(_: &WinitLoop) {
-        // Linux cannot hold a shutdown for the user and no other OS reports a
-        // session end, so no block is ever held.
-    }
-
-    fn on_reopen(owner: &WinitLoop, callback: Box<dyn FnMut() + Send>) {
-        install(&owner.handler(|state| &mut state.handlers.reopen), callback);
-    }
-
-    fn activate(_: &WinitLoop, _ignoring_other_apps: bool) {
-        // winit raises one window at a time (`Window::focus_window`); it has no
-        // application-wide activation to ask for.
     }
 }

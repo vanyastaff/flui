@@ -26,20 +26,20 @@ use parking_lot::Mutex;
 use super::window_policy::HeadlessWindowPolicy;
 use crate::display::headless::{DisplayChangeError, LaidOutDisplays};
 use crate::host::{self, Host};
-use crate::owner::call_point::{Field, call, install};
+use crate::owner::call_point::{Field, install};
 use crate::owner::headless::{HeadlessLoop, HeadlessState, consult_exit_policy, emit_window_event};
 use crate::platform::HostPlatform;
 use crate::text::headless::FakeTextInput;
 use crate::{
-    error::PlatformError, host_window::HostWindow, owner::OpenWindowError,
-    owner::handlers::WindowCallbacks, shared::window_state::WindowStateCell,
+    host_window::HostWindow, owner::OpenWindowError, owner::handlers::WindowCallbacks,
+    shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     Clipboard, CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput,
-    PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase, SizeConstraints,
-    SystemNotice, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowEvent, WindowGeometry, WindowId, WindowMode, WindowOptions,
-    WindowState, data_transfer::DataTransferSource,
+    PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
+    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent,
+    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowState,
+    data_transfer::DataTransferSource,
 };
 
 /// Builds the text-store host a headless window offers
@@ -169,46 +169,6 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             .with_state(|state| state.window_policy = limits);
         self
     }
-
-    /// What the system reports as its preferences from the start, before any
-    /// window exists. The default reports every field unknown.
-    #[must_use]
-    pub fn with_preferences(self, values: flui_platform::SystemPreferences) -> Self {
-        self.owner().with_state(|state| state.preferences = values);
-        self
-    }
-
-    /// Obtain the preference source before `run` consumes this platform: the
-    /// handle changes the system's preferences the way an operating system
-    /// would, from any thread. See [`HeadlessPreferences`].
-    #[must_use]
-    pub fn preference_source(&self) -> HeadlessPreferences {
-        HeadlessPreferences {
-            signal: Arc::downgrade(&self.owner().signal),
-            state: Arc::downgrade(&self.owner().state),
-        }
-    }
-
-    /// Obtain the host-event handle before `run` consumes this platform: the
-    /// handle reports session ends and system notices the way an operating
-    /// system does. See [`HeadlessHostEvents`].
-    #[must_use]
-    pub fn host_events(&self) -> HeadlessHostEvents {
-        HeadlessHostEvents {
-            state: Arc::downgrade(&self.owner().state),
-        }
-    }
-
-    /// Simulate one phase of the user's session ending; see
-    /// [`HeadlessHostEvents::session_end`].
-    pub fn simulate_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        self.host_events().session_end(phase)
-    }
-
-    /// Simulate a system notice; see [`HeadlessHostEvents::notice`].
-    pub fn simulate_host_notice(&self, notice: SystemNotice) {
-        self.host_events().notice(notice);
-    }
 }
 
 impl host::Window<HeadlessLoop> for MockWindow {
@@ -273,45 +233,6 @@ impl host::Drag<HeadlessLoop> for super::drag::DragDouble {
         // The headless backend's one source: it serves the drags the test plays
         // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
         owner.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
-    }
-}
-
-impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
-    fn sample(owner: &HeadlessLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        owner.with_state(|state| match state.preference_failure.take() {
-            Some(message) => Err(PlatformError::Preferences { message }),
-            None => Ok(state.preferences.clone()),
-        })
-    }
-}
-
-impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
-    fn on_session_end(
-        owner: &HeadlessLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &Field::new(&*owner.state, |state| &mut state.handlers.session_end),
-            callback,
-        );
-    }
-
-    fn on_host_notice(owner: &HeadlessLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        let notices = owner.with_state(|state| Arc::clone(&state.notices));
-        notices.set_hook(callback);
-    }
-
-    fn release_session_end(owner: &HeadlessLoop) {
-        owner.with_state(|state| state.session_end_releases += 1);
-    }
-
-    fn on_reopen(_: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
-        // Nothing reopens a headless application.
-        drop(callback);
-    }
-
-    fn activate(_: &HeadlessLoop, _: bool) {
-        // Nothing is shown, so nothing comes to the front.
     }
 }
 
@@ -458,117 +379,6 @@ pub(crate) fn create_mock_window(
     state.active_window = Some(window_id);
 
     Arc::new(window) as Arc<dyn HostWindow>
-}
-
-/// Reports session ends and system notices to the headless platform's
-/// registered hooks after `run` has consumed it — obtained from
-/// [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events) before `run`.
-///
-/// Each call runs the hook on the calling thread through the call point,
-/// outside the platform's state lock, so the hook may call back into the
-/// platform; a hook registered while it runs replaces it. A hook that panics
-/// keeps its place, and its panic reaches the caller.
-#[derive(Clone)]
-pub struct HeadlessHostEvents {
-    state: Weak<Mutex<HeadlessState>>,
-}
-
-impl std::fmt::Debug for HeadlessHostEvents {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessHostEvents").finish_non_exhaustive()
-    }
-}
-
-impl HeadlessHostEvents {
-    /// One phase of the user's session ending, as the operating system reports
-    /// it: the hook registered with `OwnerPlatform::on_session_end` is asked and
-    /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
-    /// registered or the platform is gone. Like [`MockWindow::simulate_close`],
-    /// it may be called from inside another callback, as a session end arriving
-    /// in a nested native loop is.
-    pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let Some(state) = self.state.upgrade() else {
-            return SessionEndAnswer::Proceed;
-        };
-        call(
-            &Field::new(&*state, |state| &mut state.handlers.session_end),
-            |hook| hook(phase),
-        )
-        .or_resume(SessionEndAnswer::Proceed)
-    }
-
-    /// A system notice other than a session end's phases: the hook registered
-    /// with `OwnerPlatform::on_host_notice` is called. Nothing happens when
-    /// none is registered or the platform is gone.
-    ///
-    /// A wake marks the state of every window opened on this platform stale
-    /// first (`shared::system_notice`).
-    pub fn notice(&self, notice: SystemNotice) {
-        let Some(state) = self.state.upgrade() else {
-            return;
-        };
-        let notices = Arc::clone(&state.lock().notices);
-        notices.dispatch(notice);
-    }
-
-    /// How many times the host told the platform it released a session end it
-    /// had answered with a block (`Platform::release_session_end`).
-    #[must_use]
-    pub fn session_end_releases(&self) -> usize {
-        self.state
-            .upgrade()
-            .map_or(0, |state| state.lock().session_end_releases)
-    }
-}
-
-/// The headless platform's system preferences after `run` has consumed it:
-/// obtained from [`HeadlessPlatform::preference_source`](crate::HeadlessPlatform::preference_source) before `run`.
-///
-/// A change commits to the platform's preferences and then wakes the owner, as
-/// a native source does when the OS reports a setting change, so it works from
-/// any thread: the host reads `Platform::preferences` on its next turn and
-/// delivers what it accepts to every runtime.
-#[derive(Clone)]
-pub struct HeadlessPreferences {
-    signal: Weak<crate::owner::signal::OwnerSignal>,
-    state: Weak<Mutex<HeadlessState>>,
-}
-
-impl std::fmt::Debug for HeadlessPreferences {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessPreferences")
-            .finish_non_exhaustive()
-    }
-}
-
-impl HeadlessPreferences {
-    /// Report `values` as the system's preferences and wake the owner. A
-    /// platform that is gone applies nothing.
-    pub fn set(&self, values: flui_platform::SystemPreferences) {
-        let Some(state) = self.state.upgrade() else {
-            return;
-        };
-        state.lock().preferences = values;
-        self.wake();
-    }
-
-    /// Make the next read fail with `message`, as a native getter that cannot
-    /// complete does, and wake the owner. The host keeps the values it accepted
-    /// last; the read after that reports the platform's preferences again.
-    pub fn fail_next_read(&self, message: impl Into<String>) {
-        let Some(state) = self.state.upgrade() else {
-            return;
-        };
-        state.lock().preference_failure = Some(message.into());
-        self.wake();
-    }
-
-    fn wake(&self) {
-        // A failed wake leaves the signal's pending debt for the next turn.
-        if let Some(signal) = self.signal.upgrade() {
-            let _ = signal.wake();
-        }
-    }
 }
 
 // ==================== Mock Implementations ====================

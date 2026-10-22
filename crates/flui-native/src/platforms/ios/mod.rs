@@ -56,7 +56,6 @@ mod events;
 mod haptics;
 pub(crate) mod os_version;
 mod positions;
-mod preferences;
 mod status_bar;
 mod window;
 
@@ -65,7 +64,6 @@ pub use crate::owner::apple::ios::{
 };
 pub use clipboard::IOSClipboard;
 pub(crate) use haptics::IOSHaptics;
-pub(crate) use preferences::IOSPreferences;
 pub(crate) use status_bar::IOSSystemChrome;
 pub use window::IOSWindow;
 pub(crate) use window::LifecycleObservation;

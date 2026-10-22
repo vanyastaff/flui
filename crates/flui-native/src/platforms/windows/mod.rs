@@ -19,9 +19,7 @@ mod direct_manipulation;
 pub(crate) mod drag;
 mod events;
 mod haptics;
-pub(crate) mod host_events;
 pub(crate) mod platform;
-pub(crate) mod preferences;
 mod window;
 mod window_ext;
 mod window_frame;
@@ -37,8 +35,6 @@ pub use clipboard::WindowsClipboard;
 // table names only public types), and nameable only inside the crate.
 pub(crate) use drag::OleTransfer;
 pub(crate) use haptics::WindowsHaptics;
-pub(crate) use host_events::HostEvents;
-pub(crate) use preferences::PreferenceSource;
 // The hooks the Windows host registers on FLUI's window class.
 pub(crate) use direct_manipulation::Touchpad;
 pub(crate) use drag::DropTargetRegistration;

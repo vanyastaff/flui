@@ -37,12 +37,15 @@ use flui_platform::{DisplaySnapshot, WindowCapabilities, WindowEvent, WindowId, 
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 /// What the headless host's table names for its loop (ADR-0151 §10): the
-/// displays a platform has before a test lays out its own. The loop holds
-/// their snapshot, which is all the display double keeps, and names no
-/// feature.
+/// displays a platform has before a test lays out its own, and the channel its
+/// system notices take. The loop holds the displays' snapshot, which is all
+/// the display double keeps, and names no feature.
 pub(crate) trait HeadlessHost: 'static {
     /// The snapshot of the displays every platform starts with.
     fn displays() -> DisplaySnapshot;
+
+    /// The channel the system notices a test reports take to the application.
+    fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel>;
 }
 
 /// The displays position is the loop's: the snapshot it holds.
@@ -121,7 +124,7 @@ pub(crate) struct HeadlessState {
     pub(crate) window_policy: HeadlessWindowPolicy,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
-    pub(crate) notices: Arc<crate::shared::system_notice::SystemNotices>,
+    pub(crate) notices: Arc<dyn crate::owner::notices::NoticeChannel>,
     /// How many times the host told this platform it released a session end it
     /// had answered with a block.
     pub(crate) session_end_releases: usize,
@@ -134,6 +137,8 @@ pub(crate) struct HeadlessState {
 }
 
 impl HeadlessLoop {
+    /// The loop of host `H`, whose table makes the displays and the notice
+    /// channel.
     pub(crate) fn new<H: HeadlessHost>() -> Self {
         let state = HeadlessState {
             drag: Arc::new(DragDouble::new()),
@@ -157,7 +162,7 @@ impl HeadlessLoop {
             displays: H::displays(),
             window_capabilities: WindowCapabilities::ALL,
             window_policy: HeadlessWindowPolicy::default(),
-            notices: Arc::default(),
+            notices: H::notices(),
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
