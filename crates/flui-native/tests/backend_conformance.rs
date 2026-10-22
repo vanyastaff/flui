@@ -36,7 +36,7 @@ use flui_native::input::availability::{
     self as input_availability, AndroidInputApis, WinitSession,
 };
 use flui_native::input::keys::vk_to_key;
-use flui_native::text::web::ime::key_composition;
+use flui_native::input::web::keys::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;

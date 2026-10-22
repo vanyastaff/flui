@@ -1,10 +1,53 @@
 //! The web host's input: the DOM's pointer, keyboard, wheel and gesture
 //! events on the canvas, converted into FLUI's owned `PlatformInput`.
 //!
+//! - [`keys`]: which key belongs to the input method; built on every target
+//!   and public, hidden from the documentation, for the backend conformance
+//!   table in `tests/`;
 //! - `pinch`: the browser's trackpad pinch, decoded from what each engine
 //!   dispatches for it; pure, built for the web and for tests on every host;
-//! - `events`: the listeners on the canvas and the conversion of the DOM's
-//!   events, which read the DOM.
+//! - `events`: the listeners on the canvas, which the window registers through
+//!   the loop's input hook, and the conversion of the DOM's events, which
+//!   read the DOM.
+
+#[doc(hidden)]
+pub mod keys {
+    //! The decidable half of the web backend's key translation: which key
+    //! belongs to the input method. Cfg-free plain functions over integers, so
+    //! Linux CI pins them; `events` reads the DOM.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::keyboard::ImeComposition;
+
+    /// `KeyboardEvent.keyCode` of a key an input method processes: every
+    /// browser reports 229 for it, including WebKit for the key that commits a
+    /// composition, which it dispatches after `compositionend` with
+    /// `isComposing` already false.
+    pub const IME_PROCESS_KEY_CODE: u32 = 229;
+
+    /// Whether a DOM key event belongs to the input method: the event says it
+    /// composes, carries the input method's key code, or arrives while the
+    /// window's own text input composes. Such a key reaches the application
+    /// marked [`ImeComposition::Active`], which no shortcut, focus traversal or
+    /// drag cancellation takes, so the input method sees it first: Escape
+    /// cancels the composition, not a dialog.
+    #[must_use]
+    pub const fn key_composition(
+        is_composing: bool,
+        key_code: u32,
+        host_composing: bool,
+    ) -> ImeComposition {
+        if is_composing || key_code == IME_PROCESS_KEY_CODE || host_composing {
+            ImeComposition::Active
+        } else {
+            ImeComposition::Inactive
+        }
+    }
+
+    #[cfg(test)]
+    mod tests;
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod pinch {
@@ -356,10 +399,9 @@ pub(crate) mod pinch {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod events {
-    //! DOM event → PlatformInput mapping
-    //!
-    //! Registers DOM event listeners on the canvas and converts browser events
-    //! into FLUI's owned PlatformInput types.
+    //! The canvas's input listeners and the conversion of the DOM's events into
+    //! FLUI's owned `PlatformInput`. The window registers its canvas's input
+    //! through [`WebInput`], the loop's input hook.
 
     use std::{
         cell::{Cell, RefCell},
@@ -377,13 +419,14 @@ pub(crate) mod events {
         },
     };
 
+    use super::keys::key_composition;
     use super::pinch::{CtrlWheel, GestureEventKind, GestureTracker, WheelRoute, WheelStep};
     use crate::input::assembly::{
         Assembled, ContactRegistry, DecodeError, GesturePhase, GestureReading, MoveBatch,
         NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface, PenAngles,
         RawSensors, ReadingAction, ReadingTime, decode,
     };
-    use crate::text::web::ime::key_composition;
+    use crate::owner::web::event::{answer, client_position, pointer_position};
     use flui_platform::DispatchEventResult;
     use icu_normalizer::{
         ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed,
@@ -393,111 +436,78 @@ pub(crate) mod events {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::*;
 
-    use crate::display::web::PixelRatioWatch;
     use crate::owner::handlers::WindowCallbacks;
-    use crate::owner::web::CanvasListeners;
-    use crate::window::web::{Registration, WebWindow, effective_focus};
-    use flui_platform::{PlatformInput, WindowExecutionState};
+    use crate::owner::web::{CanvasKeys, CanvasRegistration, HostInput, PointerCustody};
+    use flui_platform::PlatformInput;
 
-    /// Register all DOM event listeners on the canvas.
-    ///
-    /// Failure rolls back the installed prefix through the registration's Drop.
-    pub(crate) fn register_event_listeners(
-        window: &WebWindow,
-        input_latency: flui_platform::InputLatency,
-        transfer: &Arc<dyn crate::owner::web::HostDrag>,
-        registration: &mut Registration,
-    ) -> Result<CanvasServices, crate::OpenWindowError> {
-        let canvas = window.canvas();
-        let callbacks = Arc::clone(window.callbacks());
-        let contacts = Rc::new(RefCell::new(
-            ContactRegistry::new(NativeClock::epoch_only()).with_reserved_contact(MOUSE_CONTACT),
-        ));
-        let pinch = Rc::new(Pinch {
-            callbacks: Arc::clone(&callbacks),
-            accepting: Rc::clone(&registration.accepting),
-            contacts: Rc::clone(&contacts),
-            wheel: RefCell::default(),
-            gesture: RefCell::default(),
-            focal: Cell::new(None),
-        });
-        let keys = Rc::new(KeyRoute {
-            callbacks: Arc::clone(&callbacks),
-            pinch: Rc::clone(&pinch),
-            accepting: Rc::clone(&registration.accepting),
-            composing: Rc::default(),
-        });
+    /// The page's input, as the web loop holds it ([`HostInput`]).
+    pub(crate) struct WebInput;
 
-        // The drag source learns of a press before the press is dispatched: the
-        // runtime may start a session from inside that dispatch.
-        let drag = Arc::clone(transfer).register(canvas, &callbacks, registration)?;
-        let menu = Rc::new(MenuAnswer::default());
-        let loss = register_pointer_events(
-            canvas,
-            &contacts,
-            &pinch,
-            &menu,
-            input_latency,
-            registration,
-        )?;
-        register_keyboard_events(canvas, &keys, registration)?;
-        let focus = register_focus_events(window, &loss, registration)?;
-        let text = crate::text::web::WebTextInput::new(
-            canvas,
-            registration.editor_slot(),
-            Rc::clone(&registration.accepting),
-            Rc::clone(&keys),
-            Rc::clone(&focus),
-        );
-        let visibility = Rc::new(window.visibility_sync(Rc::clone(&registration.accepting)));
-        let observer = Rc::clone(&visibility);
-        registration.listen(
-            visibility.document.as_ref(),
-            "visibilitychange",
-            Rc::new(move |e: web_sys::Event| {
-                // The sequences end before the change is reported: its callback
-                // may close the window.
-                if observer.document.hidden() {
-                    loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
-                }
-                observer.sync();
-            }),
-        )?;
-        register_wheel_events(canvas, &callbacks, &pinch, registration)?;
-        register_gesture_events(canvas, &pinch, registration)?;
-        register_context_menu(canvas, &menu, registration)?;
-        register_layout_events(window, registration)?;
-        register_appearance_events(&callbacks, registration)?;
-        register_page_lifecycle_events(window, registration)?;
-        register_fullscreen_events(window, registration)?;
-        register_context_loss_events(window, registration)?;
-        // Host registration calls can change native state before its listeners
-        // exist. Reconcile after successful installation, before Created.
-        focus.sync();
-        visibility.sync();
-        Ok(CanvasServices { drag, text })
-    }
+    impl HostInput for WebInput {
+        /// Trackpad pinch is native where the browser has WebKit gesture
+        /// events, else emulated from Control-held wheel events.
+        fn availability(&self) -> flui_platform::input_capabilities::InputCapabilities {
+            crate::input::availability::web(has_gesture_events())
+        }
 
-    /// What a canvas registration serves beside its listeners: its drag source
-    /// and target, and its text input.
-    pub(crate) struct CanvasServices {
-        pub(crate) drag: Box<dyn crate::owner::web::CanvasDrag>,
-        pub(crate) text: Rc<crate::text::web::WebTextInput>,
+        /// The pointer, keyboard, wheel, gesture and context-menu listeners of
+        /// the canvas, and the end of every pointer sequence when the page
+        /// loses the OS focus or is hidden, which the browser may never
+        /// release. The keys route to the window from the canvas and from the
+        /// editor the text input keeps beside it.
+        fn register(
+            &self,
+            canvas: &web_sys::HtmlCanvasElement,
+            callbacks: &Arc<WindowCallbacks>,
+            latency: flui_platform::InputLatency,
+            registration: &mut dyn CanvasRegistration,
+        ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError> {
+            let accepting = registration.accepting();
+            let contacts = Rc::new(RefCell::new(
+                ContactRegistry::new(NativeClock::epoch_only())
+                    .with_reserved_contact(MOUSE_CONTACT),
+            ));
+            let pinch = Rc::new(Pinch {
+                callbacks: Arc::clone(callbacks),
+                accepting: Rc::clone(&accepting),
+                contacts: Rc::clone(&contacts),
+                wheel: RefCell::default(),
+                gesture: RefCell::default(),
+                focal: Cell::new(None),
+            });
+            let keys = Rc::new(KeyRoute {
+                callbacks: Arc::clone(callbacks),
+                pinch: Rc::clone(&pinch),
+                accepting,
+                composing: Cell::new(false),
+            });
+
+            let menu = Rc::new(MenuAnswer::default());
+            let loss =
+                register_pointer_events(canvas, &contacts, &pinch, &menu, latency, registration)?;
+            register_keyboard_events(canvas, &keys, registration)?;
+            register_loss_events(canvas, &loss, registration)?;
+            register_hover_events(canvas, callbacks, registration)?;
+            register_wheel_events(canvas, callbacks, &pinch, registration)?;
+            register_gesture_events(canvas, &pinch, registration)?;
+            register_context_menu(canvas, &menu, registration)?;
+            Ok(keys)
+        }
     }
 
     /// How a DOM key event reaches the window: from the canvas, or from the
     /// text input's own editor.
-    pub(crate) struct KeyRoute {
+    struct KeyRoute {
         callbacks: Arc<WindowCallbacks>,
         pinch: Rc<Pinch>,
         accepting: Rc<Cell<bool>>,
         /// Whether the window's text input composes now.
-        pub(crate) composing: Rc<Cell<bool>>,
+        composing: Cell<bool>,
     }
 
-    impl KeyRoute {
+    impl CanvasKeys for KeyRoute {
         /// Deliver `event` as a key `state`, answering it with the result.
-        pub(crate) fn deliver(&self, event: &web_sys::Event, state: KeyState) {
+        fn deliver(&self, event: &web_sys::Event, state: KeyState) {
             if !self.accepting.get() {
                 return;
             }
@@ -512,148 +522,70 @@ pub(crate) mod events {
             }
             answer(event, self.callbacks.dispatch_input(input));
         }
+
+        fn composing(&self) -> bool {
+            self.composing.get()
+        }
+
+        fn set_composing(&self, composing: bool) {
+            self.composing.set(composing);
+        }
     }
 
-    // ==================== Layout (size) ====================
-
-    /// Keep the canvas's backing store and the window's tracked size in step
-    /// with its CSS box — see `WebWindow::new`'s "Size" section. A
-    /// `ResizeObserver` on the canvas sees every layout change (a viewport
-    /// resize under `100vw`, a container reflow, a style change). Where the
-    /// browser observes the device-pixel content box (Chrome, Firefox), a report
-    /// carries the exact backing size, and observers of the CSS content and border
-    /// boxes report a reflow or a change of padding that leaves the rounded
-    /// device-pixel box as it was. A window dragged to a display of another
-    /// scale moves the device pixel ratio and keeps its CSS box: Safari's CSS-box
-    /// observer and the window's `resize` event miss that, and the device-pixel
-    /// box misses it while its rounded size stays (a small canvas), so a
-    /// pixel-ratio watch of the window's own reports it everywhere. `resize` is
-    /// kept for page zoom, which also arms a watch the browser refused.
-    /// `LayoutSync::sync` is a no-op when nothing changed, so the overlapping
-    /// sources cost nothing.
-    fn register_layout_events(
-        window: &WebWindow,
-        registration: &mut Registration,
+    /// The page losing the OS focus (`blur` does not bubble, so the browser
+    /// window's own) or being hidden ends every sequence, before the window's
+    /// own listeners report the change: its callback may close the window, after
+    /// which nothing would cancel them.
+    fn register_loss_events(
+        canvas: &web_sys::HtmlCanvasElement,
+        loss: &Rc<PointerLoss>,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
-        let sync = Rc::new(window.layout_sync());
-        let observer_sync = Rc::clone(&sync);
-        registration.observe(move |report| observer_sync.observe(report))?;
-        let ratio_sync = Rc::clone(&sync);
-        // Owned by the `resize` listener, so the registration's teardown removes
-        // the query with it.
-        let ratio = PixelRatioWatch::for_layout(&registration.accepting, move || ratio_sync.sync());
-        let browser =
-            web_sys::window().expect("BUG: window construction verified browser environment");
-        registration.listen(
-            browser.as_ref(),
-            "resize",
-            Rc::new(move |_: web_sys::Event| {
-                if let Some(ratio) = &ratio {
-                    ratio.arm_if_unarmed();
-                }
-                sync.sync();
-            }),
-        )
-    }
-
-    // ==================== Appearance ====================
-
-    /// Report `prefers-color-scheme` flips. The query list fires `change` only
-    /// when its `matches` flips, so every event is a real change; a browser that
-    /// cannot evaluate the query has nothing to report.
-    fn register_appearance_events(
-        callbacks: &Arc<WindowCallbacks>,
-        registration: &mut Registration,
-    ) -> Result<(), crate::OpenWindowError> {
-        let Some(query) = crate::window::web::dark_scheme_query() else {
-            return Ok(());
-        };
-        let callbacks = Arc::clone(callbacks);
-        registration.listen(
-            query.as_ref(),
-            "change",
-            Rc::new(move |_: web_sys::Event| {
-                callbacks.dispatch_appearance_changed();
-            }),
-        )
-    }
-
-    // ==================== Page lifecycle ====================
-
-    /// `freeze` and `resume` (Page Lifecycle): a frozen page runs no script at
-    /// all, so the window is `Suspended` from the last event it can handle until
-    /// `resume`. A browser without the API never raises them and the window stays
-    /// `Running`.
-    fn register_page_lifecycle_events(
-        window: &WebWindow,
-        registration: &mut Registration,
-    ) -> Result<(), crate::OpenWindowError> {
-        let document = document_of(window);
-        let execution = Rc::new(window.execution_sync());
-        for (kind, state) in [
-            ("freeze", WindowExecutionState::Suspended),
-            ("resume", WindowExecutionState::Running),
-        ] {
-            let execution = Rc::clone(&execution);
+        let browser = web_sys::window().expect("BUG: construction verified browser");
+        {
+            let loss = Rc::clone(loss);
             registration.listen(
-                document.as_ref(),
-                kind,
-                Rc::new(move |_: web_sys::Event| execution.set(state)),
+                browser.as_ref(),
+                "blur",
+                Rc::new(move |event: web_sys::Event| {
+                    let page_lost = event
+                        .target()
+                        .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
+                    if page_lost {
+                        loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
+                    }
+                }),
             )?;
         }
-        Ok(())
-    }
-
-    // ==================== Fullscreen ====================
-
-    /// `fullscreenchange`: the browser answers `requestFullscreen`, Escape and the
-    /// user's own exit with this one event, so the published state is read again
-    /// here and nowhere else.
-    fn register_fullscreen_events(
-        window: &WebWindow,
-        registration: &mut Registration,
-    ) -> Result<(), crate::OpenWindowError> {
-        let publisher = window.publisher();
+        let document = canvas
+            .owner_document()
+            .expect("BUG: window construction verified the canvas document");
+        let loss = Rc::clone(loss);
+        let hidden = document.clone();
         registration.listen(
-            document_of(window).as_ref(),
-            "fullscreenchange",
-            Rc::new(move |_: web_sys::Event| {
-                publisher.publish();
+            document.as_ref(),
+            "visibilitychange",
+            Rc::new(move |event: web_sys::Event| {
+                if hidden.hidden() {
+                    loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
+                }
             }),
         )
     }
 
-    fn document_of(window: &WebWindow) -> web_sys::Document {
-        window
-            .canvas()
-            .owner_document()
-            .expect("BUG: window construction verified the canvas document")
-    }
-
-    // ==================== GPU context ====================
-
-    /// Tell the presentation when the canvas's WebGL context goes and comes back,
-    /// as the surface becoming unavailable and available again.
-    ///
-    /// The browser takes a context away whenever it reclaims GPU memory, often from
-    /// a tab nobody is looking at. `preventDefault` on the loss is what asks the
-    /// browser to restore the context later; without it the context is gone for
-    /// good. Everything built on the lost context is dead either way, so the
-    /// restoration is reported too and the presentation rebuilds on it.
-    fn register_context_loss_events(
-        window: &WebWindow,
-        registration: &mut Registration,
+    /// The mouse coming over the canvas and leaving it, as the window's hover.
+    fn register_hover_events(
+        canvas: &web_sys::HtmlCanvasElement,
+        callbacks: &Arc<WindowCallbacks>,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
-        for (kind, available) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
-            let callbacks = Arc::clone(window.callbacks());
+        for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
+            let callbacks = Arc::clone(callbacks);
             registration.listen(
-                window.canvas().as_ref(),
+                canvas.as_ref(),
                 kind,
-                Rc::new(move |event: web_sys::Event| {
-                    if !available {
-                        event.prevent_default();
-                    }
-                    callbacks.dispatch_surface_status_change(available);
+                Rc::new(move |_: web_sys::Event| {
+                    callbacks.dispatch_hover_status_change(hovered);
                 }),
             )?;
         }
@@ -684,9 +616,9 @@ pub(crate) mod events {
         pinch: &Rc<Pinch>,
         menu: &Rc<MenuAnswer>,
         input_latency: flui_platform::InputLatency,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<Rc<PointerLoss>, crate::OpenWindowError> {
-        let active = Rc::clone(&registration.pointers);
+        let active = registration.captured();
         // DOM getters and application callbacks can synchronously dispatch another
         // pointer event. Listener captures are immutable; mutable state is scoped
         // inside the active-pointer cell instead of the JavaScript closure.
@@ -696,8 +628,8 @@ pub(crate) mod events {
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
             let capture = canvas.clone();
-            let accepting = Rc::clone(&registration.accepting);
-            let custody = registration.capture_owner();
+            let accepting = registration.accepting();
+            let custody = registration.custody();
             let menu = Rc::clone(menu);
             registration.listen(
                 canvas.as_ref(),
@@ -741,7 +673,7 @@ pub(crate) mod events {
             let active = Rc::clone(&active);
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
-            let accepting = Rc::clone(&registration.accepting);
+            let accepting = registration.accepting();
             let menu = Rc::clone(menu);
             registration.listen(
                 canvas.as_ref(),
@@ -778,7 +710,7 @@ pub(crate) mod events {
             let active = Rc::clone(&active);
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
-            let accepting = Rc::clone(&registration.accepting);
+            let accepting = registration.accepting();
             registration.listen(
                 canvas.as_ref(),
                 kind,
@@ -806,8 +738,8 @@ pub(crate) mod events {
             let active = Rc::clone(&active);
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
-            let accepting = Rc::clone(&registration.accepting);
-            let custody = registration.capture_owner();
+            let accepting = registration.accepting();
+            let custody = registration.custody();
             registration.listen(
                 canvas.as_ref(),
                 "pointerup",
@@ -836,8 +768,8 @@ pub(crate) mod events {
             let active = Rc::clone(&active);
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
-            let accepting = Rc::clone(&registration.accepting);
-            let custody = registration.capture_owner();
+            let accepting = registration.accepting();
+            let custody = registration.custody();
             registration.listen(
                 canvas.as_ref(),
                 "pointercancel",
@@ -867,8 +799,8 @@ pub(crate) mod events {
         {
             let contacts = Rc::clone(contacts);
             let pinch = Rc::clone(pinch);
-            let accepting = Rc::clone(&registration.accepting);
-            let custody = registration.capture_owner();
+            let accepting = registration.accepting();
+            let custody = registration.custody();
             registration.listen(
                 canvas.as_ref(),
                 "lostpointercapture",
@@ -899,8 +831,8 @@ pub(crate) mod events {
         Ok(Rc::new(PointerLoss {
             contacts: Rc::clone(contacts),
             pinch: Rc::clone(pinch),
-            active: Rc::clone(&registration.pointers),
-            custody: registration.capture_owner(),
+            active: registration.captured(),
+            custody: registration.custody(),
             menu: Rc::clone(menu),
         }))
     }
@@ -975,7 +907,7 @@ pub(crate) mod events {
         contacts: Rc<RefCell<ContactRegistry>>,
         pinch: Rc<Pinch>,
         active: Rc<RefCell<std::collections::HashMap<i32, u16>>>,
-        custody: crate::window::web::PointerCaptureOwner,
+        custody: Rc<dyn PointerCustody>,
         /// A menu answer the ended press left is not a later menu's.
         menu: Rc<MenuAnswer>,
     }
@@ -1004,19 +936,6 @@ pub(crate) mod events {
         }
     }
 
-    /// Apply a dispatch result to the DOM event it answers, synchronously, while
-    /// the browser still waits on it: `propagate: false` stops it reaching the
-    /// canvas's ancestors (same-target listeners still run), and
-    /// `default_prevented` cancels its default where it is cancelable.
-    pub(crate) fn answer(event: &web_sys::Event, result: DispatchEventResult) {
-        if !result.propagate {
-            event.stop_propagation();
-        }
-        if result.default_prevented {
-            event.prevent_default();
-        }
-    }
-
     /// A DOM `timeStamp` (milliseconds on the page's high-resolution timeline)
     /// on the event timeline.
     fn event_time(millis: f64) -> EventTime {
@@ -1026,17 +945,17 @@ pub(crate) mod events {
     fn register_keyboard_events(
         canvas: &web_sys::HtmlCanvasElement,
         keys: &Rc<KeyRoute>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
             let keys = Rc::clone(keys);
+            let focus = registration.focus();
             let target = canvas.clone();
             registration.listen(
                 canvas.as_ref(),
                 kind,
                 Rc::new(move |event: web_sys::Event| {
-                    if !effective_focus(&target) || event.target().as_ref() != Some(target.as_ref())
-                    {
+                    if !focus.has_focus() || event.target().as_ref() != Some(target.as_ref()) {
                         return;
                     }
                     keys.deliver(&event, state);
@@ -1044,68 +963,6 @@ pub(crate) mod events {
             )?;
         }
         Ok(())
-    }
-
-    // ==================== Focus Events ====================
-
-    /// Whether `event` only moves focus within the canvas's focus area (between
-    /// the canvas and its text editor), which the window does not see as a
-    /// focus change.
-    pub(crate) fn is_focus_handoff(
-        canvas: &web_sys::HtmlCanvasElement,
-        event: &web_sys::Event,
-    ) -> bool {
-        event.type_() == "blur"
-            && event
-                .dyn_ref::<web_sys::FocusEvent>()
-                .and_then(web_sys::FocusEvent::related_target)
-                .is_some_and(|next| crate::window::web::is_owned_focus(canvas, &next))
-    }
-
-    fn register_focus_events(
-        window: &WebWindow,
-        loss: &Rc<PointerLoss>,
-        registration: &mut Registration,
-    ) -> Result<Rc<crate::window::web::FocusSync>, crate::OpenWindowError> {
-        let focus = Rc::new(window.focus_sync());
-        let browser = web_sys::window().expect("BUG: construction verified browser");
-        for target in [window.canvas().as_ref(), browser.as_ref()] {
-            for kind in ["focus", "blur"] {
-                let focus = Rc::clone(&focus);
-                let loss = Rc::clone(loss);
-                let canvas = window.canvas().clone();
-                registration.listen(
-                    target,
-                    kind,
-                    Rc::new(move |event: web_sys::Event| {
-                        // The page itself losing the OS focus (`blur` does not
-                        // bubble, so the window's own) ends every sequence before
-                        // the change is reported: its callback may close the window.
-                        let page_lost = event.type_() == "blur"
-                            && event.target().is_some_and(|target| {
-                                target.dyn_ref::<web_sys::Window>().is_some()
-                            });
-                        if page_lost {
-                            loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
-                        }
-                        if !is_focus_handoff(&canvas, &event) {
-                            focus.sync();
-                        }
-                    }),
-                )?;
-            }
-        }
-        for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
-            let callbacks = Arc::clone(window.callbacks());
-            registration.listen(
-                window.canvas().as_ref(),
-                kind,
-                Rc::new(move |_: web_sys::Event| {
-                    callbacks.dispatch_hover_status_change(hovered);
-                }),
-            )?;
-        }
-        Ok(focus)
     }
 
     // ==================== Wheel Events ====================
@@ -1226,11 +1083,11 @@ pub(crate) mod events {
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
         pinch: &Rc<Pinch>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         let timer = {
             let pinch = Rc::clone(pinch);
-            registration.timer(move || {
+            registration.timer(Box::new(move || {
                 // The timer runs no earlier than the deadline it was armed for.
                 let deadline = pinch.wheel.borrow().deadline();
                 if let Some(deadline) = deadline {
@@ -1238,7 +1095,7 @@ pub(crate) mod events {
                         performance_now().max(deadline.checked_add(NANOSECOND).unwrap_or(deadline));
                     pinch.flush(now);
                 }
-            })
+            }))
         };
         let callbacks = Arc::clone(callbacks);
         let pinch = Rc::clone(pinch);
@@ -1349,7 +1206,7 @@ pub(crate) mod events {
     }
 
     /// Whether this browser dispatches WebKit gesture events.
-    pub(crate) fn has_gesture_events() -> bool {
+    fn has_gesture_events() -> bool {
         web_sys::window().is_some_and(|window| {
             js_sys::Reflect::has(&window, &JsValue::from_str("GestureEvent")).unwrap_or(false)
         })
@@ -1358,7 +1215,7 @@ pub(crate) mod events {
     fn register_gesture_events(
         canvas: &web_sys::HtmlCanvasElement,
         pinch: &Rc<Pinch>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         for (name, kind) in [
             ("gesturestart", GestureEventKind::Start),
@@ -1441,7 +1298,7 @@ pub(crate) mod events {
     fn register_context_menu(
         canvas: &web_sys::HtmlCanvasElement,
         menu: &Rc<MenuAnswer>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         let menu = Rc::clone(menu);
         registration.listen(
@@ -1462,9 +1319,9 @@ pub(crate) mod events {
 
     // ==================== Event Conversion ====================
 
-    // CSSOM View defines these offsets as doubles. web-sys exposes the older
-    // integer signature, which discards subpixel positions before Rust receives
-    // them. Bind the actual DOM getters with their floating-point result type.
+    // web-sys reads some of these getters through older signatures that lose
+    // what the DOM reports (fractions, unpaired surrogates) before Rust receives
+    // it. Bind the actual DOM getters with their own result types.
     #[wasm_bindgen]
     extern "C" {
         // DOMString can contain unpaired surrogates. A Rust String getter would
@@ -1472,16 +1329,6 @@ pub(crate) mod events {
         type Utf16KeyboardEvent;
         #[wasm_bindgen(method, getter, js_name = key)]
         fn key_utf16(this: &Utf16KeyboardEvent) -> js_sys::JsString;
-
-        type PreciseMouseEvent;
-        #[wasm_bindgen(method, getter, js_name = offsetX)]
-        fn offset_x_f64(this: &PreciseMouseEvent) -> f64;
-        #[wasm_bindgen(method, getter, js_name = offsetY)]
-        fn offset_y_f64(this: &PreciseMouseEvent) -> f64;
-        #[wasm_bindgen(method, getter, js_name = clientX)]
-        fn client_x_f64(this: &PreciseMouseEvent) -> f64;
-        #[wasm_bindgen(method, getter, js_name = clientY)]
-        fn client_y_f64(this: &PreciseMouseEvent) -> f64;
 
         type ExtendedPointerEvent;
         #[wasm_bindgen(method, getter, js_name = width)]
@@ -1505,11 +1352,6 @@ pub(crate) mod events {
         fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
     }
 
-    pub(crate) fn pointer_position(event: &web_sys::MouseEvent) -> Point {
-        let event: &PreciseMouseEvent = event.unchecked_ref();
-        Point::new(event.offset_x_f64(), event.offset_y_f64())
-    }
-
     /// MouseEvent implementations can round wheel offsets even when the canvas
     /// origin is fractional. Recover its padding-edge position from viewport
     /// coordinates only when the whole ancestry has no coordinate transform.
@@ -1524,11 +1366,8 @@ pub(crate) mod events {
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Option<Point> {
         let origin = untransformed_origin(canvas)?;
-        let source: &PreciseMouseEvent = event.unchecked_ref();
-        Some(Point::new(
-            source.client_x_f64() - origin.x,
-            source.client_y_f64() - origin.y,
-        ))
+        let client = client_position(event);
+        Some(Point::new(client.x - origin.x, client.y - origin.y))
     }
 
     /// The viewport position of the canvas's padding edge, when its whole

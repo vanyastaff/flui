@@ -7,7 +7,7 @@
 
 // This module is one of the workspace's sanctioned `unsafe` FFI islands —
 // `wasm-bindgen`'s JS interop requires it, and the window's `Send`/`Sync`
-// claims rest on the page having one thread, which `platforms::web` enforces
+// claims rest on the page having one thread, which `owner::web` enforces
 // by refusing a `+atomics` build. The workspace lint `unsafe_code = "warn"` is
 // opted out here, at the module boundary, rather than for the whole crate.
 #![expect(unsafe_code)]
@@ -34,7 +34,9 @@ use flui_platform::{
     WindowMode, WindowOptions, WindowState,
 };
 
-use crate::owner::web::{CanvasListeners, HostDisplays};
+use crate::owner::web::{
+    CanvasFocus, CanvasRegistration, CanvasTimer, HostDisplays, PointerCustody,
+};
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -210,7 +212,7 @@ impl WebWindow {
     /// empty at construction (`display: none`, or not yet laid out) and are
     /// applied as its CSS size then; a caller that wants a fixed size
     /// otherwise sets it in CSS. The backing store follows the box at the
-    /// device pixel ratio, and `input::web` keeps both in step with the
+    /// device pixel ratio, and the window keeps both in step with the
     /// layout afterwards (a `ResizeObserver` on the canvas plus the window's
     /// `resize` event for zoom), dispatching a resize to the embedder each
     /// time they change — so the first version of this backend, which
@@ -331,14 +333,14 @@ impl WebWindow {
         }
     }
 
-    /// A handle for the layout-tracking listeners `input::web` registers:
+    /// A handle for the window's layout-tracking listeners:
     /// re-reads the canvas's CSS box and the device pixel ratio, and, when
     /// either or the backing size changed, resizes the backing store, updates
     /// the tracked size and dispatches a resize followed by a frame request.
     /// A no-op when nothing changed (a `ResizeObserver` reports once on
     /// registration, and a `resize` event fires for scrolls on some mobile
     /// browsers).
-    pub(crate) fn layout_sync(&self) -> LayoutSync {
+    fn layout_sync(&self) -> LayoutSync {
         LayoutSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
@@ -358,10 +360,19 @@ impl WebWindow {
         &self.callbacks
     }
 
+    /// Register the canvas's listeners: the drag transport's first, so the
+    /// drag source learns of a press before the press is dispatched (the
+    /// runtime may start a session from inside that dispatch); then the
+    /// input's, which end the pointer sequences a lost focus or a hidden page
+    /// leaves before the window's own listeners report the change (its
+    /// callback may close the window); then the window's own, and its text
+    /// input over the input's key route. Failure rolls back the installed
+    /// prefix through the registration's `Drop`.
     pub(crate) fn install(
         &self,
         input_latency: flui_platform::InputLatency,
         transfer: &Arc<dyn crate::owner::web::HostDrag>,
+        input: &dyn crate::owner::web::HostInput,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -369,21 +380,211 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        let services = crate::input::web::events::register_event_listeners(
-            self,
+        let drag =
+            Arc::clone(transfer).register(&self.canvas, &self.callbacks, &mut registration)?;
+        let keys = input.register(
+            &self.canvas,
+            &self.callbacks,
             input_latency,
-            transfer,
             &mut registration,
         )?;
-        services.drag.arm();
-        *self.drag.borrow_mut() = Some(services.drag);
-        *self.text.borrow_mut() = Some(services.text);
+        let focus = self.register_focus_events(&mut registration)?;
+        let text = crate::text::web::WebTextInput::new(
+            &self.canvas,
+            registration.editor_slot(),
+            Rc::clone(&registration.accepting),
+            keys,
+            Rc::clone(&focus),
+        );
+        let visibility = Rc::new(self.visibility_sync(Rc::clone(&registration.accepting)));
+        let observer = Rc::clone(&visibility);
+        registration.listen(
+            visibility.document.as_ref(),
+            "visibilitychange",
+            Rc::new(move |_: web_sys::Event| observer.sync()),
+        )?;
+        self.register_layout_events(&mut registration)?;
+        self.register_appearance_events(&mut registration)?;
+        self.register_page_lifecycle_events(&mut registration)?;
+        self.register_fullscreen_events(&mut registration)?;
+        self.register_context_loss_events(&mut registration)?;
+        // Host registration calls can change native state before its listeners
+        // exist. Reconcile after successful installation, before Created.
+        focus.sync();
+        visibility.sync();
+        drag.arm();
+        *self.drag.borrow_mut() = Some(drag);
+        *self.text.borrow_mut() = Some(text);
         *self.registration.borrow_mut() = Some(registration);
         *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
         Ok(())
     }
 
-    pub(crate) fn focus_sync(&self) -> FocusSync {
+    /// The window's focus: the canvas's focus area gaining or losing the
+    /// page's focus, a move within it being no change.
+    fn register_focus_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<Rc<FocusSync>, OpenWindowError> {
+        let focus = Rc::new(self.focus_sync());
+        let browser = web_sys::window().expect("BUG: construction verified browser");
+        for target in [self.canvas.as_ref(), browser.as_ref()] {
+            for kind in ["focus", "blur"] {
+                let focus = Rc::clone(&focus);
+                let canvas = self.canvas.clone();
+                registration.listen(
+                    target,
+                    kind,
+                    Rc::new(move |event: web_sys::Event| {
+                        if !is_focus_handoff(&canvas, &event) {
+                            focus.sync();
+                        }
+                    }),
+                )?;
+            }
+        }
+        Ok(focus)
+    }
+
+    /// Keep the canvas's backing store and the window's tracked size in step
+    /// with its CSS box — see `WebWindow::new`'s "Size" section. A
+    /// `ResizeObserver` on the canvas sees every layout change (a viewport
+    /// resize under `100vw`, a container reflow, a style change). Where the
+    /// browser observes the device-pixel content box (Chrome, Firefox), a report
+    /// carries the exact backing size, and observers of the CSS content and border
+    /// boxes report a reflow or a change of padding that leaves the rounded
+    /// device-pixel box as it was. A window dragged to a display of another
+    /// scale moves the device pixel ratio and keeps its CSS box: Safari's CSS-box
+    /// observer and the window's `resize` event miss that, and the device-pixel
+    /// box misses it while its rounded size stays (a small canvas), so a
+    /// pixel-ratio watch of the window's own reports it everywhere. `resize` is
+    /// kept for page zoom, which also arms a watch the browser refused.
+    /// `LayoutSync::sync` is a no-op when nothing changed, so the overlapping
+    /// sources cost nothing.
+    fn register_layout_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let sync = Rc::new(self.layout_sync());
+        let observer_sync = Rc::clone(&sync);
+        registration.observe(move |report| observer_sync.observe(report))?;
+        let ratio_sync = Rc::clone(&sync);
+        // Owned by the `resize` listener, so the registration's teardown removes
+        // the query with it.
+        let ratio = self
+            .displays
+            .watch_pixel_ratio(&registration.accepting, Box::new(move || ratio_sync.sync()));
+        let browser =
+            web_sys::window().expect("BUG: window construction verified browser environment");
+        registration.listen(
+            browser.as_ref(),
+            "resize",
+            Rc::new(move |_: web_sys::Event| {
+                if let Some(ratio) = &ratio {
+                    ratio.arm_if_unarmed();
+                }
+                sync.sync();
+            }),
+        )
+    }
+
+    /// Report `prefers-color-scheme` flips. The query list fires `change` only
+    /// when its `matches` flips, so every event is a real change; a browser that
+    /// cannot evaluate the query has nothing to report.
+    fn register_appearance_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let Some(query) = dark_scheme_query() else {
+            return Ok(());
+        };
+        let callbacks = Arc::clone(&self.callbacks);
+        registration.listen(
+            query.as_ref(),
+            "change",
+            Rc::new(move |_: web_sys::Event| {
+                callbacks.dispatch_appearance_changed();
+            }),
+        )
+    }
+
+    /// `freeze` and `resume` (Page Lifecycle): a frozen page runs no script at
+    /// all, so the window is `Suspended` from the last event it can handle until
+    /// `resume`. A browser without the API never raises them and the window stays
+    /// `Running`.
+    fn register_page_lifecycle_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let document = self.document();
+        let execution = Rc::new(self.execution_sync());
+        for (kind, state) in [
+            ("freeze", WindowExecutionState::Suspended),
+            ("resume", WindowExecutionState::Running),
+        ] {
+            let execution = Rc::clone(&execution);
+            registration.listen(
+                document.as_ref(),
+                kind,
+                Rc::new(move |_: web_sys::Event| execution.set(state)),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// `fullscreenchange`: the browser answers `requestFullscreen`, Escape and the
+    /// user's own exit with this one event, so the published state is read again
+    /// here and nowhere else.
+    fn register_fullscreen_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let publisher = self.publisher();
+        registration.listen(
+            self.document().as_ref(),
+            "fullscreenchange",
+            Rc::new(move |_: web_sys::Event| {
+                publisher.publish();
+            }),
+        )
+    }
+
+    /// Tell the presentation when the canvas's WebGL context goes and comes back,
+    /// as the surface becoming unavailable and available again.
+    ///
+    /// The browser takes a context away whenever it reclaims GPU memory, often from
+    /// a tab nobody is looking at. `preventDefault` on the loss is what asks the
+    /// browser to restore the context later; without it the context is gone for
+    /// good. Everything built on the lost context is dead either way, so the
+    /// restoration is reported too and the presentation rebuilds on it.
+    fn register_context_loss_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        for (kind, available) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
+            let callbacks = Arc::clone(&self.callbacks);
+            registration.listen(
+                self.canvas.as_ref(),
+                kind,
+                Rc::new(move |event: web_sys::Event| {
+                    if !available {
+                        event.prevent_default();
+                    }
+                    callbacks.dispatch_surface_status_change(available);
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The document the canvas is in.
+    fn document(&self) -> web_sys::Document {
+        self.canvas
+            .owner_document()
+            .expect("BUG: window construction verified the canvas document")
+    }
+
+    fn focus_sync(&self) -> FocusSync {
         FocusSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
@@ -393,16 +594,16 @@ impl WebWindow {
         }
     }
 
-    /// The handle by which the Page Lifecycle listeners `input::web`
-    /// registers set the window's execution state.
-    pub(crate) fn execution_sync(&self) -> ExecutionSync {
+    /// The handle by which the window's Page Lifecycle listeners
+    /// set the window's execution state.
+    fn execution_sync(&self) -> ExecutionSync {
         ExecutionSync {
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
         }
     }
 
-    pub(crate) fn visibility_sync(&self, accepting: Rc<Cell<bool>>) -> VisibilitySync {
+    fn visibility_sync(&self, accepting: Rc<Cell<bool>>) -> VisibilitySync {
         VisibilitySync {
             document: self
                 .canvas
@@ -697,14 +898,12 @@ impl host::Window<WebLoop> for WebWindow {
 
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
-        callbacks.set_input_capabilities(crate::input::availability::web(
-            crate::input::web::events::has_gesture_events(),
-        ));
+        callbacks.set_input_capabilities(owner.input.availability());
         callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&owner.state);
         let transfer = Arc::clone(&owner.drag);
-        window.install(options.input_latency, &transfer, move || {
+        window.install(options.input_latency, &transfer, &*owner.input, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
                 if state
@@ -1113,6 +1312,20 @@ extern "C" {
     fn retire_capture(token: &JsValue, id: i32);
 }
 
+/// Whether `event` only moves focus within the canvas's focus area (between
+/// the canvas and its text editor), which the window does not see as a focus
+/// change.
+pub(crate) fn is_focus_handoff(
+    canvas: &web_sys::HtmlCanvasElement,
+    event: &web_sys::Event,
+) -> bool {
+    event.type_() == "blur"
+        && event
+            .dyn_ref::<web_sys::FocusEvent>()
+            .and_then(web_sys::FocusEvent::related_target)
+            .is_some_and(|next| is_owned_focus(canvas, &next))
+}
+
 fn backend(error: JsValue) -> OpenWindowError {
     OpenWindowError::Backend {
         message: format!("DOM registration failed: {error:?}"),
@@ -1357,9 +1570,9 @@ pub(crate) struct Registration {
     claim: CanvasClaim,
 }
 
-/// The canvas window's listeners, which its input and the drag transport add
-/// theirs to.
-impl CanvasListeners for Registration {
+/// The canvas window's registration, which its input and the drag transport
+/// add their listeners and timers to.
+impl CanvasRegistration for Registration {
     fn listen(
         &mut self,
         target: &web_sys::EventTarget,
@@ -1371,6 +1584,55 @@ impl CanvasListeners for Registration {
         let listener = Listener::install_body(target, kind, &self.accepting, false, body)?;
         self.listeners.push(listener);
         Ok(())
+    }
+
+    fn accepting(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.accepting)
+    }
+
+    fn timer(&mut self, body: Box<dyn Fn()>) -> Rc<dyn CanvasTimer> {
+        Registration::timer(self, body)
+    }
+
+    fn captured(&self) -> Rc<RefCell<HashMap<i32, u16>>> {
+        Rc::clone(&self.pointers)
+    }
+
+    fn custody(&self) -> Rc<dyn PointerCustody> {
+        Rc::new(self.capture_owner())
+    }
+
+    fn focus(&self) -> Rc<dyn CanvasFocus> {
+        Rc::new(FocusArea(self.canvas.clone()))
+    }
+}
+
+impl CanvasTimer for DeadlineTimer {
+    fn arm(&self, delay: std::time::Duration) {
+        DeadlineTimer::arm(self, delay);
+    }
+}
+
+impl PointerCustody for PointerCaptureOwner {
+    fn admit(&self, id: i32) -> bool {
+        PointerCaptureOwner::admit(self, id)
+    }
+
+    fn forget(&self, id: i32) {
+        PointerCaptureOwner::forget(self, id);
+    }
+
+    fn release(&self, id: i32) {
+        PointerCaptureOwner::release(self, id);
+    }
+}
+
+/// A canvas's focus area: the canvas and the editor named on its claim.
+struct FocusArea(web_sys::HtmlCanvasElement);
+
+impl CanvasFocus for FocusArea {
+    fn has_focus(&self) -> bool {
+        effective_focus(&self.0)
     }
 }
 

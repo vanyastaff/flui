@@ -303,10 +303,10 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use crate::{
     drag::offers::payload_of_bytes,
-    input::web::events::{answer, pointer_position},
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
-    owner::web::{CanvasDrag, CanvasListeners, HostDrag},
+    owner::web::event::{answer, pointer_position},
+    owner::web::{CanvasDrag, CanvasRegistration, HostDrag},
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -462,7 +462,7 @@ impl HostDrag for WebTransfer {
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
-        registration: &mut dyn CanvasListeners,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
         Ok(Box::new(register(canvas, &self, callbacks, registration)?))
     }
@@ -797,7 +797,7 @@ fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
     callbacks: &Arc<WindowCallbacks>,
-    registration: &mut dyn CanvasListeners,
+    registration: &mut dyn CanvasRegistration,
 ) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
     let source = Arc::new(WebDragSource::new());

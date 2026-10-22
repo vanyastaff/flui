@@ -9,8 +9,6 @@
 //! and `events` call the browser and exist only on wasm32.
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use events::PixelRatioWatch;
-#[cfg(target_arch = "wasm32")]
 pub(crate) use source::WebDisplays;
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1186,6 +1184,15 @@ pub(crate) mod source {
         ) -> crate::owner::watch::Watch {
             crate::owner::watch::Watch::new(super::events::DisplayObservers::start(&self, signal))
         }
+
+        fn watch_pixel_ratio(
+            &self,
+            active: &std::rc::Rc<std::cell::Cell<bool>>,
+            on_change: Box<dyn Fn()>,
+        ) -> Option<Box<dyn crate::owner::web::PixelRatioWatch>> {
+            let watch = super::events::PixelRatioWatch::for_layout(active, on_change)?;
+            Some(Box::new(watch))
+        }
     }
 
     impl WebDisplays {
@@ -1899,12 +1906,6 @@ mod events {
             Some(Self::start(proof, active, on_change))
         }
 
-        /// Arm now if no query is armed (the browser refused the last one), and
-        /// report a change that went unseen meanwhile.
-        pub(crate) fn arm_if_unarmed(&self) {
-            self.shared.arm_if_unarmed();
-        }
-
         fn handle(&self) -> std::rc::Weak<PixelRatioShared> {
             Rc::downgrade(&self.shared)
         }
@@ -1963,6 +1964,14 @@ mod events {
                 shared,
                 callback: Some(callback),
             }
+        }
+    }
+
+    impl crate::owner::web::PixelRatioWatch for PixelRatioWatch {
+        /// Arm now if no query is armed (the browser refused the last one), and
+        /// report a change that went unseen meanwhile.
+        fn arm_if_unarmed(&self) {
+            self.shared.arm_if_unarmed();
         }
     }
 
