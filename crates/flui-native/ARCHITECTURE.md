@@ -84,8 +84,10 @@ trait depends on `flui-platform` instead.
     the window's moves, which TSF hears before the procedure answers them),
     the window's procedure (`platforms::windows::WindowProc`, which still
     answers every message, its default included), the drop target
-    (`platforms::windows::DropTargetRegistration`) and the precision touchpad,
-    whose `created` gives the window its DirectManipulation viewport. Tests:
+    (`drag::windows::DropTargetRegistration`, which registers the window with
+    the transport its context holds, the loop's `HostDrag`) and the precision
+    touchpad, whose `created` gives the window its DirectManipulation
+    viewport. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class`.
