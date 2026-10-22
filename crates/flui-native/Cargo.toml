@@ -305,7 +305,9 @@ console_error_panic_hook = "0.1"
 # (`lifecycle::linux`) and AT-SPI, the accessibility bridge
 # (`accessibility::linux`, through `accesskit_unix`). The Linux host, the winit
 # one today, brings `zbus` and the AT-SPI adapter with it (`winit-backend`), so
-# every Linux window is accessible with no feature of its own (ADR-0151 §15).
+# every Linux window is accessible with no feature of its own; both become
+# unconditional Linux dependencies with the native Wayland and X11 host
+# (ADR-0151 §15).
 [target.'cfg(target_os = "linux")'.dependencies]
 # The display source's protocol clients and descriptor primitives, behind the
 # `wayland` and `x11` features (`winit-backend` enables both on Linux).
@@ -503,9 +505,6 @@ wasm-bindgen-test.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libtest-mimic.workspace = true
-# The accessibility bridge's unit tests run through the AT-SPI adapter on Linux
-# without `winit-backend`, the feature that otherwise brings it.
-accesskit_unix = "0.24"
 
 # Main-thread winit ownership plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.

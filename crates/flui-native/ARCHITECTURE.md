@@ -319,14 +319,17 @@ trait depends on `flui-platform` instead.
   haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
 
-  Accessibility has no Cargo feature (ADR-0151 §15). `accesskit_windows` and
-  `accesskit_macos` are unconditional dependencies of their OS, and every
-  Win32 and AppKit window builds its adapter. On Linux `accesskit_unix` comes
-  with the host that names it, `winit-backend`, beside the `zbus` that host
-  needs for the Settings portal and logind, and as a dev-dependency, so
-  `accessibility::{bridge, linux}` compile under
-  `all(target_os = "linux", any(feature = "winit-backend", test))` and the
-  bridge's tests run with no feature on every desktop OS.
+  Accessibility has no Cargo feature (ADR-0151 §15, as amended).
+  `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
+  their OS, and every Win32 and AppKit window builds its adapter. The Linux
+  adapter comes with the Linux host: while that host is winit, `accesskit_unix`
+  rides `winit-backend` beside the `zbus` the host needs for the Settings
+  portal and logind (`flui-app` turns `winit-backend` on for every Linux
+  build), and `accessibility::{bridge, linux}` compile under
+  `all(target_os = "linux", feature = "winit-backend")`, written once, in
+  `accessibility/mod.rs`. The native Wayland and X11 host makes
+  `accesskit_unix` and `zbus` unconditional Linux dependencies and that gate
+  `target_os = "linux"`.
 
   The window still makes the accessibility adapter and the actuator it hands
   out by naming the feature's platform file, as the Android and headless
