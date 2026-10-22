@@ -12,7 +12,8 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::{FrameCount, ModalDelivery, WindowIdentity};
+use super::modal_loop::ModalFrames;
+use super::{FrameCount, WindowIdentity};
 use crate::platforms::windows::platform::WindowMap;
 use crate::{
     PlatformError, WakeRegistrationError,
@@ -103,10 +104,9 @@ pub(crate) struct OwnerControlContext {
     /// The features' hooks on this window (OLE drag and drop, whose sessions
     /// run from it), in the order a message reaches them.
     owner_hooks: Rc<[Arc<dyn OwnerMessages>]>,
-    /// The last wake deadline a modal loop run from this window delivered,
-    /// with the frame count it was delivered at (see
-    /// `WindowsLoop::deliver_modal_frames`).
-    modal_delivery: Rc<ModalDelivery>,
+    /// What a modal loop run from this window (OLE's drag loop) delivers its
+    /// frames from.
+    modal_frames: Rc<ModalFrames>,
 }
 
 /// One feature's part of the procedure of the owner's message-only window: the
@@ -171,10 +171,7 @@ impl OwnerPost {
 pub(crate) struct OwnerWindow {
     hwnd: HWND,
     signal: Weak<OwnerSignal>,
-    handlers: std::rc::Weak<RefCell<PlatformHandlers>>,
-    frames: std::rc::Weak<FrameCount>,
-    delivered: std::rc::Weak<ModalDelivery>,
-    windows: Weak<WindowMap>,
+    frames: std::rc::Weak<ModalFrames>,
 }
 
 impl OwnerWindow {
@@ -184,9 +181,8 @@ impl OwnerWindow {
     }
 
     /// While a modal loop run from the owner window stands in for the message
-    /// loop, deliver what that loop would
-    /// ([`WindowsLoop::deliver_modal_frames`](super::WindowsLoop::deliver_modal_frames)):
-    /// the milliseconds to wait before asking again, or `None`, delivering
+    /// loop, deliver what that loop would ([`ModalFrames::deliver`]): the
+    /// milliseconds to wait before asking again, or `None`, delivering
     /// nothing, once the platform no longer accepts work or its owner state is
     /// gone.
     pub(crate) fn deliver_modal_frames(&self) -> Option<u32> {
@@ -194,15 +190,7 @@ impl OwnerWindow {
         if !signal.accepting() {
             return None;
         }
-        let handlers = self.handlers.upgrade()?;
-        let frames = self.frames.upgrade()?;
-        let delivered = self.delivered.upgrade()?;
-        Some(super::WindowsLoop::deliver_modal_frames(
-            &handlers,
-            &self.windows,
-            &frames,
-            &delivered,
-        ))
+        Some(self.frames.upgrade()?.deliver())
     }
 }
 
@@ -364,22 +352,23 @@ impl OwnerControl {
             message: format!("the broadcast receiver: {error}"),
         })?;
         let owner_hooks: Rc<[Arc<dyn OwnerMessages>]> = owner_hooks.into();
+        let frames = Rc::new(FrameCount::default());
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
-            handlers,
+            handlers: Rc::clone(&handlers),
             turn: Rc::new(OwnerTurnSlot::default()),
-            frames: Rc::new(FrameCount::default()),
+            frames: Rc::clone(&frames),
             preferences,
             broadcasts,
             host,
             window_hooks: H::WINDOW_HOOKS,
             notices,
             displays,
-            windows,
+            windows: windows.clone(),
             exit_policy_pending: Arc::clone(&exit_policy_pending),
             owner_hooks: Rc::clone(&owner_hooks),
-            modal_delivery: Rc::default(),
+            modal_frames: Rc::new(ModalFrames::new(handlers, windows, frames)),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -713,10 +702,7 @@ unsafe extern "system" fn procedure(
                     let owner = OwnerWindow {
                         hwnd,
                         signal: Arc::downgrade(&context.signal),
-                        handlers: Rc::downgrade(&context.handlers),
-                        frames: Rc::downgrade(&context.frames),
-                        delivered: Rc::downgrade(&context.modal_delivery),
-                        windows: context.windows.clone(),
+                        frames: Rc::downgrade(&context.modal_frames),
                     };
                     (Rc::clone(&context.owner_hooks), owner)
                 };

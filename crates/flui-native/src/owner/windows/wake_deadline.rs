@@ -31,11 +31,12 @@ impl DeadlineDelivery {
     }
 }
 
-/// The last wake deadline the modal drag loop delivered, kept by the owner
-/// window across its frame requests: the main loop's rule, held apart from
-/// the main loop's own record, which is suspended under the modal loop.
+/// The last wake deadline a modal loop delivered, kept across its frame
+/// requests ([`ModalFrames`](super::modal_loop::ModalFrames)): the main loop's
+/// rule, held apart from the main loop's own record, which is suspended under
+/// the modal loop.
 #[derive(Default)]
-pub(crate) struct ModalDelivery(std::cell::RefCell<Option<DeadlineDelivery>>);
+pub(super) struct ModalDelivery(std::cell::RefCell<Option<DeadlineDelivery>>);
 
 impl ModalDelivery {
     /// Whether `deadline` from `hook` is due for delivery after the last one.
@@ -65,7 +66,7 @@ impl ModalDelivery {
     }
 
     /// No deadline is asked for: the next one is new whatever it is.
-    pub(crate) fn clear(&self) {
+    pub(super) fn clear(&self) {
         *self.0.borrow_mut() = None;
     }
 }

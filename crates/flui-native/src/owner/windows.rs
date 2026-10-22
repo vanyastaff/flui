@@ -73,7 +73,8 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
-pub(crate) use wake_deadline::{FrameCount, ModalDelivery};
+pub(crate) use wake_deadline::FrameCount;
+use wake_deadline::ModalDelivery;
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -941,68 +942,6 @@ impl WindowsLoop {
                 },
             );
         }
-    }
-
-    /// What the main loop would deliver, while `DoDragDrop`'s modal loop
-    /// stands in for it and dispatches neither deadlines nor paints: a due
-    /// wake deadline is delivered as the main loop delivers it, once per
-    /// frame generation, and every window with an invalid region is painted
-    /// (`UpdateWindow` sends its `WM_PAINT` directly), so every runtime on
-    /// the thread keeps getting frames. Returns how many milliseconds to wait
-    /// before the next request. The hook is user code, run with no borrow
-    /// held and in the main loop's custody.
-    pub(crate) fn deliver_modal_frames(
-        handlers: &RefCell<PlatformHandlers>,
-        windows: &Weak<WindowMap>,
-        frames: &FrameCount,
-        delivered: &ModalDelivery,
-    ) -> u32 {
-        // A replaced hook's final captures may replace the registration
-        // again: the query retires its clone before the answer is checked
-        // against it.
-        let queried = Self::ask_wake_deadline(handlers);
-        // The answer of a hook that is no longer installed is not its
-        // replacement's: as in the main loop, the delivery record is keyed by
-        // the hook as well as the instant.
-        let current = queried.and_then(|(deadline, identity)| {
-            let installed = handlers
-                .borrow()
-                .wake_deadline
-                .as_ref()
-                .is_some_and(|hook| Weak::ptr_eq(&identity, &Arc::downgrade(hook)));
-            installed.then_some((deadline?, identity))
-        });
-        let now = web_time::Instant::now();
-        let deadline = current.as_ref().map(|(deadline, _)| *deadline);
-        match current {
-            Some((deadline, identity))
-                if deadline <= now && delivered.admits(deadline, &identity, frames.get()) =>
-            {
-                if let Some(windows) = windows.upgrade() {
-                    delivered.record(deadline, identity, frames.get());
-                    Self::redraw_deadline_windows(&windows);
-                }
-            }
-            Some(_) => {}
-            None => delivered.clear(),
-        }
-        // A snapshot: a paint runs user code, which may open or close windows.
-        let painted: Vec<HWND> = windows
-            .upgrade()
-            .map(|windows| {
-                windows
-                    .lock()
-                    .values()
-                    .map(|window| window.hwnd())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for hwnd in painted {
-            // SAFETY: a window this thread created; a handle closed by an
-            // earlier paint fails the call harmlessly. Nothing is borrowed.
-            let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
-        }
-        crate::owner::modal_pace::modal_frame_wait_ms(deadline, now)
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.

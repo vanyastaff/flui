@@ -685,7 +685,7 @@ impl WindowsWindow {
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
-                handlers,
+                handlers: Rc::clone(&handlers),
                 exit_policy,
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
@@ -718,9 +718,13 @@ impl WindowsWindow {
                 cloak_watch: super::window_visibility::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
-                modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(Rc::clone(
-                    &frames,
-                )),
+                modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
+                    crate::owner::windows::modal_loop::ModalFrames::new(
+                        handlers,
+                        Arc::downgrade(&windows_map),
+                        Rc::clone(&frames),
+                    ),
+                ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),

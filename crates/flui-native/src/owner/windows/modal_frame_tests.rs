@@ -1,6 +1,7 @@
 //! The frames the owner window delivers while `DoDragDrop`'s modal loop
 //! stands in for the main loop.
 
+use super::modal_loop::ModalFrames;
 use super::*;
 use crate::WindowsPlatform;
 use flui_platform::WindowOptions;
@@ -31,13 +32,15 @@ fn a_replaced_wake_hook_gets_its_modal_frame() {
 
     let due = web_time::Instant::now();
     let hook = || -> Arc<WakeDeadlineHook> { Arc::new(move || Some(due)) };
-    let handlers = RefCell::new(PlatformHandlers::new());
-    let windows = Arc::downgrade(&platform.owner().windows);
+    let handlers = Rc::new(RefCell::new(PlatformHandlers::new()));
     // No frame callback counts into this generation: every delivery below
     // is in the same one.
-    let frames = FrameCount::default();
-    let delivered = ModalDelivery::default();
-    let deliver = || WindowsLoop::deliver_modal_frames(&handlers, &windows, &frames, &delivered);
+    let modal = ModalFrames::new(
+        Rc::clone(&handlers),
+        Arc::downgrade(&platform.owner().windows),
+        Rc::default(),
+    );
+    let deliver = || modal.deliver();
 
     handlers.borrow_mut().wake_deadline = Some(hook());
     let _ = deliver();

@@ -3,8 +3,9 @@
 //! While a modal loop stands in for the owner's message loop (OLE's
 //! `DoDragDrop`, or `DefWindowProc`'s while a window is moved or sized), the
 //! owner delivers the wake deadlines and paints that loop does not
-//! (`WindowsLoop::deliver_modal_frames`), each time the modal loop asks. This is
-//! how long it waits between two asks: a pure rule, so every host checks it.
+//! (`owner::windows::modal_loop::ModalFrames`), each time the modal loop asks.
+//! This is how long it waits between two asks: a pure rule, so every host
+//! checks it.
 
 #![forbid(unsafe_code)]
 
