@@ -21,8 +21,6 @@
 mod android_drag;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
-#[path = "android_ime.rs"]
-mod android_ime;
 #[path = "android_keys.rs"]
 mod android_keys;
 #[path = "android_motion.rs"]
@@ -65,12 +63,8 @@ mod ole_drag_drop;
 mod pointer_assembly;
 #[path = "preferences.rs"]
 mod preferences;
-#[path = "text_input_mapping.rs"]
-mod text_input_mapping;
 #[path = "web_pinch.rs"]
 mod web_pinch;
-#[path = "web_text.rs"]
-mod web_text;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;

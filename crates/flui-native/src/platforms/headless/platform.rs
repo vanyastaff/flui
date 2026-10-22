@@ -29,6 +29,7 @@ use crate::host::{self, Host};
 use crate::owner::call_point::{Field, call, install};
 use crate::owner::headless::{HeadlessLoop, HeadlessState, consult_exit_policy, emit_window_event};
 use crate::platform::HostPlatform;
+use crate::text::headless::FakeTextInput;
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::OpenWindowError,
     owner::handlers::WindowCallbacks, shared::window_state::WindowStateCell,
@@ -260,8 +261,6 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
         );
     }
 }
-
-impl host::Text for FakeTextInput {}
 
 impl host::Clipboard<HeadlessLoop> for InMemoryClipboard {
     fn clipboard(owner: &HeadlessLoop) -> Arc<dyn Clipboard> {
@@ -1323,7 +1322,10 @@ impl PlatformWindow for MockWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
+        use crate::text::{TextInput as _, WindowTextInput};
+        self.text_input
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
@@ -1555,70 +1557,6 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
 
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
         self.state.lock().action_listener = Some(listener);
-    }
-}
-
-/// Recording fake for [`PlatformTextInput`], backing the headless backend's
-/// [`PlatformWindow::text_input`].
-///
-/// Every `set_ime_allowed`/`set_ime_cursor_area` call is appended to an
-/// in-memory history so a test can assert exactly what a presentation-owned
-/// text-input session told the platform to do, rather than only that the call
-/// didn't panic.
-#[derive(Default)]
-pub struct FakeTextInput {
-    state: Mutex<FakeTextInputState>,
-}
-
-#[derive(Default, Clone)]
-struct FakeTextInputState {
-    ime_allowed_calls: Vec<bool>,
-    cursor_area_calls: Vec<Bounds<f64>>,
-}
-
-impl FakeTextInput {
-    /// Create a fresh recorder with no recorded calls.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Every `set_ime_allowed` call, in delivery order.
-    #[must_use]
-    pub fn ime_allowed_calls(&self) -> Vec<bool> {
-        self.state.lock().ime_allowed_calls.clone()
-    }
-
-    /// The most recent `set_ime_allowed` call, if any.
-    #[must_use]
-    pub fn last_ime_allowed(&self) -> Option<bool> {
-        self.state.lock().ime_allowed_calls.last().copied()
-    }
-
-    /// Every `set_ime_cursor_area` call, in delivery order.
-    #[must_use]
-    pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
-        self.state.lock().cursor_area_calls.clone()
-    }
-}
-
-impl std::fmt::Debug for FakeTextInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
-        f.debug_struct("FakeTextInput")
-            .field("ime_allowed_calls", &state.ime_allowed_calls)
-            .field("cursor_area_calls", &state.cursor_area_calls)
-            .finish()
-    }
-}
-
-impl PlatformTextInput for FakeTextInput {
-    fn set_ime_allowed(&self, allowed: bool) {
-        self.state.lock().ime_allowed_calls.push(allowed);
-    }
-
-    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
-        self.state.lock().cursor_area_calls.push(area);
     }
 }
 

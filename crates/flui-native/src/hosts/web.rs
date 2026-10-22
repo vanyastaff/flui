@@ -8,9 +8,10 @@ use crate::host::{Absent, Host, position};
 use crate::owner::web::{HostDisplays, WebHost, WebLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
-    PageObservers, WebClipboard, WebHaptics, WebPreferences, WebTextInput, WebTransfer, WebWindow,
+    PageObservers, WebClipboard, WebHaptics, WebPreferences, WebTransfer, WebWindow,
 };
 use crate::storage::UserDataDirs;
+use crate::text::web::WebTextInput;
 
 /// The web host's table.
 #[derive(Debug)]
@@ -23,7 +24,7 @@ impl Host for Web {
     type Window = WebWindow;
     type Displays = WebLoop;
     type Input = WebLoop;
-    type Text = WebTextInput;
+    type Text = std::rc::Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WebClipboard;
     type Drag = WebTransfer;

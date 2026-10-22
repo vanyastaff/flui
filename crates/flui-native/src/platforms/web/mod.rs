@@ -20,18 +20,16 @@ compile_error!(
 
 mod clipboard;
 mod drag;
-mod events;
+pub(crate) mod events;
 mod haptics;
 mod page_events;
 mod preferences;
-mod registration;
-mod text_input;
-mod window;
+pub(crate) mod registration;
+pub(crate) mod window;
 
 pub(crate) use clipboard::WebClipboard;
 pub(crate) use drag::WebTransfer;
 pub(crate) use haptics::WebHaptics;
 pub(crate) use page_events::PageObservers;
 pub(crate) use preferences::WebPreferences;
-pub(crate) use text_input::WebTextInput;
 pub(crate) use window::WebWindow;

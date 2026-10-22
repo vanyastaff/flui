@@ -22,7 +22,6 @@ mod haptics;
 pub(crate) mod host_events;
 pub(crate) mod platform;
 pub(crate) mod preferences;
-mod text_services;
 mod window;
 mod window_ext;
 mod window_frame;
@@ -42,8 +41,8 @@ pub(crate) use host_events::HostEvents;
 pub(crate) use preferences::PreferenceSource;
 // The hooks the Windows host registers on FLUI's window class.
 pub(crate) use direct_manipulation::Touchpad;
+pub(crate) use drag::DropTargetRegistration;
 pub(crate) use platform::WindowProc;
-pub(crate) use text_services::TextServices;
 pub use window::WindowsWindow;
 pub use window_ext::{
     TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,

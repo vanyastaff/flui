@@ -44,6 +44,7 @@ use crate::owner::OpenWindowError;
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
 use crate::storage::DataDirs;
 use crate::task::Task;
+use crate::text::TextInput;
 
 /// One type for each position of the closed list (ADR-0151 §3).
 ///
@@ -63,8 +64,8 @@ pub trait Host: 'static {
     type Displays: Displays<Self::Loop>;
     /// What the keyboard layout is and when it changes.
     type Input: Input<Self::Loop>;
-    /// Text input a window hands out: the text store or the IME requests.
-    type Text: Text;
+    /// Text input a window hands out: the IME requests or the field's store.
+    type Text: TextInput;
     /// The accessibility tree a window hands out.
     type Accessibility: PlatformAccessibility;
     /// The clipboard.
@@ -198,11 +199,6 @@ pub trait Input<O> {
     /// [`Platform::on_keyboard_layout_change`].
     fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut() + Send>);
 }
-
-/// The text position: what a window hands out for text input (the text store
-/// a TSF-, IME- or input-method-backed editor reads, or the IME requests of a
-/// push-model one).
-pub trait Text: 'static {}
 
 /// The clipboard position.
 pub trait Clipboard<O> {
@@ -367,8 +363,6 @@ impl<O> Input<O> for Absent<position::Input> {
         drop(callback);
     }
 }
-
-impl Text for Absent<position::Text> {}
 
 impl PlatformAccessibility for Absent<position::Accessibility> {
     fn publish(&self, update: accesskit::TreeUpdate) {

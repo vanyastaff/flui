@@ -25,10 +25,10 @@ use crate::platforms::ios::{IOSClipboard, IOSHaptics, IOSPreferences, IOSSystemC
 #[cfg(all(target_os = "macos", feature = "a11y"))]
 use crate::platforms::macos::MacosAccessibility;
 #[cfg(target_os = "macos")]
-use crate::platforms::macos::{
-    MacHaptics, MacOSClipboard, MacOSTextInput, MacOSWindow, PreferenceSource,
-};
+use crate::platforms::macos::{MacHaptics, MacOSClipboard, MacOSWindow, PreferenceSource};
 use crate::storage::UserDataDirs;
+#[cfg(target_os = "macos")]
+use crate::text::apple::macos::MacOSTextInput;
 
 /// The Apple host's table.
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl Host for Apple {
     type Input = IOSLoop;
 
     #[cfg(target_os = "macos")]
-    type Text = MacOSTextInput;
+    type Text = std::sync::Arc<MacOSTextInput>;
     #[cfg(target_os = "ios")]
     type Text = Absent<position::Text>;
 

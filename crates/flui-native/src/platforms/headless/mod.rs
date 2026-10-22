@@ -12,8 +12,8 @@ pub use crate::display::headless::{
 };
 pub(crate) use drag::DragDouble;
 pub use platform::{
-    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessHostEvents,
-    HeadlessInputDevices, HeadlessPreferences, MockWindow,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessPreferences, MockWindow,
 };
 pub(crate) use platform::{TextStoreHostFactory, create_mock_window};
 pub use window_policy::HeadlessWindowPolicy;
@@ -21,3 +21,4 @@ pub use window_policy::HeadlessWindowPolicy;
 pub use crate::owner::headless::{
     HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
 };
+pub use crate::text::headless::FakeTextInput;

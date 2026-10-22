@@ -117,7 +117,8 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
 ## Consequences and verification
 
 - The library grows by the dex (about 18 KB). No packaging path changes.
-- Linux CI runs the pure halves: `shared::android_ime` in `tests/android_ime.rs`
+- Linux CI runs the pure halves: `text::android::ime` in
+  `crates/flui-native/src/text/android/ime/tests.rs`
   (`android_ime_adapter`: a keyboard's composition reaching the store in order across a frame
   transaction, the store composing what the view composes, an edit on a superseded snapshot
   dropped, a refused step, surrogate pairs, a protected field, the key rule, `EditorInfo`, the

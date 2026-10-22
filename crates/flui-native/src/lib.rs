@@ -22,6 +22,8 @@
 //!   │                         point for handlers and the handler registry
 //!   ├─ display/             - The displays: the registry and snapshot model
 //!   │                         beside one file per platform
+//!   ├─ text/                - Text input and the system text size: the
+//!   │                         model and one module per platform
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │
@@ -155,9 +157,11 @@
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
 // `platforms::winit`, `platforms::android::memory`, the loops
-// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, and the
-// display sources `display::windows::source`, `display::apple::{macos, ios}`)
-// carries its own module-level `#![expect(unsafe_code)]`, and the two
+// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, the display
+// sources `display::windows::source`, `display::apple::{macos, ios}`, and the
+// text services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios`)
+// carries its own module-level `expect(unsafe_code)` where it is declared, and
+// the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
@@ -172,8 +176,6 @@
 pub mod config;
 mod display;
 pub mod error;
-mod text_sizing;
-pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 // Reachable so a crate outside can show that a table missing a position does
@@ -191,6 +193,14 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
+// Reachable for the text position's trait, which bounds a host's table, and
+// for the backend conformance table, which decodes a composing key with the
+// Android and web rules; not an embedding API.
+#[doc(hidden)]
+pub mod text;
+pub use text::sizing::{
+    CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState, capture_text_sizing,
+};
 
 // Re-export configuration types
 // ==================== Platform Detection ====================

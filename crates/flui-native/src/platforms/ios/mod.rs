@@ -58,7 +58,6 @@ pub(crate) mod os_version;
 mod positions;
 mod preferences;
 mod status_bar;
-pub(crate) mod text_sizing;
 mod window;
 
 pub use crate::owner::apple::ios::{

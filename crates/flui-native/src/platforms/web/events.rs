@@ -27,7 +27,7 @@ use crate::shared::pointer_assembly::{
 use crate::shared::web_pinch::{
     CtrlWheel, GestureEventKind, GestureTracker, WheelRoute, WheelStep,
 };
-use crate::shared::web_text::key_composition;
+use crate::text::web::ime::key_composition;
 use flui_platform::DispatchEventResult;
 use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
 use icu_properties::{CodePointMapData, props::GeneralCategory};
@@ -87,7 +87,7 @@ pub(super) fn register_event_listeners(
     )?;
     register_keyboard_events(canvas, &keys, registration)?;
     let focus = register_focus_events(window, &loss, registration)?;
-    let text = super::text_input::WebTextInput::new(
+    let text = crate::text::web::WebTextInput::new(
         canvas,
         registration.editor_slot(),
         Rc::clone(&registration.accepting),
@@ -123,22 +123,22 @@ pub(super) fn register_event_listeners(
 /// and target, and its text input.
 pub(super) struct CanvasServices {
     pub(super) drag: super::drag::CanvasDrag,
-    pub(super) text: Rc<super::text_input::WebTextInput>,
+    pub(super) text: Rc<crate::text::web::WebTextInput>,
 }
 
 /// How a DOM key event reaches the window: from the canvas, or from the
 /// text input's own editor.
-pub(super) struct KeyRoute {
+pub(crate) struct KeyRoute {
     callbacks: Arc<WindowCallbacks>,
     pinch: Rc<Pinch>,
     accepting: Rc<Cell<bool>>,
     /// Whether the window's text input composes now.
-    pub(super) composing: Rc<Cell<bool>>,
+    pub(crate) composing: Rc<Cell<bool>>,
 }
 
 impl KeyRoute {
     /// Deliver `event` as a key `state`, answering it with the result.
-    pub(super) fn deliver(&self, event: &web_sys::Event, state: KeyState) {
+    pub(crate) fn deliver(&self, event: &web_sys::Event, state: KeyState) {
         if !self.accepting.get() {
             return;
         }
@@ -658,7 +658,7 @@ fn register_keyboard_events(
 /// Whether `event` only moves focus within the canvas's focus area (between
 /// the canvas and its text editor), which the window does not see as a
 /// focus change.
-pub(super) fn is_focus_handoff(
+pub(crate) fn is_focus_handoff(
     canvas: &web_sys::HtmlCanvasElement,
     event: &web_sys::Event,
 ) -> bool {

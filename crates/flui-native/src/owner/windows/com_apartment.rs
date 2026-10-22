@@ -3,8 +3,8 @@
 //! [`ComApartment`] is one `OleInitialize` (the single-threaded apartment
 //! plus the OLE state `RegisterDragDrop` and `DoDragDrop` need) whose `Drop`
 //! is the matching `OleUninitialize`. Everything that uses COM objects past the platform's own
-//! lifetime holds a clone of it — the platform, and each window's
-//! [`TextServices`](crate::platforms::windows::TextServices) — so the apartment ends only after
+//! lifetime holds a clone of it — the platform, and each window's TSF
+//! connection (the text feature's `TextServices`) — so the apartment ends only after
 //! its last user has released its interfaces, in whatever order the platform
 //! and its windows are dropped. `!Send`: the apartment belongs to the thread
 //! that entered it, and the `Rc` count is touched there only.

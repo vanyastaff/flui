@@ -141,12 +141,12 @@ kind = "double"
 names = ["Scripted"]
 
 [[allow]]
-path = "crates/flui-native/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/text/windows/tsf/probe.rs"
 kind = "pump"
 names = ["pump", "tick"]
 
 [[allow]]
-path = "crates/flui-native/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/text/windows/tsf/probe.rs"
 kind = "double"
 names = ["Probe"]
 

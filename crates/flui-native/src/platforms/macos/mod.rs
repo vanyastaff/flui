@@ -21,7 +21,7 @@
 //! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
 //! - ✅ `NSPasteboard` clipboard, routed through the owner lane (`clipboard.rs`)
 //! - ✅ IME composition via an `NSTextInputClient` conformance
-//!   (`text_input.rs`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
+//!   (`crate::text::apple::macos`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
 //!   `keyDown:` is a gate, so one press reaches the application exactly once —
 //!   either as a composition/commit or as a key event, never both
 //! - ✅ A display snapshot from `NSScreen.screens`, each display keyed by its
@@ -73,9 +73,8 @@ mod observation;
 mod positions;
 pub(super) mod preferences;
 mod system_notices;
-mod text_input;
-mod view;
-mod window;
+pub(crate) mod view;
+pub(crate) mod window;
 mod window_ext;
 mod window_tiling;
 
@@ -86,7 +85,6 @@ pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub(crate) use preferences::{PreferenceObservers, PreferenceSource};
 pub(crate) use system_notices::SystemNoticeSources;
-pub(crate) use text_input::MacOSTextInput;
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
 pub use window_tiling::{

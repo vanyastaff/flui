@@ -1,8 +1,10 @@
 //! Owner-acquired, detached native numeric text sizing.
-
-#[cfg(all(test, not(target_os = "android")))]
-#[path = "platforms/android/text_sizing.rs"]
-mod android_capture_tests;
+//!
+//! The composition root acquires a presentation's converter on the owner
+//! thread ([`capture_text_sizing`]). A platform whose system text size is not
+//! one linear scale captures it natively and provides it as a
+//! [`NativeTextSize`]: Android a copy of its `DisplayMetrics`, UIKit its trait
+//! collection.
 
 use flui_foundation::{TextSize, TextSizeRequest};
 use std::{
@@ -11,6 +13,21 @@ use std::{
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use crate::host_window::{HostWindow, OwnerThreadToken};
+use crate::owner::OwnerPlatform;
+
+/// Acquire a detached numeric text converter for `window`, a native
+/// presentation, on the owner thread `_owner` proves.
+///
+/// # Errors
+/// Refuses unavailable native contexts and failed capture/query admission.
+pub fn capture_text_sizing(
+    _owner: &OwnerPlatform,
+    window: &Arc<dyn HostWindow>,
+) -> Result<TextSizingCaptureState, TextSizingCaptureError> {
+    window.capture_text_sizing(OwnerThreadToken::new())
+}
 
 /// Readiness of one presentation's detached conversion context.
 #[derive(Debug)]
@@ -59,13 +76,15 @@ pub enum TextSizingCaptureError {
     InvalidSize(#[from] flui_foundation::TextSizeError),
 }
 
-pub(crate) enum NativeSizing {
-    #[cfg(test)]
-    Test(Box<dyn Fn(TextSizeRequest) -> Result<TextSize, TextSizingCaptureError> + Send + Sync>),
-    #[cfg(target_os = "android")]
-    Android(crate::platforms::android::text_sizing::Snapshot),
-    #[cfg(target_os = "ios")]
-    UIKit(crate::platforms::ios::text_sizing::Snapshot),
+/// A platform's frozen native converter: the size an authored size and growth
+/// profile take under the system text setting it captured.
+pub(crate) trait NativeTextSize {
+    /// The size `request` takes under the captured setting.
+    ///
+    /// # Errors
+    /// The profile the platform cannot map, a failed native call, or a native
+    /// answer that is no valid size.
+    fn query(&self, request: TextSizeRequest) -> Result<TextSize, TextSizingCaptureError>;
 }
 
 /// A frozen native converter, independent of live Resources or trait lookup.
@@ -73,7 +92,7 @@ pub(crate) enum NativeSizing {
 /// from the lifetime of its native resources.
 #[derive(Clone)]
 pub struct CapturedTextSizing {
-    native: Arc<NativeSizing>,
+    native: Arc<dyn NativeTextSize>,
     valid: Arc<AtomicBool>,
     owner: std::thread::ThreadId,
     _owner_local: PhantomData<Rc<()>>,
@@ -92,7 +111,7 @@ impl std::fmt::Debug for CapturedTextSizing {
 impl CapturedTextSizing {
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     pub(crate) fn new(
-        native: Arc<NativeSizing>,
+        native: Arc<dyn NativeTextSize>,
         valid: Arc<AtomicBool>,
         owner: std::thread::ThreadId,
     ) -> Self {
@@ -128,26 +147,25 @@ impl CapturedTextSizing {
         if !self.is_current() {
             return Err(TextSizingCaptureError::Unavailable);
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-        {
-            let _ = request;
-            Err(TextSizingCaptureError::UnsupportedProfile)
+        let result = self.native.query(request);
+        if !self.is_current() {
+            return Err(TextSizingCaptureError::Unavailable);
         }
-        #[cfg(any(target_os = "android", target_os = "ios", test))]
-        {
-            let result = match &*self.native {
-                #[cfg(test)]
-                NativeSizing::Test(query) => query(request),
-                #[cfg(target_os = "android")]
-                NativeSizing::Android(snapshot) => snapshot.query(request),
-                #[cfg(target_os = "ios")]
-                NativeSizing::UIKit(snapshot) => snapshot.query(request),
-            };
-            if !self.is_current() {
-                return Err(TextSizingCaptureError::Unavailable);
-            }
-            result
-        }
+        result
+    }
+}
+
+/// A converter of a test's own, which answers through its closure.
+#[cfg(test)]
+pub(crate) struct QueryWith<F>(pub(crate) F);
+
+#[cfg(test)]
+impl<F> NativeTextSize for QueryWith<F>
+where
+    F: Fn(TextSizeRequest) -> Result<TextSize, TextSizingCaptureError>,
+{
+    fn query(&self, request: TextSizeRequest) -> Result<TextSize, TextSizingCaptureError> {
+        (self.0)(request)
     }
 }
 
@@ -162,11 +180,11 @@ mod tests {
         let native_valid = Arc::clone(&valid);
         let native_calls = Arc::clone(&calls);
         let capture = CapturedTextSizing::new(
-            Arc::new(NativeSizing::Test(Box::new(move |request| {
+            Arc::new(QueryWith(move |request: TextSizeRequest| {
                 native_calls.fetch_add(1, Ordering::Relaxed);
                 native_valid.store(false, Ordering::Release);
                 Ok(request.size)
-            }))),
+            })),
             valid,
             std::thread::current().id(),
         );

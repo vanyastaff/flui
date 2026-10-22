@@ -269,17 +269,6 @@ impl OwnerPlatform {
     pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
         window.text_store_host(OwnerThreadToken::new())
     }
-
-    /// Acquire a detached numeric text converter for this native presentation.
-    ///
-    /// # Errors
-    /// Refuses unavailable native contexts and failed capture/query admission.
-    pub fn capture_text_sizing(
-        &self,
-        window: &Arc<dyn HostWindow>,
-    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        window.capture_text_sizing(OwnerThreadToken::new())
-    }
 }
 
 // The evidence that wrong-thread owner ops are compile errors — expanded

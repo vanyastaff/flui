@@ -7,15 +7,17 @@ use android_activity::AndroidApp;
 
 use crate::display::android::AndroidDisplays;
 use crate::host::{Absent, Host, position};
+use crate::owner::android::java_view::InputMethod;
 use crate::owner::android::ndk::SymbolSource;
 use crate::owner::android::{AndroidHost, AndroidLoop, HostDisplays};
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput, AndroidTransfer,
-    AndroidWindow, MockClipboard,
+    AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer, AndroidWindow,
+    MockClipboard,
 };
 use crate::shared::os_version::android::AndroidApi;
+use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -28,7 +30,7 @@ impl Host for Android {
     type Window = AndroidWindow;
     type Displays = AndroidLoop;
     type Input = AndroidInputState;
-    type Text = AndroidTextInput;
+    type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = MockClipboard;
     type Drag = AndroidTransfer;
@@ -37,6 +39,21 @@ impl Host for Android {
     type Lifecycle = AndroidLoop;
     type Chrome = AndroidSystemChrome;
     type Storage = AndroidLoop;
+}
+
+impl AndroidHost for Android {
+    /// The text feature's answer to the input method's calls.
+    fn input_method() -> Box<dyn InputMethod> {
+        Box::new(ViewInputMethod::default())
+    }
+
+    fn displays(
+        api: AndroidApi,
+        library: Arc<dyn SymbolSource>,
+        owner: Weak<OwnerSignal>,
+    ) -> Arc<dyn HostDisplays> {
+        Arc::new(AndroidDisplays::new(api, library, owner))
+    }
 }
 
 /// Android platform implementation using `android-activity`
@@ -58,16 +75,6 @@ impl Host for Android {
 /// }
 /// ```
 pub type AndroidPlatform = HostPlatform<Android>;
-
-impl AndroidHost for Android {
-    fn displays(
-        api: AndroidApi,
-        library: Arc<dyn SymbolSource>,
-        owner: Weak<OwnerSignal>,
-    ) -> Arc<dyn HostDisplays> {
-        Arc::new(AndroidDisplays::new(api, library, owner))
-    }
-}
 
 impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by

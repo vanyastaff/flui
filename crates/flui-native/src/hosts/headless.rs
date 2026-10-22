@@ -7,10 +7,11 @@ use crate::host::Host;
 use crate::owner::headless::{HeadlessHost, HeadlessLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DragDouble, FakeAccessibility, FakeSystemChrome, FakeTextInput, HeadlessHostEvents,
-    HeadlessInputDevices, HeadlessPreferences, MockWindow,
+    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessPreferences, MockWindow,
 };
 use crate::storage::UserDataDirs;
+use crate::text::headless::FakeTextInput;
 
 /// The headless host's table.
 #[derive(Debug)]
@@ -23,7 +24,7 @@ impl Host for Headless {
     type Window = MockWindow;
     type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
-    type Text = FakeTextInput;
+    type Text = std::sync::Arc<FakeTextInput>;
     type Accessibility = FakeAccessibility;
     type Clipboard = InMemoryClipboard;
     type Drag = DragDouble;

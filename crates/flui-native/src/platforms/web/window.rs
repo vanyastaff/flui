@@ -33,7 +33,7 @@ pub struct WebWindow {
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     drag: RefCell<Option<super::drag::CanvasDrag>>,
-    text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
+    text: RefCell<Option<Rc<crate::text::web::WebTextInput>>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<dyn HostDisplays>,
     /// The published window state (ADR-0237).
@@ -452,7 +452,7 @@ impl Drop for WebWindow {
     }
 }
 
-pub(super) struct FocusSync {
+pub(crate) struct FocusSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
@@ -461,7 +461,7 @@ pub(super) struct FocusSync {
 }
 
 impl FocusSync {
-    pub(super) fn sync(&self) {
+    pub(crate) fn sync(&self) {
         let focused = effective_focus(&self.canvas);
         if self.observed.replace(focused) == focused {
             return;
@@ -538,14 +538,34 @@ pub(super) struct LayoutSync {
 
 /// A `ResizeObserverEntry`'s `devicePixelContentBoxSize`: the device pixels
 /// the browser laid the box out at, exact where the estimate can be a pixel
-/// off. It holds while the CSS box it was reported for does, across a change
-/// of the device pixel ratio too: the device-pixel observer reports a ratio
-/// change that moves the device box, so one it does not report left the box
-/// as it was, which the estimate at the new ratio may not be.
+/// off, while it holds ([`Self::holds`]).
 #[derive(Clone, Copy)]
 struct ObservedSize {
     css: (f64, f64),
     device: DeviceSize,
+}
+
+impl ObservedSize {
+    /// Whether this is still the device size of a `width`×`height` box at
+    /// `scale`: the box is the one it was reported for, and `scale` can lay
+    /// that box out at this size. `clientWidth`/`clientHeight` are snapped to
+    /// whole CSS pixels, up to one off the size laid out, and the device box
+    /// to whole device pixels, up to one off that size times `scale`.
+    ///
+    /// It holds across a ratio change the device-pixel observer does not
+    /// report: the observer reports one that moves the device box, so one it
+    /// does not report left the box as it was, which the estimate at the new
+    /// ratio may not be. A size the ratio contradicts is in other pixels: the
+    /// box at the old ratio, which the pixel-ratio watch replaces before the
+    /// observer reports the new one, or the screen's own, which Chrome's
+    /// device emulation reports while `devicePixelRatio` is the emulated
+    /// ratio.
+    fn holds(self, width: f64, height: f64, scale: f64) -> bool {
+        let slack = scale + 1.0;
+        self.css == (width, height)
+            && (f64::from(self.device.width) - width * scale).abs() <= slack
+            && (f64::from(self.device.height) - height * scale).abs() <= slack
+    }
 }
 
 impl LayoutSync {
@@ -565,10 +585,10 @@ impl LayoutSync {
 
     /// Bring the backing store and the tracked size up to the layout; see
     /// [`WebWindow::layout_sync`]. The backing store is the observed device
-    /// size while the CSS box is the one it was observed for, and the
-    /// estimate otherwise: a `resize` event can run before the observer
-    /// reports the new box. The state lock is released before the dispatch,
-    /// which runs embedder callbacks.
+    /// size while it holds ([`ObservedSize::holds`]), and the estimate
+    /// otherwise: a `resize` event can run before the observer reports the
+    /// new box. The state lock is released before the dispatch, which runs
+    /// embedder callbacks.
     pub(super) fn sync(&self) {
         let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
             return;
@@ -576,7 +596,7 @@ impl LayoutSync {
         let backing = self
             .observed
             .get()
-            .filter(|observed| observed.css == (width, height))
+            .filter(|observed| observed.holds(width, height, scale_factor))
             .map_or_else(
                 || DeviceSize::estimate(width, height, scale_factor),
                 |observed| observed.device,
@@ -618,10 +638,12 @@ impl crate::host_window::HostWindow for WebWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        use crate::text::{TextInput, WindowTextInput};
         self.text
             .borrow()
             .as_ref()
-            .map(|text| Rc::clone(text) as Rc<dyn flui_platform::text_store::TextStoreHost>)
+            .and_then(TextInput::window_text_input)
+            .and_then(WindowTextInput::store_host)
     }
 }
 

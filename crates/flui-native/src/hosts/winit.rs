@@ -14,8 +14,9 @@ use crate::owner::winit::{HostDisplays, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::platforms::linux::UnixAccessibility;
-use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitTextInput, WinitWindow};
+use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitWindow};
 use crate::storage::UserDataDirs;
+use crate::text::winit::WinitTextInput;
 
 /// The winit host's table.
 #[derive(Debug)]
@@ -33,7 +34,7 @@ impl Host for Winit {
     type Window = WinitWindow;
     type Displays = WinitLoop;
     type Input = WinitLoop;
-    type Text = WinitTextInput;
+    type Text = std::sync::Arc<WinitTextInput>;
     // The AT-SPI bridge exists on Linux with the `a11y` feature.
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     type Accessibility = UnixAccessibility;

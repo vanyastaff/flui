@@ -33,12 +33,6 @@ pub mod android_motion;
 // Rule module; consumer: the Android backend's `FluiView`.
 #[doc(hidden)]
 pub mod android_drag;
-// Rule module; consumer: the Android backend's text input.
-#[doc(hidden)]
-pub mod android_ime;
-// Rule module; consumers: the Android and web backends' text input.
-#[doc(hidden)]
-pub mod ime_text;
 // Rule module; consumer: the Android backend.
 #[doc(hidden)]
 pub mod android_keys;
@@ -122,9 +116,6 @@ pub mod screen_edges;
 // Rule module; consumers: the Win32 and web backends.
 #[doc(hidden)]
 pub mod scroll;
-// Rule module; consumer: the Win32 text services.
-#[doc(hidden)]
-pub mod text_geometry;
 // Rule module; consumers: the Win32 and AppKit backends.
 #[doc(hidden)]
 pub mod visibility;
@@ -134,9 +125,6 @@ pub mod web_pinch;
 // Rule module; consumer: the web backend's HTML drag and drop.
 #[doc(hidden)]
 pub mod html_drag_drop;
-// Rule module; consumer: the web backend's text input.
-#[doc(hidden)]
-pub mod web_text;
 // The Win32 backend turns window limits, system messages and the low-memory
 // event into notices by these rules; `test` keeps them checked on every host.
 #[cfg(any(windows, test))]

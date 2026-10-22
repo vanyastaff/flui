@@ -595,7 +595,7 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = ["display"]
+features = ["display", "text"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
@@ -611,4 +611,12 @@ exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
     { from = "display::android", to = "platforms::android::preferences", exit = "ADR-0151", since = "2026-10-22", reason = "the Android display source samples through `with_activity`, the JNI Activity helper the preference file holds; it goes when the preferences become a feature directory and the helper moves into owner/android (ADR-0151 §10)" },
     { from = "display::apple::ios", to = "platforms::ios::os_version", exit = "ADR-0151", since = "2026-10-22", reason = "the iOS display source reads the OS version through `platforms::ios::os_version::read`, widened to `pub(crate)` for it; it goes when the version gates become `version/` (ADR-0151 §10)" },
+    { from = "text::android", to = "platforms::android::input", exit = "ADR-0151", since = "2026-10-22", reason = "the input method's editor action arrives as the key the Android input decoder builds (`editor_action_keys`); it goes when the input becomes a feature directory and the key reaches the text input through the input feature's model (ADR-0151 §10)" },
+    { from = "text::android", to = "platforms::android::window", exit = "ADR-0151", since = "2026-10-22", reason = "the work the input method's calls hand the owner runs against `AndroidWindow`, which holds the window's text input; it goes when the window becomes a feature directory and hands out its text input through the text position (ADR-0151 §10)" },
+    { from = "text::apple::macos", to = "platforms::macos::view", exit = "ADR-0151", since = "2026-10-22", reason = "the `NSTextInputClient` methods are added to the AppKit content view's class and read its context and key path; it goes when the view becomes the input feature's (ADR-0151 §10)" },
+    { from = "text::apple::macos", to = "platforms::macos::window", exit = "ADR-0151", since = "2026-10-22", reason = "the text input's setters route through the AppKit window's owner lane (`route_on_owner`); it goes when the window becomes a feature directory (ADR-0151 §10)" },
+    { from = "text::web", to = "platforms::web::events", exit = "ADR-0151", since = "2026-10-22", reason = "the web text input routes its surface's keys through the canvas's `KeyRoute` and asks `is_focus_handoff`; it goes when the web events become the input feature's (ADR-0151 §10)" },
+    { from = "text::web", to = "platforms::web::registration", exit = "ADR-0151", since = "2026-10-22", reason = "the textarea is named on the canvas's claim (`EditorSlot`) and listens through the registration's `Listener`; it goes when the registration becomes the window feature's (ADR-0151 §10)" },
+    { from = "text::web", to = "platforms::web::window", exit = "ADR-0151", since = "2026-10-22", reason = "the textarea's focus is synced through the web window's `FocusSync`; it goes when the window becomes a feature directory (ADR-0151 §10)" },
+    { from = "text::windows", to = "platforms::windows::platform", exit = "ADR-0151", since = "2026-10-22", reason = "TSF names its window by `WindowRef` and reads the window's context (its scale, where the connection is kept) through `with_window_context`; it goes when the window context becomes the window feature's (ADR-0151 §10)" },
 ]

@@ -9,10 +9,11 @@
 //!   level on, found by name when the platform is built;
 //! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
-//! Window, input, text, drag, haptics and preferences stay in
-//! `platforms::android`; the loop reaches them there. The displays are the
-//! `display` feature's, which the loop holds through the hook the host's table
-//! fills.
+//! Window, input, drag, haptics and preferences stay in `platforms::android`;
+//! the loop reaches them there. The displays and the text input are their
+//! features': the loop holds the displays through the hook the host's table
+//! fills, and the view serves several features, so what it hands a feature's
+//! state is named by the host's table (`AndroidHost`), not by the view.
 
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
@@ -36,16 +37,22 @@ mod hooks {
     use android_activity::ndk::native_window::NativeWindow;
     use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 
+    use super::java_view::InputMethod;
     use super::ndk::SymbolSource;
     use crate::error::PlatformError;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::watch::Watch;
     use crate::shared::os_version::android::AndroidApi;
 
-    /// What the Android host's table names for its owner thread (ADR-0151
-    /// §10): the displays the loop holds. The owner reaches them through the
-    /// hook and names no feature.
+    /// What an Android host's table names for its owner thread (ADR-0151
+    /// §10): the displays the loop holds and the features' objects `FluiView`
+    /// hands what it reports. The owner reaches them through the hooks and
+    /// names no feature.
     pub(crate) trait AndroidHost: 'static {
+        /// What answers the input method's calls through a new view, one per
+        /// view.
+        fn input_method() -> Box<dyn InputMethod>;
+
         /// The displays of the platform on API level `api`, whose NDK
         /// functions `library` looks up and whose changes wake `owner`. The
         /// loop holds them for the table's displays position and hands them to
@@ -88,4 +95,22 @@ mod hooks {
         /// thread.
         fn observe(&self) -> Watch;
     }
+}
+
+/// What `FluiView` reports of its editor after an input method edit
+/// (`nativeImeState`): the text it holds and the raw offsets of `Selection`
+/// and the composing span (`-1` for none), as Java counts them, in UTF-16 code
+/// units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditorState {
+    /// The view's text.
+    pub(crate) text: String,
+    /// `Selection.getSelectionStart`: the selection's anchor.
+    pub(crate) selection_start: i32,
+    /// `Selection.getSelectionEnd`: the selection's moving end.
+    pub(crate) selection_end: i32,
+    /// `BaseInputConnection.getComposingSpanStart`.
+    pub(crate) composition_start: i32,
+    /// `BaseInputConnection.getComposingSpanEnd`.
+    pub(crate) composition_end: i32,
 }

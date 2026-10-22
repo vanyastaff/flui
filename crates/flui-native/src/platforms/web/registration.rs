@@ -91,7 +91,7 @@ extern "C" {
     #[wasm_bindgen(catch, js_name = releaseCanvas)]
     fn release_canvas(canvas: &web_sys::HtmlCanvasElement, token: &JsValue) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = effectiveCanvasFocus)]
-    pub(super) fn effective_focus(canvas: &web_sys::HtmlCanvasElement) -> bool;
+    pub(crate) fn effective_focus(canvas: &web_sys::HtmlCanvasElement) -> bool;
     #[wasm_bindgen(js_name = isOwnedFocus)]
     pub(super) fn is_owned_focus(canvas: &web_sys::HtmlCanvasElement, node: &JsValue) -> bool;
     #[wasm_bindgen(js_name = setCanvasEditor)]
@@ -191,7 +191,7 @@ impl Drop for CanvasClaim {
     }
 }
 
-pub(super) struct Listener {
+pub(crate) struct Listener {
     target: web_sys::EventTarget,
     kind: &'static str,
     capture: bool,
@@ -206,7 +206,7 @@ impl Listener {
     /// registration's installation: one the window's text input attaches to
     /// its surface while the window lives. Its body runs only while
     /// `accepting` holds; dropping it detaches it.
-    pub(super) fn install(
+    pub(crate) fn install(
         target: &web_sys::EventTarget,
         kind: &'static str,
         accepting: &Rc<Cell<bool>>,
@@ -217,7 +217,7 @@ impl Listener {
 
     /// [`Self::install`] in the capture phase when `capture` holds, which
     /// sees the events of descendants that do not bubble (`scroll`).
-    pub(super) fn install_in_phase(
+    pub(crate) fn install_in_phase(
         target: &web_sys::EventTarget,
         kind: &'static str,
         accepting: &Rc<Cell<bool>>,
@@ -493,14 +493,14 @@ impl Registration {
 /// Where a canvas's owner names the text editor beside it, so the canvas's
 /// focus area includes it.
 #[derive(Clone)]
-pub(super) struct EditorSlot {
+pub(crate) struct EditorSlot {
     canvas: web_sys::HtmlCanvasElement,
     token: JsValue,
 }
 
 impl EditorSlot {
     /// `editor` is now part of the canvas's focus area; `None` when none is.
-    pub(super) fn set(&self, editor: Option<&web_sys::HtmlElement>) {
+    pub(crate) fn set(&self, editor: Option<&web_sys::HtmlElement>) {
         let editor = editor.map_or(JsValue::NULL, |editor| JsValue::from(editor.clone()));
         set_canvas_editor(&self.canvas, &self.token, &editor);
     }
