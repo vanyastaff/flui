@@ -776,6 +776,99 @@ graph LR
   в поле и эхе; три Backspace, затем « мир» — «hello  мир» в обоих; ошибок в консоли нет; набор
   `web_browser` не запускался — на хосте нет chromedriver. Не запускалось: `cross-typecheck`
   локально (нет `zig`; job — в CI); Mac и iPhone — в очереди vanyastaff/flui#1840.
+- [x] **LY32** — ветка `platform/services`. Четыре каталога фич, модель рядом с файлом на
+  платформу; переносы — `git mv`, тела без правок, кроме путей, `use` и видимости. `clipboard/`:
+  `lock.rs` (модель: замок сессий Win32, общий у Win32 и `arboard`), `windows.rs`,
+  `apple/{macos,ios}.rs`, `android.rs` (внутрипроцессная заглушка, в таблице до LY50), `web.rs`,
+  `winit.rs`, `headless.rs` (`host::Clipboard` для `InMemoryClipboard` контракта). `drag/`: модель
+  `offers.rs` (`format_of`, `payload_of_bytes`: правила Android брали их у веб-модуля правил —
+  ребро между платформами), `windows/{ole_model,ole}.rs` (с `ole/{com,tests}.rs`),
+  `android/{view_model,view}.rs`, `web/{html_model,html}.rs`, `winit.rs`, `headless.rs`.
+  `accessibility/`: `bridge.rs`, `windows.rs`, `apple/macos.rs`, `linux.rs` (AT-SPI),
+  `headless.rs` (`FakeAccessibility` из `headless/platform.rs`). `haptics/`: `degradation.rs`,
+  `windows.rs`, `apple/{macos,ios}.rs`, `android.rs`, `web.rs`, `headless.rs` (реэкспорт
+  `FakeHaptics` контракта до LY48). `Absent`: drag macOS и iOS, accessibility Android, iOS, Web (и
+  везде без `a11y`), haptics winit (он же хост Linux). Решения, которых строка не называла:
+  (1) `owner/` не называет ни одной из четырёх фич. Объекты позиций, которые фича только читает
+  обратно, — `owner::positions::PositionObjects`: таблица кладёт их при сборке цикла, фича достаёт
+  по типу (`OleTransfer::of`, `WebTransfer::of`, `DragDouble::of`; их называет и окно). Что цикл
+  вызывает сам — трейт-хук рядом с циклом: Win32 — `owner::windows::control::OwnerMessages`
+  (`attach(OwnerPost)`, `message(&OwnerWindow, u32)`, `destroyed()`), их отдаёт таблица вместе с
+  объектами (`WindowsHost::loop_parts() -> LoopParts`); процедура окна владельца отвечает на свои
+  сообщения (пробуждение, политика выхода), остальное предлагает хукам по порядку, неотвеченное
+  уходит в `DefWindowProcW`. `OleTransfer` — такой хук: `START_DRAG` запускает `DoDragDrop`,
+  `MODAL_FRAME` получает кадры модального цикла через `OwnerWindow::deliver_modal_frames`
+  (состояние владельца там — `Weak`, сессия не продлевает жизнь набора обработчиков), `destroyed`
+  отменяет не начатую сессию; `OwnerPost` вместо сырого адреса. winit —
+  `owner::winit::file_drops::FileDrops` (шесть методов транспорта; `DataTransferSource` —
+  супертрейт, позиция отдаёт его upcast'ом); Android — `java_view::ViewTransfer` (`drag`,
+  `drop_clip` с частями клипа, `set_own`, `take_local_drop`) и `TransferFor`, которым таблица
+  делает транспорт для вида. Буфер обмена, который держит цикл (Android, Web, winit), —
+  `Arc<dyn Clipboard>` от таблицы (`ArboardClipboard::or_inert` унёс запасной инертный буфер из
+  цикла); у UIKit буфер без состояния — новая ручка на вызов, как у AppKit. (2) Темп модального
+  цикла (`MODAL_FRAME_PACE_MS`, `modal_frame_wait_ms`) — владельца:
+  `owner/windows/modal_pace.rs`, чистый, `forbid(unsafe_code)`; им же темпируются циклы
+  перемещения и размера `DefWindowProc`, а `owner` модель drag назвать не может. На Linux модуль
+  собирается в тестах через `#[path]` (как модели Linux в `platforms/mod.rs`); его случай ушёл из
+  таблицы `ole_drag_drop_contracts` в отдельный тест рядом, тело то же. (3) Файл платформы с
+  чистой половиной собирается под `cfg(any(<os>, test))`, чистая половина — модуль
+  `<механизм>_model` с `forbid(unsafe_code)` (как `wayland_model`, `x11_model`), FFI — модуль
+  механизма под `cfg(<os>)`: `forbid` нельзя ослабить ниже, поэтому чистая половина не может быть
+  корнем файла. Константы, которые читает только FFI-половина, переехали в неё (имя CF_HTML,
+  действия `DragEvent`, тип `Files`), неиспользуемый `ACTION_DROP` удалён: иначе это мёртвый код в
+  тестовой сборке чужой ОС. (4) Drag-сообщений у `WindowProc` нет; шаг отзыва drop target в
+  `WM_DESTROY` (между освобождением тачпада и колбэками закрытия) и регистрация цели при создании
+  (между TSF и viewport) остались в окне — путь `crate::drag::windows`: хук перед `WindowProc`
+  изменил бы их порядок внутри одного сообщения. (5) Видимость `pub(super)` → `pub(crate)`:
+  `WindowRef` и его методы, `WindowContext::drop_target`, `events::{SURFACE, MOUSE_BUTTONS}`,
+  `web::events::{answer, pointer_position}`, `web::registration::{Registration, listen}`.
+  (6) Публичные пути `platforms::<os>::{WindowsClipboard, …}`, скрытые
+  `shared::{ole_drag_drop, android_drag, html_drag_drop}` удалены, `shared::haptic_degradation` →
+  `haptics::degradation` (скрытый: его читает `backend_conformance`), фрагмент
+  `changelog.d/platform-services.md`; имена корня (`FakeAccessibility`, `FakeHaptics`,
+  `HeadlessDragAndDrop`) те же, `flui-app` не тронут. Что не выдержит соседей — рёбра между
+  файлами платформ двух фич, законные, пока `platforms/` — уровень крейта: окно называет адаптер
+  доступности, актуатор и источник drag своей платформы (`platforms::*` → `accessibility::*`,
+  `haptics::*`, `drag::*`); `drag::windows` и `haptics::windows` достигают окна через
+  `platforms::windows::platform::WindowRef` (контекст окна: `drop_target`, `pointer_registry`,
+  колбэки); `drag::windows` читает `events::MOUSE_BUTTONS` (ввод), `drag::web` —
+  `events::{answer, pointer_position}` (ввод) и `registration::Registration` (окно),
+  `haptics::android` — `preferences::with_activity` (LY33). С каталогами LY28, LY29 и LY33 они
+  станут находками `ForeignPlatform`; снимает их подключение оконных позиций через таблицу (LY38)
+  или перенос общих помощников в модели и `owner/`. `globals`: `clipboard::lock::{CLIPBOARD,
+  reentrancy::SESSION_OPEN}`, `clipboard::windows::owner_window::OWNER` (итого 55); `module-dag`:
+  `features = ["clipboard", "drag", "accessibility", "haptics"]`, исключений нет; allowlist
+  `testing` — путь `drag/windows/ole/tests.rs`, `docs-paths` — ADR-0247 называет
+  `tests/android_drag.rs` (запись не переписывается). Тесты: `ole_drag_drop_contracts`,
+  `android_drag_mapping`, `html_drag_drop_table`, `haptic_degradation_table` и
+  `stale_haptic_source_plays_on_the_window_actuator` — модули `tests.rs` рядом, правки — пути,
+  импорты, `crate::table_test::run_table`; `ole_drag_and_drop_on_real_windows`
+  (`drag/windows/ole/tests.rs`) — только доступ к транспорту (`OleTransfer::of`) и окну владельца
+  (`OwnerPost::hwnd`); `modal_frame_tests`, `headless_drag` и тест AT-SPI — без правок; новый
+  `owner::positions::tests::a_position_takes_back_the_object_of_its_type`. Проверки на Windows:
+  `cargo fmt --check`; clippy `-p flui-native -p flui-app -p flui-testing --all-targets -D
+  warnings` и `-p flui-native --all-targets --features winit-backend,a11y`; nextest `-p
+  flui-native -p flui-app` — 280 (2 пропущены), `-p flui-native --features winit-backend` — 262
+  (1 пропущен), `-p xtask` — 45; clippy Android (`-p flui-native -p flui-app --all-targets`),
+  macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`); `wasm-check`, `wasm-test` (49
+  утверждений); `module-dag` (268 модулей, 4 фичи с 25 файлами платформ, 1 base) и самотест (52),
+  `globals` (55) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`, `checks` (с
+  `android-dex`), `doc-strict`, `workspace`, `reach`; rustdoc `--document-private-items` с
+  `winit-backend,a11y` под `-D warnings`. WSL Ubuntu 24.04: clippy `-p flui-native -p flui-app`
+  без фич и `-p flui-native` с `winit-backend,a11y`; nextest `-p flui-native` (`FLUI_HEADLESS=1`)
+  — 172; с `winit-backend,a11y` под xvfb — 259 из 260, падает
+  `a_randr_reconfiguration_on_a_real_server_is_published` (как на базе), тест AT-SPI
+  `activation_answers_with_the_retained_tree` проходит. Galaxy S21 (Android 15): проба `flui
+  create --template counter --local` из этого дерева, в её `lib.rs` (вне репозитория) — касание с
+  `HapticsHandle::perform(LightImpact, Immediate)`, `Draggable` с `DragTrigger::LongPress` и
+  `DropTarget`, `RawTextField`. Два касания «Increment» — счётчик 2, исход хаптики `Submitted`;
+  `input draganddrop` с долгим нажатием по карточке на цель — «dropped 1»; в поле «clip»: Ctrl+A,
+  Ctrl+C, End, Ctrl+V — «clipclip» (заглушка буфера); Back — «Android platform event loop
+  finished», службы остановлены, `FATAL` и паник нет, настройки устройства не менялись.
+  Предупреждение `flui_interaction::haptics: a haptic outcome was not delivered before its
+  presentation closed` (тикеты `FramePresented` подъёма и броска drag) — и на базе `e86d0d5b4` с
+  той же пробой. Не запускалось: `cross-typecheck` (нет `zig`; job CI), набор `web_browser` (нет
+  `chromedriver`), Mac и iPhone — в очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
