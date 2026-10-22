@@ -204,7 +204,7 @@ graph LR
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY38** | **Один словарь отсутствия; закрытость как решение** (D5, D6, R3.7, R2.5). Модуль `unsupported`: `Unsupported { reason }` (конструируется, не пишется литералом; конструктор с именем возможности `Unsupported::of::<C>` добавляет LY50), `UnsupportedReason { NotOnThisPlatform, NotOnThisDevice, NotDeclared { what }, Unavailable, NotRegistered, NoWindow }` (`NotOnThisDevice` — ОС или железо этого устройства не умеет, номер версии не называется), `Availability`. Встраивается в `WindowCommandError`, `WindowShowError`, `CursorError`, `DragError`, исход haptics, `StorageError`, `PreferenceQueryError`, `TextStoreHostError` вместо девяти unit-вариантов. `Absent<F>` (`host.rs`, LY22) отвечает `Unsupported { NotOnThisPlatform }` в каждой позиции, где сегодня отвечает словарём позиции; оконные позиции таблицы (`Text`, `Accessibility`, `Haptics`, `Chrome`) становятся тем, что отдаёт окно: у `HostWindow::accessibility` и `PlatformWindow::{text_input, haptics, system_chrome}` нет умолчаний, окно без позиции отдаёт `Absent` своей таблицы. Так снимаются рёбра файлов окна в фичи, которые оставили LY32 и LY28 (окно делает объект позиции, называя файл платформы фичи): Win32 — `accessibility::windows`, `haptics::windows` и `drag::windows` (слот и отзыв drop target в контексте окна); macOS — `accessibility::apple`, `haptics::apple`, `text::apple` (текстовый ввод над content view); iOS — `haptics::apple`; Android — `haptics::android`, `drag::android` (источник drag); Web — `haptics::web`, `text::web` (текстовый ввод над canvas); winit — `accessibility::linux`, `text::winit`; headless — `accessibility::headless`, `haptics::headless`, `drag::headless` (источник drag и сторона теста), `text::headless` (двойник текстового ввода). Источник drag и цель Win32 и Web окно уже получает через хук владельца (`HostDrag`). `clippy::exhaustive_enums` включён на уровне deny; каждое из 26 закрытых перечислений получает `#[non_exhaustive]` или `#[allow]` с причиной (W3C-закрытые `KeyState`, `Location` — кандидаты на `allow`). Версия ОС в контракт не попадает (ADR-0244) | LY34 | `crates/flui-platform/src/{unsupported.rs,window.rs,window_state.rs,drag.rs,haptics/*,storage.rs,preferences/geometry.rs,text_store/host.rs,input_capabilities/*,…}`, хосты и потребители ошибок | `workspace`, `reach`, `clippy` (`exhaustive_enums`) | таблица «каждая ошибка несёт причину»; conformance окна и haptics; существующие | L + T |
+| **LY38** | **Один словарь отсутствия; закрытость как решение** (D5, D6, R3.7, R2.5). Модуль `unsupported`: `Unsupported { reason }` (конструируется, не пишется литералом; конструктор с именем возможности `Unsupported::of::<C>` добавляет LY50), `UnsupportedReason { NotOnThisPlatform, NotOnThisDevice, NotDeclared { what }, Unavailable, NotRegistered, NoWindow }` (`NotOnThisDevice` — ОС или железо этого устройства не умеет, номер версии не называется), `Availability`. Встраивается в `WindowCommandError`, `WindowShowError`, `CursorError`, `DragError`, исход haptics, `StorageError`, `PreferenceQueryError`, `TextStoreHostError` вместо девяти unit-вариантов. `Absent<F>` (`host.rs`, LY22) отвечает `Unsupported { NotOnThisPlatform }` в каждой позиции, где сегодня отвечает словарём позиции; оконные позиции таблицы (`Text`, `Accessibility`, `Haptics`, `Chrome`) становятся тем, что отдаёт окно: у `HostWindow::accessibility` и `PlatformWindow::{text_input, haptics, system_chrome}` нет умолчаний, окно без позиции отдаёт `Absent` своей таблицы. Так снимаются рёбра файлов окна в фичи, которые оставили LY32 и LY28 (окно делает объект позиции, называя файл платформы фичи): Win32 — `accessibility::windows`, `haptics::windows` и `drag::windows` (слот и отзыв drop target в контексте окна); macOS — `accessibility::apple`, `haptics::apple`, `text::apple` (текстовый ввод над content view); iOS — `haptics::apple`; Android — `haptics::android`, `drag::android` (источник drag); Web — `haptics::web`, `text::web` (текстовый ввод над canvas); winit — `accessibility::linux`, `text::winit`; headless — `accessibility::headless`, `haptics::headless`, `drag::headless` (источник drag и сторона теста), `text::headless` (двойник текстового ввода). Источник drag и цель Win32 и Web окно уже получает через хук владельца (`HostDrag`). Здесь же уходят рёбра общего вида Apple, оставленные LY29: content view AppKit и касания UIKit становятся мультиплексорами владельца, к которым ввод, текстовый ввод и окно подключаются хуками и держат каждый своё состояние окна по `WindowIdentity` (ADR-0151 §10) — `text::apple::macos` ↔ `input::apple::macos`, `input::apple::macos` → `window::apple::macos`, `window::apple::macos` → `input::apple::macos`, `window::apple::ios` → `input::apple::ios`; нужен прогон на Mac и iPhone. И ребро `text::web` → `window::web`: текстовый ввод регистрирует свой редактор и слушателей через хуки холста (`CanvasRegistration`), как ввод и drag, и держит их по `WindowIdentity`. `clippy::exhaustive_enums` включён на уровне deny; каждое из 26 закрытых перечислений получает `#[non_exhaustive]` или `#[allow]` с причиной (W3C-закрытые `KeyState`, `Location` — кандидаты на `allow`). Версия ОС в контракт не попадает (ADR-0244) | LY34 | `crates/flui-platform/src/{unsupported.rs,window.rs,window_state.rs,drag.rs,haptics/*,storage.rs,preferences/geometry.rs,text_store/host.rs,input_capabilities/*,…}`, хосты и потребители ошибок | `workspace`, `reach`, `clippy` (`exhaustive_enums`) | таблица «каждая ошибка несёт причину»; conformance окна и haptics; существующие | L + T |
 | **LY39** [P] | **Гейт API-замыкания** (ADR-0089 §6, R2.6). Новая задача xtask по rustdoc-JSON: публичные сигнатуры контракта называют upstream-типы только из ADR-0089 §2; `ui-events`, `keyboard-types`, `dpi` в списке исключений поимённо со ссылкой на спеку pointer-vocabulary, список только сокращается; тот же механизм принимает проверку OS-типов в ядре (LY36). В CI — отчёт `cargo-semver-checks` по контракту (R2.7) | LY21 | `tools/xtask/src/api_closure*` (новый), `.github/workflows/ci.yml`, манифесты контракта (`reach-forbid`) | сама задача: `api-closure` (+ `--self-test`) | самотест: посаженный `ui-events` в публичной сигнатуре и посаженный OS-тип в ядре; исключение, которое больше не нужно, — ошибка | L |
 | **LY40** | **Снимок окна: полнота** (D4, R3.1). `WindowState` получает все оконные факты, которые сегодня отдают геттеры или парные `on_*`: размеры и масштаб (`WindowMetrics`), внешний вид, дисплей, safe-area insets, состояние исполнения, фокус, видимость, наведение; каждый факт сохраняет правило своей записи (тема — пользовательская, как применена к окну, ADR-0222; дисплей — по идентичности снимка дисплеев, ADR-0236; состояние исполнения не зависит от фокуса и видимости, ADR-0035; нерисуемое значение — нулевой размер, неконечный или неположительный масштаб — не публикуется); `WindowCapabilities` входит в `WindowState` (токен привязывается к ревизии, LY42); `activates` и сходные признаки — `Availability`, а не `bool`. Одно `on_state_changed` без данных; хост публикует факты одной ревизией и доставляет изменение синхронно внутри OS-колбэка там, где его даёт ОС (Win32 modal loop). Геттеры живут до LY41 (аддитивный шаг) | LY38 | `crates/flui-platform/src/{window_state.rs,platform_window.rs}`, `crates/flui-native/src/window/*` | `workspace`, `reach`, `cross-typecheck` | conformance окна: снимок согласован с readback ОС на каждом хосте; Windows — живой resize в modal loop | L + W + T |
 | **LY41** | **Потребители на снимок; удаление вторых истин** (D4, D10, R3.1). Удалить геттеры `is_focused`, `is_visible`, `physical_size`, `logical_size`, `scale_factor`, `metrics`, `appearance`, `display_id`, `safe_area_insets`, `execution_state`, `is_active`, `is_hovered`, `capabilities`; `mouse_position` и `modifiers` (положение и модификаторы берутся из потока ввода); регистрации `on_resize`, `on_active_status_change`, `on_visibility_status_change`, `on_hover_status_change`, `on_appearance_changed`, `on_display_changed`, `on_safe_area_change`, `on_execution_state_change` (остаются шесть регистраций по обязательствам, их заменит LY44); потребитель, которому нужно знать, какой факт изменился, сравнивает новый снимок с прежним (равенство ревизий); методы-близнецы `show`, `activate`, `close` и `WindowShowError`; `WindowEvent` и `Platform::on_window_event`. `flui-app` (`direct.rs`, `runner/{window_install,desktop,secondary_window,android,ios,web}.rs`) подписывается один раз на запуск; `presentation.rs` читает снимок; 15 реализаций `PlatformWindow` вне ядра (ADR-0254) теряют методы; команды show, activate, close идут только через `WindowControl` | LY40, LY26 | `crates/flui-platform/src/{platform_window.rs,window.rs}`, `crates/flui-native/src/window/*`, `crates/flui-app/src/app/**`, `crates/flui-runtime/src/presentation.rs`, `crates/flui-interaction`, `crates/flui-testing`, тестовые двойники в `flui-*` | `workspace`, `reach`, `markers` | headless: смена фокуса видна одним `state_changed` и одним снимком; путь вето закрытия (ADR-0123) через `WindowControl`; `rg` по удалённым именам пуст | L + W + T |
@@ -1300,22 +1300,26 @@ graph LR
 - [x] **LY29** — ветка `platform/input`, на `main` @ `78c487b24` (LY28). Ввод — фича `input/` (`git mv`, где
   файл переезжает целиком; правки — пути, `use`, видимость, разрезы и хуки ниже). Модель:
   `assembly/` (9 файлов, тесты `pointer_assembly_contracts` из `tests/pointer_assembly.rs` — в
-  `assembly/tests.rs`), `keys.rs` (с `keyboard_adapter` внутри как `keys::adapter` под
-  `cfg(any(android, winit-desktop))` и кодами кнопок мыши `MOUSE_BUTTONS`, которые раньше держал
-  `platforms::windows::events`; их читает и drag), `availability.rs` (`every_backend_states_its_availability`
-  из `tests/input_capabilities.rs` — в `availability/tests.rs`), `scroll.rs`, `mod.rs`
+  `assembly/tests.rs`; `assembly/touchpad.rs` — показания viewport тачпада как данные, их пишет
+  журнал `native-capture`: модель не называет файл платформы; модель запрещает `unsafe`),
+  `keys.rs` (с `keyboard_adapter` внутри как `keys::adapter` под
+  `cfg(any(android, winit-desktop))` и кодами кнопок мыши `MOUSE_BUTTONS: [MouseButtonCodes; 5]`,
+  которые раньше держал `platforms::windows::events`; их читает и drag), `availability.rs`
+  (`every_backend_states_its_availability` из `tests/input_capabilities.rs` — в
+  `availability/tests.rs`), `scroll.rs` (`pub(crate)`: `tests/` его не называет), `mod.rs`
   (`event_timestamp_ns`, публичен от корня крейта: `flui_native::event_timestamp_ns`, его зовёт
   `flui-app` в `owner_dispatch.rs`; `primary_mouse_info` стал `pub(crate)`; `shared` больше не
-  публичен — `changelog.d/platform-input.md`) и `WindowInput` (то, что окно Win32, drag и haptics
-  читают у ввода окна). Файлы платформ: `windows/{mod (956), raw (1 759), direct_manipulation
-  (1 352)}.rs` — хук `InputMessages` и состояние окна `InputWindow`; разбор сообщений (бывший
-  `events.rs` с `pointer_messages`); хук `Touchpad`, механизм одного объекта ОС, с чистым
-  `manipulation` (декодер `shared/direct_manipulation`, тесты из `tests/direct_manipulation.rs`) и
-  своими тестами в `direct_manipulation/tests.rs`; `apple.rs` (2 053: чистый `keys` из
-  `keys_macos` с тестом `winit/events/keyboard_tests.rs` → `apple/keys/tests.rs`, `macos` — класс
-  content view и его события, `ios` — касания); `android.rs` (1 964: чистые `keys`, `motion`,
-  `scroll` с тестами рядом; `AndroidInput`); `web.rs` (1 820: чистые `keys` и `pinch`; `events`,
-  `WebInput`); `winit.rs` (1 756); `headless.rs` (`HeadlessInputDevices` и устройства теста).
+  публичен — `changelog.d/platform-input.md`). Файлы платформ (каждая чистая половина —
+  `forbid(unsafe_code)`): `windows/{mod (2 138), direct_manipulation (1 180)}.rs` — `mod.rs`:
+  хук класса `InputWindows` (сообщения ввода, hit test и таймер тачпада) с состоянием окна
+  `InputWindow` и встроенным модулем `raw` (разбор сообщений, бывший `events.rs` с
+  `pointer_messages`; его тесты — `raw/tests.rs`); `direct_manipulation.rs` — viewport тачпада,
+  механизм одного объекта ОС, с чистым `manipulation` (декодер `shared/direct_manipulation`, тесты
+  из `tests/direct_manipulation.rs`) и своими тестами в `direct_manipulation/tests.rs`; `apple.rs`
+  (2 048: чистый `keys` из `keys_macos`, `macos` — класс content view и его события, `ios` —
+  касания); `android.rs` (1 968: чистые `keys`, `motion`, `scroll` с тестами рядом;
+  `AndroidInput`); `web.rs` (1 859: чистые `keys` и `pinch`; `events`, `WebInput`); `winit.rs`
+  (2 019, `WinitInput`); `headless.rs` (`HeadlessInputDevices`, `AttachedDevices`).
   `#[path]` нет. Каталоги `platforms/android/` и `platforms/web/` ушли (страж `atomics` — в
   `owner/web.rs`), `shared/` держит только `os_version` и `platform_floor`. Доступ к `assembly/`:
   модуль остаётся `#[doc(hidden)] pub` — записи нативных трасс и conformance в `tests/` декодируют
@@ -1324,63 +1328,83 @@ graph LR
   `input::assembly::capture`. Так же публичны и скрыты правила, которыми декодирует таблица
   `tests/`: `availability`, `keys`, `apple::keys`, `android::keys`, `web::keys`,
   `windows::direct_manipulation::manipulation`; `android::motion` и `web::pinch` стали
-  `pub(crate)`. Хуки (owner/ не называет фичу): Win32 — состояние фичи на окно у владельца:
-  `WindowRef::attach`/`attached` держат по одному `Rc` каждого типа в свойстве окна, процедура
-  класса снимает его после `WM_NCDESTROY`; `attached` проверяет идентичность окна; хуки класса
-  слышат шаги окна `WindowMessages::step` (`WindowStep`: размер, свёртывание, потеря фокуса,
-  отрисовка, модальный цикл размера, масштаб, смена настройки, клавиша, которую приложение
-  пропустило) и его уничтожение `WindowMessages::destroyed`, в порядке хуков; `InputMessages`
+  `pub(crate)`. Хуки (owner/ не называет фичу): Win32 — хуки класса стали экземплярами:
+  `WindowsHost::window_class() -> WindowClass { hooks: Rc<[Rc<dyn WindowMessages>]>, input:
+  Rc<dyn WindowInputs> }`, класс делается один раз на поток владельца, и процедура окна
+  (`window_proc::<H>`, её Win32 зовёт с одним дескриптором) находит его через батут Win32
+  `owner::windows::CLASS_ON_THREAD` (ADR-0097, `window_class::<H>()`). Каждый хук держит своё
+  состояние окна сам, по `WindowIdentity`: заводит в `created`, снимает в `destroyed` (окно
+  объявляет его на `WM_DESTROY`) и на `WM_NCDESTROY` для окна, чьё уничтожение не объявлено;
+  указателей Rust в свойствах и слотах окна нет; сообщение, шаг или чтение для окна, которого хук
+  не держит, — явный `None`. Хуки слышат шаги окна `WindowMessages::step` (`WindowStep`: размер,
+  свёртывание, потеря фокуса, отрисовка, модальный цикл размера, DPI — `Rescaled { dpi }`, смена
+  настройки, клавиша, которую приложение пропустило). Хук ввода `InputWindows` (с тачпадом в
+  одном хуке: его `answers` — и `DM_POINTERHITTEST`, и таймер насоса; порядка между хуками нет)
   делает `InputWindow` в `created` (часы сообщений, реестр указателей, viewport тачпада, hover,
-  модификаторы, мёртвые клавиши, суррогат), `Touchpad` ставит в него viewport и выставляет
-  возможности окна; контекст окна этих полей больше не держит. Пропущенная клавиша — шаг,
-  на который окно отвечает своей горячей клавишей. Геометрия мыши — метод источника предпочтений
-  `OwnerPreferences::mouse_geometry`. Порядок `WINDOW_HOOKS` и наборы ответов не менялись,
-  `window_created` по-прежнему останавливается на первом мёртвом окне. Android —
+  модификаторы, мёртвые клавиши, суррогат) и выставляет возможности окна; окно, drag и haptics
+  читают его только через `WindowInputs` (`hovered`, `modifiers`, `press_kind`, `pen_in_range`,
+  каждое `Option`) из `owner::windows::window_inputs()`; контекст окна этих полей не держит.
+  Пропущенная клавиша — шаг, на который окно отвечает своей горячей клавишей. Интервал и
+  прямоугольник двойного щелчка — одним чтением источника предпочтений
+  (`OwnerPreferences::mouse_gestures(dpi) -> GesturePreferences`; им же пользуется снимок
+  предпочтений и геометрия жестов окна). Наборы ответов не менялись; окно получает ввод с viewport
+  до регистрации drop target; `window_created` по-прежнему останавливается на первом мёртвом
+  окне. Android —
   `AndroidHost::input` (`ActivityInput`: события очереди, сброс касаний, коэффициенты прокрутки),
   winit — `WinitHost::input` (`LoopInput`), headless — `HeadlessHost::devices`
   (`SimulatedDevices`), Web — `WebHost::input` (`HostInput`): окно регистрирует ввод canvas через
   хук цикла в ту же регистрацию, что и drag (`CanvasListeners` стал `CanvasRegistration`:
-  слушатели, флаг приёма, таймеры, захват указателя и его опека, область фокуса), ввод отвечает
-  маршрутом клавиш `CanvasKeys`, который окно отдаёт текстовому вводу; собственные слушатели окна
-  (фокус, раскладка, оформление, жизненный цикл страницы, полноэкранный режим, потеря контекста)
-  перешли в `window/web.rs`; ответ DOM-событию и точная позиция мыши — `owner::web::event`
-  (их читают ввод и drag); наблюдение за плотностью пикселей для раскладки окна — хук дисплеев
-  `HostDisplays::watch_pixel_ratio`. Позиция ввода таблицы называет цикл (`type Input = <Os>Loop`),
+  слушатели, флаг приёма только для чтения `Accepting`, таймеры, `on_retire(Box<dyn FnOnce()>)` —
+  ввод сам держит захваченные указатели и отпускает их, когда регистрация уходит, опека захвата,
+  область фокуса), ввод отвечает маршрутом клавиш `CanvasKeys`, который окно отдаёт текстовому
+  вводу; собственные слушатели окна (фокус, раскладка, оформление, жизненный цикл страницы,
+  полноэкранный режим, потеря контекста) перешли в `window/web.rs`; наблюдение за плотностью
+  пикселей для раскладки окна — хук дисплеев `HostDisplays::watch_pixel_ratio(&Accepting, ..)`.
+  Отступление от строки: она относила `answer` и `pointer_position`, которые берёт drag, к модели
+  ввода, но это чтение DOM (`web_sys`), а модель — общая часть платформ; они у владельца веба,
+  `owner::web::event` (вместе с `client_position`), их читают ввод и drag. Позиция ввода таблицы называет цикл (`type Input = <Os>Loop`),
   его `host::Input` реализует файл ввода. Правило «клавиша принадлежит методу ввода» —
   `input::{android,web}::keys::key_composition` (`text::android::keys` ушёл, `text::web::ime`
   стал приватным; `editor_action_keys` — в модуле `input` у `text::android`). Тесты: перенесённые
-  меняют только пути и импорты, кроме двух разрезов: вход `keyboard_tests` звал и контракт указателя
+  меняют только пути и импорты, кроме разрезов: вход `keyboard_tests` звал и контракт указателя
   winit — тот стал отдельным `#[test]` `translated_events_meet_the_pointer_field_contract` в
-  `input/winit.rs` (файл Apple не зовёт winit); `web_text_table` распался на
+  `input/winit.rs`; сам `keyboard_tests` разделён, файл Apple не называет winit: проверка кодов
+  winit `every_winit_keycode_maps_to_a_canonical_code` — в `input/winit.rs`, сверка трёх таблиц
+  `physical_keys_agree_across_backends` — в `tests/backend_conformance.rs` (обёртка
+  `winit_events_translate_to_the_cross_backend_contract` ушла); `web_text_table` распался на
   `the_purpose_picks_the_input_mode` (`text::web::ime::tests`) и
-  `a_key_of_the_input_method_is_marked_composing` (`input::web::keys::tests`). Новые:
-  `a_window_step_and_its_destruction_reach_every_hook_in_order`,
-  `a_windows_input_lives_as_long_as_its_window` (падает без снятия состояний на
-  `WM_NCDESTROY`), `the_mouse_buttons_carry_the_win32_codes`. Записи нативных трасс и conformance
-  в `tests/` проходят без правок, кроме путей импорта. `module-dag`: `input` в `features`; снято 11
+  `a_key_of_the_input_method_is_marked_composing` (`input::web::keys::tests`);
+  `a_key_during_composition_is_the_input_methods` (Android) переехал из `text::android` в
+  `input::android::keys::tests` вместе с правилом. Новые: `two_windows_keep_their_own_input`,
+  `a_windows_input_is_gone_once_it_is_destroyed` (падает, если `InputWindows::forget` оставляет
+  запись), `a_window_the_input_never_saw_has_no_input`, `the_mouse_buttons_carry_the_win32_codes`;
+  `a_window_step_and_its_destruction_reach_every_hook_in_order` (проверял только цикл) снят.
+  Записи нативных трасс и conformance в `tests/` проходят без правок, кроме путей импорта. `module-dag`: `input` в `features`; снято 11
   исключений (`drag::web`, `drag::windows`, `text::android`, `text::apple::macos`, `text::web`,
   `window::apple::ios`, `window::apple::macos`, `window::web` в `platforms::*`, три
   `window::windows` → `platforms::windows::{direct_manipulation, events}` и
   `preferences::windows`), добавлено 5: класс content view AppKit делят ввод, текст и окно, и класс
   UIKit view держит касания — `input::apple::macos` → `text::apple::macos` и
   `window::apple::macos`, `text::apple::macos` → `input::apple::macos`, `window::apple::macos` →
-  `input::apple::macos`, `window::apple::ios` → `input::apple::ios`; их снимает класс view у
-  владельца с хуками фич (без Mac форму не проверить, поэтому не сделано здесь). Прямые рёбра окна в
+  `input::apple::macos`, `window::apple::ios` → `input::apple::ios`; это не снятие, а перенос
+  путей: их снимает строка LY38 — content view AppKit и касания UIKit становятся мультиплексорами
+  владельца с хуками фич (ADR-0151 §10), нужен прогон на Mac; туда же отнесено `text::web` →
+  `window::web` (`is_focus_handoff`), причины исключений говорят то же. Прямые рёбра окна в
   `text::*` (macOS, Web, winit, headless) говорят, что уходят через таблицу хоста, и записаны в
   строку LY38. Итого 35 (было 41). `globals`: `FIRST_MOTION_SEEN` — у `AndroidInput::motion`,
-  записи захвата и класса view переехали, итого 55; запись `testing` для насоса тестов
-  тачпада — по новому пути. ADR-0143, 0213, 0217 и 0255 называют пути `input/`;
+  записи захвата и класса view переехали, добавлен батут Win32 `owner::windows::CLASS_ON_THREAD`,
+  итого 56; запись `testing` для насоса тестов тачпада — по новому пути. ADR-0143, 0213, 0217 и 0255 называют пути `input/`;
   `ARCHITECTURE.md` — инвариант фичи ввода, состояния и шаги окна Win32, хуки ввода всех циклов.
   Проверки (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-native -p flui-app --all-targets`
-  с `winit-backend,a11y` и без; nextest `-p flui-native -p flui-app` — 299 (2 пропущены), с
-  `winit-backend,a11y` — 330 (2); clippy Android `--all-targets`, macOS lib (и с
+  с `winit-backend,a11y` и без; nextest `-p flui-native -p flui-app` — 300 (2 пропущены), с
+  `winit-backend,a11y` — 332 (2); clippy Android `--all-targets`, macOS lib (и с
   `winit-backend,a11y`), iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 50 (44 у
-  `flui-native`); `module-dag` (298 модулей, 10 фич с 77 файлами платформ, 342 ребра,
-  35 исключений) и самотест (54), `globals` (55) и самотест (15), `file-length`, `markers`,
+  `flui-native`); `module-dag` (299 модулей, 10 фич с 77 файлами платформ, 339 рёбер,
+  35 исключений) и самотест (54), `globals` (56) и самотест (15), `file-length`, `markers`,
   `testing`, `docs-paths`, `checks` (с `android-dex`), `doc-strict`, `workspace` (28 крейтов,
   229 рёбер), `reach`. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy
   `-p flui-native -p flui-app --all-targets` (и с `winit-backend,a11y`), nextest с
-  `FLUI_HEADLESS=1` под xvfb — 317 (1 пропущен), `--all-features` под xvfb (команда CI) — 274,
+  `FLUI_HEADLESS=1` под xvfb — 318 (1 пропущен), `--all-features` под xvfb (команда CI) — 275,
   rustdoc `-D warnings --document-private-items` для `flui-native` с `winit-backend,a11y` и без.
   На X-сервере WSLg (`DISPLAY=:0`) два теста окна X11, которых ветка не трогает, падают на его
   менеджере окон; под xvfb проходят. Galaxy S21, 2026-10-22, Android 15, проба `flui create
@@ -1391,11 +1415,15 @@ graph LR
   композиции; после возврата — tap и горизонтальный свайп, Back — `GoBack`, Pause, «Destroy —
   shutting down», цикл завершён; `FATAL` и паник нет. Касание, удержанное через Home, дало ANR через
   10 с: цикл не читает очередь ввода, пока Activity на паузе (`if resumed { process_input_events() }`
-  было и до ветки), и отмену системы для убранного окна никто не принимает — отдельная задача.
-  Pinch через `adb` не воспроизвести (нет мультитача), он покрыт только тестами модели. Строки
-  `PROBE` удалены, проба удалена, настройки устройства не менялись. Не запускалось:
-  `cross-typecheck` локально (нет `zig`; job в CI), `web_browser` (нет ChromeDriver); Mac и iPhone —
-  в очереди vanyastaff/flui#1840 (перенос класса content view и его методов, касаний UIKit).
+  было и до ветки), и отмену системы для убранного окна никто не принимает — отдельная задача
+  (предложена задачей сессии), запись в `docs/gaps.md`, п. 15. Pinch через `adb` не воспроизвести
+  (нет мультитача), он покрыт только тестами модели. Строки `PROBE` удалены, проба удалена,
+  настройки устройства не менялись. Правки по ревью проводку ввода Android не трогают (только
+  `forbid(unsafe_code)` на чистых половинах), повтор на S21 не нужен. Не запускалось:
+  `cross-typecheck` локально (нет `zig`; job в CI), `web_browser` (нет ChromeDriver; регистрация
+  холста перестроена — браузерный прогон по фокусу, видимости, клавиатуре, указателю и колесу
+  делается на итоговом коммите); Mac и iPhone — в очереди vanyastaff/flui#1840 (перенос класса
+  content view и его методов, касаний UIKit).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
