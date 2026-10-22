@@ -204,4 +204,26 @@ mod tests {
             .count();
         assert_eq!(timers, 2, "the modal deadline timer and the touchpad's");
     }
+
+    /// Windows holds one window class of a name per process: once this
+    /// host's platform registered it, a loop for a second host is refused,
+    /// not handed a class that dispatches to this host's hooks.
+    #[test]
+    fn a_second_host_is_refused_the_window_class() {
+        use std::sync::Arc;
+
+        use crate::error::PlatformError;
+        use crate::owner::windows::WindowsLoop;
+        use crate::owner::windows::testing::{NoWindows, QuietHost};
+
+        let _platform = crate::WindowsPlatform::new().expect("native platform");
+        match WindowsLoop::new::<QuietHost>(Arc::new(NoWindows)) {
+            Err(PlatformError::Init { message }) => assert!(
+                message.contains("another host"),
+                "the refusal names the class's other host: {message}"
+            ),
+            Err(error) => panic!("refused for another reason: {error}"),
+            Ok(_) => panic!("a second host was given the first host's window class"),
+        }
+    }
 }

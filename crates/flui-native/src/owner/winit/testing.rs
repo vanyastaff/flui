@@ -1,35 +1,117 @@
-//! A real winit loop for tests: the owner signal a hand-built `WinitApp`
-//! needs and the wait for the loop to run, and, for the tests of the windows
-//! the loop drives, a window opened through the loop's control lane with a
-//! scenario run against it on a worker thread while the loop runs on the
-//! test's own, over a host whose loop hooks report nothing ([`QuietHost`]).
+//! A real winit loop for tests: the event loop a test thread may build, the
+//! owner signal a hand-built [`WinitApp`] needs, the application a test runs
+//! the loop with ([`WinitApp::for_test`]) and the waits for the loop to run
+//! and to track its windows.
+//!
+//! The loop's own tests run over a host whose loop hooks report nothing
+//! ([`QuietHost`]) and a platform over it that opens no window
+//! ([`quiet_platform`]), so they name no feature. The tests of the windows the
+//! loop drives open a window through the loop's control lane and run a
+//! scenario against it on a worker thread while the loop runs on the test's
+//! own (`run_window_scenario`).
 
 use std::{
-    sync::Arc,
+    sync::{Arc, Weak},
     thread,
     time::{Duration, Instant},
 };
 
-use winit::event_loop::EventLoop;
-
-use super::{WinitLoop, WinitRunState};
+use flui_foundation::DataTransferId;
+use flui_foundation::geometry::{Point, Size};
+use flui_platform::data_transfer::{
+    DropFeedback, RepresentationIndex, TransferLimits, TransferRequest,
+};
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::{
+    Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
+    InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemNotice, SystemPreferences,
+    WindowCapabilities, WindowEvent, WindowId, WindowOptions,
+};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 
 #[cfg(target_os = "linux")]
-pub(crate) use window_scenario::{QuietHost, run_window_scenario};
+pub(crate) use window_scenario::run_window_scenario;
+
+use super::control::ControlReceiver;
+use super::{
+    FileDrops, HostDisplays, LoopInput, LoopWindow, LoopWindows, PreferenceStart, SelfCloseRoute,
+    WindowSeed, WinitApp, WinitHost, WinitLoop, WinitRunState,
+};
+use crate::error::{BootstrapError, PlatformError};
+use crate::host::{self, Absent, Host, position};
+use crate::host_window::HostWindow;
+use crate::owner::OpenWindowError;
+use crate::owner::call_point::install;
+use crate::owner::notices::{NoticeChannel, StaleOnWake, SystemNoticeHook};
+use crate::owner::signal::OwnerSignal;
+use crate::owner::sources::SystemPreferenceSource;
+use crate::platform::{HostPlatform, Platform, PlatformReadyCallback};
+
+/// Builds a real `EventLoop` for a test running on an ordinary test
+/// thread, not the process's actual main thread. winit refuses this by
+/// default (a real cross-platform hazard for production code); Linux
+/// and Windows offer an explicit opt-out for exactly this situation
+/// (test harnesses, embedding). AppKit has no such opt-out — main-thread
+/// affinity there is enforced by the OS, not just winit's own guard —
+/// so the tests that build one are `#[ignore]`d on macOS.
+///
+/// **Only one `EventLoop` may ever exist per process** (a separate,
+/// permanent winit limitation, not the main-thread one above): a second
+/// `build()` call anywhere in the same process fails with
+/// `RecreationAttempt`, even sequentially, even after the first loop
+/// exited. Every test that calls this must run in its own process —
+/// `cargo nextest run` gives each test one by default; plain
+/// `cargo test` runs the whole binary in one process and WILL fail
+/// whichever of these tests happens to run second. CI runs this crate's
+/// suite with nextest under `xvfb-run` (see `docs/testing.md`),
+/// which is what gives these tests their X11 connection there.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn build_test_event_loop() -> EventLoop<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // `EventLoopBuilderExtWayland` adds a same-named, same-effect
+        // `with_any_thread` to this same shared `EventLoopBuilder` (the
+        // backend, X11 or Wayland, is a runtime choice, not this
+        // builder's) -- importing both traits makes the call
+        // ambiguous, so this sets the flag through X11's alone; it
+        // applies regardless of which backend is actually selected at
+        // runtime.
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let mut builder = EventLoop::builder();
+        EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+        builder
+            .build()
+            .expect("build a real winit event loop off the main thread")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        EventLoop::builder()
+            .with_any_thread(true)
+            .build()
+            .expect("build a real winit event loop off the main thread")
+    }
+}
+
+/// See the Linux and Windows builder: on macOS the loop is the main thread's.
+#[cfg(target_os = "macos")]
+pub(crate) fn build_test_event_loop() -> EventLoop<()> {
+    EventLoop::builder()
+        .build()
+        .expect("build a real winit event loop (main-thread only on macOS)")
+}
 
 /// The owner signal `run_event_loop` installs, for a hand-built `WinitApp`:
 /// a wake posts a user event to `event_loop`.
 pub(crate) fn install_test_owner_signal(platform: &WinitLoop, event_loop: &EventLoop<()>) {
     let proxy = event_loop.create_proxy();
-    *platform.owner_signal.lock() = Some(crate::owner::signal::OwnerSignal::new(Arc::new(
-        move || {
-            proxy
-                .send_event(())
-                .map_err(|error| crate::PlatformError::EventLoop {
-                    message: error.to_string(),
-                })
-        },
-    )));
+    *platform.owner_signal.lock() = Some(OwnerSignal::new(Arc::new(move || {
+        proxy
+            .send_event(())
+            .map_err(|error| PlatformError::EventLoop {
+                message: error.to_string(),
+            })
+    })));
 }
 
 /// Polls (bounded, 2s) until the owner has reached `Running` — the point
@@ -47,42 +129,494 @@ pub(crate) fn wait_for_running(platform: &WinitLoop) {
     }
 }
 
+/// Polls (bounded, 2s) until the loop tracks `expected` windows. Used
+/// both to detect that a deferred request actually landed (count goes
+/// up) and that an unwind completed (count goes back down) — a
+/// deterministic condition, not a blind sleep, even though the exact
+/// wake-up latency is real wall-clock time.
+pub(crate) fn wait_for_map_len(platform: &WinitLoop, expected: usize, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let actual = platform.with_state(|state| state.window_id_map.len());
+        if actual == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}: window_id_map.len() = {actual}, expected {expected}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+impl WinitApp {
+    /// The application `run_event_loop` runs over `platform`, for a test that
+    /// runs a real loop by hand: `owner_platform` is what `on_ready`'s owner
+    /// capability wraps, `control` the receiving end of the lane the test
+    /// installed, and nothing is observed yet.
+    pub(crate) fn for_test(
+        platform: Arc<WinitLoop>,
+        owner_platform: Arc<dyn Platform>,
+        control: ControlReceiver,
+        on_ready: Option<PlatformReadyCallback>,
+    ) -> Self {
+        Self {
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+            preference_source: None,
+            #[cfg(windows)]
+            broadcasts: None,
+            #[cfg(target_os = "macos")]
+            preference_observers: None,
+            #[cfg(target_os = "linux")]
+            host_notices: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            display_watch: None,
+            platform,
+            owner_platform,
+            on_ready,
+            control,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+            self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
+        }
+    }
+
+    /// The preference source the loop started as it resumed, or the one a
+    /// test put in its place before.
+    #[cfg(windows)]
+    pub(crate) fn preference_source_for_test(
+        &mut self,
+    ) -> &mut Option<std::rc::Rc<dyn crate::owner::windows::control::OwnerPreferences>> {
+        &mut self.preference_source
+    }
+
+    /// The broadcast receiver the loop built as it resumed.
+    #[cfg(windows)]
+    pub(crate) fn broadcasts_for_test(
+        &self,
+    ) -> Option<&crate::owner::windows::broadcast::Receiver> {
+        self.broadcasts.as_ref()
+    }
+
+    /// Reads the preferences again now, as an owner wake does.
+    #[cfg(windows)]
+    pub(crate) fn refresh_preferences_for_test(&self) -> bool {
+        self.refresh_preferences()
+    }
+
+    /// The failure `on_ready` returned, which `run` reports once the loop
+    /// unwound.
+    pub(crate) fn bootstrap_error_for_test(&self) -> Option<&BootstrapError> {
+        self.bootstrap_error.as_ref()
+    }
+}
+
+/// A winit host whose loop hooks report nothing: no displays, notices,
+/// preferences or host notices, an in-memory clipboard, no file drags and
+/// no input. The loop's tests and the tests of a window run a real loop over
+/// it without the host table.
+pub(crate) struct QuietHost;
+
+impl WinitHost for QuietHost {
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(NoDisplays)
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(NoNotices)
+    }
+
+    fn preferences() -> Box<dyn PreferenceStart> {
+        Box::new(NoPreferences)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn host_notices() -> Box<dyn super::HostNoticeStart> {
+        Box::new(NoHostNotices)
+    }
+
+    fn clipboard() -> Arc<dyn Clipboard> {
+        Arc::new(InMemoryClipboard::new())
+    }
+
+    fn drag() -> Arc<dyn FileDrops> {
+        Arc::new(NoFileDrops)
+    }
+
+    fn input() -> Box<dyn LoopInput> {
+        Box::new(NoInput)
+    }
+}
+
+/// The table of a loop that opens no window: every position the loop does
+/// not answer itself is absent. Its tests reach the platform through it,
+/// as an application does, without naming a feature.
+pub(crate) struct Quiet;
+
+impl Host for Quiet {
+    const NAME: &'static str = "winit loop with no windows (tests)";
+
+    type Loop = WinitLoop;
+    type Window = NoWindows;
+    type Displays = WinitLoop;
+    type Input = Absent<position::Input>;
+    type Text = Absent<position::Text>;
+    type Accessibility = Absent<position::Accessibility>;
+    type Clipboard = Absent<position::Clipboard>;
+    type Drag = WinitLoop;
+    type Haptics = Absent<position::Haptics>;
+    type Preferences = WinitLoop;
+    // The loop is the lifecycle position where it hears logind.
+    #[cfg(target_os = "linux")]
+    type Lifecycle = WinitLoop;
+    #[cfg(not(target_os = "linux"))]
+    type Lifecycle = Absent<position::Lifecycle>;
+    type Chrome = Absent<position::Chrome>;
+    type Storage = Absent<position::Storage>;
+}
+
+/// A platform of [`Quiet`] over a loop whose hooks `H` makes.
+pub(crate) fn quiet_platform_over<H: WinitHost>() -> HostPlatform<Quiet> {
+    HostPlatform::from_parts(NoWindows, |windows| {
+        WinitLoop::new::<H>(Arc::clone(windows) as _)
+    })
+}
+
+/// A platform of [`Quiet`] over a loop of [`QuietHost`].
+pub(crate) fn quiet_platform() -> HostPlatform<Quiet> {
+    quiet_platform_over::<QuietHost>()
+}
+
+/// The windows of a loop that opens none: a request to open one is refused.
+/// The window position registers the application's window-event handler and
+/// reads the active window in the loop, as every winit window position does.
+pub(crate) struct NoWindows;
+
+impl NoWindows {
+    fn refusal() -> OpenWindowError {
+        OpenWindowError::Backend {
+            message: "a quiet winit loop opens no windows".to_owned(),
+        }
+    }
+}
+
+impl LoopWindows for NoWindows {
+    fn build(
+        &self,
+        _: &ActiveEventLoop,
+        _: WindowSeed<'_>,
+        _: WindowOptions,
+    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError> {
+        Err(Self::refusal())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn take_unreported(&self) -> Vec<u32> {
+        Vec::new()
+    }
+}
+
+impl host::Window<WinitLoop> for NoWindows {
+    type Shared = NoWindows;
+
+    fn open(
+        _: &WinitLoop,
+        _: &Arc<NoWindows>,
+        _: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        Err(Self::refusal())
+    }
+
+    fn active(owner: &WinitLoop, _: &NoWindows) -> Option<WindowId> {
+        owner.with_state(|state| state.active_window)
+    }
+
+    fn capabilities(_: &WinitLoop, _: &NoWindows) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn frame_inset(_: &WinitLoop, _: &NoWindows, _: f64) -> Size<f64> {
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &WinitLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        install(
+            &owner.handler(|state| &mut state.handlers.window_event),
+            callback,
+        );
+    }
+}
+
+/// A translation that delivers no input and sees no device.
+struct NoInput;
+
+impl LoopInput for NoInput {
+    fn opening(&mut self, _: &ActiveEventLoop) -> InputCapabilities {
+        InputCapabilities::UNAVAILABLE
+    }
+
+    fn window_event(
+        &mut self,
+        _: WindowId,
+        _: &winit::event::WindowEvent,
+        _: f64,
+        _: winit::keyboard::ModifiersState,
+    ) -> Option<Vec<(WindowId, PlatformInput)>> {
+        None
+    }
+
+    fn device_event(
+        &mut self,
+        _: winit::event::DeviceId,
+        _: &winit::event::DeviceEvent,
+        _: &[WindowId],
+    ) -> Vec<(WindowId, PlatformInput)> {
+        Vec::new()
+    }
+
+    fn presence_change(&mut self) -> Option<PointerKindSet> {
+        None
+    }
+
+    fn flush(&mut self) -> Vec<(WindowId, PlatformInput)> {
+        Vec::new()
+    }
+
+    fn focus_lost(&mut self, _: WindowId) -> Vec<PlatformInput> {
+        Vec::new()
+    }
+
+    fn key(
+        &self,
+        _: winit::event::KeyEvent,
+        _: winit::keyboard::ModifiersState,
+    ) -> Option<PlatformInput> {
+        None
+    }
+
+    fn ime(&self, _: &winit::event::Ime) -> Option<PlatformInput> {
+        None
+    }
+}
+
+/// Displays the source holds none of.
+pub(crate) struct NoDisplays;
+
+impl StaleOnWake for NoDisplays {
+    fn mark_stale(&self) {}
+}
+
+impl HostDisplays for NoDisplays {
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(DisplaySnapshot::empty())
+    }
+
+    fn id_of_window(&self, _: &winit::window::Window) -> Option<DisplayId> {
+        None
+    }
+
+    fn resample(&self, _: &ActiveEventLoop, _: Option<&Arc<OwnerSignal>>) -> bool {
+        false
+    }
+
+    #[cfg(windows)]
+    fn broadcasts(
+        self: Arc<Self>,
+        _: &Arc<OwnerSignal>,
+    ) -> std::rc::Rc<dyn crate::owner::windows::broadcast::Subscriber> {
+        std::rc::Rc::new(NoBroadcasts)
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn observe(self: Arc<Self>, _: &Arc<OwnerSignal>) -> crate::owner::watch::Watch {
+        crate::owner::watch::Watch::new(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_wayland(&self) -> bool {
+        false
+    }
+}
+
+/// A subscriber of the system's broadcasts that answers none of them.
+#[cfg(windows)]
+struct NoBroadcasts;
+
+#[cfg(windows)]
+impl crate::owner::windows::broadcast::Subscriber for NoBroadcasts {
+    fn message(
+        &self,
+        _: windows::Win32::Foundation::HWND,
+        _: u32,
+        _: windows::Win32::Foundation::WPARAM,
+        _: windows::Win32::Foundation::LPARAM,
+    ) -> Option<windows::Win32::Foundation::LRESULT> {
+        None
+    }
+}
+
+/// A notice channel that keeps no hook and marks nothing stale.
+struct NoNotices;
+
+impl NoticeChannel for NoNotices {
+    fn set_hook(&self, _: SystemNoticeHook) {}
+
+    fn mark_held_stale_on_wake(&self, _: Weak<dyn StaleOnWake>) {}
+
+    fn dispatch(&self, _: SystemNotice) {}
+}
+
+/// Preferences that stay the defaults.
+pub(crate) struct NoPreferences;
+
+impl PreferenceStart for NoPreferences {
+    #[cfg(windows)]
+    fn start(
+        &self,
+        _: &Arc<OwnerSignal>,
+    ) -> Result<std::rc::Rc<dyn crate::owner::windows::control::OwnerPreferences>, PlatformError>
+    {
+        Ok(std::rc::Rc::new(
+            crate::owner::windows::testing::NoPreferences,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn start(
+        &self,
+        _: &Arc<OwnerSignal>,
+    ) -> (
+        Arc<dyn SystemPreferenceSource + Send + Sync>,
+        crate::owner::watch::Watch,
+    ) {
+        (Arc::new(NoPreferences), crate::owner::watch::Watch::new(()))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start(
+        &self,
+        _: &crate::executor::BackgroundExecutor,
+        _: &Arc<OwnerSignal>,
+    ) -> Arc<dyn super::PortalPreferences> {
+        Arc::new(NoPreferences)
+    }
+}
+
+impl SystemPreferenceSource for NoPreferences {
+    fn sample(&self) -> Result<SystemPreferences, PlatformError> {
+        Ok(SystemPreferences::default())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl super::PortalPreferences for NoPreferences {
+    fn appearance(&self) -> flui_platform::WindowAppearance {
+        flui_platform::WindowAppearance::default()
+    }
+}
+
+/// Host notices that never queue anything.
+#[cfg(target_os = "linux")]
+struct NoHostNotices;
+
+#[cfg(target_os = "linux")]
+impl super::HostNoticeStart for NoHostNotices {
+    fn start(
+        &self,
+        _: &crate::executor::BackgroundExecutor,
+        _: &Arc<OwnerSignal>,
+    ) -> Box<dyn super::HostNotices> {
+        Box::new(NoHostNotices)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl super::HostNotices for NoHostNotices {
+    fn deliver(&self, _: &WinitLoop) {}
+}
+
+/// A drag transport that hears of no files: every report ends nothing
+/// and offers nothing.
+struct NoFileDrops;
+
+impl DataTransferSource for NoFileDrops {
+    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
+        NullDataTransferSource.clipboard_offer()
+    }
+
+    fn request(
+        &self,
+        id: DataTransferId,
+        representation: RepresentationIndex,
+        limits: TransferLimits,
+    ) -> TransferRequest {
+        NullDataTransferSource.request(id, representation, limits)
+    }
+
+    fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
+        NullDataTransferSource.update_drop_feedback(id, feedback);
+    }
+
+    fn conclude_drop(&self, id: DataTransferId) {
+        NullDataTransferSource.conclude_drop(id);
+    }
+}
+
+impl FileDrops for NoFileDrops {
+    fn note_hovered_file(
+        &self,
+        _: WindowId,
+        _: std::path::PathBuf,
+        _: Option<Point<f64>>,
+    ) -> Option<DragDropEvent> {
+        None
+    }
+
+    fn note_dropped_file(
+        &self,
+        _: WindowId,
+        _: std::path::PathBuf,
+        _: Option<Point<f64>>,
+    ) -> Option<DragDropEvent> {
+        None
+    }
+
+    fn note_hover_cancelled(&self, _: WindowId) -> Option<DragDropEvent> {
+        None
+    }
+
+    fn windows_awaiting_freeze(&self) -> Vec<WindowId> {
+        Vec::new()
+    }
+
+    fn freeze_completed(
+        &self,
+        _: &std::collections::HashMap<WindowId, Point<f64>>,
+    ) -> Vec<(WindowId, DragDropEvent)> {
+        Vec::new()
+    }
+
+    fn forget_window(&self, _: WindowId) {}
+}
+
 #[cfg(target_os = "linux")]
 mod window_scenario {
     use std::{
-        collections::HashMap,
         panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-        path::PathBuf,
-        sync::{Arc, Weak},
+        sync::Arc,
         thread,
     };
 
-    use flui_foundation::geometry::Point;
-    use flui_foundation::{ClaimOutcome, DataTransferId};
-    use flui_platform::data_transfer::{
-        DropFeedback, RepresentationIndex, TransferLimits, TransferRequest,
-    };
-    use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
-    use flui_platform::{
-        Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot,
-        DragDropEvent, InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemNotice,
-        SystemPreferences, WindowAppearance, WindowId, WindowOptions,
-    };
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use flui_foundation::ClaimOutcome;
+    use flui_platform::WindowOptions;
+    use winit::event_loop::EventLoop;
 
     use super::{install_test_owner_signal, wait_for_running};
-    use crate::error::PlatformError;
-    use crate::executor::BackgroundExecutor;
     use crate::host_window::HostWindow;
-    use crate::owner::notices::{NoticeChannel, StaleOnWake, SystemNoticeHook};
-    use crate::owner::signal::OwnerSignal;
-    use crate::owner::sources::SystemPreferenceSource;
-    use crate::owner::watch::Watch;
     use crate::owner::winit::control::control_lane;
-    use crate::owner::winit::{
-        FileDrops, HostDisplays, HostNoticeStart, HostNotices, LoopInput, PortalPreferences,
-        PreferenceStart, SelfCloseRoute, WinitApp, WinitHost, WinitLoop,
-    };
+    use crate::owner::winit::{WinitApp, WinitLoop};
     use crate::platform::Platform;
 
     /// Run `event_loop` for `platform`, the loop of `owner_platform`, open a
@@ -127,252 +661,10 @@ mod window_scenario {
             }
         });
 
-        let mut app = WinitApp {
-            platform: Arc::clone(&platform),
-            owner_platform,
-            preference_source: None,
-            host_notices: None,
-            display_watch: None,
-            on_ready: None,
-            control: receiver,
-            quit_notified: false,
-            in_flight_replies: Vec::new(),
-            bootstrap_error: None,
-            self_close_deadline: None,
-            self_close_route: SelfCloseRoute::default(),
-        };
+        let mut app = WinitApp::for_test(Arc::clone(&platform), owner_platform, receiver, None);
         event_loop
             .run_app(&mut app)
             .expect("event loop runs to completion");
         worker.join().expect("worker thread does not panic");
-    }
-
-    /// A winit host whose loop hooks report nothing: no displays, notices,
-    /// preferences or host notices, an in-memory clipboard and no file drags.
-    /// The tests of a window run a real loop over it without the host table.
-    pub(crate) struct QuietHost;
-
-    impl WinitHost for QuietHost {
-        fn displays() -> Arc<dyn HostDisplays> {
-            Arc::new(NoDisplays)
-        }
-
-        fn notices() -> Arc<dyn NoticeChannel> {
-            Arc::new(NoNotices)
-        }
-
-        fn preferences() -> Box<dyn PreferenceStart> {
-            Box::new(NoPreferences)
-        }
-
-        fn host_notices() -> Box<dyn HostNoticeStart> {
-            Box::new(NoHostNotices)
-        }
-
-        fn clipboard() -> Arc<dyn Clipboard> {
-            Arc::new(InMemoryClipboard::new())
-        }
-
-        fn drag() -> Arc<dyn FileDrops> {
-            Arc::new(NoFileDrops)
-        }
-
-        fn input() -> Box<dyn LoopInput> {
-            Box::new(NoInput)
-        }
-    }
-
-    /// A translation that delivers no input and sees no device.
-    struct NoInput;
-
-    impl LoopInput for NoInput {
-        fn opening(&mut self, _: &ActiveEventLoop) -> InputCapabilities {
-            InputCapabilities::UNAVAILABLE
-        }
-
-        fn window_event(
-            &mut self,
-            _: WindowId,
-            _: &winit::event::WindowEvent,
-            _: f64,
-            _: winit::keyboard::ModifiersState,
-        ) -> Option<Vec<(WindowId, PlatformInput)>> {
-            None
-        }
-
-        fn device_event(
-            &mut self,
-            _: winit::event::DeviceId,
-            _: &winit::event::DeviceEvent,
-            _: &[WindowId],
-        ) -> Vec<(WindowId, PlatformInput)> {
-            Vec::new()
-        }
-
-        fn presence_change(&mut self) -> Option<PointerKindSet> {
-            None
-        }
-
-        fn flush(&mut self) -> Vec<(WindowId, PlatformInput)> {
-            Vec::new()
-        }
-
-        fn focus_lost(&mut self, _: WindowId) -> Vec<PlatformInput> {
-            Vec::new()
-        }
-
-        fn key(
-            &self,
-            _: winit::event::KeyEvent,
-            _: winit::keyboard::ModifiersState,
-        ) -> Option<PlatformInput> {
-            None
-        }
-
-        fn ime(&self, _: &winit::event::Ime) -> Option<PlatformInput> {
-            None
-        }
-    }
-
-    /// Displays the source holds none of.
-    struct NoDisplays;
-
-    impl StaleOnWake for NoDisplays {
-        fn mark_stale(&self) {}
-    }
-
-    impl HostDisplays for NoDisplays {
-        fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-            Ok(DisplaySnapshot::empty())
-        }
-
-        fn id_of_window(&self, _: &winit::window::Window) -> Option<DisplayId> {
-            None
-        }
-
-        fn resample(&self, _: &ActiveEventLoop, _: Option<&Arc<OwnerSignal>>) -> bool {
-            false
-        }
-
-        fn observe(self: Arc<Self>, _: &Arc<OwnerSignal>) -> Watch {
-            Watch::new(())
-        }
-
-        fn is_wayland(&self) -> bool {
-            false
-        }
-    }
-
-    /// A notice channel that keeps no hook and marks nothing stale.
-    struct NoNotices;
-
-    impl NoticeChannel for NoNotices {
-        fn set_hook(&self, _: SystemNoticeHook) {}
-
-        fn mark_held_stale_on_wake(&self, _: Weak<dyn StaleOnWake>) {}
-
-        fn dispatch(&self, _: SystemNotice) {}
-    }
-
-    /// Preferences that stay the defaults.
-    struct NoPreferences;
-
-    impl PreferenceStart for NoPreferences {
-        fn start(
-            &self,
-            _: &BackgroundExecutor,
-            _: &Arc<OwnerSignal>,
-        ) -> Arc<dyn PortalPreferences> {
-            Arc::new(NoPreferences)
-        }
-    }
-
-    impl SystemPreferenceSource for NoPreferences {
-        fn sample(&self) -> Result<SystemPreferences, PlatformError> {
-            Ok(SystemPreferences::default())
-        }
-    }
-
-    impl PortalPreferences for NoPreferences {
-        fn appearance(&self) -> WindowAppearance {
-            WindowAppearance::default()
-        }
-    }
-
-    /// Host notices that never queue anything.
-    struct NoHostNotices;
-
-    impl HostNoticeStart for NoHostNotices {
-        fn start(&self, _: &BackgroundExecutor, _: &Arc<OwnerSignal>) -> Box<dyn HostNotices> {
-            Box::new(NoHostNotices)
-        }
-    }
-
-    impl HostNotices for NoHostNotices {
-        fn deliver(&self, _: &WinitLoop) {}
-    }
-
-    /// A drag transport that hears of no files: every report ends nothing
-    /// and offers nothing.
-    struct NoFileDrops;
-
-    impl DataTransferSource for NoFileDrops {
-        fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-            NullDataTransferSource.clipboard_offer()
-        }
-
-        fn request(
-            &self,
-            id: DataTransferId,
-            representation: RepresentationIndex,
-            limits: TransferLimits,
-        ) -> TransferRequest {
-            NullDataTransferSource.request(id, representation, limits)
-        }
-
-        fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
-            NullDataTransferSource.update_drop_feedback(id, feedback);
-        }
-
-        fn conclude_drop(&self, id: DataTransferId) {
-            NullDataTransferSource.conclude_drop(id);
-        }
-    }
-
-    impl FileDrops for NoFileDrops {
-        fn note_hovered_file(
-            &self,
-            _: WindowId,
-            _: PathBuf,
-            _: Option<Point<f64>>,
-        ) -> Option<DragDropEvent> {
-            None
-        }
-
-        fn note_dropped_file(
-            &self,
-            _: WindowId,
-            _: PathBuf,
-            _: Option<Point<f64>>,
-        ) -> Option<DragDropEvent> {
-            None
-        }
-
-        fn note_hover_cancelled(&self, _: WindowId) -> Option<DragDropEvent> {
-            None
-        }
-
-        fn windows_awaiting_freeze(&self) -> Vec<WindowId> {
-            Vec::new()
-        }
-
-        fn freeze_completed(
-            &self,
-            _: &HashMap<WindowId, Point<f64>>,
-        ) -> Vec<(WindowId, DragDropEvent)> {
-            Vec::new()
-        }
-
-        fn forget_window(&self, _: WindowId) {}
     }
 }

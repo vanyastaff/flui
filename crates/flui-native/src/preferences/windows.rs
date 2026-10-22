@@ -52,6 +52,9 @@ mod languages;
 mod retry_tests;
 #[cfg(test)]
 mod tests;
+// The source as the winit host on Windows runs it, on a real winit loop.
+#[cfg(all(test, feature = "winit-backend"))]
+mod winit_tests;
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
 

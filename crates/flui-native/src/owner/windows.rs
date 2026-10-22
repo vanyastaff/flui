@@ -28,6 +28,9 @@ mod modal_frame_tests;
 pub(crate) mod modal_loop;
 #[cfg(test)]
 mod tests;
+// The quiet host the loop's tests run over, and another host's tests name.
+#[cfg(test)]
+pub(crate) mod testing;
 mod wake_deadline;
 
 use std::{
@@ -718,10 +721,10 @@ impl WindowsLoop {
         let source = AtomicU64::new(0);
         for attempt in 0..3 {
             let refused = std::panic::catch_unwind(|| {
-                Self::admit::<tests::TestHost>(
-                    Arc::new(tests::NoWindows),
+                Self::admit::<testing::QuietHost>(
+                    Arc::new(testing::NoWindows),
                     &source,
-                    tests::TestHost::drag,
+                    testing::QuietHost::drag,
                 )
             });
             assert!(

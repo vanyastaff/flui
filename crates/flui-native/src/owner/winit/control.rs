@@ -112,7 +112,7 @@ impl std::fmt::Debug for ControlSender {
     }
 }
 
-pub(super) struct ControlReceiver {
+pub(crate) struct ControlReceiver {
     commands: Receiver<ControlCommand>,
     wake_pending: Arc<AtomicBool>,
     quit_requested: Arc<AtomicBool>,
@@ -122,7 +122,7 @@ pub(super) struct ControlReceiver {
     owner_affinity: PhantomData<Rc<()>>,
 }
 
-pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlReceiver) {
+pub(crate) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlReceiver) {
     let (commands, receiver) = bounded(CONTROL_CAPACITY);
     let wake_pending = Arc::new(AtomicBool::new(false));
     let quit_requested = Arc::new(AtomicBool::new(false));
@@ -228,7 +228,7 @@ impl ControlSender {
         }
     }
 
-    pub(super) fn request_quit(&self) {
+    pub(crate) fn request_quit(&self) {
         let should_wake = {
             let admission = self.admission.lock();
             *admission && !self.quit_requested.swap(true, Ordering::AcqRel)
