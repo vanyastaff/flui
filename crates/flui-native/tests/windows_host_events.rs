@@ -173,6 +173,62 @@ fn a_panicking_hook_does_not_hold_the_session_up() {
     );
 }
 
+/// A hook that installs its successor and then panics: the query proceeds,
+/// the failed hook's captures are retained rather than dropped after the
+/// failure, and the successor hears the next phase.
+fn a_hook_that_replaced_itself_and_failed_is_retained() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Witness(Arc<AtomicBool>);
+    impl Drop for Witness {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let witness = Witness(Arc::clone(&dropped));
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let (weak, recorded) = (Arc::downgrade(&platform), Arc::clone(&phases));
+    platform.on_session_end(Box::new(move |_| {
+        let _ = &witness;
+        let recorded = Arc::clone(&recorded);
+        weak.upgrade()
+            .expect("the platform")
+            .on_session_end(Box::new(move |phase| {
+                recorded.lock().expect("phase log").push(phase);
+                SessionEndAnswer::Proceed
+            }));
+        panic!("first failure");
+    }));
+    let receiver = receiver_of_this_thread();
+    let send = |message, wparam, lparam| {
+        // SAFETY: a pointer-free message to this platform's own receiver.
+        unsafe {
+            SendMessageW(
+                receiver,
+                message,
+                Some(WPARAM(wparam)),
+                Some(LPARAM(lparam)),
+            )
+        }
+        .0
+    };
+
+    assert_eq!(send(WM_QUERYENDSESSION, 0, 0), TRUE);
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "the failed hook's captures are retained, not dropped"
+    );
+    send(WM_ENDSESSION, 1, 0);
+    assert_eq!(
+        *phases.lock().expect("phase log"),
+        [SessionEndPhase::Ending],
+        "the successor hears the next phase"
+    );
+}
+
 fn sleep_and_wake_reach_the_host_once_each() {
     let host = hosted(|_| SessionEndAnswer::Proceed);
     host.send(WM_POWERBROADCAST, PBT_APMSUSPEND as usize, 0);
@@ -236,6 +292,10 @@ fn native_host_events() {
         (
             "a_panicking_hook_does_not_hold_the_session_up",
             a_panicking_hook_does_not_hold_the_session_up,
+        ),
+        (
+            "a_hook_that_replaced_itself_and_failed_is_retained",
+            a_hook_that_replaced_itself_and_failed_is_retained,
         ),
         (
             "sleep_and_wake_reach_the_host_once_each",

@@ -206,6 +206,58 @@ async fn web_pagehide_is_not_replayed_to_a_later_hook() {
     settle().await;
 }
 
+/// Runs its action when dropped: a capture whose destructor calls the
+/// platform.
+struct OnDrop(Option<Box<dyn FnOnce() + Send>>);
+
+impl Drop for OnDrop {
+    fn drop(&mut self) {
+        if let Some(action) = self.0.take() {
+            action();
+        }
+    }
+}
+
+/// A session-end hook installs its successor and asks the page to quit from
+/// inside its call; its captures, which call the platform when dropped, are
+/// dropped after the call, and the successor hears the next phase.
+#[wasm_bindgen_test]
+async fn web_session_end_hook_reenters_the_platform() {
+    let (_probe, running, _window) = page().await;
+    let (shared, proxy) = {
+        let owner = running.owner.borrow();
+        let owner = owner.as_ref().expect("owner");
+        (owner.shared(), owner.proxy())
+    };
+    let reached = Arc::new(Mutex::new(false));
+    let (dropping, observed) = (shared.clone(), Arc::clone(&reached));
+    let calls_back = OnDrop(Some(Box::new(move || {
+        dropping.on_quit(Box::new(|| {}));
+        *observed.lock().unwrap() = true;
+    })));
+    let (seen, log) = recorder();
+    let installing = shared.clone();
+    shared.on_session_end(Box::new(move |_| {
+        let _ = &calls_back;
+        let log = Arc::clone(&log);
+        installing.on_session_end(Box::new(move |phase| {
+            log.lock().unwrap().push(phase);
+            SessionEndAnswer::Proceed
+        }));
+        proxy.request_quit().expect("quit");
+        SessionEndAnswer::Proceed
+    }));
+
+    fire_window("pagehide", false);
+    assert!(
+        *reached.lock().unwrap(),
+        "the replaced hook's destructor reached the platform"
+    );
+    fire_window("pageshow", true);
+    assert_eq!(*seen.lock().unwrap(), [SessionEndPhase::Cancelled]);
+    settle().await;
+}
+
 #[wasm_bindgen_test]
 async fn web_fullscreenchange_republishes_the_window_state() {
     let (_probe, running, window) = page().await;
