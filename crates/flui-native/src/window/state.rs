@@ -1,6 +1,6 @@
 //! The window state every backend keeps: the snapshot it last published and
 //! the rule for when it is read from the OS again (ADR-0237), built like
-//! [`DisplaySource`](crate::display::source).
+//! the display source (`display::source`).
 
 #![forbid(unsafe_code)]
 

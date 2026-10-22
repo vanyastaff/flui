@@ -35,8 +35,10 @@
 //! A window leaves this backend by exactly one body,
 //! [`WinitApp::complete_window_close`], whichever way it was asked to go:
 //! the compositor's `CloseRequested` (after the should-close veto) runs it
-//! in the event arm, and [`PlatformWindow::close`] — a decision the embedder
-//! already made, so no veto — posts a per-window request on the owner
+//! in the event arm, and
+//! [`PlatformWindow::close`](flui_platform::PlatformWindow::close) — a
+//! decision the embedder already made, so no veto — posts a per-window
+//! request on the owner
 //! control lane ([`ControlSender::request_close_window`]) that the owner
 //! runs on its next turn. It cannot run in place: the teardown ends the
 //! loop when the last window goes, which needs the live `ActiveEventLoop`
@@ -833,7 +835,8 @@ impl WinitLoop {
     /// Look up a previously-created window by [`WindowId`] and return the
     /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
     /// (not `window_handle`) to avoid colliding with the unrelated
-    /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
+    /// [`PlatformWindow::window_handle`](flui_platform::PlatformWindow::window_handle)
+    /// raw GPU-handle accessor.
     pub(crate) fn window_by_id(
         &self,
         window_id: WindowId,
@@ -994,9 +997,9 @@ enum SelfCloseRoute {
     /// veto and all.
     #[default]
     Compositor,
-    /// Call [`PlatformWindow::close`] on the tracked window: the
-    /// programmatic path, exactly as an application closing its own window
-    /// does (issue #919).
+    /// Call [`PlatformWindow::close`](flui_platform::PlatformWindow::close)
+    /// on the tracked window: the programmatic path, exactly as an
+    /// application closing its own window does (issue #919).
     Programmatic,
 }
 
@@ -1111,7 +1114,8 @@ pub(crate) struct WinitApp {
     self_close_deadline: Option<Instant>,
     /// Which close route the armed self-close drives
     /// (`FLUI_SELF_CLOSE_ROUTE`): the synthesized compositor
-    /// `CloseRequested` by default, or [`PlatformWindow::close`] on the
+    /// `CloseRequested` by default, or
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on the
     /// tracked window — so a harness can prove the
     /// programmatic route's teardown (issue #919) against a real app, real
     /// GPU surface, and the embedder's real exit-policy hook, which no
@@ -2151,8 +2155,8 @@ impl WinitApp {
     /// should-close veto, per-window close callbacks, global handler, map
     /// removal, exit policy — runs exactly as a compositor-delivered close
     /// would; on [`SelfCloseRoute::Programmatic`] it calls
-    /// [`PlatformWindow::close`] on that window instead, exactly as an
-    /// application would. One-shot: the deadline is cleared on fire. If no window exists
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on
+    /// that window instead, exactly as an application would. One-shot: the deadline is cleared on fire. If no window exists
     /// yet at the deadline, it stays armed until one does — re-paced a
     /// short interval forward on each check, never left in the past, so the
     /// loop keeps waiting instead of busy-waking on an expired
@@ -2214,8 +2218,9 @@ impl WinitApp {
     /// is final — the ONE body behind both routes, because issue #919 was
     /// exactly the two routes being written separately: the compositor's
     /// `CloseRequested` arm (after its should-close veto) did all of this,
-    /// while the programmatic [`PlatformWindow::close`] hid the window and
-    /// fired its callback but never left the tracking map, so the exit
+    /// while the programmatic
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) hid
+    /// the window and fired its callback but never left the tracking map, so the exit
     /// policy — consulted only against that map — never saw the last
     /// window go, and the process lingered with nothing on screen.
     ///

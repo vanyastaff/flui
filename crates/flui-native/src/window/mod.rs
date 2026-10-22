@@ -3,7 +3,7 @@
 //!
 //! The model is what two or more platforms share: the published state and its
 //! staleness ([`state`]), the hidden-surface rules of the Win32 and AppKit
-//! windows ([`visibility`]), the window configuration a desktop host is built
+//! windows (`visibility`), the window configuration a desktop host is built
 //! with ([`config`]) and the acknowledgement a host waits for before it
 //! publishes a window it attached ([`installation`]). Each platform file
 //! implements the window position of its host's table, and its system chrome
