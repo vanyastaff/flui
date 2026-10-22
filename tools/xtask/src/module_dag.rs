@@ -24,8 +24,10 @@
 //! `hosts` names it, a base module names no feature, a feature names another
 //! feature's model and never its platform files, and a platform file names no
 //! other platform's file (a model names its own platform files, a group module
-//! its children, a child its group module). `layers` and the feature keys
-//! exclude each other.
+//! its children, a child its group module). `retiring` lists top-level modules
+//! the layout is taking apart: a feature names a module under one only through
+//! an exception, so each such edge is listed by name until it goes. `layers`
+//! and the feature keys exclude each other.
 //!
 //! Why a scan (ADR-0078 §4, condition 1): no type or stock lint states the
 //! rule. Visibility (`pub(crate)`, `pub(in ...)`) says who may name an item,
