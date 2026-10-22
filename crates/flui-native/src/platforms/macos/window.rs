@@ -962,6 +962,8 @@ impl MacOSWindow {
 /// as long as the nested loop runs.
 const MAX_DEFER_HOPS: u8 = 4;
 
+impl crate::host_window::CoreHostWindow for MacOSWindow {}
+
 impl crate::host_window::HostWindow for MacOSWindow {
     /// The window's own NSAccessibility bridge — the capability the
     /// composition root's accessibility wire discovers. Without this

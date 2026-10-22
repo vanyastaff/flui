@@ -1113,6 +1113,8 @@ impl std::fmt::Debug for IOSWindow {
     }
 }
 
+impl crate::host_window::CoreHostWindow for IOSWindow {}
+
 impl crate::host_window::HostWindow for IOSWindow {
     fn capture_text_sizing(
         &self,

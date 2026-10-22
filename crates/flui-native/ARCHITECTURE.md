@@ -52,6 +52,15 @@ trait depends on `flui-platform` instead.
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
   crate root only.
+- **`Platform` and `HostWindow` are sealed (ADR-0151 §5).** Each has a private
+  supertrait: `Platform`'s is implemented for `HostPlatform<H>` alone,
+  `HostWindow`'s for every type that implements the crate-private
+  `CoreHostWindow`, which each host's window implements beside its
+  `HostWindow`. An outside implementation does not compile, and the error
+  names the seal (`tests/ui/platform_and_host_window_are_sealed.rs`). The
+  window seal goes through one generic implementation so that the error lists
+  the same implementations on every target and feature set. `PlatformWindow`
+  stays open for test doubles.
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
   Linux under `winit-backend`. The `desktop` compatibility selector enables no

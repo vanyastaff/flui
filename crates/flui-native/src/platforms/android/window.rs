@@ -432,6 +432,8 @@ fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_runn
     execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
+impl crate::host_window::CoreHostWindow for AndroidWindow {}
+
 impl crate::host_window::HostWindow for AndroidWindow {
     fn capture_text_sizing(
         &self,

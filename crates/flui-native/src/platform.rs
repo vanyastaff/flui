@@ -49,11 +49,23 @@ use crate::task::Task;
 /// one error library.
 pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
 
+mod sealed {
+    /// The seal of [`Platform`](super::Platform): public in a private module,
+    /// so only this crate can implement it, and implemented for
+    /// [`HostPlatform`](super::HostPlatform) alone.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot implement `Platform`: the trait is sealed",
+        label = "not the platform of a host in `flui-native`",
+        note = "`HostPlatform<H>` over a host's table is the one implementation of `Platform`; a new platform is a host table in `flui-native` (ADR-0151 §5, §10)"
+    )]
+    pub trait Sealed {}
+}
+
 /// Core platform abstraction trait
 ///
 /// This trait provides the complete interface for platform-specific operations.
-/// All platform implementations (Winit, native Windows/macOS/Linux, headless
-/// testing) must implement this trait.
+/// Every host answers it as [`HostPlatform`] over the host's table (Win32,
+/// AppKit, UIKit, Android, the web, winit, headless).
 ///
 /// # Architecture
 ///
@@ -81,17 +93,15 @@ pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), Boo
 /// }
 /// ```
 ///
-/// # De-facto crate seal (ADR-0039)
+/// # Sealed (ADR-0151 §5)
 ///
-/// `run`'s `on_ready` callback receives an [`OwnerPlatform`] — a capability
-/// minted only through a `pub(crate)` constructor in this crate. An
-/// out-of-crate `impl Platform` can implement `run` but cannot construct the
-/// `OwnerPlatform` it must hand to `on_ready`, so this trait is de-facto
-/// sealed to backends living inside `flui-native` even though nothing
-/// marks it `sealed` in the type system. An external-embedder minting seam
-/// is design work tracked separately (#560, `flui-native` issue tracker);
-/// until then, new backends land in this crate.
-pub trait Platform: Send + Sync + 'static {
+/// A private supertrait, implemented for [`HostPlatform`] alone, keeps every
+/// implementation in this crate: an outside `impl Platform` does not compile
+/// (`trybuild_ui::ui_tests` pins the error). It could not have run either:
+/// `run`'s `on_ready` callback receives an [`OwnerPlatform`], which only a
+/// `pub(crate)` constructor here mints. A new platform is a host table in
+/// `hosts/`, not another implementation of this trait.
+pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // ==================== Core System ====================
 
     /// Get the platform's background executor for async tasks
@@ -536,6 +546,8 @@ where
             .finish()
     }
 }
+
+impl<H: Host> sealed::Sealed for HostPlatform<H> {}
 
 impl<H: Host> Platform for HostPlatform<H> {
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {

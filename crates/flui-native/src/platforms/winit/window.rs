@@ -910,6 +910,8 @@ impl PlatformWindow for WinitWindow {
     // the permanent correct answer here, not a stub awaiting a backend.
 }
 
+impl crate::host_window::CoreHostWindow for WinitWindow {}
+
 impl HostWindow for WinitWindow {
     /// The window's own AT-SPI bridge — the capability the composition
     /// root's accessibility wire discovers. Without this override the trait

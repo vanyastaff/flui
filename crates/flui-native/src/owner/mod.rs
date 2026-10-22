@@ -12,10 +12,10 @@
 //! on at least one real OS: window creation, display queries, activation,
 //! appearance/keyboard queries, and quit. It is minted only by a backend, on
 //! the thread that owns — or, before the loop starts, will own — its event
-//! loop, and handed to [`PlatformReadyCallback`](crate::PlatformReadyCallback). `!Send + !Sync` by
-//! phantom marker: possession proves the thread, so a wrong-thread call
-//! becomes a compile error instead of a runtime assert (the [`OwnerAffinity`]
-//! backstop `flui-foundation` carries).
+//! loop, and handed to [`PlatformReadyCallback`](crate::PlatformReadyCallback).
+//! `!Send + !Sync` by phantom marker: possession proves the thread, so a
+//! wrong-thread call becomes a compile error instead of a runtime assert (the
+//! [`OwnerAffinity`] backstop `flui-foundation` carries).
 //!
 //! [`OwnerAffinity`]: flui_foundation::OwnerAffinity
 //!
@@ -28,12 +28,9 @@
 //! thread-affine capability, only a bounded, typed, cross-thread request
 //! channel.
 //!
-//! `Platform` becomes de-facto crate-sealed by this module: minting an
-//! `OwnerPlatform` requires the `pub(crate)` constructor here, so an
-//! out-of-crate `impl Platform` cannot hand its own `run()` the capability
-//! `on_ready` needs. An external-embedder minting seam is design work
-//! tracked separately (#560); until then, backend implementations of
-//! `Platform` live in this crate.
+//! Only the `pub(crate)` constructor here mints an `OwnerPlatform`, so only a
+//! host in this crate can hand `on_ready` the capability it needs; `Platform`
+//! is sealed to say so in its type (ADR-0151 §5).
 
 pub(crate) mod panic_boundary;
 pub(crate) mod signal;

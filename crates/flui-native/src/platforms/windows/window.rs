@@ -1807,6 +1807,8 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
     }
 }
 
+impl crate::host_window::CoreHostWindow for WindowsWindow {}
+
 impl crate::host_window::HostWindow for WindowsWindow {
     /// The window's own UIA bridge — the capability the composition root's
     /// accessibility wire discovers. Without this override the trait

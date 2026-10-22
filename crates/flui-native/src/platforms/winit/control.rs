@@ -405,6 +405,7 @@ mod tests {
     /// reply payload without depending on a real winit window.
     struct StubWindow;
 
+    impl crate::host_window::CoreHostWindow for StubWindow {}
     impl crate::host_window::HostWindow for StubWindow {}
 
     impl flui_platform::PlatformWindow for StubWindow {
