@@ -24,7 +24,7 @@ use syn::{
 
 /// Where the scan reads source: the repository on disk, or the self-test's
 /// in-memory crates. Paths are repository-relative and `/`-separated.
-pub(super) trait Source {
+pub(crate) trait Source {
     /// The file's text, or `None` when there is no such file.
     fn read(&self, rel: &str) -> Option<String>;
 
@@ -56,11 +56,11 @@ const PRIMITIVES: [&str; 17] = [
 
 /// One crate target to scan.
 #[derive(Debug, Clone)]
-pub(super) struct Target {
+pub(crate) struct Target {
     /// The root file, repository-relative.
-    pub(super) src: String,
+    pub(crate) src: String,
     /// `Some(name)` for a bin target: its items are keyed `name::…`.
-    pub(super) bin: Option<String>,
+    pub(crate) bin: Option<String>,
 }
 
 /// How a global is defined.
@@ -180,7 +180,7 @@ pub(super) struct Scanned {
 /// A cfg predicate's value when only `test` is known (false): everything else
 /// may be either, so the scan result does not depend on the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Truth {
+pub(crate) enum Truth {
     True,
     False,
     Unknown,
@@ -275,7 +275,7 @@ fn split_commas(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
 
 /// The conjunction of the `#[cfg]` attributes in `attrs`, and each
 /// predicate's text.
-fn cfg_of(attrs: &[Attribute]) -> (Truth, Vec<String>) {
+pub(crate) fn cfg_of(attrs: &[Attribute]) -> (Truth, Vec<String>) {
     let mut truth = Truth::True;
     let mut texts = Vec::new();
     for attr in attrs {
@@ -405,7 +405,7 @@ fn type_segment(ty: &Type) -> String {
 // ---------------------------------------------------------------------------
 // attributes of the nodes that carry them
 
-pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
+pub(crate) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(item) => &item.attrs,
         Item::Enum(item) => &item.attrs,
@@ -426,7 +426,7 @@ pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
     }
 }
 
-fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
+pub(crate) fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
     match item {
         ImplItem::Const(item) => &item.attrs,
         ImplItem::Fn(item) => &item.attrs,
@@ -436,7 +436,7 @@ fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
     }
 }
 
-fn trait_item_attrs(item: &TraitItem) -> &[Attribute] {
+pub(crate) fn trait_item_attrs(item: &TraitItem) -> &[Attribute] {
     match item {
         TraitItem::Const(item) => &item.attrs,
         TraitItem::Fn(item) => &item.attrs,
@@ -468,7 +468,7 @@ fn expr_attrs(expr: &Expr) -> &[Attribute] {
     }
 }
 
-fn stmt_attrs(stmt: &Stmt) -> &[Attribute] {
+pub(crate) fn stmt_attrs(stmt: &Stmt) -> &[Attribute] {
     match stmt {
         Stmt::Local(local) => &local.attrs,
         Stmt::Macro(mac) => &mac.attrs,
@@ -649,12 +649,14 @@ struct ModDecl {
 }
 
 /// A parsed file of the target.
-struct Parsed {
-    rel: String,
-    module: Vec<String>,
+pub(crate) struct Parsed {
+    /// Repository-relative, `/`-separated.
+    pub(crate) rel: String,
+    /// The file's module path from the target root.
+    pub(crate) module: Vec<String>,
     cfgs: Vec<String>,
     kind: FileKind,
-    ast: syn::File,
+    pub(crate) ast: syn::File,
 }
 
 /// Scans one target.
@@ -693,8 +695,10 @@ pub(super) fn scan_target(source: &dyn Source, target: &Target) -> anyhow::Resul
     })
 }
 
-/// Parses the target root and every module file it reaches.
-fn walk(source: &dyn Source, target: &Target) -> anyhow::Result<Vec<Parsed>> {
+/// Parses the target root and every module file it reaches, leaving out the
+/// ones mounted under a cfg that is false in every build (`test`). The
+/// `panic-boundary` gate reads the same tree.
+pub(crate) fn walk(source: &dyn Source, target: &Target) -> anyhow::Result<Vec<Parsed>> {
     let mut files: Vec<Parsed> = Vec::new();
     let mut queue = vec![(target.src.clone(), Vec::new(), Vec::new(), FileKind::ModRs)];
     while let Some((rel, module, mut cfgs, kind)) = queue.pop() {

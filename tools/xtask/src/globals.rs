@@ -47,7 +47,7 @@ use crate::workspace::relative;
 
 mod allowlist;
 mod fixture;
-mod scan;
+pub(crate) mod scan;
 
 use allowlist::{Class, Standing};
 use scan::{Def, Shape, Source, Target, Vis};
