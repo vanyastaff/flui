@@ -1379,6 +1379,16 @@ async fn web_window_backing_store_keeps_to_the_ratio_a_device_size_contradicts()
     settle().await;
     assert_eq!(canvas_backing_size(), [601, 300], "the reported size");
 
+    // `clientWidth` reads a box laid out 300.99 pixels wide from x = 0.5 as
+    // 300, and 2× snaps it to 602 device pixels: two off the estimate.
+    lay_out_canvas(300, 150, 602, 300);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [602, 300],
+        "a CSS pixel of snapping at 2× is two device pixels"
+    );
+
     drop(window);
     running.quit();
     settle().await;
