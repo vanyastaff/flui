@@ -1228,6 +1228,7 @@ pub(crate) mod macos {
             NativeSurface, NativeTime, RawSensors, ReadingAction, ReadingTime, ScrollPhases,
             ScrollReading, decode,
         };
+        use crate::input::scroll::{WheelAmount, wheel_step};
         use flui_platform::PlatformInput;
 
         /// The view's cursor.
@@ -1420,9 +1421,14 @@ pub(crate) mod macos {
                 } else {
                     ScrollUnit::Lines
                 };
-                let delta =
-                    ScrollDelta::try_new(unit, -event.scrollingDeltaX(), -event.scrollingDeltaY())
-                        .unwrap_or_else(|_| ScrollDelta::zero(unit));
+                // AppKit's deltas move the content; a step the one wheel rule
+                // refuses is zero.
+                let delta = wheel_step(
+                    unit,
+                    WheelAmount::content(event.scrollingDeltaX()),
+                    WheelAmount::content(event.scrollingDeltaY()),
+                )
+                .unwrap_or_else(|_| ScrollDelta::zero(unit));
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
                     .with_precision(if precise {

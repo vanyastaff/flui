@@ -5,7 +5,10 @@
 //! a `WM_CHAR` burst is typeable text, and how that text merges into the
 //! key-down event — lives here as pure functions over raw integers, with the
 //! virtual keys and `MK_*` bits of the mouse buttons ([`MOUSE_BUTTONS`]),
-//! which OLE drag and drop reads too.
+//! which OLE drag and drop reads too. Beside them is what every backend
+//! shares: the one table of key locations ([`location_of_number`],
+//! [`location_for_code`]) and the adapter from `keyboard-types` the winit and
+//! Android hosts read their keys through.
 //!
 //! This module is deliberately free of `cfg` gates and platform types so the
 //! per-decision tables compile — and their tests execute — on any host, even
@@ -442,36 +445,85 @@ pub fn scancode_to_code(scancode: u16, extended: bool) -> Code {
     }
 }
 
+/// Every key location: the number W3C UI Events gives it
+/// (`KeyboardEvent.location`, which keyboard-types' `Location` carries as its
+/// discriminant) and the codes of the keys that sit there. A number or a code
+/// no row names is `Standard`.
+///
+/// The one table every backend's location comes from: the DOM and the
+/// keyboard-types events of the winit and Android adapters report the number
+/// ([`location_of_number`]); Win32 and AppKit report only the key, whose code
+/// implies its place ([`location_for_code`]).
+const LOCATIONS: [(Location, u32, &[Code]); 4] = [
+    (Location::Standard, 0, &[]),
+    (
+        Location::Left,
+        1,
+        &[
+            Code::ShiftLeft,
+            Code::ControlLeft,
+            Code::AltLeft,
+            Code::MetaLeft,
+        ],
+    ),
+    (
+        Location::Right,
+        2,
+        &[
+            Code::ShiftRight,
+            Code::ControlRight,
+            Code::AltRight,
+            Code::MetaRight,
+        ],
+    ),
+    (
+        Location::Numpad,
+        3,
+        &[
+            Code::Numpad0,
+            Code::Numpad1,
+            Code::Numpad2,
+            Code::Numpad3,
+            Code::Numpad4,
+            Code::Numpad5,
+            Code::Numpad6,
+            Code::Numpad7,
+            Code::Numpad8,
+            Code::Numpad9,
+            Code::NumpadEnter,
+            Code::NumpadAdd,
+            Code::NumpadSubtract,
+            Code::NumpadMultiply,
+            Code::NumpadDivide,
+            Code::NumpadDecimal,
+            Code::NumpadComma,
+            Code::NumpadEqual,
+            Code::NumLock,
+        ],
+    ),
+];
+
+/// The location W3C UI Events numbers `number`: the DOM's
+/// `KeyboardEvent.location` (`DOM_KEY_LOCATION_*`) and keyboard-types'
+/// `Location` as an integer. A number it does not define is `Standard`, not
+/// dropped.
+pub fn location_of_number(number: u32) -> Location {
+    LOCATIONS
+        .iter()
+        .find(|(_, numbered, _)| *numbered == number)
+        .map_or(Location::Standard, |(location, _, _)| *location)
+}
+
 /// The W3C `location` a `code` implies: numpad keys report `Numpad`, sided
-/// modifiers report their side, everything else is `Standard`. Mirrors the
-/// winit backend's location derivation so the native wires (this module's
-/// Win32 caller, and the AppKit caller via [`super::apple::keys`]) agree
-/// with the fallback wire.
+/// modifiers report their side, everything else is `Standard`. Win32 and
+/// AppKit (via [`super::apple::keys`]) report no location, only the key, so
+/// their location comes from its code by the same table that names the
+/// location the DOM, winit and Android report.
 pub fn location_for_code(code: Code) -> Location {
-    match code {
-        Code::ShiftLeft | Code::ControlLeft | Code::AltLeft | Code::MetaLeft => Location::Left,
-        Code::ShiftRight | Code::ControlRight | Code::AltRight | Code::MetaRight => Location::Right,
-        Code::Numpad0
-        | Code::Numpad1
-        | Code::Numpad2
-        | Code::Numpad3
-        | Code::Numpad4
-        | Code::Numpad5
-        | Code::Numpad6
-        | Code::Numpad7
-        | Code::Numpad8
-        | Code::Numpad9
-        | Code::NumpadEnter
-        | Code::NumpadAdd
-        | Code::NumpadSubtract
-        | Code::NumpadMultiply
-        | Code::NumpadDivide
-        | Code::NumpadDecimal
-        | Code::NumpadComma
-        | Code::NumpadEqual
-        | Code::NumLock => Location::Numpad,
-        _ => Location::Standard,
-    }
+    LOCATIONS
+        .iter()
+        .find(|(_, _, codes)| codes.contains(&code))
+        .map_or(Location::Standard, |(location, _, _)| *location)
 }
 
 /// Decode a keydown's `WM_CHAR` burst (the UTF-16 code units of every
@@ -592,9 +644,7 @@ pub(crate) mod adapter {
 
     use flui_platform::{
         EventTime,
-        keyboard::{
-            Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
-        },
+        keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey},
     };
     use keyboard_types as upstream;
 
@@ -653,14 +703,9 @@ pub(crate) mod adapter {
             upstream::Key::Character(text) => Key::character(text.as_str()),
             upstream::Key::Named(value) => Key::Named(named_key(*value)),
         };
-        let location = match event.location {
-            upstream::Location::Standard => Location::Standard,
-            upstream::Location::Left => Location::Left,
-            upstream::Location::Right => Location::Right,
-            upstream::Location::Numpad => Location::Numpad,
-        };
+        // keyboard-types numbers its locations as W3C UI Events does.
         KeyEvent::new(state, key, code(event.code), time)
-            .with_location(location)
+            .with_location(super::location_of_number(event.location as u32))
             .with_modifiers(modifiers(event.modifiers))
             .with_repeat(if event.repeat {
                 KeyRepeat::AutoRepeat
@@ -680,6 +725,7 @@ pub(crate) mod adapter {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use flui_platform::keyboard::Location;
         use std::str::FromStr;
 
         fn every_named_key_and_code_round_trips_through_keyboard_types() {
@@ -745,5 +791,153 @@ pub(crate) mod adapter {
                 ],
             );
         }
+    }
+}
+
+/// The table of the one location rule, which every backend's reading of a
+/// key is held to: one physical key, as each backend reports it, sits at the
+/// row's location.
+#[cfg(test)]
+mod mapping {
+    use flui_platform::keyboard::{Code, Location};
+
+    use super::{location_for_code, location_of_number, scancode_to_code};
+    use crate::input::apple::keys::{keycode_to_code, kvk};
+
+    /// One physical key as each backend reports it.
+    struct Key {
+        case: &'static str,
+        /// Win32's scancode and whether it is extended.
+        win32: (u16, bool),
+        /// AppKit's virtual key code.
+        appkit: u16,
+        /// The number the DOM, winit and Android report for its location.
+        number: u32,
+        location: Location,
+    }
+
+    const KEYS: [Key; 7] = [
+        Key {
+            case: "the A key",
+            win32: (0x1E, false),
+            appkit: kvk::ANSI_A,
+            number: 0,
+            location: Location::Standard,
+        },
+        Key {
+            case: "the left Shift",
+            win32: (0x2A, false),
+            appkit: kvk::SHIFT,
+            number: 1,
+            location: Location::Left,
+        },
+        Key {
+            case: "the right Shift",
+            win32: (0x36, false),
+            appkit: kvk::RIGHT_SHIFT,
+            number: 2,
+            location: Location::Right,
+        },
+        Key {
+            case: "the left Meta",
+            win32: (0x5B, true),
+            appkit: kvk::COMMAND,
+            number: 1,
+            location: Location::Left,
+        },
+        Key {
+            case: "the right Meta",
+            win32: (0x5C, true),
+            appkit: kvk::RIGHT_COMMAND,
+            number: 2,
+            location: Location::Right,
+        },
+        Key {
+            case: "keypad 0",
+            win32: (0x52, false),
+            appkit: kvk::ANSI_KEYPAD_0,
+            number: 3,
+            location: Location::Numpad,
+        },
+        Key {
+            case: "keypad Enter",
+            win32: (0x1C, true),
+            appkit: kvk::ANSI_KEYPAD_ENTER,
+            number: 3,
+            location: Location::Numpad,
+        },
+    ];
+
+    /// What the keyboard-types adapter of the winit and Android hosts reads
+    /// for a key whose location keyboard-types numbers `number`.
+    #[cfg(any(
+        target_os = "android",
+        all(
+            feature = "winit-backend",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        )
+    ))]
+    fn keyboard_types(number: u32, code: Code) -> Location {
+        use keyboard_types as upstream;
+
+        let location = [
+            upstream::Location::Standard,
+            upstream::Location::Left,
+            upstream::Location::Right,
+            upstream::Location::Numpad,
+        ]
+        .into_iter()
+        .find(|location| *location as u32 == number)
+        .expect("BUG: a row numbers a location keyboard-types names");
+        let event = upstream::KeyboardEvent {
+            state: upstream::KeyState::Down,
+            key: upstream::Key::Character("x".to_owned()),
+            code: code
+                .as_str()
+                .parse()
+                .expect("BUG: keyboard-types names the code"),
+            location,
+            modifiers: upstream::Modifiers::empty(),
+            repeat: false,
+            is_composing: false,
+        };
+        let flui_platform::PlatformInput::Keyboard(event) =
+            super::adapter::keyboard_input(event, 0)
+        else {
+            panic!("the keyboard adapter produces keyboard input")
+        };
+        event.location
+    }
+
+    #[test]
+    fn every_backend_reads_a_key_at_one_location() {
+        for key in KEYS {
+            let case = key.case;
+            let (scancode, extended) = key.win32;
+            let code = scancode_to_code(scancode, extended);
+            assert_eq!(location_for_code(code), key.location, "Win32: {case}");
+            assert_eq!(
+                location_for_code(keycode_to_code(key.appkit)),
+                key.location,
+                "AppKit: {case}"
+            );
+            assert_eq!(location_of_number(key.number), key.location, "DOM: {case}");
+            #[cfg(any(
+                target_os = "android",
+                all(
+                    feature = "winit-backend",
+                    any(target_os = "windows", target_os = "macos", target_os = "linux")
+                )
+            ))]
+            assert_eq!(
+                keyboard_types(key.number, code),
+                key.location,
+                "winit and Android: {case}"
+            );
+        }
+        // A location the DOM may number later, and a character no key typed
+        // (Win32's Alt+numpad text), are where every other key is.
+        assert_eq!(location_of_number(4), Location::Standard);
+        assert_eq!(location_for_code(Code::Unidentified), Location::Standard);
     }
 }

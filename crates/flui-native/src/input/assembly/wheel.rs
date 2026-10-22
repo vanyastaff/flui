@@ -9,11 +9,13 @@
 use flui_foundation::geometry::Point;
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{PointerEvent, PointerPosition, ScrollEvent, ScrollPrecision};
+use flui_platform::pointer::{
+    PointerEvent, PointerPosition, ScrollEvent, ScrollPrecision, ScrollUnit,
+};
 
 use super::ContactRegistry;
 use crate::input::primary_mouse_info;
-use crate::input::scroll::{from_win32_hwheel, from_win32_wheel};
+use crate::input::scroll::{WheelAmount, wheel_step};
 use flui_platform::PlatformInput;
 
 /// The distance of one wheel detent (Win32's `WHEEL_DELTA`).
@@ -65,10 +67,19 @@ impl ContactRegistry {
         }
         let (x, y) = reading.position;
         let position = PointerPosition::try_new(Point::new(x / scale, y / scale)).ok()?;
-        let delta = match reading.axis {
-            WheelAxis::Vertical => from_win32_wheel(reading.distance),
-            WheelAxis::Horizontal => from_win32_hwheel(reading.distance),
+        // Win32 signs the vertical wheel turned away from the user, toward
+        // earlier content, and the horizontal one tilted right.
+        let detents = f64::from(reading.distance) / f64::from(WHEEL_DETENT);
+        let (x, y) = match reading.axis {
+            WheelAxis::Vertical => (0.0, detents),
+            WheelAxis::Horizontal => (detents, 0.0),
         };
+        let delta = wheel_step(
+            ScrollUnit::Detents,
+            WheelAmount::offset(x),
+            WheelAmount::content(y),
+        )
+        .expect("BUG: a whole Win32 wheel distance over a nonzero detent is finite");
         let precision = if reading.distance % WHEEL_DETENT == 0 {
             ScrollPrecision::Unknown
         } else {

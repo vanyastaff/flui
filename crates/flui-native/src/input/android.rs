@@ -1036,6 +1036,7 @@ pub(crate) mod scroll {
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::pointer::{ScrollDelta, ScrollUnit};
 
+    use crate::input::scroll::{WheelAmount, wheel_step};
     use crate::version::gate::android::{AndroidApi, ScaledScrollFactor};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1109,20 +1110,28 @@ pub(crate) mod scroll {
     }
 
     impl AxisPolicy {
+        /// The step `AXIS_HSCROLL` and `AXIS_VSCROLL` make, by the one wheel
+        /// rule: Android's scroll axes move the content. `None` for an axis
+        /// value that is not finite; the event is dropped.
         pub(crate) fn delta(self, horizontal: f32, vertical: f32) -> Option<ScrollDelta> {
             let (unit, horizontal, vertical) = match self {
                 Self::Pixels(factors) => (
                     ScrollUnit::Pixels,
-                    -f64::from(horizontal) * factors.horizontal,
-                    -f64::from(vertical) * factors.vertical,
+                    f64::from(horizontal) * factors.horizontal,
+                    f64::from(vertical) * factors.vertical,
                 ),
                 Self::AuthoredLines => (
                     ScrollUnit::Lines,
-                    -f64::from(horizontal),
-                    -f64::from(vertical),
+                    f64::from(horizontal),
+                    f64::from(vertical),
                 ),
             };
-            ScrollDelta::try_new(unit, horizontal, vertical).ok()
+            wheel_step(
+                unit,
+                WheelAmount::content(horizontal),
+                WheelAmount::content(vertical),
+            )
+            .ok()
         }
     }
 
