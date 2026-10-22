@@ -42,6 +42,7 @@ use parking_lot::Mutex;
 use super::owner_lane::owner_queue;
 use crate::owner::call_point::{SharedField, call};
 use crate::owner::handlers::PlatformHandlers;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// How long after a redraw request the pump looks at the hook a second time
 /// when the first look found no deadline.
@@ -175,15 +176,34 @@ impl WakePump {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let delay = target.saturating_duration_since(web_time::Instant::now());
         let pump = Arc::clone(self);
-        owner_queue().exec_after(delay, move || pump.fire(generation));
+        owner_queue().exec_after(delay, move || {
+            os_entry(
+                "the AppKit wake pump's tick",
+                AfterPanic::Answer(|| ()),
+                || {
+                    pump.fire(generation);
+                },
+            );
+        });
     }
 
     /// A scheduled tick: honor the deadline if it is due, otherwise wait for it.
+    ///
+    /// A tick whose hook or wake panics stops the chain the way
+    /// [`TickPlan::Stop`] does, so the next `arm` schedules again instead of
+    /// reading the failed tick as still queued.
     fn fire(self: &Arc<Self>, generation: u64) {
         if self.generation.load(Ordering::Acquire) != generation {
             // A later arm superseded this tick; it owns the deadline now.
             return;
         }
+        let unfinished = StopUnlessFinished(Some(&self.pending_at));
+        self.run_tick();
+        unfinished.finish();
+    }
+
+    /// What a current tick does.
+    fn run_tick(self: &Arc<Self>) {
         match tick_plan(self.consult(), web_time::Instant::now()) {
             TickPlan::Stop => {
                 // Nothing pending and this tick requested no frame, so there
@@ -224,6 +244,25 @@ impl WakePump {
                 self.schedule(web_time::Instant::now() + FOLLOW_UP);
             }
             TickPlan::Wait(deadline) => self.schedule(deadline),
+        }
+    }
+}
+
+/// Clears [`WakePump::pending_at`] when dropped before [`Self::finish`]: a tick
+/// that unwound has scheduled nothing, so no tick is queued.
+struct StopUnlessFinished<'a>(Option<&'a AtomicU64>);
+
+impl StopUnlessFinished<'_> {
+    /// The tick ran to its end and left `pending_at` as its plan set it.
+    fn finish(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StopUnlessFinished<'_> {
+    fn drop(&mut self) {
+        if let Some(pending_at) = self.0 {
+            pending_at.store(0, Ordering::Release);
         }
     }
 }
@@ -291,6 +330,37 @@ mod tests {
             pump.generation.load(Ordering::Acquire),
             before,
             "an arm later than the pending tick must not re-schedule it"
+        );
+    }
+
+    /// A tick whose hook panics is contained by the GCD boundary, and must not
+    /// leave the expired tick looking queued: `arm` would then refuse every
+    /// later deadline. Red-check: drop the `StopUnlessFinished` guard.
+    #[test]
+    fn a_tick_whose_hook_panics_leaves_no_tick_queued() {
+        let pump = silent_pump();
+        pump.handlers.lock().wake_deadline = Some(Arc::new(|| -> Option<web_time::Instant> {
+            panic!("a failing wake hook")
+        }));
+        // The tick being fired: a nonzero instant, whatever the base.
+        pump.pending_at.store(
+            micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
+            Ordering::Release,
+        );
+        let generation = pump.generation.load(Ordering::Acquire);
+
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pump.fire(generation);
+        }));
+
+        assert!(
+            fired.is_err(),
+            "the hook's panic reaches the tick's boundary"
+        );
+        assert_eq!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "the failed tick still reads as queued"
         );
     }
 }

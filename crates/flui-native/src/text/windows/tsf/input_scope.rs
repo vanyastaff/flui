@@ -6,7 +6,7 @@
 
 use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
 use windows::Win32::{
-    Foundation::E_NOTIMPL,
+    Foundation::{E_NOTIMPL, E_UNEXPECTED},
     System::{Com::CoTaskMemAlloc, Variant::VARIANT},
     UI::TextServices::{
         GUID_PROP_INPUTSCOPE, IS_DIGITS, IS_EMAIL_SMTPEMAILADDRESS, IS_PASSWORD, IS_SEARCH,
@@ -15,6 +15,8 @@ use windows::Win32::{
     },
 };
 use windows_core::{BSTR, GUID};
+
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The input scope a field of `status` asks for, or `None` for plain text
 /// (the default, which an input method assumes without being told).
@@ -132,28 +134,40 @@ mod com_object {
 }
 use com_object::{SingleScope, SingleScope_Impl};
 
+/// The boundary every vtable method of [`SingleScope`] crosses: a panic
+/// answers `E_UNEXPECTED`.
+fn scope_entry<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
+    os_entry(
+        "the input scope",
+        AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+        body,
+    )
+}
+
 impl ITfInputScope_Impl for SingleScope_Impl {
     fn GetInputScopes(
         &self,
         pprginputscopes: *mut *mut InputScope,
         pccount: *mut u32,
     ) -> windows_core::Result<()> {
-        if pprginputscopes.is_null() || pccount.is_null() {
-            return Err(windows::Win32::Foundation::E_POINTER.into());
-        }
-        // SAFETY: TSF frees the array with `CoTaskMemFree`, so it is
-        // allocated with `CoTaskMemAlloc`; the allocation is checked before
-        // the write and both out-pointers were checked above.
-        unsafe {
-            let array = CoTaskMemAlloc(size_of::<InputScope>()).cast::<InputScope>();
-            if array.is_null() {
-                return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
+        scope_entry(|| {
+            if pprginputscopes.is_null() || pccount.is_null() {
+                return Err(windows::Win32::Foundation::E_POINTER.into());
             }
-            array.write(self.scope);
-            pprginputscopes.write(array);
-            pccount.write(1);
-        }
-        Ok(())
+            // SAFETY: TSF frees the array with `CoTaskMemFree`, so it is
+            // allocated with `CoTaskMemAlloc`; the allocation is checked before
+            // the write and both out-pointers were checked above.
+            unsafe {
+                let array = CoTaskMemAlloc(size_of::<InputScope>()).cast::<InputScope>();
+                if array.is_null() {
+                    return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
+                }
+                array.write(self.scope);
+                pprginputscopes.write(array);
+                pccount.write(1);
+            }
+            Ok(())
+        })
     }
 
     fn GetPhrase(
@@ -161,19 +175,19 @@ impl ITfInputScope_Impl for SingleScope_Impl {
         _ppbstrphrases: *mut *mut BSTR,
         _pccount: *mut u32,
     ) -> windows_core::Result<()> {
-        Err(E_NOTIMPL.into())
+        scope_entry(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetRegularExpression(&self) -> windows_core::Result<BSTR> {
-        Err(E_NOTIMPL.into())
+        scope_entry(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetSRGS(&self) -> windows_core::Result<BSTR> {
-        Err(E_NOTIMPL.into())
+        scope_entry(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetXML(&self) -> windows_core::Result<BSTR> {
-        Err(E_NOTIMPL.into())
+        scope_entry(|| Err(E_NOTIMPL.into()))
     }
 }
 

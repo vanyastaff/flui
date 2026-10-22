@@ -43,6 +43,7 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
 use super::{TextServices, input_scope};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::WindowRef;
 use crate::text::windows::geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
@@ -371,6 +372,20 @@ fn range_extent(range: &ITfRange) -> windows_core::Result<Utf16Range> {
 
 pub(super) use com_object::{TsfStore, TsfStore_Impl};
 
+/// The boundary of a vtable method whose answer reads no document state, so
+/// a poisoned or closed document answers it the same: a panic answers
+/// `E_UNEXPECTED`.
+fn stateless_entry<R>(
+    method: &'static str,
+    body: impl FnOnce() -> windows_core::Result<R>,
+) -> windows_core::Result<R> {
+    os_entry(
+        method,
+        AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+        body,
+    )
+}
+
 /// The `#[implement]` expansion, in a module of its own so the lints its
 /// generated code trips are expected here and nowhere else.
 #[expect(
@@ -401,30 +416,36 @@ impl TsfStore {
         Self { state }
     }
 
-    /// The boundary every vtable method crosses; see the module doc.
+    /// The boundary every vtable method crosses; see the module doc. The
+    /// method's own panic poisons the document; anything else that panics
+    /// here answers `E_UNEXPECTED` as well.
     fn com_entry<R>(
         &self,
         method: &'static str,
         body: impl FnOnce(&DocumentState) -> windows_core::Result<R>,
     ) -> windows_core::Result<R> {
-        let state = Rc::clone(&self.state);
-        let _store = Rc::clone(&state.store);
-        if state.poisoned.get() || state.closed.get() {
-            return Err(E_UNEXPECTED.into());
-        }
-        let services = state.services.upgrade();
-        if let Some(services) = &services {
-            services.enter();
-        }
-        let result = match catch_unwind(AssertUnwindSafe(|| body(&state))) {
-            Ok(result) => result,
-            Err(payload) => {
-                state.poisoned.set(true);
-                // The log runs a user-installed subscriber: contained, so
-                // nothing it raises unwinds into TSF (a failure it raises
-                // is retained with the scope).
-                let mut diagnostics = OwnerCalls::new();
-                diagnostics.run(|| {
+        os_entry(
+            method,
+            AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+            || {
+                let state = Rc::clone(&self.state);
+                let _store = Rc::clone(&state.store);
+                if state.poisoned.get() || state.closed.get() {
+                    return Err(E_UNEXPECTED.into());
+                }
+                let services = state.services.upgrade();
+                if let Some(services) = &services {
+                    services.enter();
+                }
+                let result = match catch_unwind(AssertUnwindSafe(|| body(&state))) {
+                    Ok(result) => result,
+                    Err(payload) => {
+                        state.poisoned.set(true);
+                        // The log runs a user-installed subscriber: contained, so
+                        // nothing it raises unwinds into TSF (a failure it raises
+                        // is retained with the scope).
+                        let mut diagnostics = OwnerCalls::new();
+                        diagnostics.run(|| {
                     tracing::error!(
                         target: "flui_native::tsf",
                         method,
@@ -432,19 +453,21 @@ impl TsfStore {
                         "a TSF call into the text store panicked; the document is poisoned"
                     );
                 });
-                drop(diagnostics);
-                // A payload whose `Drop` panics must not unwind into TSF.
-                std::mem::forget(payload);
+                        drop(diagnostics);
+                        // A payload whose `Drop` panics must not unwind into TSF.
+                        std::mem::forget(payload);
+                        if let Some(services) = &services {
+                            services.document_poisoned(&state);
+                        }
+                        Err(E_UNEXPECTED.into())
+                    }
+                };
                 if let Some(services) = &services {
-                    services.document_poisoned(&state);
+                    services.leave();
                 }
-                Err(E_UNEXPECTED.into())
-            }
-        };
-        if let Some(services) = &services {
-            services.leave();
-        }
-        result
+                result
+            },
+        )
     }
 }
 
@@ -717,7 +740,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetFormattedText(&self, _acpstart: i32, _acpend: i32) -> windows_core::Result<IDataObject> {
-        Err(E_NOTIMPL.into())
+        stateless_entry("GetFormattedText", || Err(E_NOTIMPL.into()))
     }
 
     fn GetEmbedded(
@@ -726,7 +749,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _rguidservice: *const GUID,
         _riid: *const GUID,
     ) -> windows_core::Result<IUnknown> {
-        Err(E_NOTIMPL.into())
+        stateless_entry("GetEmbedded", || Err(E_NOTIMPL.into()))
     }
 
     fn QueryInsertEmbedded(
@@ -734,7 +757,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pguidservice: *const GUID,
         _pformatetc: *const FORMATETC,
     ) -> windows_core::Result<BOOL> {
-        Ok(false.into())
+        stateless_entry("QueryInsertEmbedded", || Ok(false.into()))
     }
 
     fn InsertEmbedded(
@@ -744,7 +767,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _acpend: i32,
         _pdataobject: Ref<'_, IDataObject>,
     ) -> windows_core::Result<TS_TEXTCHANGE> {
-        Err(E_NOTIMPL.into())
+        stateless_entry("InsertEmbedded", || Err(E_NOTIMPL.into()))
     }
 
     fn InsertTextAtSelection(
@@ -783,7 +806,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pacpend: *mut i32,
         _pchange: *mut TS_TEXTCHANGE,
     ) -> windows_core::Result<()> {
-        Err(E_NOTIMPL.into())
+        stateless_entry("InsertEmbeddedAtSelection", || Err(E_NOTIMPL.into()))
     }
 
     fn RequestSupportedAttrs(
@@ -826,7 +849,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pafilterattrs: *const GUID,
         _dwflags: u32,
     ) -> windows_core::Result<()> {
-        Ok(())
+        stateless_entry("RequestAttrsTransitioningAtPosition", || Ok(()))
     }
 
     fn FindNextAttrTransition(
@@ -840,10 +863,12 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pffound: *mut BOOL,
         plfoundoffset: *mut i32,
     ) -> windows_core::Result<()> {
-        put(pacpnext, acphalt);
-        put(pffound, false.into());
-        put(plfoundoffset, 0);
-        Ok(())
+        stateless_entry("FindNextAttrTransition", || {
+            put(pacpnext, acphalt);
+            put(pffound, false.into());
+            put(plfoundoffset, 0);
+            Ok(())
+        })
     }
 
     fn RetrieveRequestedAttrs(
@@ -875,7 +900,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetActiveView(&self) -> windows_core::Result<u32> {
-        Ok(0)
+        stateless_entry("GetActiveView", || Ok(0))
     }
 
     fn GetACPFromPoint(

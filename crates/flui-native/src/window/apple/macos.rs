@@ -1248,7 +1248,11 @@ fn window_class() -> &'static Class {
 
     INIT.call_once(|| {
         extern "C-unwind" fn takes_focus(_this: &Object, _sel: Sel) -> Bool {
-            YES
+            crate::owner::panic_boundary::os_entry(
+                "canBecomeKeyWindow",
+                crate::owner::panic_boundary::AfterPanic::Answer(|| YES),
+                || YES,
+            )
         }
 
         let mut decl = ClassBuilder::new(c"FLUIWindow", class!(NSWindow))

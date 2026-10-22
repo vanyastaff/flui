@@ -84,8 +84,9 @@ trait depends on `flui-platform` instead.
   crate-private `OwnerHooks` and `ProxyTransport` a host implements),
   `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
   the owner-thread storage for a value that is not `Send`, and
-  `owner::panic_boundary` the containment a panic in user code meets before it
-  reaches the operating system, `owner::call_point` the one point where the
+  `owner::panic_boundary` the containment a panic meets before it reaches the
+  operating system (`os_entry`, the one boundary of every OS entry, below),
+  `owner::call_point` the one point where the
   platform calls a handler, `owner::handlers` the application's handler set
   and a window's callbacks, `owner::notices` the trait a loop pushes system
   notices through (`NoticeChannel`, which the lifecycle feature implements; a
@@ -552,6 +553,34 @@ trait depends on `flui-platform` instead.
   `native_host_events`' `a_hook_that_replaced_itself_and_failed_is_retained`
   and `web_session_end_hook_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
+- **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
+  code the operating system calls, or a library from inside its own entry: a
+  function with a foreign ABI (a window procedure, an enumeration callback, a
+  JNI native, an Objective-C method a `ClassBuilder` adds, an NDK callback), a
+  `define_class!` method, a method of a windows-rs `I…_Impl` (a COM vtable
+  entry), an AccessKit handler, and a closure handed to the OS (an `RcBlock` or
+  `StackBlock`, a WinRT delegate, a GCD work item). Its body is one call of
+  `owner::panic_boundary::os_entry(entry, after_panic, body)`, or of an adapter
+  of its file whose body is that call (`com_boundary`, `com_entry`, `contained`,
+  `send`, …). `os_entry` logs a panic with its text before anything else runs,
+  contains the log, retains the payload, then answers what `AfterPanic` says:
+  `Answer(fn() -> R)`, a failure the OS understands, made only after a panic and
+  capturing nothing; or `Abort`, where the state behind the entry may be torn
+  (FLUI's window procedure, the cloak hook, a UIKit configuration or init, the
+  macOS owner lane's guard). An answer that panics too ends the process. Inner
+  containment stays where an entry runs several steps (a broadcast subscriber,
+  a TSF method that poisons its document, a view's `dealloc` that still runs
+  the super `dealloc` after its context's teardown failed). `cargo xtask
+  panic-boundary` finds every entry and holds it to that shape, with no
+  allowlist; `wasm_bindgen` closures are out of its scope because wasm32 aborts
+  on panic, and winit's and android-activity's procedures contain their own.
+  The crate keeps the GCD method names (`exec_async`, `exec_sync`,
+  `exec_after`, `after`, `barrier_*`) for GCD. Tests:
+  `owner::panic_boundary::tests` (the first failure is logged before the answer;
+  a panicking log stays inside), `a_panicking_listener_stays_inside_its_handler`
+  (AccessKit, Windows and Linux) and, on macOS,
+  `a_tick_whose_hook_panics_leaves_no_tick_queued` (the wake pump does not stay
+  wedged after a contained tick).
 - **`Platform` and `HostWindow` are sealed (ADR-0151 §5).** Each has a private
   supertrait: `Platform`'s is implemented for `HostPlatform<H>` alone,
   `HostWindow`'s for every type that implements the crate-private

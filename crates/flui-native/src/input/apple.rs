@@ -470,6 +470,7 @@ pub(crate) mod macos {
     use objc2_foundation::{NSArray, NSRect, NSRectEdge};
 
     use crate::owner::handlers::WindowCallbacks;
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::text::apple::macos::{TextInputState, add_text_input_methods};
     use events::MacInputState;
 
@@ -553,21 +554,23 @@ pub(crate) mod macos {
         _sel: Sel,
         event: *mut AnyObject,
     ) {
-        // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
-        // live objects); `event` is a valid NSEvent* for the duration of the call;
-        // `bounds` is a plain NSRect getter.
-        unsafe {
-            if let Some(ctx) = get_context(this) {
-                let bounds: NSRect = msg_send![this, bounds];
-                let inputs = ctx
-                    .input
-                    .borrow_mut()
-                    .convert(event.cast::<std::ffi::c_void>(), bounds.size.height);
-                for input in inputs {
-                    dispatch_input_event(ctx, input);
+        os_entry("FLUIContentView's input", AfterPanic::Answer(|| ()), || {
+            // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
+            // on live objects); `event` is a valid NSEvent* for the duration of the
+            // call; `bounds` is a plain NSRect getter.
+            unsafe {
+                if let Some(ctx) = get_context(this) {
+                    let bounds: NSRect = msg_send![this, bounds];
+                    let inputs = ctx
+                        .input
+                        .borrow_mut()
+                        .convert(event.cast::<std::ffi::c_void>(), bounds.size.height);
+                    for input in inputs {
+                        dispatch_input_event(ctx, input);
+                    }
                 }
             }
-        }
+        });
     }
 
     /// `keyDown:` — the input-context route while a text input is attached, the
@@ -590,43 +593,45 @@ pub(crate) mod macos {
     /// `interpretKeyEvents:` call, which is the only window in which the input
     /// context can call `doCommandBySelector:` back for this event.
     extern "C-unwind" fn key_down(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
-        // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
-        // the duration of the call, and `interpretKeyEvents:` retains it for the
-        // span of its own dispatch. The array is created by an NSArray class
-        // constructor and autoreleased.
-        unsafe {
-            let Some(ctx) = get_context(this) else {
-                return;
-            };
-            // The gate, and the whole of the change this callback makes to a window
-            // that never attaches a text input: while no input context is attached
-            // the key takes the keyboard path below, byte for byte as `keyDown:`
-            // did before `NSTextInputClient` existed. Only an attached text input
-            // makes AppKit's input method a *second* producer for the same press,
-            // and a press must reach the application exactly once — either as a
-            // composition/commit through the input context, or as a key event
-            // through the keyboard conversion, never both (see the module doc of
-            // `text::apple::macos`).
-            let ime_allowed = ctx.text_input.borrow().ime_allowed;
-            if !ime_allowed {
-                handle_input_event(this, objc2::sel!(keyDown:), event);
-                return;
-            }
+        os_entry("keyDown:", AfterPanic::Answer(|| ()), || {
+            // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
+            // the duration of the call, and `interpretKeyEvents:` retains it for the
+            // span of its own dispatch. The array is created by an NSArray class
+            // constructor and autoreleased.
+            unsafe {
+                let Some(ctx) = get_context(this) else {
+                    return;
+                };
+                // The gate, and the whole of the change this callback makes to a window
+                // that never attaches a text input: while no input context is attached
+                // the key takes the keyboard path below, byte for byte as `keyDown:`
+                // did before `NSTextInputClient` existed. Only an attached text input
+                // makes AppKit's input method a *second* producer for the same press,
+                // and a press must reach the application exactly once — either as a
+                // composition/commit through the input context, or as a key event
+                // through the keyboard conversion, never both (see the module doc of
+                // `text::apple::macos`).
+                let ime_allowed = ctx.text_input.borrow().ime_allowed;
+                if !ime_allowed {
+                    handle_input_event(this, objc2::sel!(keyDown:), event);
+                    return;
+                }
 
-            // Saved and restored rather than set and cleared: an input method can
-            // route a *second* `keyDown:` through the view while this one is inside
-            // `interpretKeyEvents:` (the character palette does), and a plain clear
-            // would leave the outer event's `doCommandBySelector:` reading zero and
-            // dropping a command that belongs to this press.
-            let previous_pending_key_event = ctx.text_input.borrow().pending_key_event;
-            ctx.text_input.borrow_mut().pending_key_event = event as usize;
-            let events: *mut AnyObject = msg_send![
-                objc2::class!(NSArray),
-                arrayWithObject: event
-            ];
-            let _: () = msg_send![this, interpretKeyEvents: events];
-            ctx.text_input.borrow_mut().pending_key_event = previous_pending_key_event;
-        }
+                // Saved and restored rather than set and cleared: an input method can
+                // route a *second* `keyDown:` through the view while this one is inside
+                // `interpretKeyEvents:` (the character palette does), and a plain clear
+                // would leave the outer event's `doCommandBySelector:` reading zero and
+                // dropping a command that belongs to this press.
+                let previous_pending_key_event = ctx.text_input.borrow().pending_key_event;
+                ctx.text_input.borrow_mut().pending_key_event = event as usize;
+                let events: *mut AnyObject = msg_send![
+                    objc2::class!(NSArray),
+                    arrayWithObject: event
+                ];
+                let _: () = msg_send![this, interpretKeyEvents: events];
+                ctx.text_input.borrow_mut().pending_key_event = previous_pending_key_event;
+            }
+        });
     }
 
     /// `keyUp:` — the keyboard route, except while a composition is in flight.
@@ -644,15 +649,17 @@ pub(crate) mod macos {
     /// release normally. What is suppressed is exactly the release that lands
     /// inside an open composition.
     extern "C-unwind" fn key_up(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
-        // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
-        // live objects); `event` is a valid NSEvent* for the duration of the call.
-        let reported = unsafe {
-            get_context(this).is_none_or(|ctx| ctx.text_input.borrow().reports_key_release())
-        };
-        if !reported {
-            return;
-        }
-        handle_input_event(this, objc2::sel!(keyUp:), event);
+        os_entry("keyUp:", AfterPanic::Answer(|| ()), || {
+            // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
+            // on live objects); `event` is a valid NSEvent* for the duration of the
+            // call.
+            let reported = unsafe {
+                get_context(this).is_none_or(|ctx| ctx.text_input.borrow().reports_key_release())
+            };
+            if reported {
+                handle_input_event(this, objc2::sel!(keyUp:), event);
+            }
+        });
     }
 
     /// Dispatch a hover status change through the per-window callbacks.
@@ -671,14 +678,18 @@ pub(crate) mod macos {
 
     /// mouseEntered: — report hover gained, then forward the pointer event.
     extern "C-unwind" fn mouse_entered(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-        dispatch_hover_change(this, true);
-        handle_input_event(this, sel, event);
+        os_entry("mouseEntered:", AfterPanic::Answer(|| ()), || {
+            dispatch_hover_change(this, true);
+            handle_input_event(this, sel, event);
+        });
     }
 
     /// mouseExited: — report hover lost, then forward the pointer event.
     extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-        dispatch_hover_change(this, false);
-        handle_input_event(this, sel, event);
+        os_entry("mouseExited:", AfterPanic::Answer(|| ()), || {
+            dispatch_hover_change(this, false);
+            handle_input_event(this, sel, event);
+        });
     }
 
     /// drawRect: — the platform asks for content; forward as a frame request.
@@ -696,27 +707,29 @@ pub(crate) mod macos {
     ///
     /// [`DisplayPassGuard`]: crate::window::apple::macos::display_pass::DisplayPassGuard
     extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
-        // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
-        // is the documented NSView teardown of the dirty region.
-        unsafe {
-            let _display_pass =
-                crate::window::apple::macos::display_pass::DisplayPassGuard::enter();
-            if let Some(callbacks) = get_context(this).and_then(|ctx| ctx.callbacks.upgrade()) {
-                tracing::trace!("FLUIContentView drawRect: dispatching frame request");
-                callbacks.dispatch_request_frame();
-            } else {
-                // The window's callbacks are gone (torn down, or the view outlived
-                // its window). AppKit still owns this display pass, so the super
-                // call below runs either way — but a missing callback here is why a
-                // frame that AppKit asked for produced no frame request, which is
-                // otherwise indistinguishable from AppKit never asking at all.
-                tracing::trace!(
-                    "FLUIContentView drawRect: no live callbacks; frame request dropped"
-                );
-            }
+        os_entry("drawRect:", AfterPanic::Answer(|| ()), || {
+            // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
+            // is the documented NSView teardown of the dirty region.
+            unsafe {
+                let _display_pass =
+                    crate::window::apple::macos::display_pass::DisplayPassGuard::enter();
+                if let Some(callbacks) = get_context(this).and_then(|ctx| ctx.callbacks.upgrade()) {
+                    tracing::trace!("FLUIContentView drawRect: dispatching frame request");
+                    callbacks.dispatch_request_frame();
+                } else {
+                    // The window's callbacks are gone (torn down, or the view outlived
+                    // its window). AppKit still owns this display pass, so the super
+                    // call below runs either way — but a missing callback here is why a
+                    // frame that AppKit asked for produced no frame request, which is
+                    // otherwise indistinguishable from AppKit never asking at all.
+                    tracing::trace!(
+                        "FLUIContentView drawRect: no live callbacks; frame request dropped"
+                    );
+                }
 
-            let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
-        }
+                let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
+            }
+        });
     }
 
     /// The light/dark half of `object`'s effective appearance: the system theme,
@@ -746,23 +759,29 @@ pub(crate) mod macos {
     /// `viewDidChangeEffectiveAppearance` — AppKit re-resolved this view's
     /// appearance: the system theme flipped, or something that keeps it did.
     extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel: Sel) {
-        // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
-        // thread; the super call is NSView's own (empty) implementation.
-        unsafe {
-            let _: () = msg_send![
-                super(this, NSViewClass::class()),
-                viewDidChangeEffectiveAppearance
-            ];
-            let Some(ctx) = get_context(this) else {
-                return;
-            };
-            let appearance = effective_appearance(as_view(this));
-            if ctx.appearance.replace(appearance) != appearance
-                && let Some(callbacks) = ctx.callbacks.upgrade()
-            {
-                callbacks.dispatch_appearance_changed();
-            }
-        }
+        os_entry(
+            "viewDidChangeEffectiveAppearance",
+            AfterPanic::Answer(|| ()),
+            || {
+                // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
+                // thread; the super call is NSView's own (empty) implementation.
+                unsafe {
+                    let _: () = msg_send![
+                        super(this, NSViewClass::class()),
+                        viewDidChangeEffectiveAppearance
+                    ];
+                    let Some(ctx) = get_context(this) else {
+                        return;
+                    };
+                    let appearance = effective_appearance(as_view(this));
+                    if ctx.appearance.replace(appearance) != appearance
+                        && let Some(callbacks) = ctx.callbacks.upgrade()
+                    {
+                        callbacks.dispatch_appearance_changed();
+                    }
+                }
+            },
+        );
     }
 
     /// Get or create the FLUIContentView class
@@ -784,19 +803,35 @@ pub(crate) mod macos {
 
             // acceptsFirstResponder - Allow view to become first responder
             extern "C-unwind" fn accepts_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
-                Bool::YES
+                os_entry(
+                    "acceptsFirstResponder",
+                    AfterPanic::Answer(|| Bool::YES),
+                    || Bool::YES,
+                )
             }
 
             // becomeFirstResponder
             extern "C-unwind" fn become_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
-                tracing::debug!("FLUIContentView became first responder");
-                Bool::YES
+                os_entry(
+                    "becomeFirstResponder",
+                    AfterPanic::Answer(|| Bool::YES),
+                    || {
+                        tracing::debug!("FLUIContentView became first responder");
+                        Bool::YES
+                    },
+                )
             }
 
             // resignFirstResponder
             extern "C-unwind" fn resign_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
-                tracing::debug!("FLUIContentView resigned first responder");
-                Bool::YES
+                os_entry(
+                    "resignFirstResponder",
+                    AfterPanic::Answer(|| Bool::YES),
+                    || {
+                        tracing::debug!("FLUIContentView resigned first responder");
+                        Bool::YES
+                    },
+                )
             }
 
             // flagsChanged: — modifier keys (Shift, Control, Alt, Command).
@@ -807,32 +842,45 @@ pub(crate) mod macos {
                 _sel: Sel,
                 _event: *mut AnyObject,
             ) {
-                tracing::trace!("Modifier flags changed");
+                os_entry("flagsChanged:", AfterPanic::Answer(|| ()), || {
+                    tracing::trace!("Modifier flags changed");
+                });
             }
 
             // =================================================================
             // View Lifecycle
             // =================================================================
 
+            // A context whose teardown panics is contained apart, so the
+            // mandatory super `dealloc` still runs after it.
             extern "C-unwind" fn dealloc(this: &AnyObject, _sel: Sel) {
-                // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
-                // in `create_content_view`; reclaiming it here (exactly once, on
-                // dealloc) is the matching release. The super dealloc message is
-                // the mandatory NSObject teardown.
-                unsafe {
-                    let class = AnyClass::get(c"FLUIContentView")
-                        .expect("BUG: dealloc only runs on a registered FLUIContentView");
-                    let ivar = class
-                        .instance_variable(CONTEXT_IVAR)
-                        .expect("BUG: FLUIContentView declares the context ivar");
-                    let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(this);
-                    let context_ptr = *slot;
-                    if !context_ptr.is_null() {
-                        drop(Box::from_raw(context_ptr.cast::<ViewContext>()));
-                    }
+                os_entry(
+                    "FLUIContentView's dealloc",
+                    AfterPanic::Answer(|| ()),
+                    || {
+                        // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
+                        // in `create_content_view`; reclaiming it here (exactly once, on
+                        // dealloc) is the matching release. The super dealloc message is
+                        // the mandatory NSObject teardown.
+                        unsafe {
+                            let class = AnyClass::get(c"FLUIContentView")
+                                .expect("BUG: dealloc only runs on a registered FLUIContentView");
+                            let ivar = class
+                                .instance_variable(CONTEXT_IVAR)
+                                .expect("BUG: FLUIContentView declares the context ivar");
+                            let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(this);
+                            let context_ptr = *slot;
+                            if !context_ptr.is_null() {
+                                let context = Box::from_raw(context_ptr.cast::<ViewContext>());
+                                crate::owner::panic_boundary::contain_owner_callback(|| {
+                                    drop(context);
+                                });
+                            }
 
-                    let _: () = msg_send![super(this, NSViewClass::class()), dealloc];
-                }
+                            let _: () = msg_send![super(this, NSViewClass::class()), dealloc];
+                        }
+                    },
+                );
             }
 
             // =================================================================
@@ -840,11 +888,17 @@ pub(crate) mod macos {
             // =================================================================
 
             extern "C-unwind" fn is_opaque(_this: &AnyObject, _sel: Sel) -> Bool {
-                Bool::YES // Our view is fully opaque
+                // Our view is fully opaque
+                os_entry("isOpaque", AfterPanic::Answer(|| Bool::YES), || Bool::YES)
             }
 
             extern "C-unwind" fn accepts_touch_events(_this: &AnyObject, _sel: Sel) -> Bool {
-                Bool::YES // Accept touch events for future trackpad gestures
+                // Accept touch events for future trackpad gestures
+                os_entry(
+                    "acceptsTouchEvents",
+                    AfterPanic::Answer(|| Bool::YES),
+                    || Bool::YES,
+                )
             }
 
             // =================================================================

@@ -17,7 +17,7 @@ use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol,
 };
 
-use crate::owner::panic_boundary::contain_owner_callback;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 pub(crate) struct Observation {
     center: Retained<NSNotificationCenter>,
@@ -40,7 +40,7 @@ impl Observation {
         let block = {
             let active = Arc::clone(&active);
             RcBlock::new(move |_: NonNull<NSNotification>| {
-                contain_owner_callback(|| {
+                os_entry("a notification observer", AfterPanic::Answer(|| ()), || {
                     if active.load(Ordering::Acquire) {
                         handler();
                     }

@@ -296,7 +296,7 @@ pub(crate) mod source {
             GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE,
             QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
         },
-        Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, RECT, TRUE},
+        Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, FALSE, HWND, LPARAM, RECT, TRUE},
         Graphics::Gdi::{
             DEVMODEW, DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, ENUM_CURRENT_SETTINGS,
             EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC,
@@ -316,6 +316,7 @@ pub(crate) mod source {
     };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::version::gate::Since;
     use crate::version::gate::windows::WindowsBuild;
 
@@ -758,16 +759,26 @@ pub(crate) mod source {
             _rect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
-            // SAFETY: `lparam.0` is the address of `monitors` below, cast to
-            // `isize`. `EnumDisplayMonitors` blocks until every callback returns, so
-            // the vector is live and no other reference to it exists concurrently.
-            let monitors = unsafe {
-                &mut *std::ptr::with_exposed_provenance_mut::<Vec<Monitor>>(lparam.0 as usize)
-            };
-            if let Some(monitor) = Monitor::new(hmonitor) {
-                monitors.push(monitor);
-            }
-            TRUE
+            // A panic ends the enumeration with the monitors read so far.
+            os_entry(
+                "the monitor enumeration",
+                AfterPanic::Answer(|| FALSE),
+                || {
+                    // SAFETY: `lparam.0` is the address of `monitors` below, cast to
+                    // `isize`. `EnumDisplayMonitors` blocks until every callback
+                    // returns, so the vector is live and no other reference to it
+                    // exists concurrently.
+                    let monitors = unsafe {
+                        &mut *std::ptr::with_exposed_provenance_mut::<Vec<Monitor>>(
+                            lparam.0 as usize,
+                        )
+                    };
+                    if let Some(monitor) = Monitor::new(hmonitor) {
+                        monitors.push(monitor);
+                    }
+                    TRUE
+                },
+            )
         }
 
         let mut monitors: Vec<Monitor> = Vec::new();

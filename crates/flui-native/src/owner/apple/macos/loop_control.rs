@@ -27,6 +27,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
+    owner::panic_boundary::{AfterPanic, os_entry},
 };
 use flui_platform::PlatformWindow;
 
@@ -117,7 +118,7 @@ impl LoopControl {
         let blocked = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
         let epoch = self.terminate_gate.lock().announced(blocked);
         if let Some(epoch) = epoch {
-            self.after(ANNOUNCEMENT_LIFETIME, move |control| {
+            self.run_after(ANNOUNCEMENT_LIFETIME, move |control| {
                 if control.terminate_gate.lock().announcement_lapsed(epoch) {
                     control.ask_session_end(SessionEndPhase::Cancelled);
                 }
@@ -162,7 +163,7 @@ impl LoopControl {
                 NSApplicationTerminateReply::TerminateNow
             }
             Termination::Later { epoch } => {
-                self.after(DEFERRAL_LIMIT, move |control| {
+                self.run_after(DEFERRAL_LIMIT, move |control| {
                     if control.terminate_gate.lock().deferral_ran_out(epoch) {
                         tracing::warn!("a session end waited the full limit for the application");
                         control.finish_session_end(Reply::ToAppKit);
@@ -175,14 +176,18 @@ impl LoopControl {
 
     /// Run `body` on the owner lane after `delay`, if the control is still
     /// alive.
-    fn after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
+    fn run_after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
         let weak = Arc::downgrade(self);
         owner_queue().exec_after(delay, move || {
-            cleanup_step(|| {
-                if let Some(control) = weak.upgrade() {
-                    body(&control);
-                }
-            });
+            os_entry(
+                "a deferred owner-lane task",
+                AfterPanic::Answer(|| ()),
+                || {
+                    if let Some(control) = weak.upgrade() {
+                        body(&control);
+                    }
+                },
+            );
         });
     }
 
@@ -497,32 +502,37 @@ define_class!(
     unsafe impl NSObjectProtocol for LoopDelegate {}
     // SAFETY: this delegate is retained for its entire installation on main.
     unsafe impl NSApplicationDelegate for LoopDelegate {
+        // FLUI owns window policy. Suppress AppKit's default untitled
+        // document creation, regardless of its visible-window classification,
+        // and after a panic too.
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_reopen(&self, _app: &NSApplication, _has_visible_windows: bool) -> bool {
-            cleanup_step(|| {
-                if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
-            });
-            // FLUI owns window policy. Suppress AppKit's default untitled
-            // document creation, regardless of its visible-window classification.
-            false
+            os_entry(
+                "applicationShouldHandleReopen:hasVisibleWindows:",
+                AfterPanic::Answer(|| false),
+                || {
+                    if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
+                    false
+                },
+            )
         }
 
+        // An ordinary quit never runs user teardown inside the Objective-C
+        // callback: it queues the request and cancels this one. A session
+        // end is answered here, since the system waits for the answer. A
+        // panic cancels the termination.
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
-            // An ordinary quit never runs user teardown inside the Objective-C
-            // callback: it queues the request and cancels this one. A session
-            // end is answered here, since the system waits for the answer.
-            // Guard everything: Rust unwinding must not cross this ABI.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.ivars()
-                    .upgrade()
-                    .map(|control| control.terminate_requested())
-            }))
-            .unwrap_or_else(|payload| {
-                report_contained_panic(payload);
-                None
-            })
-            .unwrap_or(NSApplicationTerminateReply::TerminateCancel)
+            os_entry(
+                "applicationShouldTerminate:",
+                AfterPanic::Answer(|| NSApplicationTerminateReply::TerminateCancel),
+                || {
+                    self.ivars().upgrade().map_or(
+                        NSApplicationTerminateReply::TerminateCancel,
+                        |control| control.terminate_requested(),
+                    )
+                },
+            )
         }
     }
 );

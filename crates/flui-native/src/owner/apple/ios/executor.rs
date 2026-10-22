@@ -21,18 +21,19 @@ impl std::fmt::Debug for IOSExecutor {
 impl PlatformExecutor for IOSExecutor {
     fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
         // `spawn` returns nothing, so a panicking task must not unwind across
-        // the GCD block's `extern "C"` trampoline. The same shield
-        // `owner_lane.rs` uses on macOS is applied here: catch the panic and
-        // retain its opaque payload without running arbitrary destructors.
+        // the GCD block's `extern "C"` trampoline: the boundary logs it and
+        // retains its opaque payload without running arbitrary destructors.
         // The task itself is FnOnce: its capture destruction is still governed
         // by Rust's ordinary consuming-call unwind rules.
         DispatchQueue::global_queue(GlobalQueueIdentifier::Priority(
             DispatchQueueGlobalPriority::Default,
         ))
         .exec_async(move || {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task)) {
-                flui_foundation::panic::retain_opaque_payload(payload);
-            }
+            crate::owner::panic_boundary::os_entry(
+                "a background task",
+                crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                task,
+            );
         });
     }
 

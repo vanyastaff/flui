@@ -42,10 +42,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, RuntimeName};
 
 use crate::PlatformError;
+use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
+use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::OwnerPreferences;
-use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 
 mod languages;
 #[cfg(test)]
@@ -257,8 +258,14 @@ impl PreferenceSource {
             source
                 .ui
                 .TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
-                    contain_owner_callback(|| text.notify());
-                    Ok(())
+                    os_entry(
+                        "the text-scale delegate",
+                        AfterPanic::Answer(|| Ok(())),
+                        || {
+                            text.notify();
+                            Ok(())
+                        },
+                    )
                 }))
                 .map_err(native_error)?,
         );
@@ -267,8 +274,14 @@ impl PreferenceSource {
             source
                 .ui
                 .AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
-                    contain_owner_callback(|| motion.notify());
-                    Ok(())
+                    os_entry(
+                        "the animations delegate",
+                        AfterPanic::Answer(|| Ok(())),
+                        || {
+                            motion.notify();
+                            Ok(())
+                        },
+                    )
                 }))
                 .map_err(native_error)?,
         );

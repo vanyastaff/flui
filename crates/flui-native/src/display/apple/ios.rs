@@ -167,19 +167,22 @@ impl ScreenObserver {
             RcBlock::new(move |_: NonNull<NSNotification>| {
                 // Delivered on the posting thread; the notification is never
                 // read. Dropping the upgraded leases can release the last
-                // owner, so the whole body runs inside the owner-callback
-                // panic boundary.
-                crate::owner::panic_boundary::contain_owner_callback(|| {
-                    if !active.load(Ordering::Acquire) {
-                        return;
-                    }
-                    if let Some(displays) = displays.upgrade() {
-                        displays.source.invalidate();
-                    }
-                    if let Some(signal) = signal.upgrade() {
-                        let _ = signal.wake();
-                    }
-                });
+                // owner, so the whole body runs inside the panic boundary.
+                crate::owner::panic_boundary::os_entry(
+                    "the screen observer",
+                    crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                    || {
+                        if !active.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if let Some(displays) = displays.upgrade() {
+                            displays.source.invalidate();
+                        }
+                        if let Some(signal) = signal.upgrade() {
+                            let _ = signal.wake();
+                        }
+                    },
+                );
             })
         };
         let center = NSNotificationCenter::defaultCenter();

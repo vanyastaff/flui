@@ -38,6 +38,7 @@ use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
 use super::bridge::BridgeShared;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -45,15 +46,25 @@ use flui_semantics::{
 
 struct Activation(Arc<BridgeShared>);
 
+// Each handler runs the composition root's listener inside AccessKit's UIA
+// entry, an `extern "system"` vtable method: a panic in it is contained here
+// and answers as if no listener ran.
+
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        // Order matters: mark active and tell the composition root *before*
-        // reading the retained tree. The listener typically enables
-        // semantics, and on a cold start that is what will produce the first
-        // tree at all — reading first would answer `None` even when a
-        // synchronous listener could have supplied one.
-        self.0.notify_activation(true);
-        self.0.retained()
+        os_entry(
+            "AccessKit's activation",
+            AfterPanic::Answer(|| None),
+            || {
+                // Order matters: mark active and tell the composition root *before*
+                // reading the retained tree. The listener typically enables
+                // semantics, and on a cold start that is what will produce the first
+                // tree at all — reading first would answer `None` even when a
+                // synchronous listener could have supplied one.
+                self.0.notify_activation(true);
+                self.0.retained()
+            },
+        )
     }
 }
 
@@ -61,7 +72,9 @@ struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
-        self.0.notify_action(request);
+        os_entry("an AccessKit action", AfterPanic::Answer(|| ()), || {
+            self.0.notify_action(request);
+        });
     }
 }
 
@@ -211,5 +224,45 @@ impl PlatformAccessibility for WindowsAccessibility {
 
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         self.shared.set_action_listener(listener);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+
+    use accesskit::{ActionHandler, ActionRequest, ActivationHandler, NodeId, TreeId};
+
+    use super::{Action, Activation, BridgeShared};
+
+    /// AccessKit calls the handlers from its UIA vtable methods, which are
+    /// `extern "system"`: a panic of the composition root's listener is
+    /// contained by the handler, which answers as if no listener ran.
+    /// Red-check: call the listener outside `os_entry` (the panic unwinds
+    /// out of the handler, and under UIA aborts the process).
+    #[test]
+    fn a_panicking_listener_stays_inside_its_handler() {
+        let shared = Arc::new(BridgeShared::new());
+        shared.set_activation_listener(Arc::new(|_| panic!("activation listener")));
+        shared.set_action_listener(Arc::new(|_| panic!("action listener")));
+
+        let contained = catch_unwind(AssertUnwindSafe(|| {
+            let initial = Activation(Arc::clone(&shared)).request_initial_tree();
+            Action(Arc::clone(&shared)).do_action(ActionRequest {
+                action: accesskit::Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(1),
+                data: None,
+            });
+            initial
+        }));
+
+        let initial = contained.expect("a listener's panic unwound out of its handler");
+        assert!(initial.is_none(), "a failed activation answers no tree");
+        assert!(
+            shared.is_active(),
+            "the activation reached the bridge before its listener failed"
+        );
     }
 }

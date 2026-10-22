@@ -27,7 +27,7 @@ use crate::{
     owner::hwnd_affinity::UserDataVerdict,
     owner::hwnd_affinity::classify_user_data_access,
     owner::notices::NoticeChannel,
-    owner::panic_boundary::contain_owner_callback,
+    owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry},
     owner::signal::OwnerSignal,
     owner::signal::OwnerTurnSlot,
     owner::sources::SystemPreferenceSource,
@@ -724,65 +724,75 @@ unsafe extern "system" fn procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let mut result = LRESULT(0);
-    contain_owner_callback(|| {
-        // SAFETY: only this class stores `OwnerControlContext` userdata, and
-        // Win32 runs this procedure on the owner thread, the only thread
-        // that frees it (`WM_NCDESTROY`, below). A wake turn, the exit
-        // policy and a feature's hook clone what they use out of the context
-        // before running callbacks, so a callback that tears the window down
-        // cannot free what they still use.
-        unsafe {
-            let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
-            if message == WM_NCDESTROY && !pointer.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                let context = Box::from_raw(pointer);
-                let hooks = Rc::clone(&context.owner_hooks);
-                // Each step is contained apart: a panic in one leaves the
-                // rest to run.
-                contain_owner_callback(|| drop(context));
-                // What a feature was to run from this window never runs: it
-                // is told so here, with nothing of the window left to reach.
-                for hook in hooks.iter() {
-                    contain_owner_callback(|| hook.destroyed());
+    os_entry(
+        "the owner's message window",
+        AfterPanic::Answer(|| LRESULT(0)),
+        || {
+            // A hook's contained panic answers 0.
+            let mut result = LRESULT(0);
+            contain_owner_callback(|| {
+                // SAFETY: only this class stores `OwnerControlContext` userdata, and
+                // Win32 runs this procedure on the owner thread, the only thread
+                // that frees it (`WM_NCDESTROY`, below). A wake turn, the exit
+                // policy and a feature's hook clone what they use out of the context
+                // before running callbacks, so a callback that tears the window down
+                // cannot free what they still use.
+                unsafe {
+                    let pointer =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
+                    if message == WM_NCDESTROY && !pointer.is_null() {
+                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                        let context = Box::from_raw(pointer);
+                        let hooks = Rc::clone(&context.owner_hooks);
+                        // Each step is contained apart: a panic in one leaves the
+                        // rest to run.
+                        contain_owner_callback(|| drop(context));
+                        // What a feature was to run from this window never runs: it
+                        // is told so here, with nothing of the window left to reach.
+                        for hook in hooks.iter() {
+                            contain_owner_callback(|| hook.destroyed());
+                        }
+                    } else if message == WAKE && !pointer.is_null() {
+                        let signal = Arc::clone(&(*pointer).signal);
+                        let turn = Rc::clone(&(*pointer).turn);
+                        if signal.drive_in(&*turn) {
+                            quit_owner_loop(&signal, &turn);
+                        }
+                        return;
+                    } else if message == EXIT_POLICY && !pointer.is_null() {
+                        let context = &*pointer;
+                        context.exit_policy_pending.store(false, Ordering::Release);
+                        let signal = Arc::clone(&context.signal);
+                        let turn = Rc::clone(&context.turn);
+                        let handlers = Rc::clone(&context.handlers);
+                        let windows = context.windows.clone();
+                        if exit_policy_allows_exit(&signal, &handlers, &windows) {
+                            quit_owner_loop(&signal, &turn);
+                        }
+                        return;
+                    } else if !pointer.is_null() {
+                        // Cloned out first: a hook runs user code (a drag session's
+                        // modal loop) that may tear this window down.
+                        let (hooks, owner) = {
+                            let context = &*pointer;
+                            let owner = OwnerWindow {
+                                hwnd,
+                                signal: Arc::downgrade(&context.signal),
+                                frames: Rc::downgrade(&context.modal_frames),
+                            };
+                            (Rc::clone(&context.owner_hooks), owner)
+                        };
+                        if let Some(answer) =
+                            hooks.iter().find_map(|hook| hook.message(&owner, message))
+                        {
+                            result = answer;
+                            return;
+                        }
+                    }
+                    result = DefWindowProcW(hwnd, message, wparam, lparam);
                 }
-            } else if message == WAKE && !pointer.is_null() {
-                let signal = Arc::clone(&(*pointer).signal);
-                let turn = Rc::clone(&(*pointer).turn);
-                if signal.drive_in(&*turn) {
-                    quit_owner_loop(&signal, &turn);
-                }
-                return;
-            } else if message == EXIT_POLICY && !pointer.is_null() {
-                let context = &*pointer;
-                context.exit_policy_pending.store(false, Ordering::Release);
-                let signal = Arc::clone(&context.signal);
-                let turn = Rc::clone(&context.turn);
-                let handlers = Rc::clone(&context.handlers);
-                let windows = context.windows.clone();
-                if exit_policy_allows_exit(&signal, &handlers, &windows) {
-                    quit_owner_loop(&signal, &turn);
-                }
-                return;
-            } else if !pointer.is_null() {
-                // Cloned out first: a hook runs user code (a drag session's
-                // modal loop) that may tear this window down.
-                let (hooks, owner) = {
-                    let context = &*pointer;
-                    let owner = OwnerWindow {
-                        hwnd,
-                        signal: Arc::downgrade(&context.signal),
-                        frames: Rc::downgrade(&context.modal_frames),
-                    };
-                    (Rc::clone(&context.owner_hooks), owner)
-                };
-                if let Some(answer) = hooks.iter().find_map(|hook| hook.message(&owner, message)) {
-                    result = answer;
-                    return;
-                }
-            }
-            result = DefWindowProcW(hwnd, message, wparam, lparam);
-        }
-    });
-    result
+            });
+            result
+        },
+    )
 }

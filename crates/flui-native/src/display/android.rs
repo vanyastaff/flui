@@ -251,7 +251,6 @@ pub(crate) mod source {
     //! only invalidates the source and wakes the owner, which does the read.
 
     use std::ffi::c_void;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::ptr::NonNull;
     use std::sync::{
         Arc, Weak,
@@ -274,6 +273,7 @@ pub(crate) mod source {
     use crate::owner::android::ndk::{
         AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
     };
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
     use crate::owner::watch::Watch;
     use crate::version::gate::android::{AndroidApi, ContextDisplay};
@@ -361,14 +361,18 @@ pub(crate) mod source {
         reason = "an extern \"C\" callback receiving the registered data"
     )]
     unsafe extern "C" fn on_refresh_rate(period_nanos: i64, data: *mut c_void) {
-        // SAFETY: `data` is the `Arc<Invalidator>` pointer registered with this
-        // callback, which stays allocated until the callback is unregistered.
-        let invalidator = unsafe { &*data.cast::<Invalidator>() };
-        // A panic must not unwind into the NDK.
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            tracing::debug!(period_nanos, "Android: the display refresh rate changed");
-            invalidator.raise();
-        }));
+        os_entry(
+            "the choreographer's refresh-rate callback",
+            AfterPanic::Answer(|| ()),
+            || {
+                // SAFETY: `data` is the `Arc<Invalidator>` pointer registered with
+                // this callback, which stays allocated until the callback is
+                // unregistered.
+                let invalidator = unsafe { &*data.cast::<Invalidator>() };
+                tracing::debug!(period_nanos, "Android: the display refresh rate changed");
+                invalidator.raise();
+            },
+        );
     }
 
     /// The displays of the device, sampled through JNI and kept between samples.

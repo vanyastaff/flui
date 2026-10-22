@@ -123,14 +123,18 @@ impl IOSPreferences {
             // This notification may arrive on a foreign thread. Neither UIKit
             // reads nor UI callbacks enter it; OwnerSignal retains wake debt.
             // The temporary signal lease can be its final strong owner. Retire
-            // any callback captures inside the existing owner panic boundary.
-            crate::owner::panic_boundary::contain_owner_callback(|| {
-                if callback_active.load(Ordering::Acquire)
-                    && let Some(signal) = signal.upgrade()
-                {
-                    let _ = signal.wake();
-                }
-            });
+            // any callback captures inside the panic boundary.
+            crate::owner::panic_boundary::os_entry(
+                "the preference observer",
+                crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                || {
+                    if callback_active.load(Ordering::Acquire)
+                        && let Some(signal) = signal.upgrade()
+                    {
+                        let _ = signal.wake();
+                    }
+                },
+            );
         });
         // Own each token as soon as registration succeeds. If a later
         // registration unwinds, Drop closes admission and removes the earlier

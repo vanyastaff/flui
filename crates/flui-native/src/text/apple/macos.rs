@@ -57,6 +57,7 @@ use flui_platform::ImeEvent;
 
 use crate::input::apple::macos::{ViewContext, get_context as get_view_context};
 use crate::owner::apple::macos::exec_on_owner;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::PlatformTextInput;
 
 // ============================================================================
@@ -294,20 +295,24 @@ extern "C-unwind" fn insert_text(
     // an object that declares it, and `add_text_input_methods` registered this
     // one on that class; `string` is the live argument for the duration of the
     // call, and its bytes are copied before this function returns.
-    unsafe {
-        let Some(ctx) = get_view_context(this) else {
-            return;
-        };
-        let Some(text) = insert_text_argument_string(string) else {
-            tracing::trace!("insertText: carried no readable string; commit dropped");
-            return;
-        };
-        // State before announcement, as in `set_marked_text`: once `insertText:`
-        // returns, AppKit requires `hasMarkedText` to answer NO, and the
-        // dispatched commit runs application code that may ask.
-        ctx.text_input.borrow_mut().clear_marked_text();
-        emit_ime(ctx, ImeEvent::Commit(text));
-    }
+    os_entry(
+        "insertText:replacementRange:",
+        AfterPanic::Answer(|| ()),
+        || unsafe {
+            let Some(ctx) = get_view_context(this) else {
+                return;
+            };
+            let Some(text) = insert_text_argument_string(string) else {
+                tracing::trace!("insertText: carried no readable string; commit dropped");
+                return;
+            };
+            // State before announcement, as in `set_marked_text`: once `insertText:`
+            // returns, AppKit requires `hasMarkedText` to answer NO, and the
+            // dispatched commit runs application code that may ask.
+            ctx.text_input.borrow_mut().clear_marked_text();
+            emit_ime(ctx, ImeEvent::Commit(text));
+        },
+    );
 }
 
 /// `setMarkedText:selectedRange:replacementRange:` — the composition changed.
@@ -325,22 +330,26 @@ extern "C-unwind" fn set_marked_text(
 ) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`); `string` is
     // the live argument for the duration of the call, copied out immediately.
-    unsafe {
-        let Some(ctx) = get_view_context(this) else {
-            return;
-        };
-        let text = ns_string_to_owned(string).unwrap_or_default();
-        let cursor =
-            utf16_range_to_byte_range(&text, selected_range.location, selected_range.length);
-        {
-            let mut state = ctx.text_input.borrow_mut();
-            state.marked_text.clone_from(&text);
-            state.marked_range = (0, utf16_len(&text));
-            state.selected_range = (selected_range.location, selected_range.length);
-        }
-        tracing::trace!("IME composition updated ({} bytes marked)", text.len());
-        emit_ime(ctx, ImeEvent::Preedit { text, cursor });
-    }
+    os_entry(
+        "setMarkedText:selectedRange:replacementRange:",
+        AfterPanic::Answer(|| ()),
+        || unsafe {
+            let Some(ctx) = get_view_context(this) else {
+                return;
+            };
+            let text = ns_string_to_owned(string).unwrap_or_default();
+            let cursor =
+                utf16_range_to_byte_range(&text, selected_range.location, selected_range.length);
+            {
+                let mut state = ctx.text_input.borrow_mut();
+                state.marked_text.clone_from(&text);
+                state.marked_range = (0, utf16_len(&text));
+                state.selected_range = (selected_range.location, selected_range.length);
+            }
+            tracing::trace!("IME composition updated ({} bytes marked)", text.len());
+            emit_ime(ctx, ImeEvent::Preedit { text, cursor });
+        },
+    );
 }
 
 /// `unmarkText` — the composition was abandoned; nothing is committed.
@@ -361,7 +370,7 @@ extern "C-unwind" fn set_marked_text(
 /// callback needs no `hasMarkedText` check of its own.
 extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    unsafe {
+    os_entry("unmarkText", AfterPanic::Answer(|| ()), || unsafe {
         if let Some(ctx) = get_view_context(this) {
             ctx.text_input.borrow_mut().clear_marked_text();
             emit_ime(
@@ -372,34 +381,43 @@ extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
                 },
             );
         }
-    }
+    });
 }
 
 /// `hasMarkedText` — is a composition in progress?
 extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    unsafe {
-        match get_view_context(this) {
-            Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => Bool::YES,
-            _ => Bool::NO,
-        }
-    }
+    os_entry(
+        "hasMarkedText",
+        AfterPanic::Answer(|| Bool::NO),
+        || unsafe {
+            match get_view_context(this) {
+                Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => Bool::YES,
+                _ => Bool::NO,
+            }
+        },
+    )
+}
+
+/// No range: `{NSNotFound, 0}`.
+fn not_found() -> NSRange {
+    NSRange::new(NSNotFound as usize, 0)
 }
 
 /// `markedRange` — the range of the composition, in UTF-16 units.
 extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    unsafe {
+    os_entry("markedRange", AfterPanic::Answer(not_found), || unsafe {
         let Some(ctx) = get_view_context(this) else {
-            return NSRange::new(NSNotFound as usize, 0);
+            return not_found();
         };
         let state = ctx.text_input.borrow();
         if state.marked_text.is_empty() {
-            NSRange::new(NSNotFound as usize, 0)
+            not_found()
         } else {
             NSRange::new(state.marked_range.0, state.marked_range.1)
         }
-    }
+    })
 }
 
 /// `selectedRange` — the caret's range within the composition.
@@ -409,17 +427,17 @@ extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
 /// documents that pair as "no selection".
 extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    unsafe {
+    os_entry("selectedRange", AfterPanic::Answer(not_found), || unsafe {
         let Some(ctx) = get_view_context(this) else {
-            return NSRange::new(NSNotFound as usize, 0);
+            return not_found();
         };
         let state = ctx.text_input.borrow();
         if state.marked_text.is_empty() {
-            NSRange::new(NSNotFound as usize, 0)
+            not_found()
         } else {
             NSRange::new(state.selected_range.0, state.selected_range.1)
         }
-    }
+    })
 }
 
 /// `validAttributesForMarkedText` — the attributes this view honours.
@@ -432,7 +450,11 @@ extern "C-unwind" fn valid_attributes_for_marked_text(
 ) -> *mut AnyObject {
     // SAFETY: `+[NSArray array]` is a class constructor on a class AppKit
     // always provides; it returns an autoreleased empty array.
-    unsafe { msg_send![objc2::class!(NSArray), array] }
+    os_entry(
+        "validAttributesForMarkedText",
+        AfterPanic::Answer(std::ptr::null_mut),
+        || unsafe { msg_send![objc2::class!(NSArray), array] },
+    )
 }
 
 /// `attributedSubstringForProposedRange:actualRange:` — the text in a range.
@@ -446,11 +468,17 @@ extern "C-unwind" fn attributed_substring_for_proposed_range(
     _range: NSRange,
     actual_range: *mut NSRange,
 ) -> *mut AnyObject {
-    // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
-    // null or a valid writable `NSRange*` — which is what `write_actual_range`
-    // requires.
-    unsafe { write_actual_range(actual_range, NSRange::new(NSNotFound as usize, 0)) };
-    std::ptr::null_mut()
+    os_entry(
+        "attributedSubstringForProposedRange:actualRange:",
+        AfterPanic::Answer(std::ptr::null_mut),
+        || {
+            // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
+            // null or a valid writable `NSRange*` — which is what
+            // `write_actual_range` requires.
+            unsafe { write_actual_range(actual_range, not_found()) };
+            std::ptr::null_mut()
+        },
+    )
 }
 
 /// `firstRectForCharacterRange:actualRange:` — where to place candidates.
@@ -471,43 +499,47 @@ extern "C-unwind" fn first_rect_for_character_range(
     // AppKit's own getters on that live view, and the window is nil-checked
     // before `convertRectToScreen:` — a view with no window (mid-teardown) has
     // no screen rectangle to answer with.
-    unsafe {
-        write_actual_range(actual_range, NSRange::new(NSNotFound as usize, 0));
-        let Some(ctx) = get_view_context(this) else {
-            return zero_rect();
-        };
-        let state = ctx.text_input.borrow();
-        let Some(area) = state.cursor_area else {
-            return zero_rect();
-        };
-        // The range that goes with the area, which the SDK's contract requires
-        // of a non-null `actualRange` ("contains the character range
-        // corresponding to the returned area"). The area is the composing
-        // region while one is open and the caret otherwise — the only two
-        // things this view can place — so it is the marked range or a
-        // zero-length range at the view's origin, the same origin
-        // `marked_range` reports from. `{NSNotFound, 0}` is written above only
-        // for the paths that return `zero_rect()`, where there is no area for a
-        // range to correspond to.
-        let corresponding = if state.marked_text.is_empty() {
-            NSRange::new(0, 0)
-        } else {
-            NSRange::new(state.marked_range.0, state.marked_range.1)
-        };
-        let view_bounds: NSRect = msg_send![this, bounds];
-        let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height);
-        let window_rect = NSRect::new(
-            NSPoint::new(area.origin.x, flipped_y),
-            NSSize::new(area.size.width, area.size.height),
-        );
-        let window: *mut AnyObject = msg_send![this, window];
-        if window.is_null() {
-            return zero_rect();
-        }
-        let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
-        write_actual_range(actual_range, corresponding);
-        screen_rect
-    }
+    os_entry(
+        "firstRectForCharacterRange:actualRange:",
+        AfterPanic::Answer(zero_rect),
+        || unsafe {
+            write_actual_range(actual_range, not_found());
+            let Some(ctx) = get_view_context(this) else {
+                return zero_rect();
+            };
+            let state = ctx.text_input.borrow();
+            let Some(area) = state.cursor_area else {
+                return zero_rect();
+            };
+            // The range that goes with the area, which the SDK's contract requires
+            // of a non-null `actualRange` ("contains the character range
+            // corresponding to the returned area"). The area is the composing
+            // region while one is open and the caret otherwise — the only two
+            // things this view can place — so it is the marked range or a
+            // zero-length range at the view's origin, the same origin
+            // `marked_range` reports from. `{NSNotFound, 0}` is written above only
+            // for the paths that return `zero_rect()`, where there is no area for a
+            // range to correspond to.
+            let corresponding = if state.marked_text.is_empty() {
+                NSRange::new(0, 0)
+            } else {
+                NSRange::new(state.marked_range.0, state.marked_range.1)
+            };
+            let view_bounds: NSRect = msg_send![this, bounds];
+            let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height);
+            let window_rect = NSRect::new(
+                NSPoint::new(area.origin.x, flipped_y),
+                NSSize::new(area.size.width, area.size.height),
+            );
+            let window: *mut AnyObject = msg_send![this, window];
+            if window.is_null() {
+                return zero_rect();
+            }
+            let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
+            write_actual_range(actual_range, corresponding);
+            screen_rect
+        },
+    )
 }
 
 /// `characterIndexForPoint:` — the character under a point.
@@ -518,7 +550,11 @@ extern "C-unwind" fn character_index_for_point(
     _sel: Sel,
     _point: NSPoint,
 ) -> NSUInteger {
-    NSNotFound as NSUInteger
+    os_entry(
+        "characterIndexForPoint:",
+        AfterPanic::Answer(|| NSNotFound as NSUInteger),
+        || NSNotFound as NSUInteger,
+    )
 }
 
 /// `doCommandBySelector:` — a key the input method declined.
@@ -537,21 +573,27 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
     // or an `NSEvent*` AppKit owns and keeps alive across the
     // `interpretKeyEvents:` call whose dispatch is on this stack frame, which is
     // the only window in which this callback runs.
-    unsafe {
-        let Some(ctx) = get_view_context(this) else {
-            return;
-        };
-        let pending_key_event = ctx.text_input.borrow().pending_key_event;
-        if pending_key_event == 0 {
-            tracing::trace!("doCommandBySelector: outside a pending key press; command dropped");
-            return;
-        }
-        crate::input::apple::macos::handle_input_event(
-            this,
-            sel!(keyDown:),
-            pending_key_event as *mut AnyObject,
-        );
-    }
+    os_entry(
+        "doCommandBySelector:",
+        AfterPanic::Answer(|| ()),
+        || unsafe {
+            let Some(ctx) = get_view_context(this) else {
+                return;
+            };
+            let pending_key_event = ctx.text_input.borrow().pending_key_event;
+            if pending_key_event == 0 {
+                tracing::trace!(
+                    "doCommandBySelector: outside a pending key press; command dropped"
+                );
+                return;
+            }
+            crate::input::apple::macos::handle_input_event(
+                this,
+                sel!(keyDown:),
+                pending_key_event as *mut AnyObject,
+            );
+        },
+    );
 }
 
 /// Register the `NSTextInputClient` callbacks on a class being declared.

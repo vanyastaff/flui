@@ -68,6 +68,7 @@ mod host_events {
     use crate::owner::call_point::{Field, call};
     use crate::owner::handlers::PlatformHandlers;
     use crate::owner::notices::NoticeChannel;
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::windows::broadcast::Subscriber;
     use crate::owner::windows::control::OwnerLifecycle;
 
@@ -381,16 +382,23 @@ mod host_events {
     /// as holding the session up. The hidden receiver is the fallback.
     fn visible_window_of_this_thread() -> Option<HWND> {
         unsafe extern "system" fn first_visible(window: HWND, found: LPARAM) -> BOOL {
-            // SAFETY: `found` is the address of the `Option<HWND>` below, alive for
-            // the whole enumeration on this thread.
-            let found = unsafe { &mut *(found.0 as *mut Option<HWND>) };
-            // SAFETY: a plain query of the handle the enumeration hands over.
-            if unsafe { IsWindowVisible(window) }.as_bool() {
-                *found = Some(window);
-                BOOL::from(false)
-            } else {
-                BOOL::from(true)
-            }
+            // A panic ends the enumeration; the receiver is the fallback.
+            os_entry(
+                "the thread's window enumeration",
+                AfterPanic::Answer(|| BOOL::from(false)),
+                || {
+                    // SAFETY: `found` is the address of the `Option<HWND>` below,
+                    // alive for the whole enumeration on this thread.
+                    let found = unsafe { &mut *(found.0 as *mut Option<HWND>) };
+                    // SAFETY: a plain query of the handle the enumeration hands over.
+                    if unsafe { IsWindowVisible(window) }.as_bool() {
+                        *found = Some(window);
+                        BOOL::from(false)
+                    } else {
+                        BOOL::from(true)
+                    }
+                },
+            )
         }
 
         let mut found: Option<HWND> = None;
@@ -421,21 +429,27 @@ mod host_events {
         shared: Box<LowMemoryShared>,
     }
 
+    /// The thread pool's callback for the low-memory event; a panic in it
+    /// reports nothing for this signal.
     unsafe extern "system" fn low_memory_fired(context: *mut c_void, _timed_out: bool) {
-        // SAFETY: `context` is the address of the `LowMemoryShared` its
-        // `LowMemoryWait` keeps alive until the wait is unregistered and every
-        // running callback has returned.
-        let shared = unsafe { &*context.cast::<LowMemoryShared>() };
-        if shared.watch.lock().on_signal() {
-            let receiver = HWND(shared.receiver as *mut _);
-            // SAFETY: posting is legal from any thread; a destroyed receiver only
-            // makes it fail.
-            if unsafe { PostMessageW(Some(receiver), LOW_MEMORY, WPARAM(0), LPARAM(0)) }.is_err() {
-                // The report is owed and no message carries it: the owner collects it
-                // with the next message it gets.
-                shared.post_failed.store(true, Ordering::Release);
+        os_entry("the low-memory wait", AfterPanic::Answer(|| ()), || {
+            // SAFETY: `context` is the address of the `LowMemoryShared` its
+            // `LowMemoryWait` keeps alive until the wait is unregistered and every
+            // running callback has returned.
+            let shared = unsafe { &*context.cast::<LowMemoryShared>() };
+            if shared.watch.lock().on_signal() {
+                let receiver = HWND(shared.receiver as *mut _);
+                // SAFETY: posting is legal from any thread; a destroyed receiver
+                // only makes it fail.
+                if unsafe { PostMessageW(Some(receiver), LOW_MEMORY, WPARAM(0), LPARAM(0)) }
+                    .is_err()
+                {
+                    // The report is owed and no message carries it: the owner
+                    // collects it with the next message it gets.
+                    shared.post_failed.store(true, Ordering::Release);
+                }
             }
-        }
+        });
     }
 
     impl LowMemoryWait {

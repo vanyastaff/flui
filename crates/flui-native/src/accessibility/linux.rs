@@ -37,6 +37,7 @@ use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHan
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::BridgeShared;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -51,15 +52,25 @@ use flui_semantics::{
 
 struct Activation(Arc<BridgeShared>);
 
+// Each handler runs the composition root's listener on the adapter's thread,
+// inside AccessKit's own AT-SPI entry: a panic in it is contained there and
+// answers as if no listener ran.
+
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        // Order matters: mark active and tell the composition root *before*
-        // reading `latest`. The listener typically enables semantics, and on a
-        // cold start that is what will produce the first tree at all — reading
-        // first would answer `None` even when a synchronous listener could
-        // have supplied one.
-        self.0.notify_activation(true);
-        self.0.retained()
+        os_entry(
+            "AccessKit's activation",
+            AfterPanic::Answer(|| None),
+            || {
+                // Order matters: mark active and tell the composition root *before*
+                // reading `latest`. The listener typically enables semantics, and on a
+                // cold start that is what will produce the first tree at all — reading
+                // first would answer `None` even when a synchronous listener could
+                // have supplied one.
+                self.0.notify_activation(true);
+                self.0.retained()
+            },
+        )
     }
 }
 
@@ -67,7 +78,13 @@ struct Deactivation(Arc<BridgeShared>);
 
 impl DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {
-        self.0.notify_activation(false);
+        os_entry(
+            "AccessKit's deactivation",
+            AfterPanic::Answer(|| ()),
+            || {
+                self.0.notify_activation(false);
+            },
+        );
     }
 }
 
@@ -75,7 +92,9 @@ struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
-        self.0.notify_action(request);
+        os_entry("an AccessKit action", AfterPanic::Answer(|| ()), || {
+            self.0.notify_action(request);
+        });
     }
 }
 
@@ -186,5 +205,36 @@ mod tests {
         let (_, node) = initial.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
         assert!(accessibility.is_active());
+    }
+
+    /// The listeners are the composition root's code, run inside AccessKit's
+    /// AT-SPI entry: a panic in one is contained by the handler, which answers
+    /// as if no listener ran, and the bridge stays usable. Red-check: call the
+    /// listener outside `os_entry`.
+    #[test]
+    fn a_panicking_listener_stays_inside_its_handler() {
+        let accessibility = UnixAccessibility::new();
+        accessibility.publish(tree_update("Submit"));
+        accessibility.set_activation_listener(Arc::new(|_| panic!("activation listener")));
+        accessibility.set_action_listener(Arc::new(|_| panic!("action listener")));
+
+        let contained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let initial = Activation(Arc::clone(&accessibility.shared)).request_initial_tree();
+            Action(Arc::clone(&accessibility.shared)).do_action(ActionRequest {
+                action: accesskit::Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(1),
+                data: None,
+            });
+            Deactivation(Arc::clone(&accessibility.shared)).deactivate_accessibility();
+            initial
+        }));
+
+        let initial = contained.expect("a listener's panic unwound out of its handler");
+        assert!(initial.is_none(), "a failed activation answers no tree");
+        assert!(
+            !accessibility.is_active(),
+            "the deactivation after the failures still reached the bridge"
+        );
     }
 }

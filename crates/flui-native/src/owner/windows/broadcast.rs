@@ -20,7 +20,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::owner::panic_boundary::contain_owner_callback;
+use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
 
 /// What one feature does with the messages the receiver hears. Runs on the
 /// owner thread, inside the receiver's window procedure.
@@ -228,49 +228,58 @@ unsafe extern "system" fn procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // A contained panic answers what the subscribers set below, 0 otherwise.
-    let result = Cell::new(LRESULT(0));
-    contain_owner_callback(|| {
-        // SAFETY: this class receives only its own boxed Context during native
-        // creation. Only this owner reaches userdata. It is detached before
-        // destruction returns, and no pointer borrow crosses a user callback.
-        unsafe {
-            if message == WM_NCCREATE {
-                let create = &*(lparam.0 as *const CREATESTRUCTW);
-                let context = create.lpCreateParams.cast::<Context>();
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, context as isize);
-                (*context).hwnd.set(Some(hwnd));
-            }
-            let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
-            if !context.is_null() {
-                if message == WM_NCDESTROY {
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                    (*context).hwnd.set(None);
-                } else if message == WM_CLOSE {
-                    // This internal receiver is retired by the host, not by
-                    // ordinary window-close routing or last-user-window policy.
-                    return;
-                } else {
-                    // Cloned out of the context: a subscriber may drop the
-                    // platform, and nothing borrowed from userdata survives
-                    // user code.
-                    let subscribers = Rc::clone(&(*context).subscribers);
-                    result.set(
-                        subscribers
-                            .iter()
-                            .find_map(|subscriber| subscriber.answer_after_panic(message))
-                            .unwrap_or(LRESULT(0)),
-                    );
-                    for subscriber in subscribers.iter() {
-                        if let Some(answer) = subscriber.message(hwnd, message, wparam, lparam) {
-                            result.set(answer);
+    os_entry(
+        "the broadcast receiver's procedure",
+        AfterPanic::Answer(|| LRESULT(0)),
+        || {
+            // A subscriber's contained panic answers what the subscribers set below,
+            // 0 otherwise.
+            let result = Cell::new(LRESULT(0));
+            contain_owner_callback(|| {
+                // SAFETY: this class receives only its own boxed Context during native
+                // creation. Only this owner reaches userdata. It is detached before
+                // destruction returns, and no pointer borrow crosses a user callback.
+                unsafe {
+                    if message == WM_NCCREATE {
+                        let create = &*(lparam.0 as *const CREATESTRUCTW);
+                        let context = create.lpCreateParams.cast::<Context>();
+                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, context as isize);
+                        (*context).hwnd.set(Some(hwnd));
+                    }
+                    let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
+                    if !context.is_null() {
+                        if message == WM_NCDESTROY {
+                            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                            (*context).hwnd.set(None);
+                        } else if message == WM_CLOSE {
+                            // This internal receiver is retired by the host, not by
+                            // ordinary window-close routing or last-user-window policy.
                             return;
+                        } else {
+                            // Cloned out of the context: a subscriber may drop the
+                            // platform, and nothing borrowed from userdata survives
+                            // user code.
+                            let subscribers = Rc::clone(&(*context).subscribers);
+                            result.set(
+                                subscribers
+                                    .iter()
+                                    .find_map(|subscriber| subscriber.answer_after_panic(message))
+                                    .unwrap_or(LRESULT(0)),
+                            );
+                            for subscriber in subscribers.iter() {
+                                if let Some(answer) =
+                                    subscriber.message(hwnd, message, wparam, lparam)
+                                {
+                                    result.set(answer);
+                                    return;
+                                }
+                            }
                         }
                     }
+                    result.set(DefWindowProcW(hwnd, message, wparam, lparam));
                 }
-            }
-            result.set(DefWindowProcW(hwnd, message, wparam, lparam));
-        }
-    });
-    result.get()
+            });
+            result.get()
+        },
+    )
 }

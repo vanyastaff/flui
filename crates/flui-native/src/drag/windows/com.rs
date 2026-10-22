@@ -1,11 +1,12 @@
 //! The COM objects of OLE drag and drop: the data object and drop source a
 //! session hands `DoDragDrop`, and the drop target each window registers.
 //!
-//! Every vtable method is a boundary: its body runs under [`com_boundary`],
-//! so a panic (a hostile diagnostics subscriber, a provider) never unwinds
-//! into OLE; it answers `E_UNEXPECTED` and its payload is retained.
+//! Every vtable method is a boundary: its body runs under [`com_boundary`]
+//! or [`hresult_boundary`], so a panic (a hostile diagnostics subscriber, a
+//! provider) never unwinds into OLE; it answers `E_UNEXPECTED` and its
+//! payload is retained.
 
-use crate::owner::panic_boundary::contain_os_entry;
+use crate::owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry};
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
@@ -52,7 +53,20 @@ pub(crate) use objects::WindowDropTarget;
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
 fn com_boundary<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
-    contain_os_entry("OLE drag and drop", body).unwrap_or_else(|| Err(E_UNEXPECTED.into()))
+    os_entry(
+        "OLE drag and drop",
+        AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+        body,
+    )
+}
+
+/// [`com_boundary`] for a method that answers an `HRESULT` of its own.
+fn hresult_boundary(body: impl FnOnce() -> HRESULT) -> HRESULT {
+    os_entry(
+        "OLE drag and drop",
+        AfterPanic::Answer(|| E_UNEXPECTED),
+        body,
+    )
 }
 
 /// The `#[implement]` expansions, in a module of their own so the lints
@@ -247,19 +261,24 @@ impl IDataObject_Impl for SourceData_Impl {
         _format: *const FORMATETC,
         _medium: *mut STGMEDIUM,
     ) -> windows_core::Result<()> {
-        Err(E_NOTIMPL.into())
+        com_boundary(|| Err(E_NOTIMPL.into()))
     }
 
     fn QueryGetData(&self, format: *const FORMATETC) -> HRESULT {
-        com_boundary(|| self.entry(format).map(|_| ())).map_or_else(|error| error.code(), |()| S_OK)
+        hresult_boundary(|| {
+            self.entry(format)
+                .map_or_else(|error| error.code(), |_| S_OK)
+        })
     }
 
     fn GetCanonicalFormatEtc(&self, _in: *const FORMATETC, out: *mut FORMATETC) -> HRESULT {
-        // SAFETY: OLE passes a writable `FORMATETC`, or null.
-        if let Some(out) = unsafe { out.as_mut() } {
-            out.ptd = std::ptr::null_mut();
-        }
-        DATA_S_SAMEFORMATETC
+        hresult_boundary(|| {
+            // SAFETY: OLE passes a writable `FORMATETC`, or null.
+            if let Some(out) = unsafe { out.as_mut() } {
+                out.ptd = std::ptr::null_mut();
+            }
+            DATA_S_SAMEFORMATETC
+        })
     }
 
     fn SetData(
@@ -268,7 +287,7 @@ impl IDataObject_Impl for SourceData_Impl {
         _medium: *const STGMEDIUM,
         _release: BOOL,
     ) -> windows_core::Result<()> {
-        Err(E_NOTIMPL.into())
+        com_boundary(|| Err(E_NOTIMPL.into()))
     }
 
     fn EnumFormatEtc(&self, direction: u32) -> windows_core::Result<IEnumFORMATETC> {
@@ -291,58 +310,66 @@ impl IDataObject_Impl for SourceData_Impl {
         _advf: u32,
         _sink: Ref<'_, IAdviseSink>,
     ) -> windows_core::Result<u32> {
-        Err(OLE_E_ADVISENOTSUPPORTED.into())
+        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 
     fn DUnadvise(&self, _connection: u32) -> windows_core::Result<()> {
-        Err(OLE_E_ADVISENOTSUPPORTED.into())
+        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 
     fn EnumDAdvise(&self) -> windows_core::Result<IEnumSTATDATA> {
-        Err(OLE_E_ADVISENOTSUPPORTED.into())
+        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 }
 
 impl IEnumFORMATETC_Impl for FormatList_Impl {
     fn Next(&self, count: u32, out: *mut FORMATETC, fetched: *mut u32) -> HRESULT {
-        let start = self.next.get().min(self.formats.len());
-        let wanted = usize::try_from(count).unwrap_or(usize::MAX);
-        let take = wanted.min(self.formats.len() - start);
-        if take > 0 && out.is_null() {
-            return E_POINTER;
-        }
-        for (offset, format) in self.formats[start..start + take].iter().enumerate() {
-            // SAFETY: OLE passes room for `count` entries; `offset < take <= count`.
-            unsafe { out.add(offset).write(global_format(*format)) };
-        }
-        self.next.set(start + take);
-        // SAFETY: OLE passes a writable count, or null when it asks for one entry.
-        if let Some(fetched) = unsafe { fetched.as_mut() } {
-            *fetched = u32::try_from(take).unwrap_or(u32::MAX);
-        }
-        if take == wanted { S_OK } else { S_FALSE }
+        hresult_boundary(|| {
+            let start = self.next.get().min(self.formats.len());
+            let wanted = usize::try_from(count).unwrap_or(usize::MAX);
+            let take = wanted.min(self.formats.len() - start);
+            if take > 0 && out.is_null() {
+                return E_POINTER;
+            }
+            for (offset, format) in self.formats[start..start + take].iter().enumerate() {
+                // SAFETY: OLE passes room for `count` entries; `offset < take <= count`.
+                unsafe { out.add(offset).write(global_format(*format)) };
+            }
+            self.next.set(start + take);
+            // SAFETY: OLE passes a writable count, or null when it asks for one entry.
+            if let Some(fetched) = unsafe { fetched.as_mut() } {
+                *fetched = u32::try_from(take).unwrap_or(u32::MAX);
+            }
+            if take == wanted { S_OK } else { S_FALSE }
+        })
     }
 
     fn Skip(&self, count: u32) -> windows_core::Result<()> {
-        let skipped = self
-            .next
-            .get()
-            .saturating_add(usize::try_from(count).unwrap_or(usize::MAX));
-        self.next.set(skipped.min(self.formats.len()));
-        Ok(())
+        com_boundary(|| {
+            let skipped = self
+                .next
+                .get()
+                .saturating_add(usize::try_from(count).unwrap_or(usize::MAX));
+            self.next.set(skipped.min(self.formats.len()));
+            Ok(())
+        })
     }
 
     fn Reset(&self) -> windows_core::Result<()> {
-        self.next.set(0);
-        Ok(())
+        com_boundary(|| {
+            self.next.set(0);
+            Ok(())
+        })
     }
 
     fn Clone(&self) -> windows_core::Result<IEnumFORMATETC> {
-        Ok(FormatList {
-            formats: Rc::clone(&self.formats),
-            next: Cell::new(self.next.get()),
-        }
-        .into())
+        com_boundary(|| {
+            Ok(FormatList {
+                formats: Rc::clone(&self.formats),
+                next: Cell::new(self.next.get()),
+            }
+            .into())
+        })
     }
 }
 
@@ -355,15 +382,17 @@ impl DropSource {
 
 impl IDropSource_Impl for DropSource_Impl {
     fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
-        match continue_drag(escape.as_bool(), keys.0, self.began) {
-            DragContinuation::Continue => S_OK,
-            DragContinuation::Drop => DRAGDROP_S_DROP,
-            DragContinuation::Cancel => DRAGDROP_S_CANCEL,
-        }
+        hresult_boundary(
+            || match continue_drag(escape.as_bool(), keys.0, self.began) {
+                DragContinuation::Continue => S_OK,
+                DragContinuation::Drop => DRAGDROP_S_DROP,
+                DragContinuation::Cancel => DRAGDROP_S_CANCEL,
+            },
+        )
     }
 
     fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
-        DRAGDROP_S_USEDEFAULTCURSORS
+        hresult_boundary(|| DRAGDROP_S_USEDEFAULTCURSORS)
     }
 }
 
