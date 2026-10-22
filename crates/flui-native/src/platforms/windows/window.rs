@@ -99,15 +99,15 @@ pub struct WindowsWindow {
     /// This window's UIA bridge, subclassed onto `hwnd` at construction so
     /// a UI Automation client that asks at any later point is answered.
     /// Inert until one does — see
-    /// [`WindowsAccessibility::new`](super::accessibility::WindowsAccessibility::new).
+    /// [`WindowsAccessibility::new`](crate::accessibility::windows::WindowsAccessibility::new).
     #[cfg(feature = "a11y")]
-    accessibility: Arc<super::accessibility::WindowsAccessibility>,
+    accessibility: Arc<crate::accessibility::windows::WindowsAccessibility>,
 
     /// This window's haptic actuator: the pen in range of it.
-    haptics: Arc<super::haptics::WindowsHaptics>,
+    haptics: Arc<crate::haptics::windows::WindowsHaptics>,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
-    drag_source: Arc<super::drag::Win32DragSource>,
+    drag_source: Arc<crate::drag::windows::Win32DragSource>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
@@ -440,7 +440,7 @@ impl WindowsWindow {
         shares: crate::owner::windows::control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<super::drag::OleTransfer>,
+        drag: Arc<crate::drag::windows::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
             handlers,
@@ -576,7 +576,7 @@ impl WindowsWindow {
         scale_factor: f64,
         normal: Option<RECT>,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<super::drag::OleTransfer>,
+        drag: Arc<crate::drag::windows::OleTransfer>,
         window_hooks: crate::owner::windows::WindowHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
@@ -748,9 +748,11 @@ impl WindowsWindow {
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
                 #[cfg(feature = "a11y")]
-                accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
-                haptics: super::haptics::WindowsHaptics::new(this),
-                drag_source: super::drag::Win32DragSource::new(drag, this),
+                accessibility: Arc::new(crate::accessibility::windows::WindowsAccessibility::new(
+                    hwnd,
+                )),
+                haptics: crate::haptics::windows::WindowsHaptics::new(this),
+                drag_source: crate::drag::windows::Win32DragSource::new(drag, this),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -1705,7 +1707,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             shares,
             owner.config.clone(),
             owner.apartment.share(),
-            super::drag::OleTransfer::of(owner),
+            crate::drag::windows::OleTransfer::of(owner),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
         let this = WindowRef::new(window.hwnd(), window.identity);

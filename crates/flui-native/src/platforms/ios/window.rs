@@ -742,7 +742,7 @@ pub struct IOSWindow {
     )>,
     /// The haptic actuator, made on first use and shared, so its Core
     /// Haptics engine lives as long as the window.
-    haptics: std::sync::OnceLock<Arc<super::haptics::IOSHaptics>>,
+    haptics: std::sync::OnceLock<Arc<crate::haptics::apple::IOSHaptics>>,
     /// The published window state (ADR-0237).
     snapshot: WindowStateCell,
 }
@@ -1195,7 +1195,7 @@ impl PlatformWindow for IOSWindow {
         let haptics = self.haptics.get_or_init(|| {
             let view: Retained<objc2_ui_kit::UIView> =
                 Retained::into_super(self.native.get(marker).view.clone());
-            Arc::new(super::haptics::IOSHaptics::new(view, marker))
+            Arc::new(crate::haptics::apple::IOSHaptics::new(view, marker))
         });
         Some(Arc::clone(haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }

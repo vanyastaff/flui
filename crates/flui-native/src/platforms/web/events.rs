@@ -50,7 +50,7 @@ use super::{
 pub(super) fn register_event_listeners(
     window: &WebWindow,
     input_latency: flui_platform::InputLatency,
-    transfer: &Arc<super::drag::WebTransfer>,
+    transfer: &Arc<crate::drag::web::WebTransfer>,
     registration: &mut Registration,
 ) -> Result<CanvasServices, crate::OpenWindowError> {
     let canvas = window.canvas();
@@ -75,7 +75,7 @@ pub(super) fn register_event_listeners(
 
     // The drag source learns of a press before the press is dispatched: the
     // runtime may start a session from inside that dispatch.
-    let drag = super::drag::register(canvas, transfer, &callbacks, registration)?;
+    let drag = crate::drag::web::register(canvas, transfer, &callbacks, registration)?;
     let menu = Rc::new(MenuAnswer::default());
     let loss = register_pointer_events(
         canvas,
@@ -122,7 +122,7 @@ pub(super) fn register_event_listeners(
 /// What a canvas registration serves beside its listeners: its drag source
 /// and target, and its text input.
 pub(super) struct CanvasServices {
-    pub(super) drag: super::drag::CanvasDrag,
+    pub(super) drag: crate::drag::web::CanvasDrag,
     pub(super) text: Rc<crate::text::web::WebTextInput>,
 }
 
@@ -620,7 +620,7 @@ impl PointerLoss {
 /// the browser still waits on it: `propagate: false` stops it reaching the
 /// canvas's ancestors (same-target listeners still run), and
 /// `default_prevented` cancels its default where it is cancelable.
-pub(super) fn answer(event: &web_sys::Event, result: DispatchEventResult) {
+pub(crate) fn answer(event: &web_sys::Event, result: DispatchEventResult) {
     if !result.propagate {
         event.stop_propagation();
     }
@@ -1088,7 +1088,7 @@ extern "C" {
     fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
 }
 
-pub(super) fn pointer_position(event: &web_sys::MouseEvent) -> Point {
+pub(crate) fn pointer_position(event: &web_sys::MouseEvent) -> Point {
     let event: &PreciseMouseEvent = event.unchecked_ref();
     Point::new(event.offset_x_f64(), event.offset_y_f64())
 }

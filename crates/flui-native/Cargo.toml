@@ -581,12 +581,12 @@ globals = [
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "platforms::macos::window::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
     { item = "platforms::macos::window::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
-    { item = "platforms::windows::clipboard::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
+    { item = "clipboard::windows::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
     { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
     { item = "owner::windows::WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "Windows' registration of FLUI's window class with the host whose hooks its procedure dispatches to: Windows holds the class, and the procedure it was registered with, once per process, so a second host is refused" },
     { item = "owner::winit::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
-    { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
-    { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
+    { item = "clipboard::lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
+    { item = "clipboard::lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
     { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]
 
@@ -595,7 +595,7 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = ["text"]
+features = ["text", "clipboard", "drag", "accessibility", "haptics"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]

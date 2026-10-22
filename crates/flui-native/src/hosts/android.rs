@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use android_activity::AndroidApp;
 
+use crate::clipboard::android::MockClipboard;
+use crate::drag::android::AndroidTransfer;
+use crate::haptics::android::AndroidHaptics;
 use crate::host::{Absent, Host, position};
 use crate::owner::android::java_view::InputMethod;
 use crate::owner::android::{AndroidHost, AndroidLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer,
-    AndroidWindow, MockClipboard,
+    AndroidDisplays, AndroidInputState, AndroidSystemChrome, AndroidWindow,
 };
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
@@ -28,6 +30,7 @@ impl Host for Android {
     type Input = AndroidInputState;
     type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
+    // An in-process stand-in until the system clipboard is reached through JNI.
     type Clipboard = MockClipboard;
     type Drag = AndroidTransfer;
     type Haptics = AndroidHaptics;

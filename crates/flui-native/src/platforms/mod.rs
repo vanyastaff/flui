@@ -46,8 +46,8 @@ pub mod winit;
 
 // Re-exports
 pub use headless::{
-    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
-    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
+    DisplayChange, DisplayChangeError, DisplaySpec, FakeSystemChrome, FakeTextInput,
+    HeadlessDeferredWindowOpens, HeadlessDisplayControls, HeadlessExitReevaluation,
+    HeadlessHostEvents, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPreferences,
+    HeadlessWindowPolicy, MockWindow,
 };

@@ -55,13 +55,13 @@ pub struct AndroidWindow {
     /// The exclusion rectangles last handed to the decor view, as projected.
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
     /// The decor view and vibrator haptics play on (ADR-0210).
-    haptics: Arc<super::haptics::AndroidHaptics>,
+    haptics: Arc<crate::haptics::android::AndroidHaptics>,
     /// `FluiView`: the input method's editor, the drop target and the drag
     /// source (ADR-0247).
     java_view: Arc<JavaView>,
     /// The window's text input, on the owner thread only.
     text_input: Arc<OwnerSlot<Rc<crate::text::android::AndroidTextInput>>>,
-    drag_source: Arc<super::drag::AndroidDragSource>,
+    drag_source: Arc<crate::drag::android::AndroidDragSource>,
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
@@ -109,7 +109,7 @@ impl AndroidWindow {
                 "the window's text input was made off its owner thread"
             );
         }
-        let drag_source = Arc::new(super::drag::AndroidDragSource::new(
+        let drag_source = Arc::new(crate::drag::android::AndroidDragSource::new(
             Arc::clone(&java_view),
             api,
         ));
@@ -126,7 +126,10 @@ impl AndroidWindow {
             &app, &displays, &activity,
         )));
         Self {
-            haptics: Arc::new(super::haptics::AndroidHaptics::new(app.clone(), api)),
+            haptics: Arc::new(crate::haptics::android::AndroidHaptics::new(
+                app.clone(),
+                api,
+            )),
             appearance: Arc::new(Mutex::new(night_mode(&app))),
             app,
             callbacks,
@@ -188,7 +191,7 @@ impl AndroidWindow {
         Some(shared)
     }
 
-    pub(crate) fn drag_source_of(&self) -> &Arc<super::drag::AndroidDragSource> {
+    pub(crate) fn drag_source_of(&self) -> &Arc<crate::drag::android::AndroidDragSource> {
         &self.drag_source
     }
 

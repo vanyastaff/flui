@@ -114,7 +114,7 @@ pub struct MacOSWindow {
     /// holds a `Weak` back-reference to the window's callbacks); the
     /// constructor fills it immediately after installing the view.
     #[cfg(feature = "a11y")]
-    accessibility: std::sync::OnceLock<Arc<super::accessibility::MacosAccessibility>>,
+    accessibility: std::sync::OnceLock<Arc<crate::accessibility::apple::MacosAccessibility>>,
 
     /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
     ///
@@ -613,7 +613,7 @@ impl MacOSWindow {
             // `unsafe` block's contract).
             #[cfg(feature = "a11y")]
             {
-                let bridge = super::accessibility::MacosAccessibility::new(
+                let bridge = crate::accessibility::apple::MacosAccessibility::new(
                     content_view.cast::<std::ffi::c_void>(),
                 );
                 window
@@ -1083,7 +1083,7 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::new(super::haptics::MacHaptics))
+        Some(Arc::new(crate::haptics::apple::MacHaptics))
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the

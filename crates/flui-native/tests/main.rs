@@ -17,8 +17,6 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
-#[path = "android_drag.rs"]
-mod android_drag;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
 #[path = "android_keys.rs"]
@@ -41,24 +39,18 @@ mod file_store;
 #[path = "handler_reentry.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod handler_reentry;
-#[path = "haptic_degradation.rs"]
-mod haptic_degradation;
 #[path = "headless_drag.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod headless_drag;
 #[path = "headless_redraw.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod headless_redraw;
-#[path = "html_drag_drop.rs"]
-mod html_drag_drop;
 #[path = "input_capabilities.rs"]
 mod input_capabilities;
 #[path = "input_regions.rs"]
 mod input_regions;
 #[path = "native_recording/mod.rs"]
 mod native_recording;
-#[path = "ole_drag_drop.rs"]
-mod ole_drag_drop;
 #[path = "pointer_assembly.rs"]
 mod pointer_assembly;
 #[path = "preferences.rs"]

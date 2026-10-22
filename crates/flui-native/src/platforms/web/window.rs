@@ -34,7 +34,7 @@ pub struct WebWindow {
     callbacks: Arc<WindowCallbacks>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
-    drag: RefCell<Option<super::drag::CanvasDrag>>,
+    drag: RefCell<Option<crate::drag::web::CanvasDrag>>,
     text: RefCell<Option<Rc<crate::text::web::WebTextInput>>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<WebDisplays>,
@@ -351,7 +351,7 @@ impl WebWindow {
     pub(super) fn install(
         &self,
         input_latency: flui_platform::InputLatency,
-        transfer: &Arc<super::drag::WebTransfer>,
+        transfer: &Arc<crate::drag::web::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -689,7 +689,7 @@ impl host::Window<WebLoop> for WebWindow {
         callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&owner.state);
-        let transfer = super::drag::WebTransfer::of(owner);
+        let transfer = crate::drag::web::WebTransfer::of(owner);
         window.install(options.input_latency, &transfer, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
@@ -868,7 +868,7 @@ impl PlatformWindow for WebWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::new(super::haptics::WebHaptics))
+        Some(Arc::new(crate::haptics::web::WebHaptics))
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {

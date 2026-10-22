@@ -3,14 +3,14 @@
 
 use std::sync::Arc;
 
+#[cfg(all(target_os = "linux", feature = "a11y"))]
+use crate::accessibility::linux::UnixAccessibility;
+use crate::clipboard::winit::ArboardClipboard;
+use crate::drag::winit::WinitDataTransfer;
 use crate::host::{Absent, Host, position};
 use crate::owner::winit::WinitLoop;
 use crate::platform::HostPlatform;
-#[cfg(all(target_os = "linux", feature = "a11y"))]
-use crate::platforms::linux::UnixAccessibility;
-use crate::platforms::winit::{
-    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
-};
+use crate::platforms::winit::{WinitDisplaySource, WinitWindow};
 use crate::storage::UserDataDirs;
 use crate::text::winit::WinitTextInput;
 

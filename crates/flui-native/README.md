@@ -27,6 +27,8 @@ host.rs, hosts/  a host's table of positions, one table per host
 owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot and the panic boundary
 shared/          PlatformHandlers / WindowCallbacks — callback registries
+clipboard/, drag/, accessibility/, haptics/
+                 a feature each: its model beside one file per platform
 platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)
 executor.rs      BackgroundExecutor (tokio pool)
 window.rs        Window API surface — binding entry for platform integrators
@@ -66,7 +68,7 @@ real event loop need one process per test, because winit allows one
 (`cross-typecheck`).
 
 The Win32 clipboard is opened only under a process-wide lock
-(`shared::clipboard_lock`): `OpenClipboard(NULL)` does not exclude other
+(`clipboard::lock`): `OpenClipboard(NULL)` does not exclude other
 threads of the same process, and a reader racing a writer on two threads was a
 use-after-free that aborted the process with `STATUS_HEAP_CORRUPTION`.
 

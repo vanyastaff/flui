@@ -11,15 +11,10 @@
 // that makes it sound.
 #![expect(unsafe_code)]
 
-#[cfg(feature = "a11y")]
-mod accessibility;
 mod appearance;
-mod clipboard;
 mod direct_manipulation;
 pub(crate) mod display;
-pub(crate) mod drag;
-mod events;
-mod haptics;
+pub(crate) mod events;
 pub(crate) mod host_events;
 pub(crate) mod platform;
 pub(crate) mod preferences;
@@ -31,19 +26,13 @@ mod window_modes;
 mod window_placement;
 mod window_visibility;
 
-#[cfg(feature = "a11y")]
-pub use accessibility::WindowsAccessibility;
-pub use clipboard::WindowsClipboard;
 // The types the Windows host's table names: public where they are defined (a
 // table names only public types), and nameable only inside the crate.
 pub(crate) use display::WindowsDisplays;
-pub(crate) use drag::OleTransfer;
-pub(crate) use haptics::WindowsHaptics;
 pub(crate) use host_events::HostEvents;
 pub(crate) use preferences::PreferenceSource;
 // The hooks the Windows host registers on FLUI's window class.
 pub(crate) use direct_manipulation::Touchpad;
-pub(crate) use drag::DropTargetRegistration;
 pub(crate) use platform::WindowProc;
 pub use window::WindowsWindow;
 pub use window_ext::{

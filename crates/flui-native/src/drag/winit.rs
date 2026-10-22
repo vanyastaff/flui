@@ -1,0 +1,502 @@
+//! Winit data-transfer source: system file drops as ADR-0038 offers.
+//!
+//! Owns the platform instance's **one** [`OfferTable`] — the single minting
+//! authority for every [`DataTransferId`] this backend can emit. The event
+//! pump reports winit's `HoveredFile` / `DroppedFile` / `HoveredFileCancelled`
+//! window events into the session state machine here and dispatches the
+//! [`DragDropEvent`]s it returns; all methods return events instead of
+//! dispatching so no handler ever runs under this source's lock (ADR-0038 §5
+//! lock discipline).
+//!
+//! # Approximation ceiling (documented, not hidden)
+//!
+//! winit exposes file drops only, with no negotiation channel and no
+//! end-of-burst marker, so this backend approximates the transport:
+//!
+//! - offers carry a single `text/uri-list` representation — files only;
+//! - `Dropped.action` is stamped [`TransferActions::COPY`], the file-manager
+//!   convention, because winit cannot report the real effect;
+//! - `update_drop_feedback` is a no-op — winit has no API to answer the
+//!   OS's hover queries; `conclude_drop` has no protocol resources to
+//!   release but does retire the offer locally, so a concluded id goes
+//!   stale as the trait contract promises;
+//! - the drop boundary is heuristic: winit delivers one `DroppedFile` per
+//!   file with no terminator, so the burst is frozen at the first
+//!   `about_to_wait` after at least one `DroppedFile`. A straggler
+//!   `DroppedFile` after that freeze mints a **new** defensive session, so a
+//!   pathological split burst surfaces as two complete drops, never one
+//!   truncated one;
+//! - a LOST `HoveredFileCancelled` (known flaky on some X11 setups) leaves
+//!   the unfrozen session live, so the next drag's `HoveredFile` paths
+//!   accumulate into it — two distinct drags can merge into one offer with
+//!   no second `Entered`. Bounded per window; the session resolves at the
+//!   next freeze or teardown either way.
+//!
+//! Native backends (Win32 `IDropTarget`, AppKit `NSDraggingDestination`,
+//! Wayland `wl_data_device`) remove every one of these ceilings — the trait
+//! and event surface already carry what they need (ADR-0038 §5).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use flui_foundation::DataTransferId;
+use flui_foundation::geometry::Point;
+use parking_lot::Mutex;
+
+use crate::host;
+use crate::owner::winit::WinitLoop;
+use crate::owner::winit::file_drops::FileDrops;
+use flui_platform::{DragDropEvent, WindowId};
+use flui_platform::{
+    data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
+    data_transfer::DropFeedback, data_transfer::OfferRecord, data_transfer::OfferTable,
+    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
+    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
+    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
+    data_transfer::TransferRequest, data_transfer::TransferUri,
+};
+
+/// One drag session over one window (at most one live per window).
+#[derive(Debug)]
+struct DragSession {
+    /// The offer id minted for this session.
+    id: DataTransferId,
+    /// Paths accumulated from `HoveredFile` / `DroppedFile` events, drained
+    /// into the offer's `UriList` payload at the freeze.
+    paths: Vec<PathBuf>,
+    /// At least one `DroppedFile` arrived — the next `about_to_wait` freezes
+    /// the burst.
+    dropped: bool,
+    /// The burst was frozen: the payload is snapshot in the offer record and
+    /// the session no longer accepts accumulation.
+    frozen: bool,
+    /// Deliveries requested before the freeze; completed at the freeze or
+    /// dropped (→ `SourceGone`) when the session is torn down.
+    pending: Vec<(TransferCompleter, TransferLimits)>,
+}
+
+/// Interior state: the one offer table plus per-window sessions.
+#[derive(Debug, Default)]
+struct DragDropState {
+    table: OfferTable,
+    sessions: HashMap<WindowId, DragSession>,
+}
+
+/// The winit backend's single [`DataTransferSource`] (ADR-0038).
+///
+/// Constructed once at platform init, held in the backend's shared state,
+/// and returned by `Platform::data_transfer()` as clones of the same `Arc` —
+/// never reconstructed per call. DnD-capable within the winit approximation
+/// ceiling (see the module docs); `clipboard_offer` honestly returns `None`
+/// until the clipboard transport lands (ADR-0038 §6).
+#[derive(Debug, Default)]
+pub struct WinitDataTransfer {
+    /// Private lock; no guard escapes any signature.
+    state: Mutex<DragDropState>,
+}
+
+impl WinitDataTransfer {
+    /// An empty source with no live sessions.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl FileDrops for WinitDataTransfer {
+    /// A `HoveredFile` event: accumulate into the live accepting session, or
+    /// mint a new session (retiring any predecessor) and return the
+    /// `Entered` event to dispatch.
+    fn note_hovered_file(
+        &self,
+        window: WindowId,
+        path: PathBuf,
+        position: Option<Point<f64>>,
+    ) -> Option<DragDropEvent> {
+        self.accumulate_or_begin(window, path, false, position)
+    }
+
+    /// A `DroppedFile` event: accumulate into the live accepting session and
+    /// arm the freeze, or — defensive minting — start a new session when
+    /// none is accepting (no prior `HoveredFile`, or a straggler after the
+    /// freeze), returning its `Entered` event.
+    fn note_dropped_file(
+        &self,
+        window: WindowId,
+        path: PathBuf,
+        position: Option<Point<f64>>,
+    ) -> Option<DragDropEvent> {
+        self.accumulate_or_begin(window, path, true, position)
+    }
+
+    /// A `HoveredFileCancelled` event: retire the accepting session (bumping
+    /// its generation, so the id goes stale) and return the `Exited` event.
+    /// A cancel after the freeze is ignored — the drop already completed and
+    /// its offer stays redeemable.
+    fn note_hover_cancelled(&self, window: WindowId) -> Option<DragDropEvent> {
+        let (event, stale_pending) = {
+            let mut state = self.state.lock();
+            match state.sessions.get(&window) {
+                None => return None,
+                Some(session) if session.frozen => {
+                    tracing::trace!(?window, "ignoring hover-cancel after the drop burst froze");
+                    return None;
+                }
+                Some(_) => {}
+            }
+            let session = state
+                .sessions
+                .remove(&window)
+                .expect("BUG: drag session vanished while the state lock was held");
+            state.table.retire(session.id);
+            (DragDropEvent::Exited { id: session.id }, session.pending)
+        };
+        // Parked completers resolve SourceGone from their Drop — outside the
+        // lock, so a waker can never re-enter this source under it.
+        drop(stale_pending);
+        Some(event)
+    }
+
+    /// Windows whose drop burst is complete-so-far and awaiting the freeze.
+    /// Cheap; empty in the steady state, so `about_to_wait` stays a no-op.
+    fn windows_awaiting_freeze(&self) -> Vec<WindowId> {
+        self.state
+            .lock()
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.dropped && !session.frozen)
+            .map(|(window, _)| *window)
+            .collect()
+    }
+
+    /// Freeze every completed drop burst: snapshot the accumulated paths as
+    /// the offer's `UriList` payload, complete parked deliveries, and return
+    /// the `Dropped` events to dispatch. The action is stamped
+    /// [`TransferActions::COPY`] — winit cannot report the real effect
+    /// (documented approximation).
+    fn freeze_completed(
+        &self,
+        positions: &HashMap<WindowId, Point<f64>>,
+    ) -> Vec<(WindowId, DragDropEvent)> {
+        let mut events = Vec::new();
+        let mut completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)> =
+            Vec::new();
+        {
+            let mut state = self.state.lock();
+            let DragDropState { table, sessions } = &mut *state;
+            for (window, session) in sessions.iter_mut() {
+                if !session.dropped || session.frozen {
+                    continue;
+                }
+                let uris: Vec<TransferUri> =
+                    session.paths.drain(..).map(TransferUri::Path).collect();
+                let payload = TransferPayload::UriList(uris);
+                let actual = payload.byte_len();
+                if let Some(record) = table.get_mut(session.id) {
+                    record.set_payload(payload.clone());
+                }
+                session.frozen = true;
+                for (completer, limits) in session.pending.drain(..) {
+                    let result = if actual > limits.max_bytes {
+                        Err(TransferError::TooLarge {
+                            actual,
+                            limit: limits.max_bytes,
+                        })
+                    } else {
+                        Ok(payload.clone())
+                    };
+                    completions.push((completer, result));
+                }
+                events.push((
+                    *window,
+                    DragDropEvent::Dropped {
+                        id: session.id,
+                        action: TransferActions::COPY,
+                        position: positions.get(window).copied(),
+                    },
+                ));
+            }
+        }
+        // Completions wake consumer wakers — strictly outside the lock.
+        for (completer, result) in completions {
+            completer.complete(result);
+        }
+        events
+    }
+
+    /// Tear down any session addressed at a closed window: retire the offer
+    /// and let parked deliveries resolve `SourceGone`.
+    fn forget_window(&self, window: WindowId) {
+        let stale_pending = {
+            let mut state = self.state.lock();
+            state.sessions.remove(&window).map(|session| {
+                state.table.retire(session.id);
+                session.pending
+            })
+        };
+        drop(stale_pending);
+    }
+}
+
+impl WinitDataTransfer {
+    /// Shared body of the two path-bearing arms: accumulate into a live
+    /// accepting session, or begin a new one and return its `Entered` event.
+    fn accumulate_or_begin(
+        &self,
+        window: WindowId,
+        path: PathBuf,
+        dropped: bool,
+        position: Option<Point<f64>>,
+    ) -> Option<DragDropEvent> {
+        let (event, stale_pending) = {
+            let mut state = self.state.lock();
+            if let Some(session) = state.sessions.get_mut(&window)
+                && !session.frozen
+            {
+                // winit re-reports every hovered path through the
+                // `DroppedFile` arm at the actual drop, so each file of one
+                // drag arrives twice. The session tracks the drag's file
+                // SET, not the event log — an already-known path only arms
+                // the drop flag. (Linear scan: a drag's file count is
+                // small; worst case O(n²) over the burst.)
+                if !session.paths.contains(&path) {
+                    session.paths.push(path);
+                }
+                session.dropped |= dropped;
+                return None;
+            }
+
+            // Mint a new session. One live session slot per window
+            // (ADR-0038 §2): the predecessor — frozen or not — is retired,
+            // so its id goes stale and its slot's generation bumps.
+            let mut stale_pending = Vec::new();
+            if let Some(previous) = state.sessions.remove(&window) {
+                state.table.retire(previous.id);
+                stale_pending = previous.pending;
+            }
+            let representations: Arc<[RepresentationDescriptor]> =
+                Arc::from([RepresentationDescriptor {
+                    format: TransferFormat::UriList,
+                    declared_len: None,
+                }]);
+            let id = state
+                .table
+                .mint(OfferRecord::new(Arc::clone(&representations)));
+            state.sessions.insert(
+                window,
+                DragSession {
+                    id,
+                    paths: vec![path],
+                    dropped,
+                    frozen: false,
+                    pending: Vec::new(),
+                },
+            );
+            (
+                DragDropEvent::Entered {
+                    offer: DataTransferOffer::new(id, representations),
+                    // winit reports no source-permitted set; COPY is the
+                    // file-manager convention (documented approximation).
+                    allowed: TransferActions::COPY,
+                    position,
+                },
+                stale_pending,
+            )
+        };
+        drop(stale_pending);
+        Some(event)
+    }
+}
+
+impl host::Drag<WinitLoop> for WinitDataTransfer {
+    fn data_transfer(owner: &WinitLoop) -> Arc<dyn DataTransferSource> {
+        // Clones of the ONE source constructed at platform init (ADR-0038
+        // §2): every id it mints stays redeemable at every clone.
+        owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
+    }
+}
+
+impl DataTransferSource for WinitDataTransfer {
+    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
+        // The clipboard half of this source arrives with the clipboard
+        // transport (ADR-0038 §6). Until then there is honestly no offer —
+        // not a fabricated one over the sync `Clipboard` trait.
+        None
+    }
+
+    fn request(
+        &self,
+        id: DataTransferId,
+        representation: RepresentationIndex,
+        limits: TransferLimits,
+    ) -> TransferRequest {
+        let mut state = self.state.lock();
+        let DragDropState { table, sessions } = &mut *state;
+        let Some(record) = table.get(id) else {
+            return TransferRequest::ready(Err(TransferError::StaleOffer(id)));
+        };
+        if usize::from(representation.0) >= record.representations().len() {
+            return TransferRequest::ready(Err(TransferError::UnknownRepresentation {
+                id,
+                index: representation,
+            }));
+        }
+        if let Some(payload) = record.payload() {
+            // Frozen file offer: the path list is genuinely in memory, so
+            // the delivery resolves synchronously — not fake async.
+            let actual = payload.byte_len();
+            if actual > limits.max_bytes {
+                return TransferRequest::ready(Err(TransferError::TooLarge {
+                    actual,
+                    limit: limits.max_bytes,
+                }));
+            }
+            return TransferRequest::ready(Ok(payload.clone()));
+        }
+        // Live pre-drop session: park the completer; the drop-burst freeze
+        // completes it, and session teardown drops it (→ `SourceGone`).
+        if let Some(session) = sessions.values_mut().find(|session| session.id == id) {
+            let (request, completer) = TransferRequest::channel();
+            session.pending.push((completer, limits));
+            return request;
+        }
+        // A record without payload always belongs to a live session in this
+        // source; a miss means the producer side is gone.
+        TransferRequest::ready(Err(TransferError::SourceGone))
+    }
+
+    fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
+        // Documented no-op: winit exposes no channel through which the OS's
+        // synchronous hover queries could be answered, so the drop can be
+        // neither rejected nor renegotiated here (ADR-0038 approximation
+        // ceiling; native backends implement the real feedback loop).
+        tracing::trace!(%id, ?feedback, "winit exposes no drop-feedback channel; ignoring");
+    }
+
+    fn conclude_drop(&self, id: DataTransferId) {
+        // winit holds no PROTOCOL resources to release — but table
+        // retirement is purely local, and the trait contract promises the
+        // offer goes stale after conclusion. Honor it here so downstream
+        // consumers never see a source that silently keeps concluded
+        // offers redeemable until the next mint.
+        let stale_pending = {
+            let mut state = self.state.lock();
+            state.table.retire(id);
+            // Drop any session still tracking this offer (a frozen session
+            // whose drop the consumer has now concluded).
+            let window = state
+                .sessions
+                .iter()
+                .find(|(_, session)| session.id == id)
+                .map(|(window, _)| *window);
+            window.and_then(|window| state.sessions.remove(&window))
+        };
+        // Parked completers (if any survived the freeze) resolve from their
+        // Drop — outside the lock, so a waker cannot re-enter this source.
+        drop(stale_pending);
+        tracing::trace!(%id, "drop concluded; offer retired");
+    }
+}
+
+// These are the winit arm-conversion tests referenced by ADR-0038. They run
+// with flui-native's own suite (`cargo nextest run -p flui-native
+// --all-features`, a dedicated CI step outside the workspace-wide test run),
+// but they are explicitly NOT the gate evidence for the transport: that lives
+// in `crates/flui-app/tests/data_transfer_transport.rs`.
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    use super::*;
+
+    const WINDOW: WindowId = WindowId(1);
+
+    fn poll_now(request: TransferRequest) -> Poll<Result<TransferPayload, TransferError>> {
+        let mut request = pin!(request);
+        let waker = Waker::noop();
+        request.as_mut().poll(&mut Context::from_waker(waker))
+    }
+
+    fn entered_offer(event: DragDropEvent) -> DataTransferOffer {
+        match event {
+            DragDropEvent::Entered { offer, .. } => offer,
+            other => panic!("expected Entered, got {other:?}"),
+        }
+    }
+
+    /// Drag-and-drop offers: a drop burst freezes at `about_to_wait` and
+    /// serves its URI list, and window teardown resolves parked deliveries as
+    /// source-gone.
+    #[test]
+    fn a_drop_offer_freezes_serves_and_resolves_as_source_gone_on_teardown() {
+        drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list();
+        window_teardown_resolves_parked_deliveries_as_source_gone();
+    }
+
+    fn drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list() {
+        let source = WinitDataTransfer::new();
+        let offer = entered_offer(
+            source
+                .note_hovered_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
+                .expect("mint"),
+        );
+        assert!(
+            source
+                .note_dropped_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
+                .is_none(),
+            "drop into a live session accumulates silently"
+        );
+
+        assert_eq!(source.windows_awaiting_freeze(), vec![WINDOW]);
+        let drops = source.freeze_completed(&HashMap::new());
+        assert_eq!(drops.len(), 1);
+        let (window, DragDropEvent::Dropped { id, action, .. }) = drops[0].clone() else {
+            panic!("freeze must emit Dropped");
+        };
+        assert_eq!(window, WINDOW);
+        assert_eq!(id, offer.id());
+        assert_eq!(action, TransferActions::COPY, "documented COPY stamp");
+        assert_eq!(source.windows_awaiting_freeze(), [] as [WindowId; 0]);
+
+        // A frozen offer resolves synchronously from memory.
+        let outcome = poll_now(source.request(
+            offer.id(),
+            RepresentationIndex(0),
+            TransferLimits::default(),
+        ));
+        let Poll::Ready(Ok(TransferPayload::UriList(uris))) = outcome else {
+            panic!("frozen offer must deliver its UriList, got {outcome:?}");
+        };
+        assert_eq!(
+            uris,
+            vec![
+                TransferUri::Path(PathBuf::from("/tmp/a.txt")),
+                TransferUri::Path(PathBuf::from("/tmp/b.txt")),
+            ]
+        );
+    }
+
+    fn window_teardown_resolves_parked_deliveries_as_source_gone() {
+        let source = WinitDataTransfer::new();
+        let offer = entered_offer(
+            source
+                .note_hovered_file(WINDOW, PathBuf::from("/tmp/gone.txt"), None)
+                .expect("mint"),
+        );
+        let request = source.request(
+            offer.id(),
+            RepresentationIndex(0),
+            TransferLimits::default(),
+        );
+
+        source.forget_window(WINDOW);
+
+        assert!(matches!(
+            poll_now(request),
+            Poll::Ready(Err(TransferError::SourceGone))
+        ));
+    }
+}

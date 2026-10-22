@@ -7,8 +7,6 @@
 // submodules in this backend have no `unsafe` of their own.
 #![expect(unsafe_code)]
 
-mod clipboard;
-mod data_transfer;
 // The display source is the one the OS offers, never winit's monitor list:
 // each file reads its OS's native source (ADR-0236).
 #[cfg(target_os = "linux")]
@@ -29,7 +27,5 @@ pub(crate) mod preferences;
 pub(crate) mod window;
 pub(crate) mod window_plan;
 
-pub use clipboard::ArboardClipboard;
-pub use data_transfer::WinitDataTransfer;
 pub(crate) use display::WinitDisplaySource;
 pub use window::WinitWindow;

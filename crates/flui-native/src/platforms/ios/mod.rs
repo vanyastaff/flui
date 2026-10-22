@@ -51,10 +51,8 @@
 // uses).
 #![expect(unsafe_code)]
 
-mod clipboard;
 mod display;
 mod events;
-mod haptics;
 mod os_version;
 mod positions;
 mod preferences;
@@ -64,9 +62,7 @@ mod window;
 pub use crate::owner::apple::ios::{
     IOSExecutor, IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId,
 };
-pub use clipboard::IOSClipboard;
 pub(crate) use display::{IosDisplays, ScreenObserver};
-pub(crate) use haptics::IOSHaptics;
 pub(crate) use preferences::IOSPreferences;
 pub(crate) use status_bar::IOSSystemChrome;
 pub use window::IOSWindow;

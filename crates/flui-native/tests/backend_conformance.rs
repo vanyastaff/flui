@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Point;
-use flui_native::shared::haptic_degradation::{
+use flui_native::haptics::degradation::{
     AndroidHapticsApi, AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform,
     WebVibration, android_feedback, android_pattern, ios_feedback, ios_pattern, macos_feedback,
     macos_pattern, web_feedback, web_pattern, windows_capabilities, windows_feedback,

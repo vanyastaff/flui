@@ -306,11 +306,11 @@ pub(super) fn get_y_lparam(lparam: LPARAM) -> i32 {
 }
 
 /// Every Win32 registry serves one window.
-pub(super) const SURFACE: NativeSurface = NativeSurface(0);
+pub(crate) const SURFACE: NativeSurface = NativeSurface(0);
 
 /// Each mouse button: its virtual key, the `MK_*` bit a mouse message's
 /// `WPARAM` and OLE's key state carry for it, and the button it is.
-pub(super) const MOUSE_BUTTONS: [(VIRTUAL_KEY, u32, PointerButton); 5] = [
+pub(crate) const MOUSE_BUTTONS: [(VIRTUAL_KEY, u32, PointerButton); 5] = [
     (VK_LBUTTON, MK_LBUTTON.0, PointerButton::PRIMARY),
     (VK_RBUTTON, MK_RBUTTON.0, PointerButton::SECONDARY),
     (VK_MBUTTON, MK_MBUTTON.0, PointerButton::AUXILIARY),

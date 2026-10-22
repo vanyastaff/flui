@@ -18,23 +18,17 @@ compile_error!(
     "the web backend assumes one thread; build wasm32 without the `atomics` target feature"
 );
 
-mod clipboard;
 mod display;
 mod display_events;
-mod drag;
 pub(crate) mod events;
 mod features;
-mod haptics;
 mod page_events;
 mod preferences;
 pub(crate) mod registration;
 pub(crate) mod window;
 
-pub(crate) use clipboard::WebClipboard;
 pub(crate) use display::WebDisplays;
 pub(crate) use display_events::DisplayObservers;
-pub(crate) use drag::WebTransfer;
-pub(crate) use haptics::WebHaptics;
 pub(crate) use page_events::PageObservers;
 pub(crate) use preferences::WebPreferences;
 pub(crate) use window::WebWindow;

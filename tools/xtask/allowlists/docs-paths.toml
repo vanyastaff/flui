@@ -118,6 +118,12 @@ count = 17
 reason = "the record cites the platform crates' tree at `main` `083b0f75d`, before the two renames it decides, and its text is not rewritten (section 12)"
 
 [[allow]]
+path = "docs/adr/ADR-0247-android-java-view.md"
+kind = "path"
+count = 1
+reason = "the record names a test file where it lay when the record was written, and records are not rewritten"
+
+[[allow]]
 path = "docs/hot-reload.md"
 kind = "package"
 count = 2

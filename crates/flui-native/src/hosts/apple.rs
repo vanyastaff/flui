@@ -1,9 +1,19 @@
 //! The Apple host: macOS (AppKit) and iOS (UIKit) share one table, and the
 //! target operating system picks the type that fills each position.
 
+#[cfg(all(target_os = "macos", feature = "a11y"))]
+use crate::accessibility::apple::MacosAccessibility;
+#[cfg(target_os = "ios")]
+use crate::clipboard::apple::IOSClipboard;
+#[cfg(target_os = "macos")]
+use crate::clipboard::apple::MacOSClipboard;
 #[cfg(target_os = "macos")]
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
+#[cfg(target_os = "ios")]
+use crate::haptics::apple::IOSHaptics;
+#[cfg(target_os = "macos")]
+use crate::haptics::apple::MacHaptics;
 use crate::host::{Absent, Host, position};
 #[cfg(target_os = "ios")]
 use crate::owner::apple::IOSLoop;
@@ -11,15 +21,9 @@ use crate::owner::apple::IOSLoop;
 use crate::owner::apple::MacOSLoop;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
-use crate::platforms::ios::{
-    IOSClipboard, IOSHaptics, IOSPreferences, IOSSystemChrome, IOSWindow, IosDisplays,
-};
-#[cfg(all(target_os = "macos", feature = "a11y"))]
-use crate::platforms::macos::MacosAccessibility;
+use crate::platforms::ios::{IOSPreferences, IOSSystemChrome, IOSWindow, IosDisplays};
 #[cfg(target_os = "macos")]
-use crate::platforms::macos::{
-    MacHaptics, MacOSClipboard, MacOSWindow, MacosDisplays, PreferenceSource,
-};
+use crate::platforms::macos::{MacOSWindow, MacosDisplays, PreferenceSource};
 use crate::storage::UserDataDirs;
 #[cfg(target_os = "macos")]
 use crate::text::apple::macos::MacOSTextInput;
@@ -60,7 +64,7 @@ impl Host for Apple {
     type Text = Absent<position::Text>;
 
     // The AppKit bridge exists with the `a11y` feature; UIKit windows hand out
-    // no accessibility.
+    // no accessibility yet.
     #[cfg(all(target_os = "macos", feature = "a11y"))]
     type Accessibility = MacosAccessibility;
     #[cfg(not(all(target_os = "macos", feature = "a11y")))]

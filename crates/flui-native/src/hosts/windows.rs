@@ -4,19 +4,21 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(feature = "a11y")]
+use crate::accessibility::windows::WindowsAccessibility;
+use crate::clipboard::windows::WindowsClipboard;
 use crate::config::WindowConfiguration;
+use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
+use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
 use crate::owner::positions::PositionObjects;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerMessages, OwnerObjects};
 use crate::owner::windows::{LoopParts, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
-#[cfg(feature = "a11y")]
-use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
-    DropTargetRegistration, HostEvents, OleTransfer, PreferenceSource, Touchpad, WindowProc,
-    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
+    HostEvents, PreferenceSource, Touchpad, WindowProc, WindowsDisplays, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
 use crate::text::windows::{TextServices, Tsf};
