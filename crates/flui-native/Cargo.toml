@@ -598,9 +598,10 @@ globals = [
 [package.metadata.flui.modules]
 # Import directions between the core host's modules (ADR-0151 §10), checked by
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything; the
-# owner thread and the OS versions name no feature. `storage` is crate-level
-# like `host.rs`: the vocabulary of the storage position, which the loops
-# name.
+# owner thread, the OS versions and the storage position's vocabulary name no
+# feature. Every other top-level module is `crate-level`, and one with no role
+# is a finding (`table_test` is built for tests only and needs none; the root,
+# `lib.rs`, is no module).
 features = [
     "display",
     "text",
@@ -615,8 +616,9 @@ features = [
 ]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
-base = ["owner", "version"]
+base = ["owner", "version", "storage"]
 hosts = "hosts"
+crate-level = ["host", "platform", "host_window", "error", "executor", "task"]
 # The one edge between platform files of one feature (the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
 # winit), and each between the window's and another feature's files of one

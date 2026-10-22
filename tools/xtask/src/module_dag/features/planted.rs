@@ -15,6 +15,7 @@ platforms = ["windows", "apple", "web", "winit", "linux"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version"]
 hosts = "hosts"
+crate-level = ["platform"]
 transparent = ["prelude"]
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0001", since = "2026-10-21", reason = "admitted" },
@@ -35,14 +36,18 @@ pub mod version;
 pub mod hosts;
 pub mod platform;
 pub mod prelude;
+pub mod shared;
 #[cfg(test)]
 mod root_tests;
 pub use hosts::Host;
 ",
             ),
             // The root is no source: it names `hosts` to pick a host.
-            // Test code is exempt.
+            // Test code is exempt, and a test-only module needs no role.
             ("root_tests.rs", "use crate::hosts::Host;\n"),
+            // A top-level module with no role: a finding however little it
+            // names.
+            ("shared.rs", "pub struct Leftover;\n"),
             // A crate-level module: unchecked as a source, except that
             // nothing outside `hosts` names it.
             (
@@ -223,6 +228,7 @@ platforms = ["windows", "apple", "apple", "a::b"]
 groups = { apple = ["macos", "windows"], mac = ["m"] }
 base = ["owner", "window", "x::y"]
 hosts = "hosts"
+crate-level = ["gone"]
 "#,
         files: &[
             (
@@ -251,7 +257,7 @@ hosts = "hosts"
 
 /// The finding each planted violation of the feature axis must produce, and
 /// no other.
-pub(in crate::module_dag) const EXPECTED: [(&str, &str, &str); 28] = [
+pub(in crate::module_dag) const EXPECTED: [(&str, &str, &str); 30] = [
     ("platform", "hosts", "names hosts"),
     ("owner", "hosts", "names hosts"),
     ("text::windows", "hosts", "names hosts"),
@@ -313,6 +319,8 @@ pub(in crate::module_dag) const EXPECTED: [(&str, &str, &str); 28] = [
     ("window::winit", "window::windows", "stale exception"),
     ("display::wasm", "display::linux", "exception module"),
     ("ghost", "", "unknown"),
+    ("gone", "", "unknown"),
+    ("shared", "", "undeclared"),
     ("window", "", "duplicate"),
     ("x::y", "", "nested"),
     ("apple", "", "duplicate"),

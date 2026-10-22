@@ -39,10 +39,13 @@ trait depends on `flui-platform` instead.
   offers beyond `Platform` (a window and its extensions, the headless test
   controls, the UIKit scene events) is named at the crate root.
   `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the ten features, `owner` and `version` as `base`, which names no
-  feature, `hosts`, which nothing names, and the rest crate-level (`storage`
-  among it: the loops name its `DataDirs`). A platform file names its model,
-  `owner/`, `version/` and other features' models; every other edge is a
+  checks: the ten features; `owner`, `version` and `storage` as `base`, which
+  names no feature; `hosts`, which nothing names; and the crate-level files
+  (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
+  `task`). A top-level module with none of these roles is a finding, so a
+  directory the layout does not name cannot come back unchecked
+  (`table_test`, built for tests only, needs none). A platform file names its
+  model, a base and other features' models; every other edge is a
   named, dated exception whose `reason` says what removes it: the winit host's
   displays on Linux reading `display::linux` (until the native Linux host,
   ADR-0151 §11), and edges between the window's file and another feature's of

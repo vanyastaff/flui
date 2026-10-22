@@ -1209,6 +1209,7 @@ platforms = ["windows", "apple", "winit"]
 groups = { apple = ["macos", "ios"] }
 base = ["owner"]
 hosts = "hosts"
+crate-level = ["platform"]
 "#;
 
 /// The files of a feature crate in which every module only declares its
