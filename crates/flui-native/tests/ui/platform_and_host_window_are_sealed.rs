@@ -184,15 +184,15 @@ impl PlatformWindow for OutsideWindow {
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl HostWindow for OutsideWindow {
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         None
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

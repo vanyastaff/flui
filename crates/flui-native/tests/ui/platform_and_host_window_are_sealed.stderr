@@ -25,9 +25,9 @@ note: required by a bound in `flui_native::Platform`
              flui_native::HostPlatform<H>
 
 error[E0277]: `OutsideWindow` cannot implement `HostWindow`: the trait is sealed
-   --> tests/ui/platform_and_host_window_are_sealed.rs:193:21
+   --> tests/ui/platform_and_host_window_are_sealed.rs:189:21
     |
-193 | impl HostWindow for OutsideWindow {
+189 | impl HostWindow for OutsideWindow {
     |                     ^^^^^^^^^^^^^ not a window of a host in `flui-native`
     |
 help: the trait `flui_native::host_window::sealed::Sealed` is not implemented for `OutsideWindow`

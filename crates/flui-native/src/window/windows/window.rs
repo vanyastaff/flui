@@ -1243,6 +1243,10 @@ impl WindowsWindow {
 impl crate::host_window::CoreHostWindow for WindowsWindow {}
 
 impl crate::host_window::HostWindow for WindowsWindow {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     /// The window's own UIA bridge — the capability the composition root's
     /// accessibility wire discovers. Without this override the trait
     /// default (`None`) leaves every real Windows window silently invisible
@@ -1827,10 +1831,6 @@ impl PlatformWindow for WindowsWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

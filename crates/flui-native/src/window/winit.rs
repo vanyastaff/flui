@@ -799,10 +799,6 @@ impl PlatformWindow for WinitWindow {
         .and_then(WindowTextInput::ime)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     // No `haptics()` override: desktop winit targets have no haptic
     // hardware to drive, so the `PlatformWindow` trait default (`None`) is
     // the permanent correct answer here, not a stub awaiting a backend.
@@ -811,6 +807,10 @@ impl PlatformWindow for WinitWindow {
 impl crate::host_window::CoreHostWindow for WinitWindow {}
 
 impl HostWindow for WinitWindow {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// The window's own AT-SPI bridge — the capability the composition
     /// root's accessibility wire discovers. Without this override the trait
     /// default (`None`) makes every real Linux window silently

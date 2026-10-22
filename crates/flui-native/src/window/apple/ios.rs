@@ -1149,6 +1149,10 @@ impl host::Window<IOSLoop> for IOSWindow {
 impl crate::host_window::CoreHostWindow for IOSWindow {}
 
 impl crate::host_window::HostWindow for IOSWindow {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
@@ -1336,10 +1340,6 @@ impl PlatformWindow for IOSWindow {
             self.callbacks.dispatch_state_changed();
         }
         published.state
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     crate::owner::handlers::impl_window_callback_setters!(callbacks);

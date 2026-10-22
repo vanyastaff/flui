@@ -406,7 +406,11 @@ mod tests {
     struct StubWindow;
 
     impl crate::host_window::CoreHostWindow for StubWindow {}
-    impl crate::host_window::HostWindow for StubWindow {}
+    impl crate::host_window::HostWindow for StubWindow {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
 
     impl flui_platform::PlatformWindow for StubWindow {
         fn id(&self) -> flui_platform::WindowId {
@@ -450,10 +454,6 @@ mod tests {
         ) -> Result<(), flui_platform::WindowCommandError> {
             command.admit(&flui_platform::WindowCapabilities::NONE)?;
             Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

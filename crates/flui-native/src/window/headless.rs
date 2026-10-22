@@ -1170,15 +1170,15 @@ impl PlatformWindow for MockWindow {
     // ==================== Callbacks ====================
 
     crate::owner::handlers::impl_window_callback_setters!(callbacks);
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl crate::host_window::CoreHostWindow for MockWindow {}
 
 impl HostWindow for MockWindow {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility)
             as Arc<dyn flui_semantics::platform::PlatformAccessibility>)

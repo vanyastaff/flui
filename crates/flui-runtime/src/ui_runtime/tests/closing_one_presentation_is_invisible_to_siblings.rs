@@ -536,9 +536,6 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     ) -> Result<(), flui_platform::WindowCommandError> {
         self.delegate.apply(command)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 struct OwnershipBridge {

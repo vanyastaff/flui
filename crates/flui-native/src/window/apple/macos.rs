@@ -1089,6 +1089,10 @@ const MAX_DEFER_HOPS: u8 = 4;
 impl crate::host_window::CoreHostWindow for MacOSWindow {}
 
 impl crate::host_window::HostWindow for MacOSWindow {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     /// The window's own NSAccessibility bridge — the capability the
     /// composition root's accessibility wire discovers. Without this
     /// override the trait default (`None`) leaves every real macOS window
@@ -1692,10 +1696,6 @@ impl PlatformWindow for MacOSWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

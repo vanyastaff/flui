@@ -533,9 +533,6 @@ impl flui_platform::PlatformWindow for RedrawCounter {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no

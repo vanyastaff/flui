@@ -2258,9 +2258,6 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         *self.display.lock().expect("display script")
     }
@@ -2334,9 +2331,6 @@ impl flui_platform::PlatformWindow for RegionWindow {
     ) -> Result<(), flui_platform::WindowCommandError> {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self

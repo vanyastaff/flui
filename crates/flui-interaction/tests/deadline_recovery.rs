@@ -73,10 +73,6 @@ impl flui_platform::PlatformWindow for WakeWindow {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl Drop for WakeWindow {
