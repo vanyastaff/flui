@@ -11,6 +11,8 @@ mod table_test;
 
 mod tasks;
 
+mod source_tree;
+
 mod android_dex;
 mod api_closure;
 mod bench;

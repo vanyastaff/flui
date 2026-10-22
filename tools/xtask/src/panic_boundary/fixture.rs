@@ -1,22 +1,11 @@
 //! The self-test's crate: source files in memory, with one planted violation
 //! per rule and kind and one silent case per shape the rule admits.
 
-use std::collections::BTreeMap;
-
 use super::{ARGUMENT, IDENTITY, UNGUARDED, UNREAD};
-use crate::globals::scan::Source;
+pub(super) use crate::source_tree::Memory;
 
 /// The crate root.
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
-
-/// In-memory files, repository-relative.
-pub(super) struct Memory(pub(super) BTreeMap<String, String>);
-
-impl Source for Memory {
-    fn read(&self, rel: &str) -> Option<String> {
-        self.0.get(rel).cloned()
-    }
-}
 
 /// `(file, entry or item, kind)` of every planted finding.
 pub(super) const EXPECTED: [(&str, &str, &str); 19] = [

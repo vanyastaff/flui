@@ -66,10 +66,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+
 use std::process::ExitCode;
 
-use crate::globals::scan::{Source, Target, walk};
+use crate::source_tree::{Disk, Source, Target, walk};
 use crate::util;
 
 mod fixture;
@@ -114,19 +114,6 @@ pub(crate) fn panic_boundary(args: &PanicBoundaryArgs) -> anyhow::Result<ExitCod
         eprintln!("  - {finding}");
     }
     Ok(ExitCode::FAILURE)
-}
-
-/// The repository on disk.
-struct Disk(PathBuf);
-
-impl Source for Disk {
-    fn read(&self, rel: &str) -> Option<String> {
-        std::fs::read_to_string(self.0.join(rel)).ok()
-    }
-
-    fn exists(&self, rel: &str) -> bool {
-        self.0.join(rel).is_file()
-    }
 }
 
 /// One problem the gate reports.

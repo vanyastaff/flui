@@ -15,7 +15,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Block, Expr, ImplItem, Item, Meta, Path, Stmt, Token, TraitItem, UseTree};
 
 use super::{Finding, IDENTITY, UNREAD};
-use crate::globals::scan::{
+use crate::source_tree::{
     Parsed, Truth, cfg_of, impl_item_attrs, item_attrs, stmt_attrs, trait_item_attrs,
 };
 
@@ -343,6 +343,7 @@ fn leads_in_crate(lead: &[String]) -> bool {
 fn inert(expr: &Expr) -> bool {
     match expr {
         Expr::Lit(_) | Expr::Path(_) | Expr::Closure(_) => true,
+        Expr::Tuple(tuple) => tuple.elems.iter().all(inert),
         Expr::Reference(reference) => inert(&reference.expr),
         Expr::Paren(paren) => inert(&paren.expr),
         Expr::Group(group) => inert(&group.expr),

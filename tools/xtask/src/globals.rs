@@ -35,7 +35,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::Context;
@@ -47,8 +47,9 @@ use crate::workspace::relative;
 
 mod allowlist;
 mod fixture;
-pub(crate) mod scan;
+mod scan;
 
+use crate::source_tree::Disk;
 use allowlist::{Class, Standing};
 use scan::{Def, Shape, Source, Target, Vis};
 
@@ -177,19 +178,6 @@ fn adr_numbers(root: &Path) -> anyhow::Result<BTreeSet<String>> {
         }
     }
     Ok(numbers)
-}
-
-/// The repository on disk.
-struct Disk(PathBuf);
-
-impl Source for Disk {
-    fn read(&self, rel: &str) -> Option<String> {
-        std::fs::read_to_string(self.0.join(rel)).ok()
-    }
-
-    fn exists(&self, rel: &str) -> bool {
-        self.0.join(rel).is_file()
-    }
 }
 
 /// Why a global needs no entry.
