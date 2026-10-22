@@ -10,6 +10,8 @@ mod trybuild_ui {
         cases.compile_fail("tests/ui/empty_motion.rs");
         cases.compile_fail("tests/ui/non_motion_field.rs");
         cases.compile_fail("tests/ui/generic_motion_width.rs");
+        // rustc lists the first eight `Intent` implementors by name, so a new
+        // intent that sorts among them moves this snapshot.
         cases.compile_fail("tests/ui/gesture_command_needs_an_intent.rs");
         cases.pass("tests/ui/inspect_through_sdk.rs");
         cases.compile_fail("tests/ui/inspect_unmapped_field.rs");
