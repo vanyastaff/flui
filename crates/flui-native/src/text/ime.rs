@@ -1,8 +1,8 @@
 //! What the Android and web backends mirror of a focused text store: its
 //! text with a protected field's characters masked, the scalar each code
 //! unit of a character-bounds request belongs to, and the one edit between
-//! two versions of the mirrored text. Cfg-free plain values over UTF-16, so
-//! Linux CI pins them.
+//! two versions of the mirrored text. Plain values over UTF-16, built for the
+//! two backends and for tests, so Linux CI pins them.
 
 #![forbid(unsafe_code)]
 
@@ -10,11 +10,11 @@ use flui_platform::text_store::{TextStoreRead, Utf16Offset, Utf16Range};
 
 /// What a protected field's text reads as in a mirror: one bullet per code
 /// unit, so the input method's offsets still land where they do in the field.
-pub const PROTECTED_UNIT: char = '\u{2022}';
+pub(crate) const PROTECTED_UNIT: char = '\u{2022}';
 
 /// The whole text of `session`, or [`PROTECTED_UNIT`]s for a protected field.
 #[must_use]
-pub fn document_text(session: &dyn TextStoreRead) -> String {
+pub(crate) fn document_text(session: &dyn TextStoreRead) -> String {
     let len = session.document_len();
     let whole =
         Utf16Range::new(Utf16Offset::ZERO, len).expect("BUG: the whole document is a range");
@@ -26,9 +26,11 @@ pub fn document_text(session: &dyn TextStoreRead) -> String {
 /// The scalars that cover the code units `start..end` of `text`, in order,
 /// each as the UTF-16 range it occupies. A scalar outside the text is not
 /// listed; a unit that is half of a surrogate pair names the whole pair, and
-/// the pair is listed once.
+/// the pair is listed once. The web backend answers character bounds with
+/// it; Android's input method asks none.
+#[cfg(any(target_arch = "wasm32", test))]
 #[must_use]
-pub fn scalar_spans(text: &str, start: usize, end: usize) -> Vec<Utf16Range> {
+pub(crate) fn scalar_spans(text: &str, start: usize, end: usize) -> Vec<Utf16Range> {
     let mut spans = Vec::new();
     let mut at = 0;
     for scalar in text.chars() {
@@ -51,13 +53,13 @@ pub fn scalar_spans(text: &str, start: usize, end: usize) -> Vec<Utf16Range> {
 /// range `start..old_end` of the old text became `start..new_end` of the
 /// new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextDiff {
+pub(crate) struct TextDiff {
     /// Where the texts first differ.
-    pub start: usize,
+    pub(crate) start: usize,
     /// The end of the replaced range in the old text.
-    pub old_end: usize,
+    pub(crate) old_end: usize,
     /// The end of the inserted range in the new text.
-    pub new_end: usize,
+    pub(crate) new_end: usize,
 }
 
 /// The one edit that turns `old` into `new`: the longest common prefix and,
@@ -65,7 +67,7 @@ pub struct TextDiff {
 /// texts are equal. A surrogate pair is never split: an edit boundary inside
 /// one moves outward.
 #[must_use]
-pub fn diff(old: &[u16], new: &[u16]) -> Option<TextDiff> {
+pub(crate) fn diff(old: &[u16], new: &[u16]) -> Option<TextDiff> {
     if old == new {
         return None;
     }

@@ -1,7 +1,7 @@
 //! Text input and the system text size: the feature's model beside one module
 //! per platform (ADR-0151 §10).
 //!
-//! The model is what more than one platform uses: [`ime`], what the Android
+//! The model is what more than one platform uses: `ime`, what the Android
 //! and web hosts mirror of a focused field (its text with a protected field
 //! masked, and the one edit between two versions of it), `sizing`, the native
 //! text size an owner captures for a presentation, and [`TextInput`], the
@@ -18,15 +18,12 @@
 //! - `winit`: winit's IME enablement and cursor area;
 //! - `headless`: the recording double of IME requests.
 //!
-//! The model's `ime` is built on every target, public and hidden from the
-//! documentation: plain values over UTF-16 that two platform files share,
-//! pinned on every host without a `cfg` per consumer. No code outside the
-//! crate names it; the key a backend's input method owns is the input
-//! feature's (`input::android::keys`, `input::web::keys`), which the backend
-//! conformance table in `tests/` decodes with. Each platform module is built
-//! for its own target; Android's `ime` and `sizing`, the web's `ime` and the
-//! whole of `windows` for tests too, which check their pure halves on every
-//! host.
+//! The model's `ime` is built for the two hosts that mirror a field and for
+//! tests. The key a backend's input method owns is the input feature's
+//! (`input::android::keys`, `input::web::keys`), which the backend conformance
+//! table in `tests/` decodes with. Each platform module is built for its own
+//! target; Android's `ime` and `sizing`, the web's `ime` and the whole of
+//! `windows` for tests too, which check their pure halves on every host.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -40,8 +37,8 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 pub(crate) mod headless;
-#[doc(hidden)]
-pub mod ime;
+#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+pub(crate) mod ime;
 pub(crate) mod sizing;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
