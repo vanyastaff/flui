@@ -45,7 +45,7 @@ use objc2_foundation::{NSArray, NSRect, NSRectEdge};
 
 use super::events::MacInputState;
 use super::text_input::{TextInputState, add_text_input_methods};
-use crate::shared::WindowCallbacks;
+use crate::owner::handlers::WindowCallbacks;
 
 // ============================================================================
 // FLUIContentView Creation

@@ -193,7 +193,9 @@ fn hosted_receiver() -> (
         recorded.lock().expect("notice log").push(notice);
     }));
     let host = Rc::new(crate::platforms::windows::host_events::HostEvents::new(
-        Rc::new(RefCell::new(crate::shared::PlatformHandlers::default())),
+        Rc::new(RefCell::new(
+            crate::owner::handlers::PlatformHandlers::default(),
+        )),
         notices,
     ));
     let invalidation = Arc::new(Invalidation {

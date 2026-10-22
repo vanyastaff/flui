@@ -13,10 +13,19 @@ use super::{display, preferences::PreferenceSource, window::MacOSWindow};
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::{
-    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
-    host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError, owner::OwnerHooks,
-    owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::PlatformHandlers,
+    config::WindowConfiguration,
+    error::PlatformError,
+    executor::BackgroundExecutor,
+    host_window::HostWindow,
+    owner::DirectOwnerHooks,
+    owner::OpenWindowError,
+    owner::OwnerHooks,
+    owner::OwnerPlatform,
+    owner::call_point::{Field, install},
+    owner::handlers::PlatformHandlers,
+    platform::Platform,
+    platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
     shared::system_notice::SystemNotices,
 };
 use flui_platform::{
@@ -130,6 +139,14 @@ impl std::fmt::Debug for MacOSLoop {
 impl MacOSLoop {
     pub(crate) fn new() -> Result<Self, PlatformError> {
         Self::with_config(WindowConfiguration::default())
+    }
+
+    /// One of the application's handlers, as a slot of the handler set.
+    fn handler<H>(
+        &self,
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
+        Field::new(&*self.handlers, project)
     }
 
     pub(crate) fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
@@ -284,13 +301,11 @@ impl host::Loop for MacOSLoop {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        let mut handlers = self.handlers.lock();
-        handlers.quit = Some(callback);
+        install(&self.handler(|handlers| &mut handlers.quit), callback);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        let previous = self.handlers.lock().exit_policy.replace(hook);
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
+        install(&self.handler(|handlers| &mut handlers.exit_policy), hook);
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -313,7 +328,10 @@ impl host::Loop for MacOSLoop {
     ) {
         // Store under the lock, then arm OUTSIDE it: arming consults the hook,
         // and the hook re-enters `flui-app` while taking gesture locks.
-        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        install(
+            &self.handler(|handlers| &mut handlers.wake_deadline),
+            Arc::from(hook),
+        );
         self.wake_pump.arm();
     }
 }
@@ -431,8 +449,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     }
 
     fn on_event(owner: &MacOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        let mut handlers = owner.handlers.lock();
-        handlers.window_event = Some(callback);
+        install(
+            &owner.handler(|handlers| &mut handlers.window_event),
+            callback,
+        );
     }
 }
 
@@ -472,8 +492,10 @@ impl host::Lifecycle<MacOSLoop> for MacOSLoop {
         owner: &MacOSLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
-        let previous = owner.handlers.lock().session_end.replace(callback);
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
+        install(
+            &owner.handler(|handlers| &mut handlers.session_end),
+            callback,
+        );
     }
 
     fn on_host_notice(owner: &MacOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {

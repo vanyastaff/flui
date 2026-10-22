@@ -25,12 +25,13 @@ use parking_lot::Mutex;
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
 use crate::host::{self, Host};
+use crate::owner::call_point::{Field, Once, call, install};
 use crate::platform::HostPlatform;
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
     owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
-    owner::WindowOpen, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
+    owner::WindowOpen, owner::handlers::PlatformHandlers, owner::handlers::WindowCallbacks,
+    platform::Platform, platform::PlatformExecutor, platform::PlatformReadyCallback,
     shared::window_state::WindowStateCell,
 };
 use flui_platform::{
@@ -209,6 +210,68 @@ impl HeadlessLoop {
         let mut state = self.state.lock();
         f(&mut state)
     }
+}
+
+/// Call the application's window-event handler with `event` through the call
+/// point, with the state lock released: the handler re-enters the embedder's
+/// runtime, which may open a window, install another handler or quit
+/// (ADR-0039). Its panic reaches the caller. An event emitted from inside the
+/// handler finds the slot empty and is dropped, as on winit.
+fn emit_window_event(state: &Mutex<HeadlessState>, event: WindowEvent) {
+    call(
+        &Field::new(state, |state| &mut state.handlers.window_event),
+        |handler| handler(event),
+    )
+    .or_resume(());
+}
+
+/// Stop the platform and run the application's quit handler, once: it is
+/// retired after its call. The signal, when there is one, closes first.
+fn finish_quit(state: &Mutex<HeadlessState>) {
+    let signal = {
+        let mut state = state.lock();
+        state.is_running = false;
+        state.owner_signal.upgrade()
+    };
+    if let Some(signal) = signal {
+        signal.close();
+    }
+    call(
+        &Once(Field::new(state, |state| &mut state.handlers.quit)),
+        |quit| quit(),
+    )
+    .or_resume(());
+}
+
+/// Ask the application's exit-policy hook whether the platform may quit now
+/// that no window is tracked, and quit when it may. No hook never quits.
+///
+/// The hook runs with the state lock released: it drops removed UI runtime
+/// state, whose destructors may call back into this platform (a dispose hook
+/// opening another window, say). Emptiness is checked before the hook and
+/// again before quitting, so a window opened meanwhile — by the hook itself
+/// too — keeps the platform running. `true` when it quit.
+fn consult_exit_policy(state: &Mutex<HeadlessState>) -> bool {
+    if !state.lock().windows.is_empty() {
+        return false;
+    }
+    // `false` when vacant, not `true`: headless's own pre-#555 default is "no
+    // hook -> never quit" (matching every headless test/consumer that
+    // predates this mechanism, none of which expects closing a mock window
+    // to spontaneously call `quit`) -- the OPPOSITE of winit's "no hook ->
+    // exit unconditionally" default, which matches real native pre-#555
+    // window-close behavior instead. The two backends' defaults are
+    // deliberately different; this is not a typo.
+    let allowed = call(
+        &Field::new(state, |state| &mut state.handlers.exit_policy),
+        |hook| hook(),
+    )
+    .or_resume(false);
+    if !allowed || !state.lock().windows.is_empty() {
+        return false;
+    }
+    finish_quit(state);
+    true
 }
 
 /// The headless platform's test controls: builders and handles taken before
@@ -495,22 +558,16 @@ impl host::Loop for HeadlessLoop {
     fn quit(&self) {
         self.signal.close();
         tracing::info!("Quitting headless platform");
-
-        // Consume before calling: callback bodies and captured-data destructors
-        // may re-enter the platform. Matches the close/reevaluation quit paths.
-        let callback = self.with_state(|state| {
-            state.is_running = false;
-            state.handlers.quit.take()
-        });
-        if let Some(mut callback) = callback {
-            callback();
-        }
+        // The handler and its captures' destructors may re-enter the
+        // platform. Matches the close/reevaluation quit paths.
+        finish_quit(&self.state);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.with_state(|state| {
-            state.handlers.exit_policy = Some(hook);
-        });
+        install(
+            &Field::new(&*self.state, |state| &mut state.handlers.exit_policy),
+            hook,
+        );
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -521,9 +578,10 @@ impl host::Loop for HeadlessLoop {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|state| {
-            state.handlers.quit = Some(callback);
-        });
+        install(
+            &Field::new(&*self.state, |state| &mut state.handlers.quit),
+            callback,
+        );
     }
 
     fn set_wake_deadline_hook(
@@ -589,7 +647,11 @@ impl host::Window<HeadlessLoop> for MockWindow {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&owner.state);
-        Ok(owner.with_state(|state| create_mock_window(state, platform_state, options)))
+        let window = owner.with_state(|state| create_mock_window(state, platform_state, options));
+        // Announced once the state lock is released: the handler may open
+        // another window, install a handler or quit.
+        emit_window_event(&owner.state, WindowEvent::Created(window.id()));
+        Ok(window)
     }
 
     fn active(owner: &HeadlessLoop) -> Option<WindowId> {
@@ -606,9 +668,10 @@ impl host::Window<HeadlessLoop> for MockWindow {
     }
 
     fn on_event(owner: &HeadlessLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        owner.with_state(|state| {
-            state.handlers.window_event = Some(callback);
-        });
+        install(
+            &Field::new(&*owner.state, |state| &mut state.handlers.window_event),
+            callback,
+        );
     }
 }
 
@@ -624,9 +687,12 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
     }
 
     fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.with_state(|state| {
-            state.handlers.keyboard_layout_changed = Some(callback);
-        });
+        install(
+            &Field::new(&*owner.state, |state| {
+                &mut state.handlers.keyboard_layout_changed
+            }),
+            callback,
+        );
     }
 }
 
@@ -660,9 +726,10 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
         owner: &HeadlessLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
-        owner.with_state(|state| {
-            state.handlers.session_end = Some(callback);
-        });
+        install(
+            &Field::new(&*owner.state, |state| &mut state.handlers.session_end),
+            callback,
+        );
     }
 
     fn on_host_notice(owner: &HeadlessLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
@@ -778,11 +845,11 @@ impl HeadlessInputDevices {
 }
 
 /// Builds a fresh mock window under an already-locked `state`, threading it
-/// through the same register/activate/emit-`Created` bookkeeping
-/// `Platform::open_window`'s synchronous path uses — shared so the deferred-
-/// open resolution path ([`HeadlessDeferredWindowOpens::resolve_next`]) stays
-/// byte-for-byte consistent with the synchronous one instead of duplicating
-/// it.
+/// through the same register/activate bookkeeping `Platform::open_window`'s
+/// synchronous path uses — shared so the deferred-open resolution path
+/// ([`HeadlessDeferredWindowOpens::resolve_next`]) stays byte-for-byte
+/// consistent with the synchronous one instead of duplicating it. Each caller
+/// announces the window (`WindowEvent::Created`) once it released the lock.
 fn create_mock_window(
     state: &mut HeadlessState,
     platform_state: Weak<Mutex<HeadlessState>>,
@@ -836,10 +903,6 @@ fn create_mock_window(
 
     state.windows.push(window.clone());
     state.active_window = Some(window_id);
-
-    state
-        .handlers
-        .invoke_window_event(WindowEvent::Created(window_id));
 
     Arc::new(window) as Arc<dyn HostWindow>
 }
@@ -925,14 +988,7 @@ impl HeadlessOwnerTurns {
         if signal.drive() {
             signal.close();
             if let Some(state) = self.state.upgrade() {
-                let callback = {
-                    let mut state = state.lock();
-                    state.is_running = false;
-                    state.handlers.quit.take()
-                };
-                if let Some(mut callback) = callback {
-                    callback();
-                }
+                finish_quit(&state);
             }
         }
     }
@@ -942,10 +998,10 @@ impl HeadlessOwnerTurns {
 /// registered hooks after `run` has consumed it — obtained from
 /// [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events) before `run`.
 ///
-/// Each call runs the hook on the calling thread, outside the platform's state
-/// lock, so the hook may call back into the platform; a hook registered while it
-/// runs replaces it. A hook that panics is dropped with its panic, since a hook
-/// that failed once is not trusted to run again.
+/// Each call runs the hook on the calling thread through the call point,
+/// outside the platform's state lock, so the hook may call back into the
+/// platform; a hook registered while it runs replaces it. A hook that panics
+/// keeps its place, and its panic reaches the caller.
 #[derive(Clone)]
 pub struct HeadlessHostEvents {
     state: Weak<Mutex<HeadlessState>>,
@@ -968,18 +1024,11 @@ impl HeadlessHostEvents {
         let Some(state) = self.state.upgrade() else {
             return SessionEndAnswer::Proceed;
         };
-        let hook = state.lock().handlers.session_end.take();
-        let Some(hook) = hook else {
-            return SessionEndAnswer::Proceed;
-        };
-        // The hook goes back to its slot however the call ends: a hook that
-        // panics is not lost with the unwind.
-        let mut taken = TakenSessionHook {
-            state: &state,
-            hook: Some(hook),
-        };
-        let hook = taken.hook.as_mut().expect("BUG: the hook was just taken");
-        hook(phase)
+        call(
+            &Field::new(&*state, |state| &mut state.handlers.session_end),
+            |hook| hook(phase),
+        )
+        .or_resume(SessionEndAnswer::Proceed)
     }
 
     /// A system notice other than a session end's phases: the hook registered
@@ -1003,24 +1052,6 @@ impl HeadlessHostEvents {
         self.state
             .upgrade()
             .map_or(0, |state| state.lock().session_end_releases)
-    }
-}
-
-/// The session-end hook while it runs: back in the platform's slot when this
-/// drops, unless the host registered another meanwhile.
-struct TakenSessionHook<'a> {
-    state: &'a Arc<Mutex<HeadlessState>>,
-    hook: Option<Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>>,
-}
-
-impl Drop for TakenSessionHook<'_> {
-    fn drop(&mut self) {
-        let mut state = self.state.lock();
-        if let Some(hook) = self.hook.take()
-            && state.handlers.session_end.is_none()
-        {
-            state.handlers.session_end = Some(hook);
-        }
     }
 }
 
@@ -1166,9 +1197,9 @@ impl HeadlessExitReevaluation {
     /// one is parked AND no window is tracked, consult the exit-policy
     /// hook exactly as the window-close path does
     /// (`MockWindow::notify_closed`, including its "no hook -> never
-    /// quit" headless default and its take/consult-outside-the-lock/
-    /// restore discipline) and quit if the hook now allows it. Returns
-    /// `true` iff a quit was actually issued.
+    /// quit" headless default and its call outside the lock) and quit if
+    /// the hook now allows it. Returns `true` iff a quit was actually
+    /// issued.
     ///
     /// Call on the thread that owns the platform's runtime state (in a
     /// test: the test thread) — the whole reason requests park instead of
@@ -1194,47 +1225,16 @@ impl HeadlessExitReevaluation {
         let Some(platform_state) = self.state.upgrade() else {
             return false;
         };
-        let hook = {
+        {
             let mut state = platform_state.lock();
             if !state.exit_reevaluation_requested {
                 return false;
             }
             state.exit_reevaluation_requested = false;
-            if !state.windows.is_empty() {
-                return false;
-            }
-            state.handlers.exit_policy.take()
-        };
-
-        // Consult OUTSIDE the state lock: the hook re-enters the
-        // embedder's runtime (dropping removed ui_runtime state whose
-        // destructors may call back into this platform).
-        let should_quit = hook.as_ref().is_some_and(|hook| hook());
-        // Restore only if nothing fresher was installed meanwhile — the
-        // hook is not one-shot; a veto leaves it in place for the next
+        }
+        // The hook is not one-shot: a veto leaves it in place for the next
         // consult (same rule as `MockWindow::notify_closed`).
-        if let Some(hook) = hook {
-            let mut state = platform_state.lock();
-            if state.handlers.exit_policy.is_none() {
-                state.handlers.exit_policy = Some(hook);
-            }
-        }
-        if !should_quit {
-            return false;
-        }
-
-        let (quit_callback, signal) = {
-            let mut state = platform_state.lock();
-            state.is_running = false;
-            (state.handlers.quit.take(), state.owner_signal.upgrade())
-        };
-        if let Some(signal) = signal {
-            signal.close();
-        }
-        if let Some(mut callback) = quit_callback {
-            callback();
-        }
-        true
+        consult_exit_policy(&platform_state)
     }
 }
 
@@ -1287,6 +1287,7 @@ impl HeadlessDeferredWindowOpens {
             let window = create_mock_window(&mut state, Arc::downgrade(&platform_state), options);
             (slot, window)
         };
+        emit_window_event(&platform_state, WindowEvent::Created(window.id()));
 
         // The requester may have already abandoned the request (dropped its
         // `PendingWindow` before this call) -- `deliver`'s `Err` hands the
@@ -1367,7 +1368,7 @@ pub struct MockWindow {
 #[derive(Clone)]
 struct OwnerRedraw {
     signal: Weak<crate::owner::signal::OwnerSignal>,
-    wake: crate::shared::InputWake,
+    wake: crate::owner::handlers::InputWake,
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -1632,62 +1633,6 @@ impl MockWindow {
         published.state
     }
 
-    /// Removes this window from the platform's own tracking and, only once
-    /// every window this platform knows about is gone, consults the
-    /// exit-policy hook (see [`crate::shared::PlatformHandlers::exit_policy`])
-    /// exactly as the winit backend's `CloseRequested` handling does. A
-    /// caller that never installed a hook sees no behavior change: this is
-    /// a no-op unless [`crate::Platform::set_exit_policy_hook`] was
-    /// called first, matching every other headless test/consumer that
-    /// predates this mechanism.
-    ///
-    /// Every user-supplied callback (the hook itself, and `on_quit`) is taken
-    /// out of the lock and called OUTSIDE it (ADR-0039) — the same
-    /// take/invoke/restore-if-none discipline `WinitLoop`'s own
-    /// window-event-handler lease uses, and for the identical reason: the
-    /// hook's body (`flui-app`'s `AppRuntime::should_exit`) drops removed
-    /// UI runtime state, whose destructors may call back into this platform (a
-    /// dispose hook opening another window, say). Calling either callback
-    /// while still holding `platform_state`'s lock would deadlock the
-    /// instant such a callback re-entered any lock-guarded method (e.g.
-    /// `open_window`).
-    /// Leases the global window-event handler out of the platform state,
-    /// invokes it with `event`, and restores it unless something fresher was
-    /// installed meanwhile.
-    ///
-    /// Never invoked under the state lock. The handler re-enters the
-    /// embedder's runtime — in `flui-app` it drops the removed UI runtime's state,
-    /// whose destructors can call back into this platform (a dispose hook
-    /// opening a window) — so calling it while holding `platform_state` would
-    /// deadlock the moment it did. This is the discipline
-    /// [`Self::notify_closed`] already applies to the exit-policy hook
-    /// (ADR-0039), and the one `WinitLoop::lease_window_event_handler`
-    /// exists for.
-    ///
-    /// Note the consequence of leasing: an event emitted from *inside* the
-    /// handler finds the slot empty and is dropped. That matches winit, whose
-    /// lease has the same shape.
-    fn emit_window_event(&self, event: WindowEvent) {
-        let Some(platform_state) = self.platform_state.upgrade() else {
-            return;
-        };
-        let handler = { platform_state.lock().handlers.window_event.take() };
-        let Some(handler) = handler else {
-            return;
-        };
-        // Restored by the guard's `Drop`, not by a line after the call: a
-        // panicking handler would otherwise be dropped on the floor and every
-        // later event silently lost, which is a worse failure than the panic.
-        // `WinitLoop`'s own lease restores in `Drop` for the same reason.
-        let mut lease = WindowEventLease {
-            platform_state: &platform_state,
-            handler: Some(handler),
-        };
-        if let Some(handler) = lease.handler.as_mut() {
-            handler(event);
-        }
-    }
-
     /// The whole close teardown, in the order both production backends run it:
     /// hide, fire `on_close`, drop the window from tracking, clear its
     /// callbacks, emit the global `Closed`, and consult the exit policy only
@@ -1715,22 +1660,24 @@ impl MockWindow {
         self.callbacks.clear();
     }
 
+    /// Removes this window from the platform's own tracking, announces
+    /// `Closed`, and, only once every window this platform knows about is
+    /// gone, consults the exit-policy hook (see
+    /// [`crate::owner::handlers::PlatformHandlers::exit_policy`]) exactly as
+    /// the winit backend's `CloseRequested` handling does. A caller that never
+    /// installed a hook sees no behavior change: this is a no-op unless
+    /// [`crate::Platform::set_exit_policy_hook`] was called first, matching
+    /// every other headless test/consumer that predates this mechanism.
+    ///
+    /// Every application handler (the window-event handler, the hook, and
+    /// `on_quit`) runs through the call point with the state lock released
+    /// (ADR-0039): the hook's body (`flui-app`'s `AppRuntime::should_exit`)
+    /// drops removed UI runtime state, whose destructors may call back into
+    /// this platform (a dispose hook opening another window, say).
     fn notify_closed(&self) {
         let Some(platform_state) = self.platform_state.upgrade() else {
             return;
         };
-
-        // Remove this window, then take the hook, in the SAME lock
-        // acquisition that re-checks emptiness — not two separate short
-        // locks. Between two separate acquisitions, another thread (or a
-        // reentrant call this window's own removal triggers) could open a
-        // new window in the gap, leaving a `windows_empty` read from the
-        // first lock stale: true when read, false by the time the hook
-        // actually runs. Re-checking here, still under one lock, closes
-        // that window; the hook/quit callback themselves still run OUTSIDE
-        // the lock (see this function's own doc for why). If the registry
-        // is not actually empty, the hook is left installed untouched
-        // (never taken) for the window close that does empty it.
         {
             let mut state = platform_state.lock();
             state.windows.retain(|w| w.id != self.id);
@@ -1743,60 +1690,13 @@ impl MockWindow {
         // event a consumer tracks windows by, so skipping it while other
         // windows remain would leave that consumer believing a closed window
         // is still open — the multi-window case these events exist for.
-        // Leased, so the handler runs outside the state lock (ADR-0039) and
-        // survives its own panic.
-        self.emit_window_event(WindowEvent::Closed(self.id));
+        emit_window_event(&platform_state, WindowEvent::Closed(self.id));
 
-        let hook = {
-            let mut state = platform_state.lock();
-            // Re-checked HERE rather than carried down from the lock above.
-            // Before the global `Closed` event existed, emptiness and the
-            // hook were read in one acquisition precisely so nothing could
-            // open a window in between. Emitting the event splits that
-            // acquisition in two — and the thing running in the gap is a
-            // consumer callback, which is exactly the code that opens
-            // windows (a close handler showing the next one). Carrying the
-            // earlier answer would let this consult the hook, and quit,
-            // with a window tracked.
-            if !state.windows.is_empty() {
-                return;
-            }
-            state.handlers.exit_policy.take()
-        };
-
-        // `is_some_and`, not `is_none_or`: headless's own pre-#555 default
-        // is "no hook -> never quit" (matching every headless test/consumer
-        // that predates this mechanism, none of which expects closing a
-        // mock window to spontaneously call `quit`) -- the OPPOSITE of
-        // winit's "no hook -> exit unconditionally" default, which matches
-        // real native pre-#555 window-close behavior instead. The two
-        // backends' defaults are deliberately different; this is not a
-        // typo.
-        let should_quit = hook.as_ref().is_some_and(|hook| hook());
-        // Restore only if nothing fresher was installed meanwhile -- the
-        // hook is not one-shot, unlike `quit` below: a veto here must leave
-        // it in place for the NEXT window close to consult.
-        if let Some(hook) = hook {
-            let mut state = platform_state.lock();
-            if state.handlers.exit_policy.is_none() {
-                state.handlers.exit_policy = Some(hook);
-            }
-        }
-        if !should_quit {
-            return;
-        }
-
-        let (quit_callback, signal) = {
-            let mut state = platform_state.lock();
-            state.is_running = false;
-            (state.handlers.quit.take(), state.owner_signal.upgrade())
-        };
-        if let Some(signal) = signal {
-            signal.close();
-        }
-        if let Some(mut callback) = quit_callback {
-            callback();
-        }
+        // Emptiness is read after the event, not carried down from the lock
+        // above: the handler that ran in between is exactly the code that
+        // opens windows (a close handler showing the next one), and the
+        // policy re-checks it again before quitting.
+        consult_exit_policy(&platform_state);
     }
 
     /// How many times the frame pump has called
@@ -1971,38 +1871,15 @@ impl MockWindow {
             // produces it, and on Win32 only the `WM_CLOSE` arm does. A veto
             // must produce neither event, which is why this sits inside the
             // `should` branch and not above it.
-            self.emit_window_event(WindowEvent::CloseRequested { window_id: self.id });
+            if let Some(platform_state) = self.platform_state.upgrade() {
+                emit_window_event(
+                    &platform_state,
+                    WindowEvent::CloseRequested { window_id: self.id },
+                );
+            }
             self.complete_close();
         }
         should
-    }
-}
-
-/// Holds the global window-event handler out of [`HeadlessState`] for the
-/// duration of one invocation and puts it back on the way out — including
-/// while unwinding.
-///
-/// The handler cannot be invoked under the state lock: on the close path it
-/// re-enters the embedder's runtime, which drops UI runtime state whose destructors
-/// call back into this platform (ADR-0039). Taking it out is what makes that
-/// safe; restoring it in `Drop` is what keeps a panicking handler from
-/// silently disabling every later event.
-struct WindowEventLease<'a> {
-    platform_state: &'a Arc<Mutex<HeadlessState>>,
-    handler: Option<Box<dyn FnMut(WindowEvent) + Send>>,
-}
-
-impl Drop for WindowEventLease<'_> {
-    fn drop(&mut self) {
-        let Some(handler) = self.handler.take() else {
-            return;
-        };
-        let mut state = self.platform_state.lock();
-        // Only if nothing fresher was installed while the lease was out: a
-        // handler registered during the callback is the newer intent.
-        if state.handlers.window_event.is_none() {
-            state.handlers.window_event = Some(handler);
-        }
     }
 }
 
@@ -2272,7 +2149,7 @@ impl PlatformWindow for MockWindow {
 
     // ==================== Callbacks ====================
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     fn as_any(&self) -> &dyn std::any::Any {
         self

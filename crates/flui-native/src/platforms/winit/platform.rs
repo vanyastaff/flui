@@ -119,12 +119,13 @@ use super::{
     display::WinitDisplaySource,
     events as winit_events,
 };
+use crate::owner::call_point::{Field, Once, SharedField, call, install};
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
     owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
-    platform::HostPlatform, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::PlatformHandlers,
+    owner::handlers::PlatformHandlers, platform::HostPlatform, platform::Platform,
+    platform::PlatformExecutor, platform::PlatformReadyCallback,
     shared::system_notice::SystemNotices,
 };
 use flui_platform::{
@@ -683,39 +684,52 @@ impl WinitLoop {
         })
     }
 
-    /// Takes the global window-event handler out from under the state lock
-    /// so it can be invoked outside it (ADR-0039). Before this hoist,
-    /// `invoke_window_event` ran while `with_state`'s lock was held, so a
-    /// handler that called an owner-thread platform method (e.g. a
-    /// deferred `OwnerPlatform::open_window`) would re-enter this same
-    /// non-reentrant lock and deadlock. Restores the handler on drop, only
-    /// if nothing fresher was registered meanwhile — the same take/invoke/
-    /// restore-if-none contract as `shared::handlers::CallbackLease`,
-    /// reimplemented here (not reused directly) because this handler lives
-    /// nested inside the platform's single big state `Mutex`, not its own
-    /// standalone `Mutex<Option<T>>`.
-    fn lease_window_event_handler(&self) -> WindowEventHandlerLease<'_> {
-        let handler = self.with_state(|state| state.handlers.window_event.take());
-        WindowEventHandlerLease {
-            platform: self,
-            handler,
-        }
+    /// One of the application's handlers, as a slot of the platform state.
+    fn handler<H>(
+        &self,
+        project: fn(&mut WinitLoopState) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<WinitLoopState>, H> {
+        Field::new(&*self.state, project)
     }
 
-    /// Takes the exit-policy hook out from under the state lock so it can be
-    /// consulted outside it (ADR-0039) — the same take/invoke/restore-if-none
-    /// discipline [`Self::lease_window_event_handler`] uses, for the same
-    /// reason: the hook's own body (`flui-app`'s `AppRuntime::should_exit`)
-    /// drops removed UI runtime state, whose destructors (a dispose hook opening
-    /// another window, say) may call back into this platform. Calling the
-    /// hook while still holding this non-reentrant lock would deadlock the
-    /// instant such a callback re-entered any `with_state`-guarded method.
-    fn lease_exit_policy_hook(&self) -> ExitPolicyHookLease<'_> {
-        let hook = self.with_state(|state| state.handlers.exit_policy.take());
-        ExitPolicyHookLease {
-            platform: self,
-            hook,
-        }
+    /// Call the application's window-event handler with `event` through the
+    /// call point, outside the state lock (ADR-0039): a handler that calls an
+    /// owner-thread platform method (e.g. a deferred
+    /// `OwnerPlatform::open_window`) re-enters this same non-reentrant lock.
+    /// Its panic reaches the caller.
+    fn dispatch_window_event(&self, event: WindowEvent) {
+        call(
+            &self.handler(|state| &mut state.handlers.window_event),
+            |handler| {
+                handler(event);
+            },
+        )
+        .or_resume(());
+    }
+
+    /// Ask the exit-policy hook whether the loop may end, outside the state
+    /// lock (ADR-0039): the hook's own body (`flui-app`'s
+    /// `AppRuntime::should_exit`) drops removed UI runtime state, whose
+    /// destructors (a dispose hook opening another window, say) may call back
+    /// into this platform. `true` (allow the exit) when no hook is installed
+    /// — the pre-#555 unconditional default.
+    fn exit_policy_allows_exit(&self) -> bool {
+        call(
+            &self.handler(|state| &mut state.handlers.exit_policy),
+            |hook| hook(),
+        )
+        .or_resume(true)
+    }
+
+    /// The wall-clock instant the wake-deadline hook asks to be woken at,
+    /// asked through the call point outside the state lock: the hook walks
+    /// every hosted UI runtime and takes gesture-arena locks (ADR-0038 §5).
+    fn wake_deadline(&self) -> Option<web_time::Instant> {
+        call(
+            &SharedField::new(&*self.state, |state| &mut state.handlers.wake_deadline),
+            |hook| hook(),
+        )
+        .or_resume(None)
     }
 
     /// The owner control lane, while a loop is starting or running; `None`
@@ -727,63 +741,6 @@ impl WinitLoop {
             }
             WinitRunState::New { .. } | WinitRunState::Stopped => None,
         })
-    }
-}
-
-/// See [`WinitLoop::lease_window_event_handler`].
-struct WindowEventHandlerLease<'a> {
-    platform: &'a WinitLoop,
-    handler: Option<Box<dyn FnMut(WindowEvent) + Send>>,
-}
-
-impl WindowEventHandlerLease<'_> {
-    /// Invokes the leased handler, if one is registered, outside the
-    /// platform state lock.
-    fn invoke(&mut self, event: WindowEvent) {
-        if let Some(handler) = self.handler.as_mut() {
-            handler(event);
-        }
-    }
-}
-
-impl Drop for WindowEventHandlerLease<'_> {
-    fn drop(&mut self) {
-        let Some(handler) = self.handler.take() else {
-            return;
-        };
-        self.platform.with_state(|state| {
-            if state.handlers.window_event.is_none() {
-                state.handlers.window_event = Some(handler);
-            }
-        });
-    }
-}
-
-/// See [`WinitLoop::lease_exit_policy_hook`].
-struct ExitPolicyHookLease<'a> {
-    platform: &'a WinitLoop,
-    hook: Option<Box<dyn Fn() -> bool + Send>>,
-}
-
-impl ExitPolicyHookLease<'_> {
-    /// Consults the leased hook outside the platform state lock. `true`
-    /// (allow the exit) when no hook is installed — the pre-#555
-    /// unconditional default.
-    fn invoke(&self) -> bool {
-        self.hook.as_ref().is_none_or(|hook| hook())
-    }
-}
-
-impl Drop for ExitPolicyHookLease<'_> {
-    fn drop(&mut self) {
-        let Some(hook) = self.hook.take() else {
-            return;
-        };
-        self.platform.with_state(|state| {
-            if state.handlers.exit_policy.is_none() {
-                state.handlers.exit_policy = Some(hook);
-            }
-        });
     }
 }
 
@@ -1159,11 +1116,9 @@ impl ApplicationHandler for WinitApp {
                 let preference_due = source.retry_deadline().is_some_and(|time| time <= now);
                 if preference_due {
                     source.retry_if_due();
-                    let runtime_hook = self
+                    let runtime_due = self
                         .platform
-                        .with_state(|state| state.handlers.wake_deadline.clone());
-                    let runtime_due = runtime_hook
-                        .and_then(|hook| hook())
+                        .wake_deadline()
                         .is_some_and(|time| time <= now);
                     if !runtime_due {
                         // Preference retries post owner work; they do not dirty windows.
@@ -1388,11 +1343,10 @@ impl ApplicationHandler for WinitApp {
 
                 // The global "the user asked and nothing vetoed" event belongs
                 // to this route alone (a programmatic close was never a
-                // request); leased and invoked OUTSIDE the state lock
+                // request); called through the call point OUTSIDE the state lock
                 // (ADR-0039) like every global-handler call here.
                 self.platform
-                    .lease_window_event_handler()
-                    .invoke(WindowEvent::CloseRequested {
+                    .dispatch_window_event(WindowEvent::CloseRequested {
                         window_id: platform_id,
                     });
 
@@ -1416,13 +1370,11 @@ impl ApplicationHandler for WinitApp {
                     self.sync_window_display(event_loop, win, false);
                 }
 
-                // Notify platform handler (leased outside the state lock).
-                self.platform
-                    .lease_window_event_handler()
-                    .invoke(WindowEvent::Resized {
-                        window_id: platform_id,
-                        size,
-                    });
+                // Notify platform handler (called outside the state lock).
+                self.platform.dispatch_window_event(WindowEvent::Resized {
+                    window_id: platform_id,
+                    size,
+                });
             }
             WinitWindowEvent::RedrawRequested => {
                 tracing::trace!(?platform_id, "Redraw requested");
@@ -1432,10 +1384,9 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_request_frame();
                 }
 
-                // Notify platform handler (leased outside the state lock).
+                // Notify platform handler (called outside the state lock).
                 self.platform
-                    .lease_window_event_handler()
-                    .invoke(WindowEvent::RedrawRequested {
+                    .dispatch_window_event(WindowEvent::RedrawRequested {
                         window_id: platform_id,
                     });
             }
@@ -1460,8 +1411,7 @@ impl ApplicationHandler for WinitApp {
                 });
 
                 self.platform
-                    .lease_window_event_handler()
-                    .invoke(WindowEvent::FocusChanged {
+                    .dispatch_window_event(WindowEvent::FocusChanged {
                         window_id: platform_id,
                         focused,
                     });
@@ -1473,12 +1423,11 @@ impl ApplicationHandler for WinitApp {
                     self.sync_window_display(event_loop, win, true);
                 }
 
-                self.platform.lease_window_event_handler().invoke(
-                    WindowEvent::ScaleFactorChanged {
+                self.platform
+                    .dispatch_window_event(WindowEvent::ScaleFactorChanged {
                         window_id: platform_id,
                         scale_factor,
-                    },
-                );
+                    });
                 // Deliberately NO resize dispatch here. winit applies the
                 // OS-suggested inner size right after this event ("By
                 // default, the window is resized to the value suggested by
@@ -1642,12 +1591,9 @@ impl ApplicationHandler for WinitApp {
         // `CursorMoved`/`HoveredFileCancelled` arms already follow): the
         // hook itself re-enters `flui-app`, walking every hosted ui_runtime and
         // taking gesture-arena locks — it must never run while this
-        // platform's own state mutex is held. Clone the `Arc` out, drop the
-        // lock, THEN call it.
-        let wake_deadline_hook = self
-            .platform
-            .with_state(|state| state.handlers.wake_deadline.clone());
-        let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
+        // platform's own state mutex is held, so it runs through the call
+        // point.
+        let wake_deadline = self.platform.wake_deadline();
 
         // Harness self-close (see the `self_close_deadline` field doc): fire
         // once the deadline passes and a window exists, then let its own
@@ -2056,7 +2002,7 @@ impl WinitApp {
         // in the map and vetoes the re-check by count alone.
         if self.control.take_exit_reevaluation_requested() {
             let windows_empty = self.platform.with_state(|state| state.windows.is_empty());
-            if windows_empty && self.platform.lease_exit_policy_hook().invoke() {
+            if windows_empty && self.platform.exit_policy_allows_exit() {
                 self.request_exit(event_loop);
             }
         }
@@ -2200,8 +2146,8 @@ impl WinitApp {
     /// Always an owner-turn body, never run synchronously inside `close()`,
     /// for a reason stronger than "ending the loop needs the live
     /// `ActiveEventLoop`": a `close()` issued from inside one of this
-    /// window's own callbacks runs while that callback is leased out of its
-    /// slot, and `CallbackLease::drop` restores a leased callback into a
+    /// window's own callbacks runs while that callback is out of its slot
+    /// for its call, and the call point restores a callback into a
     /// slot it finds empty — so a synchronous `callbacks().clear()` would be
     /// undone the moment the callback returned, leaving the renderer-owning
     /// frame callback alive in a window that is out of the map (issue #713's
@@ -2280,10 +2226,9 @@ impl WinitApp {
         }
 
         self.platform
-            .lease_window_event_handler()
-            .invoke(WindowEvent::Closed(platform_id));
+            .dispatch_window_event(WindowEvent::Closed(platform_id));
 
-        let should_exit = windows_empty && self.platform.lease_exit_policy_hook().invoke();
+        let should_exit = windows_empty && self.platform.exit_policy_allows_exit();
         if should_exit {
             self.request_exit(event_loop);
         }
@@ -2370,7 +2315,7 @@ impl WinitApp {
     /// stores its own `Arc::clone` of the window inside the renderer — was
     /// never released: window -> callback slot -> frame closure ->
     /// `Arc<window>` is a strong cycle, and only a callback-clearing call
-    /// breaks it (see [`crate::shared::WindowCallbacks::clear`]'s own doc).
+    /// breaks it (see [`crate::owner::handlers::WindowCallbacks::clear`]'s own doc).
     /// This does not run the rest of `complete_window_close`'s teardown
     /// (visibility, `on_close`, the global `Closed` event, the exit-policy
     /// re-consult) — that body takes a live `&ActiveEventLoop`, and
@@ -2433,10 +2378,11 @@ impl WinitApp {
         }
         self.quit_notified = true;
 
-        let callback = self.platform.with_state(|state| state.handlers.quit.take());
-        if let Some(mut callback) = callback {
-            callback();
-        }
+        call(
+            &Once(self.platform.handler(|state| &mut state.handlers.quit)),
+            |quit| quit(),
+        )
+        .or_resume(());
     }
 }
 
@@ -2491,15 +2437,11 @@ impl host::Loop for WinitLoop {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|state| {
-            state.handlers.quit = Some(callback);
-        });
+        install(&self.handler(|state| &mut state.handlers.quit), callback);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.with_state(|state| {
-            state.handlers.exit_policy = Some(hook);
-        });
+        install(&self.handler(|state| &mut state.handlers.exit_policy), hook);
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -2516,16 +2458,16 @@ impl host::Loop for WinitLoop {
         &self,
         hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
     ) {
-        self.with_state(|state| {
-            // `Arc::from(Box<dyn Trait>)` is a real, sanctioned std
-            // conversion, not a smuggled second allocation strategy: the
-            // caller-facing API stays `Box`-based (matching
-            // `set_exit_policy_hook`'s exact ergonomics), and this is the
-            // one place that converts to the clone-able-out-of-the-lock
-            // `Arc` storage `about_to_wait` needs (see `PlatformHandlers::
-            // wake_deadline`'s own doc for why).
-            state.handlers.wake_deadline = Some(Arc::from(hook));
-        });
+        // `Arc::from(Box<dyn Trait>)` is a real, sanctioned std conversion,
+        // not a smuggled second allocation strategy: the caller-facing API
+        // stays `Box`-based (matching `set_exit_policy_hook`'s exact
+        // ergonomics), and this is the one place that converts to the shared
+        // storage `about_to_wait` calls a clone of (see `PlatformHandlers::
+        // wake_deadline`'s own doc for why).
+        install(
+            &self.handler(|state| &mut state.handlers.wake_deadline),
+            Arc::from(hook),
+        );
     }
 }
 
@@ -2831,6 +2773,124 @@ mod tests {
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
     use crate::{WinitPlatform, platform::Platform, platforms::winit::control::control_lane};
     use flui_platform::WindowOptions;
+
+    /// Runs its action when dropped: a capture whose destructor calls back
+    /// into the platform.
+    struct OnDrop(Option<Box<dyn FnOnce() + Send>>);
+
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            if let Some(action) = self.0.take() {
+                action();
+            }
+        }
+    }
+
+    /// The window-event handler and the exit-policy hook run with the state
+    /// lock released: one that installs its successor from inside its call,
+    /// its captures asking the platform for its active window when dropped,
+    /// is retired after the call and reaches the platform; one that installs
+    /// its successor and panics hands that panic to the loop, its captures
+    /// retained. A regression deadlocks, so the cases run on a worker thread.
+    #[test]
+    fn winit_handlers_run_outside_the_state_lock() {
+        use flui_platform::{WindowEvent, WindowId};
+        use std::sync::atomic::AtomicBool;
+
+        fn calls_back(platform: &Arc<WinitPlatform>, reached: &Arc<AtomicBool>) -> OnDrop {
+            let (weak, reached) = (Arc::downgrade(platform), Arc::clone(reached));
+            OnDrop(Some(Box::new(move || {
+                if let Some(platform) = weak.upgrade() {
+                    let _ = platform.active_window();
+                    reached.store(true, Ordering::SeqCst);
+                }
+            })))
+        }
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let event = || WindowEvent::Closed(WindowId(1));
+            let host = Arc::new(WinitPlatform::new());
+            let platform = host.shared_owner();
+
+            // A window-event handler replaces itself.
+            let reached = Arc::new(AtomicBool::new(false));
+            let capture = calls_back(&host, &reached);
+            let successor = Arc::new(AtomicUsize::new(0));
+            let (weak, heard) = (Arc::downgrade(&host), Arc::clone(&successor));
+            host.on_window_event(Box::new(move |_| {
+                let _ = &capture;
+                let heard = Arc::clone(&heard);
+                weak.upgrade()
+                    .expect("the platform")
+                    .on_window_event(Box::new(move |_| {
+                        heard.fetch_add(1, Ordering::SeqCst);
+                    }));
+            }));
+            platform.dispatch_window_event(event());
+            assert!(reached.load(Ordering::SeqCst), "the handler was retired");
+            platform.dispatch_window_event(event());
+            assert_eq!(
+                successor.load(Ordering::SeqCst),
+                1,
+                "the successor is called"
+            );
+
+            // An exit-policy hook replaces itself.
+            let reached = Arc::new(AtomicBool::new(false));
+            let capture = calls_back(&host, &reached);
+            let weak = Arc::downgrade(&host);
+            host.set_exit_policy_hook(Box::new(move || {
+                let _ = &capture;
+                weak.upgrade()
+                    .expect("the platform")
+                    .set_exit_policy_hook(Box::new(|| false));
+                true
+            }));
+            assert!(platform.exit_policy_allows_exit());
+            assert!(reached.load(Ordering::SeqCst), "the hook was retired");
+            assert!(!platform.exit_policy_allows_exit(), "the successor decides");
+
+            // A window-event handler replaces itself and panics.
+            let dropped = Arc::new(AtomicBool::new(false));
+            let witness = {
+                let dropped = Arc::clone(&dropped);
+                OnDrop(Some(Box::new(move || {
+                    dropped.store(true, Ordering::SeqCst);
+                })))
+            };
+            let weak = Arc::downgrade(&host);
+            host.on_window_event(Box::new(move |_| {
+                let _ = &witness;
+                weak.upgrade()
+                    .expect("the platform")
+                    .on_window_event(Box::new(|_| {}));
+                panic!("first failure");
+            }));
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                platform.dispatch_window_event(event());
+            }))
+            .expect_err("the handler's panic reaches the loop");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("first failure")
+            );
+            assert!(
+                !dropped.load(Ordering::SeqCst),
+                "the failed handler's captures are retained, not dropped"
+            );
+            let _ = done.send(());
+        });
+        match finished.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(()) => worker.join().expect("the cases finished"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::panic::resume_unwind(worker.join().expect_err("a case panicked"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("deadlocked: a handler ran, or was dropped, under the state lock")
+            }
+        }
+    }
 
     // ========================================================================
     // combine_shutdown_result

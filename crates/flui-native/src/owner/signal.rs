@@ -7,8 +7,8 @@
 //! its callback dropped by whichever thread closes or drops the last
 //! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
 //! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
+use super::handlers::{InputWake, WindowCallbacks};
 use super::panic_boundary::contain_owner_callback;
-use crate::shared::{InputWake, WindowCallbacks};
 use crate::{PlatformError, ProxySendError, WakeRegistrationError};
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};

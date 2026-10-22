@@ -1,7 +1,6 @@
 //! The web host's loop: the state every position of its table reads.
 
 use std::cell::RefCell;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -9,13 +8,15 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use flui_platform::SessionEndPhase;
+use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use crate::host::{self, Loop as _};
+use crate::owner::call_point::{Field, Once, call, install};
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::handlers::PlatformHandlers, owner::handlers::WindowCallbacks,
     owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
+    platform::PlatformReadyCallback,
 };
 use flui_platform::{WindowEvent, WindowId};
 
@@ -122,31 +123,22 @@ impl WebLoop {
         f(&mut self.state.lock())
     }
 
-    /// Lease the callback outside state; a replacement registered during the
-    /// call wins. Keep its owning envelope outside the caught invocation.
+    /// One of the application's handlers, as a slot of the page state.
+    pub(super) fn handler<H>(
+        state: &Mutex<WebState>,
+        project: fn(&mut WebState) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<WebState>, H> {
+        Field::new(state, project)
+    }
+
+    /// Call the window-event handler through the call point, outside the
+    /// page state's lock; a replacement registered during the call wins.
     pub(super) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
-        let Some(callback) = state.lock().handlers.window_event.take() else {
-            return;
-        };
-        let mut callback = Some(callback);
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            callback
-                .as_mut()
-                .expect("BUG: leased window callback exists")(event);
-        }));
-        {
-            let mut state = state.lock();
-            if state.handlers.window_event.is_none() {
-                state.handlers.window_event = callback.take();
-            }
-        }
-        if let Err(payload) = outcome {
-            // A replaced opaque callback may own panicking aggregate captures.
-            // Do not retire it while preserving the callback's earlier failure.
-            std::mem::forget(callback);
-            resume_unwind(payload);
-        }
-        drop(callback);
+        call(
+            &Self::handler(state, |state| &mut state.handlers.window_event),
+            |handler| handler(event),
+        )
+        .or_resume(());
     }
 
     /// The page was hidden or shown again: tell the session-end hook, so the
@@ -157,25 +149,14 @@ impl WebLoop {
     /// reports `Cancelled`, and is hidden again later, which reports `Ending`
     /// again. The browser may stop the page before an asynchronous write
     /// started here finishes; only what the application hands over
-    /// synchronously is certain to be accepted.
+    /// synchronously is certain to be accepted. A hook registered while it
+    /// ran replaces this one.
     fn report_session_phase(state: &Mutex<WebState>, phase: SessionEndPhase) {
-        let Some(mut hook) = state.lock().handlers.session_end.take() else {
-            return;
-        };
-        crate::owner::panic_boundary::contain_owner_callback(|| {
-            hook(phase);
-        });
-        // A hook registered while it ran replaces this one.
-        let replaced = {
-            let mut state = state.lock();
-            if state.handlers.session_end.is_none() {
-                state.handlers.session_end = Some(hook);
-                None
-            } else {
-                Some(hook)
-            }
-        };
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(replaced));
+        call(
+            &Self::handler(state, |state| &mut state.handlers.session_end),
+            |hook| hook(phase),
+        )
+        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
     }
 
     /// Start the requestAnimationFrame render loop
@@ -312,24 +293,21 @@ impl host::Loop for WebLoop {
         drop(display_observers);
         let page_observers = self.page_observers.borrow_mut().take();
         drop(page_observers);
-        let callback = self.with_state(|state| {
-            state.is_running = false;
-            state.handlers.quit.take()
-        });
-        if let Some(mut callback) = callback {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(&mut callback)) {
-                // Shutdown is committed. Retain failed opaque captures before
-                // propagating the original callback panic to the Rust boundary.
-                std::mem::forget(callback);
-                resume_unwind(payload);
-            }
-            drop(callback);
-        }
+        self.with_state(|state| state.is_running = false);
+        // Shutdown is committed: the quit callback runs once, and its panic
+        // reaches the Rust boundary with its captures retained.
+        call(
+            &Once(Self::handler(&self.state, |state| &mut state.handlers.quit)),
+            |quit| quit(),
+        )
+        .or_resume(());
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        let previous = self.with_state(|state| state.handlers.quit.replace(callback));
-        drop(previous);
+        install(
+            &Self::handler(&self.state, |state| &mut state.handlers.quit),
+            callback,
+        );
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {

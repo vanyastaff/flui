@@ -53,8 +53,8 @@ pub(super) const REQUEST_FRAME: u32 = WM_APP + 1;
 pub(super) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 use crate::shared::window_state::WindowStateCell;
 use crate::{
-    owner::OpenWindowError, shared::PlatformHandlers, shared::WindowCallbacks,
-    shared::hwnd_affinity::UserDataRefusal,
+    owner::OpenWindowError, owner::call_point::install, owner::handlers::PlatformHandlers,
+    owner::handlers::WindowCallbacks, shared::hwnd_affinity::UserDataRefusal,
 };
 use flui_platform::{
     CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
@@ -2285,8 +2285,8 @@ impl PlatformWindow for WindowsWindow {
     //
     // Every setter goes through `Self::register`: it installs into the
     // owner-thread context, or refuses and drops the callback on the calling
-    // thread. A replaced callback is dropped after its slot's lock is
-    // released, since its destructor may re-enter this window.
+    // thread. A replaced callback is retired through the call point after its
+    // slot's lock is released, since its destructor may re-enter this window.
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         self.register("on_input", move |callbacks| {
@@ -2296,36 +2296,31 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
         self.register("on_request_frame", move |callbacks| {
-            let previous = callbacks.on_request_frame.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_request_frame, callback);
         });
     }
 
     fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
         self.register("on_resize", move |callbacks| {
-            let previous = callbacks.on_resize.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_resize, callback);
         });
     }
 
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.register("on_state_changed", move |callbacks| {
-            let previous = callbacks.on_state_changed.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_state_changed, callback);
         });
     }
 
     fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
         self.register("on_close", move |callbacks| {
-            let previous = callbacks.on_close.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_close, callback);
         });
     }
 
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
         self.register("on_should_close", move |callbacks| {
-            let previous = callbacks.on_should_close.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_should_close, callback);
         });
     }
 
@@ -2343,46 +2338,37 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_active_status_change", move |callbacks| {
-            let previous = callbacks.on_active_status_change.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_active_status_change, callback);
         });
     }
 
     fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_visibility_status_change", move |callbacks| {
-            let previous = callbacks
-                .on_visibility_status_change
-                .lock()
-                .replace(callback);
-            drop(previous);
+            install(&callbacks.on_visibility_status_change, callback);
         });
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_hover_status_change", move |callbacks| {
-            let previous = callbacks.on_hover_status_change.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_hover_status_change, callback);
         });
     }
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.register("on_appearance_changed", move |callbacks| {
-            let previous = callbacks.on_appearance_changed.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_appearance_changed, callback);
         });
     }
 
     fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.register("on_display_changed", move |callbacks| {
-            let previous = callbacks.on_display_changed.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_display_changed, callback);
         });
     }
 
     fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_surface_status_change", move |callbacks| {
-            let previous = callbacks.on_surface_status_change.lock().replace(callback);
-            drop(previous);
+            install(&callbacks.on_surface_status_change, callback);
         });
     }
 
@@ -2475,8 +2461,8 @@ impl HasWindowHandle for WindowsWindow {
         // calls `DestroyWindow` synchronously, and Win32 dispatches
         // `WM_DESTROY` — with it, `callbacks.clear()` — before that call
         // returns. If that `close()` is itself invoked from inside a
-        // callback currently leased out of `WindowCallbacks` (the
-        // `CallbackLease` restore hazard #919 identified), a surface built
+        // callback currently out of its slot in `WindowCallbacks` for its
+        // call (the restore hazard #919 identified), a surface built
         // from a handle this method returned earlier in the same call chain
         // can still be alive while `DestroyWindow` runs beneath it — rwh's
         // own contract puts the burden of not outliving the native window

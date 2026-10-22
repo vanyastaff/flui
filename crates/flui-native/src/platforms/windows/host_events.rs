@@ -11,7 +11,6 @@
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
-    panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     sync::{
         Arc,
@@ -43,9 +42,9 @@ use windows::Win32::{
 use windows::core::{BOOL, PCWSTR};
 
 use super::platform::WindowsLoop;
-use crate::owner::panic_boundary::contain_owner_callback;
+use crate::owner::call_point::{Field, call};
+use crate::owner::handlers::PlatformHandlers;
 use crate::shared::{
-    PlatformHandlers,
     system_notice::SystemNotices,
     windows_host_messages::{self, HostEvent, HostMessage, QueryAnswer},
     windows_memory_watch::{HOLD_INTERVAL, MemoryWatch},
@@ -235,30 +234,15 @@ impl HostEvents {
     /// Run the host's session-end hook. A panic in it answers `Proceed`: the
     /// session must not hang on a broken subscriber.
     fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let hook = self.handlers.borrow_mut().session_end.take();
-        let Some(mut hook) = hook else {
-            return SessionEndAnswer::Proceed;
-        };
-        let answer = match catch_unwind(AssertUnwindSafe(|| hook(phase))) {
-            Ok(answer) => answer,
-            Err(payload) => {
-                flui_foundation::panic::retain_opaque_payload(payload);
-                SessionEndAnswer::Proceed
-            }
-        };
-        let superseded = {
-            let mut handlers = self.handlers.borrow_mut();
-            if handlers.session_end.is_none() {
-                handlers.session_end = Some(hook);
-                None
-            } else {
-                Some(hook)
-            }
-        };
-        // The superseded hook is retired in a boundary of its own: a capture that
-        // panics in `Drop` must not turn the answer below into the default one.
-        contain_owner_callback(|| drop(superseded));
-        answer
+        // Through the call point: no borrow of the handler set is held while
+        // the hook runs, and a superseded hook is retired in a boundary of its
+        // own, so a capture that panics in `Drop` cannot turn the answer into
+        // the default one.
+        call(
+            &Field::new(&*self.handlers, |handlers| &mut handlers.session_end),
+            |hook| hook(phase),
+        )
+        .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
     }
 
     fn now(&self) -> std::time::Duration {

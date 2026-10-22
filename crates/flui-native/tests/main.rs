@@ -40,6 +40,9 @@ mod displays;
 mod executor;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "handler_reentry.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod handler_reentry;
 #[path = "haptic_degradation.rs"]
 mod haptic_degradation;
 #[path = "headless_drag.rs"]

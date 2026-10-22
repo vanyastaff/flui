@@ -4,22 +4,6 @@ use std::sync::{Arc, Weak};
 
 pub(super) type WakeDeadlineHook = dyn Fn() -> Option<web_time::Instant> + Send + Sync;
 
-// The query may replace its own registration before panicking. Keep its
-// outgoing ownership in custody before invoking it, so captures cannot
-// double-panic during the incoming unwind. Healthy retirement remains normal;
-// this cannot rescue an aggregate that double-panics during healthy Drop.
-pub(super) struct DeadlineQuery(pub(super) Option<Arc<WakeDeadlineHook>>);
-
-impl Drop for DeadlineQuery {
-    fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Some(hook) = self.0.take()
-        {
-            std::mem::forget(hook);
-        }
-    }
-}
-
 /// The last deadline the loop delivered. The hook answers with an instant
 /// only, so the same `(hook, instant)` pair is either work no frame has had
 /// a chance to service, which must not spin, or work a frame left or
@@ -91,7 +75,7 @@ impl ModalDelivery {
 /// How many frame callbacks this platform's windows have run. The message
 /// loop compares it across a deadline delivery to tell an answer repeated
 /// after a serviced frame from one nothing has serviced yet. Each window's
-/// [`WindowCallbacks`](crate::shared::WindowCallbacks) counts into it when its frame callback runs, so a
+/// [`WindowCallbacks`](crate::owner::handlers::WindowCallbacks) counts into it when its frame callback runs, so a
 /// frame request no callback answered (a window with nothing registered,
 /// or one already cleared) leaves it unchanged.
 #[derive(Default)]

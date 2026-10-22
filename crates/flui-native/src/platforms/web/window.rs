@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    host, host_window::HostWindow, owner::OpenWindowError, owner::signal::OwnerSignal,
-    shared::WindowCallbacks, shared::window_state::WindowStateCell,
+    host, host_window::HostWindow, owner::OpenWindowError, owner::handlers::WindowCallbacks,
+    owner::signal::OwnerSignal, shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
@@ -445,7 +445,7 @@ impl WebWindow {
         } else {
             Some(callback)
         };
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
+        crate::owner::call_point::retire(old);
     }
 }
 
@@ -713,8 +713,10 @@ impl host::Window<WebLoop> for WebWindow {
     }
 
     fn on_event(owner: &WebLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        let previous = owner.with_state(|state| state.handlers.window_event.replace(callback));
-        drop(previous);
+        crate::owner::call_point::install(
+            &WebLoop::handler(&owner.state, |state| &mut state.handlers.window_event),
+            callback,
+        );
     }
 }
 

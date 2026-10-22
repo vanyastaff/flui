@@ -53,7 +53,7 @@ pub struct WinitWindow {
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
-    callbacks: crate::shared::WindowCallbacks,
+    callbacks: crate::owner::handlers::WindowCallbacks,
     /// This window's AT-SPI announcement, created with the window so a
     /// screen reader that attaches at any later point finds it on the bus.
     /// Construction succeeds (and stays inert) with no session bus at all —
@@ -259,7 +259,7 @@ impl WinitWindow {
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
             reported_visible: parking_lot::Mutex::new(options.visible),
-            callbacks: crate::shared::WindowCallbacks::new(),
+            callbacks: crate::owner::handlers::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
             #[cfg(target_os = "linux")]
@@ -386,7 +386,7 @@ impl WinitWindow {
     }
 
     /// Get a reference to the per-window callbacks
-    pub fn callbacks(&self) -> &crate::shared::WindowCallbacks {
+    pub fn callbacks(&self) -> &crate::owner::handlers::WindowCallbacks {
         &self.callbacks
     }
 
@@ -876,7 +876,7 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
     // `HasDisplayHandle` directly — without these overrides both fall through

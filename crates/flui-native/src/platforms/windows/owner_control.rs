@@ -14,12 +14,22 @@
 //! turn rather than nested inside whatever code destroyed the window.
 use super::platform::{FrameCount, ModalDelivery, WindowIdentity, WindowMap};
 use crate::{
-    PlatformError, WakeRegistrationError, owner::DirectOwnerHooks, owner::OpenWindowError,
-    owner::OwnerHooks, owner::ProxyTransport, owner::WindowOpen,
-    owner::panic_boundary::contain_owner_callback, owner::signal::OwnerSignal,
-    owner::signal::OwnerTurnSlot, platform::Platform, shared::PlatformHandlers,
-    shared::hwnd_affinity::UserDataRefusal, shared::hwnd_affinity::UserDataVerdict,
-    shared::hwnd_affinity::classify_user_data_access, shared::system_notice::SystemNotices,
+    PlatformError, WakeRegistrationError,
+    owner::DirectOwnerHooks,
+    owner::OpenWindowError,
+    owner::OwnerHooks,
+    owner::ProxyTransport,
+    owner::WindowOpen,
+    owner::call_point::{Called, Field, call},
+    owner::handlers::PlatformHandlers,
+    owner::panic_boundary::contain_owner_callback,
+    owner::signal::OwnerSignal,
+    owner::signal::OwnerTurnSlot,
+    platform::Platform,
+    shared::hwnd_affinity::UserDataRefusal,
+    shared::hwnd_affinity::UserDataVerdict,
+    shared::hwnd_affinity::classify_user_data_access,
+    shared::system_notice::SystemNotices,
 };
 use flui_platform::WindowOptions;
 use parking_lot::Mutex;
@@ -473,11 +483,11 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 /// still accepting work (a quit already under way is not decided twice),
 /// and the exit-policy hook allowing it. No hook installed allows it.
 ///
-/// The hook is leased out of its slot and run with no `RefCell` borrow
-/// held, because it re-enters the embedder, which may install a new hook,
-/// open a window or quit; it goes back only if the slot is still empty, so
-/// a hook installed meanwhile wins. A window opened while it ran vetoes the
-/// exit regardless of its answer, and so does a hook that panics.
+/// The hook runs through the call point with no `RefCell` borrow held,
+/// because it re-enters the embedder, which may install a new hook, open a
+/// window or quit; it goes back only if the slot is still empty, so a hook
+/// installed meanwhile wins. A window opened while it ran vetoes the exit
+/// regardless of its answer, and so does a hook that panics.
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
     handlers: &RefCell<PlatformHandlers>,
@@ -487,24 +497,16 @@ fn exit_policy_allows_exit(
     if !signal.accepting() || !no_windows() {
         return false;
     }
-    let hook = handlers.borrow_mut().exit_policy.take();
     // The hook is embedder code running inside this window procedure, where
     // an unwind cannot cross the FFI boundary. A panic is contained and
-    // counts as a veto; the hook stays installed.
-    let mut allowed = false;
-    contain_owner_callback(|| allowed = hook.as_ref().is_none_or(|hook| hook()));
-    if let Some(hook) = hook {
-        let superseded = {
-            let mut handlers = handlers.borrow_mut();
-            if handlers.exit_policy.is_none() {
-                handlers.exit_policy = Some(hook);
-                None
-            } else {
-                Some(hook)
-            }
-        };
-        contain_owner_callback(|| drop(superseded));
-    }
+    // counts as a veto; the hook stays installed. No hook allows the exit.
+    let allowed = match call(
+        &Field::new(handlers, |handlers| &mut handlers.exit_policy),
+        |hook| hook(),
+    ) {
+        Called::Vacant => true,
+        called => called.or_contain(false, "the exit-policy hook"),
+    };
     allowed && signal.accepting() && no_windows()
 }
 

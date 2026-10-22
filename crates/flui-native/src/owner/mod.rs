@@ -6,7 +6,11 @@
 //! - [`signal`]: coalesced owner turns and quit admission;
 //! - [`slot`]: owner-thread storage for a value that is not `Send`;
 //! - [`panic_boundary`]: the containment a panic in user code meets before it
-//!   reaches the operating system.
+//!   reaches the operating system;
+//! - [`call_point`]: the one point where the platform calls an application or
+//!   window handler, with no lock or borrow held;
+//! - [`handlers`]: the application's handler set and a window's callbacks,
+//!   called through it.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -32,6 +36,8 @@
 //! host in this crate can hand `on_ready` the capability it needs; `Platform`
 //! is sealed to say so in its type (ADR-0151 §5).
 
+pub(crate) mod call_point;
+pub mod handlers;
 pub(crate) mod panic_boundary;
 pub(crate) mod signal;
 pub(crate) mod slot;

@@ -1,11 +1,13 @@
-//! Platform callback handlers
-//!
-//! Registry pattern for platform callbacks, allowing the framework to register
-//! event handlers without tight coupling to platform implementations.
+//! The handlers the platform calls: the application's and each window's.
 //!
 //! Two levels of callbacks:
 //! - [`PlatformHandlers`]: Global platform-level callbacks (quit, reopen, etc.)
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
+//!
+//! Every one of them is called through the call point
+//! (`call_point::call`), which holds no lock or borrow while
+//! it runs, and every replaced one is retired outside the locks
+//! (`call_point::install`).
 
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
@@ -23,7 +25,8 @@ use flui_platform::{
     WindowExecutionState,
 };
 
-use crate::owner::panic_boundary::contain_owner_callback;
+use super::call_point::{Called, HandlerSlot, call, retire};
+use super::panic_boundary::contain_owner_callback;
 
 /// The callback a platform asks at each phase of the user's session ending.
 pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
@@ -156,16 +159,13 @@ enum HeldEntry {
     Input(PlatformInput),
 }
 
-/// Platform callback handlers registry
+/// The application's handlers: what the platform calls on its own events
+/// (quit, a window event, the session ending, …).
 ///
-/// This struct stores all registered callbacks from the framework.
-/// Platform implementations invoke these callbacks when events occur.
-///
-/// # Design Pattern
-///
-/// This is the callback registry pattern from GPUI - it decouples the framework
-/// from platform implementations. The framework registers handlers, and the
-/// platform invokes them at appropriate times.
+/// A host keeps this set behind its own lock or `RefCell` and reaches each
+/// field as a `call_point::Field` slot: a handler is called
+/// through the call point with that lock released, and one being replaced is
+/// dropped after it.
 ///
 /// # Thread Safety
 ///
@@ -200,11 +200,11 @@ pub struct PlatformHandlers {
     /// `true` allows the exit; `false` vetoes it (e.g. because the embedder
     /// has an "open another window" request queued outside this platform's
     /// own window map — issue #555's `AppRuntime::should_exit`
-    /// drain-before-decide rule). A backend that never calls
-    /// [`PlatformHandlers::invoke_exit_policy`] is unaffected by this field
-    /// at all; a backend that does but finds it unset gets `true` (the
-    /// pre-#555 unconditional "last window closed -> exit" default), so an
-    /// embedder that never registers a hook sees no behavior change.
+    /// drain-before-decide rule). A backend that never consults it is
+    /// unaffected by this field at all. With none set, winit, Win32 and
+    /// AppKit allow the exit (the pre-#555 unconditional "last window closed
+    /// -> exit" default), and headless never quits, so an embedder that never
+    /// registers a hook sees no behavior change.
     pub exit_policy: Option<Box<dyn Fn() -> bool + Send>>,
 
     /// Consulted once per idle event-loop iteration for the earliest
@@ -215,46 +215,11 @@ pub struct PlatformHandlers {
     /// unaffected by it.
     ///
     /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
-    /// every hosted UI runtime and takes gesture-arena locks), so a caller
-    /// holding this platform's own state lock must clone the `Arc` out and
-    /// invoke it AFTER releasing that lock (ADR-0038 §5's discipline) —
-    /// a `Box` would force either an in-lock call or a full field swap.
-    ///
-    /// The winit backend's `about_to_wait` is this field's one live
-    /// consumer today, and it reads the field DIRECTLY —
-    /// `state.handlers.wake_deadline.clone()` inside `with_state`, then
-    /// calls the cloned `Arc` after the lock guard has dropped — rather
-    /// than going through [`PlatformHandlers::invoke_wake_deadline`]. That
-    /// method takes `&self` and would need the lock held for its own
-    /// entire call, invoking the re-entrant hook while the lock is still
-    /// live and violating the exact discipline described above;
-    /// `invoke_wake_deadline` stays a convenience method for the
-    /// storage-level test that exercises this field in isolation, not a
-    /// production call site.
+    /// every hosted UI runtime and takes gesture-arena locks) and may be
+    /// asked again from inside that walk, so the call point calls a clone
+    /// (`call_point::SharedField`) with the lock
+    /// released (ADR-0038 §5) and the hook stays installed while it runs.
     pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
-}
-
-/// A session-end hook while it runs, back in its slot when the guard drops.
-struct RunningSessionEndHook<'a> {
-    handlers: &'a Mutex<PlatformHandlers>,
-    hook: Option<SessionEndHook>,
-}
-
-impl Drop for RunningSessionEndHook<'_> {
-    fn drop(&mut self) {
-        let Some(hook) = self.hook.take() else { return };
-        let displaced = {
-            let mut handlers = self.handlers.lock();
-            if handlers.session_end.is_none() {
-                handlers.session_end = Some(hook);
-                None
-            } else {
-                Some(hook)
-            }
-        };
-        // Outside the lock: a capture's destructor is user code.
-        drop(displaced);
-    }
 }
 
 impl PlatformHandlers {
@@ -270,102 +235,6 @@ impl PlatformHandlers {
             exit_policy: None,
             wake_deadline: None,
         }
-    }
-
-    /// Ask the registered session-end hook about `phase`, answering
-    /// [`SessionEndAnswer::Proceed`] when none is registered.
-    ///
-    /// The hook runs with no lock of `handlers` held, so it may register
-    /// another hook or call back into the platform. It is out of its slot while
-    /// it runs, and is put back afterwards even when it panics, unless a hook
-    /// registered in the meantime took the slot: then the older one is dropped.
-    #[must_use]
-    pub fn run_session_end(handlers: &Mutex<Self>, phase: SessionEndPhase) -> SessionEndAnswer {
-        let Some(hook) = handlers.lock().session_end.take() else {
-            return SessionEndAnswer::Proceed;
-        };
-        let mut running = RunningSessionEndHook {
-            handlers,
-            hook: Some(hook),
-        };
-        running
-            .hook
-            .as_mut()
-            .map_or(SessionEndAnswer::Proceed, |hook| hook(phase))
-    }
-
-    /// Invoke the quit callback if registered
-    #[inline]
-    pub fn invoke_quit(&mut self) {
-        if let Some(ref mut handler) = self.quit {
-            handler();
-        }
-    }
-
-    /// Invoke the reopen callback if registered
-    #[inline]
-    pub fn invoke_reopen(&mut self) {
-        if let Some(ref mut handler) = self.reopen {
-            handler();
-        }
-    }
-
-    /// Invoke the window event callback if registered
-    #[inline]
-    pub fn invoke_window_event(&mut self, event: WindowEvent) {
-        if let Some(ref mut handler) = self.window_event {
-            handler(event);
-        }
-    }
-
-    /// Invoke the open URLs callback if registered
-    #[inline]
-    pub fn invoke_open_urls(&mut self, urls: Vec<String>) {
-        if let Some(ref mut handler) = self.open_urls {
-            handler(urls);
-        }
-    }
-
-    /// Invoke the keyboard layout changed callback if registered
-    #[inline]
-    pub fn invoke_keyboard_layout_changed(&mut self) {
-        if let Some(ref mut handler) = self.keyboard_layout_changed {
-            handler();
-        }
-    }
-
-    /// Consult the exit-policy hook (see [`Self::exit_policy`]'s doc). `true`
-    /// when unset — the pre-#555 unconditional "last window closed -> exit"
-    /// default a real native backend (winit) had. Nothing calls this
-    /// directly: winit's own `CloseRequested` handling
-    /// leases the hook out of the lock first (`WinitLoop::
-    /// lease_exit_policy_hook`) rather than calling this while the lock is
-    /// held, and AppKit and Win32 likewise take the hook out of their handler
-    /// set before running it, with the same "no hook allows the exit"
-    /// default. The headless backend does NOT use this method at all — its own
-    /// pre-#555 default is the OPPOSITE ("no hook -> never quit", matching
-    /// every headless test/consumer that predates this mechanism, none of
-    /// which expects closing a mock window to spontaneously call `quit`) —
-    /// see `HeadlessPlatform`'s own `notify_closed` for that backend's
-    /// inline equivalent.
-    #[inline]
-    pub fn invoke_exit_policy(&self) -> bool {
-        self.exit_policy.as_ref().is_none_or(|hook| hook())
-    }
-
-    /// Consult the wake-deadline hook (see [`Self::wake_deadline`]'s doc).
-    /// `None` when unset — the previously-unconditional-`Wait` default. A
-    /// public method with no production caller: the winit backend's
-    /// `about_to_wait` (this field's one live production consumer) clones
-    /// the `Arc` directly out of [`Self::wake_deadline`] instead, because
-    /// this method takes `&self` and calling it would keep the platform
-    /// state lock held for the hook's entire re-entrant call — see
-    /// [`Self::wake_deadline`]'s own doc for why that ordering matters.
-    /// Nothing calls this directly, the same posture
-    /// [`Self::invoke_exit_policy`] documents for itself above.
-    #[inline]
-    pub fn invoke_wake_deadline(&self) -> Option<web_time::Instant> {
-        self.wake_deadline.as_ref().and_then(|hook| hook())
     }
 }
 
@@ -404,7 +273,9 @@ impl std::fmt::Debug for PlatformHandlers {
 /// The dispatch pattern ensures reentrancy safety and ordering:
 /// 1. enqueue the typed event in the window FIFO;
 /// 2. one caller becomes the drain owner;
-/// 3. take callback → unlock → call → restore;
+/// 3. call the callback through the call point
+///    (`call_point::call`): taken out, called with its slot
+///    unlocked, put back;
 /// 4. drain all nested window events in causal order, including transitions
 ///    between kinds such as input → resize → frame.
 ///
@@ -502,14 +373,14 @@ pub struct WindowCallbacks {
     /// One-shot latch set by [`Self::clear`] before it takes any slot.
     ///
     /// Closes the #919-class hazard from the *other* direction: a callback
-    /// leased out via [`CallbackLease::take`] runs with its slot empty, so
+    /// out of its slot for a call ([`Latched`]) runs with its slot empty, so
     /// a `clear()` that lands while a callback is out finds nothing to take
-    /// there — and without this flag, [`CallbackLease::drop`] would then
-    /// restore that callback into the slot `clear()` just emptied the
-    /// instant the leased call returns, resurrecting a callback (and
-    /// everything it owns — a frame closure, a renderer, a surface, the
-    /// window's own `Arc`) whose window no longer exists. Every lease reads
-    /// the flag on drop instead of restoring unconditionally.
+    /// there — and without this flag, the call point would then restore that
+    /// callback into the slot `clear()` just emptied the instant the call
+    /// returns, resurrecting a callback (and everything it owns — a frame
+    /// closure, a renderer, a surface, the window's own `Arc`) whose window
+    /// no longer exists. A slot reads the flag when its callback comes back
+    /// instead of restoring unconditionally.
     cleared: AtomicBool,
     // Immediate lifecycle delivery cannot overtake a queued general-FIFO clear.
     lifecycle_closed: AtomicBool,
@@ -641,36 +512,23 @@ pub(crate) enum LifecycleEvent {
     Surface(bool),
 }
 
-/// Temporarily removes one `FnMut` callback without holding its mutex while
-/// user code runs, then restores it even if that code unwinds — unless the
-/// window closed while the callback was out (see `cleared`'s doc), in which
-/// case it is dropped instead.
-struct CallbackLease<'a, T> {
+/// One window callback's slot for a call, closed by a latch of the window
+/// (`cleared` for delivery through the FIFO, `lifecycle_closed` for immediate
+/// delivery): a callback that returns from its call after the latch was set
+/// is not put back, and the call point drops it instead.
+struct Latched<'a, T> {
     slot: &'a Mutex<Option<T>>,
-    cleared: &'a AtomicBool,
-    callback: Option<T>,
+    closed: &'a AtomicBool,
 }
 
-impl<'a, T> CallbackLease<'a, T> {
-    fn take(slot: &'a Mutex<Option<T>>, cleared: &'a AtomicBool) -> Self {
-        let callback = slot.lock().take();
-        Self {
-            slot,
-            cleared,
-            callback,
-        }
+impl<T> HandlerSlot for Latched<'_, T> {
+    type Handler = T;
+
+    fn take(&self) -> Option<T> {
+        self.slot.lock().take()
     }
 
-    fn callback_mut(&mut self) -> Option<&mut T> {
-        self.callback.as_mut()
-    }
-}
-
-impl<T> Drop for CallbackLease<'_, T> {
-    fn drop(&mut self) {
-        let Some(callback) = self.callback.take() else {
-            return;
-        };
+    fn restore(&self, callback: T) -> Option<T> {
         let mut slot = self.slot.lock();
         // Read the latch UNDER the slot lock, not before it. `clear_now()`
         // (see `WindowCallbacks::clear`'s doc) stores this flag, in program
@@ -682,118 +540,103 @@ impl<T> Drop for CallbackLease<'_, T> {
         // will still find and drop whatever we put back. A `true` observed
         // here means `clear_now()` has already started, so this slot must
         // end up empty regardless of whether its take of this slot already
-        // ran (and found nothing, because we were holding the callback) or
-        // is still to come. Checking before acquiring the lock instead would
+        // ran (and found nothing, because the call held the callback) or is
+        // still to come. Checking before acquiring the lock instead would
         // race: `clear_now()` could store the flag and take this slot
-        // (finding it empty, since we're holding the callback) entirely
-        // between our read and our lock, and we would restore a callback
-        // `clear_now()` already believes it dropped.
-        if self.cleared.load(Ordering::SeqCst) || slot.is_some() {
-            // Release the guard before the callback's destructor runs — it
-            // may re-enter platform code that locks this same
-            // (non-reentrant) mutex.
-            drop(slot);
-            if std::thread::panicking() {
-                // An invocation failure remains authoritative. Retire this
-                // individual outgoing capture after releasing its slot guard;
-                // its destructor must not abort the original unwind.
-                contain_owner_callback(|| drop(callback));
-            } else {
-                drop(callback);
-            }
-            return;
+        // (finding it empty) entirely between our read and our lock, and we
+        // would restore a callback `clear_now()` already believes it dropped.
+        if self.closed.load(Ordering::SeqCst) || slot.is_some() {
+            return Some(callback);
         }
         *slot = Some(callback);
+        None
+    }
+
+    fn replace(&self, callback: T) -> Option<T> {
+        self.slot.lock().replace(callback)
     }
 }
 
-/// The input callback taken out of its owner-thread slot for one call; on
-/// drop it goes back unless the window cleared or a replacement was
-/// registered meanwhile, in which case it retires here. Every step runs on
-/// the owner thread, so no lock orders the restore against a clear.
-struct InputLease<'a> {
+/// The input callback's owner-thread slot for a call, closed by the window's
+/// `cleared` latch. Every step runs on the owner thread, so no lock orders
+/// the restore against a clear.
+struct InputSlot<'a> {
     slot: &'a crate::owner::slot::OwnerSlot<InputCallback>,
     cleared: &'a AtomicBool,
-    callback: Option<InputCallback>,
 }
 
-impl<'a> InputLease<'a> {
-    fn take(
-        slot: &'a crate::owner::slot::OwnerSlot<InputCallback>,
-        cleared: &'a AtomicBool,
-    ) -> Self {
-        Self {
-            slot,
-            cleared,
-            callback: slot.take(),
-        }
+impl HandlerSlot for InputSlot<'_> {
+    type Handler = InputCallback;
+
+    fn take(&self) -> Option<InputCallback> {
+        self.slot.take()
     }
 
-    fn callback_mut(&mut self) -> Option<&mut InputCallback> {
-        self.callback.as_mut()
-    }
-
-    /// Put the callback back; the outgoing one when the window cleared or a
-    /// replacement was registered meanwhile.
-    fn release(&mut self) -> Option<InputCallback> {
-        let callback = self.callback.take()?;
+    fn restore(&self, callback: InputCallback) -> Option<InputCallback> {
         if self.cleared.load(Ordering::SeqCst) {
             return Some(callback);
         }
         self.slot.restore(callback).err()
     }
 
-    /// End the lease after a call; `failed` when the call panicked and the
-    /// panic was caught. An outgoing callback then is retained, not dropped:
-    /// its captures stay out of an operation that already failed (ADR-0127
-    /// §2). Otherwise it retires here, its capture failure contained.
-    fn retire(mut self, failed: bool) {
-        let outgoing = self.release();
-        if failed {
-            std::mem::forget(outgoing);
-        } else {
-            contain_owner_callback(|| drop(outgoing));
-        }
+    fn replace(&self, callback: InputCallback) -> Option<InputCallback> {
+        self.slot.replace(callback).unwrap_or_else(Some)
     }
 }
 
-impl Drop for InputLease<'_> {
-    fn drop(&mut self) {
-        let Some(outgoing) = self.release() else {
-            return;
-        };
-        if std::thread::panicking() {
-            // The invocation's failure is unwinding: the outgoing callback is
-            // retained, so its captures cannot fail a second time (ADR-0127 §2).
-            std::mem::forget(outgoing);
-        } else {
-            drop(outgoing);
-        }
+/// The close callback's slot for its one call: the callback is `FnOnce`, so
+/// it comes out in an envelope the call empties, and nothing goes back.
+struct Closing<'a>(&'a Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl HandlerSlot for Closing<'_> {
+    type Handler = Option<Box<dyn FnOnce() + Send>>;
+
+    fn take(&self) -> Option<Self::Handler> {
+        self.0.lock().take().map(Some)
+    }
+
+    fn restore(&self, envelope: Self::Handler) -> Option<Self::Handler> {
+        Some(envelope)
+    }
+
+    fn replace(&self, envelope: Self::Handler) -> Option<Self::Handler> {
+        envelope.and_then(|callback| self.0.lock().replace(callback).map(Some))
     }
 }
 
-/// Invoke a leased input callback with `input`, containing a panic; whether
-/// it returned normally. The payload is forgotten, not dropped: its own
-/// destructor may panic.
-fn invoke_contained(lease: &mut InputLease<'_>, input: PlatformInput) -> bool {
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if let Some(callback) = lease.callback_mut() {
-            callback(input);
-        }
-    }));
-    match outcome {
-        Ok(()) => true,
-        Err(payload) => {
-            std::mem::forget(payload);
-            contain_owner_callback(|| {
-                tracing::error!("input callback panicked; the queued input stays in order");
-            });
-            false
-        }
+/// Run the close callback out of its envelope; `FnOnce` consumes its
+/// captures in the call.
+fn run_close(envelope: &mut Option<Box<dyn FnOnce() + Send>>) {
+    if let Some(close) = envelope.take() {
+        close();
     }
 }
 
 impl WindowCallbacks {
+    /// A callback's slot for delivery through this window's FIFO.
+    fn queued<'a, T>(&'a self, slot: &'a Mutex<Option<T>>) -> Latched<'a, T> {
+        Latched {
+            slot,
+            closed: &self.cleared,
+        }
+    }
+
+    /// A callback's slot for immediate delivery, fenced at the close request.
+    fn immediate<'a, T>(&'a self, slot: &'a Mutex<Option<T>>) -> Latched<'a, T> {
+        Latched {
+            slot,
+            closed: &self.lifecycle_closed,
+        }
+    }
+
+    /// The input callback's slot.
+    fn input(&self) -> InputSlot<'_> {
+        InputSlot {
+            slot: &self.on_input,
+            cleared: &self.cleared,
+        }
+    }
+
     /// Refuse registrations once native retirement has started.
     #[cfg(target_os = "windows")]
     pub(crate) fn accepts_registration(&self) -> bool {
@@ -885,15 +728,14 @@ impl WindowCallbacks {
     /// own `Clear` arm.
     ///
     /// **The `cleared` latch never resets once set, but that does not make
-    /// every slot permanently inert.** The ten slots `CallbackLease`
-    /// dispatches through (every one except `on_close`) still accept a
-    /// fresh registration after this call returns: that callback runs
-    /// exactly once, the next time its event is dispatched, and only then
-    /// does its lease's `Drop` see `cleared` set and discard it instead of
-    /// restoring it (`CallbackLease::drop`) — so it cannot run a second
-    /// time. `on_close` is untouched by the latch entirely: it is `FnOnce`,
-    /// so `drain_events`'s `Close` arm takes and calls it directly with no
-    /// lease to gate a restore, meaning a callback registered on it after
+    /// every slot permanently inert.** The ten slots called through a
+    /// `Latched` slot (every one except `on_close`) still accept a fresh
+    /// registration after this call returns: that callback runs exactly once,
+    /// the next time its event is dispatched, and only then does its slot
+    /// see `cleared` set and hand it back to be dropped instead of restoring
+    /// it — so it cannot run a second time. `on_close` is untouched by the
+    /// latch entirely: it is `FnOnce`, so `drain_events`'s `Close` arm takes
+    /// and calls it with nothing to restore, meaning a callback registered on it after
     /// `clear()` returns would fire normally if `Close` were ever
     /// dispatched again — a case no current call site produces (nothing
     /// dispatches `Close` twice), but not prevented by this type either.
@@ -939,16 +781,16 @@ impl WindowCallbacks {
     /// lock has been released, since a callback's destructor may re-enter
     /// platform code.
     fn clear_now(&self) {
-        // Set BEFORE taking any slot: a callback leased out right now (its
-        // slot already empty, user code running) checks this flag when its
-        // lease drops, which happens strictly after this store — the only
+        // Set BEFORE taking any slot: a callback out for a call right now
+        // (its slot already empty, user code running) checks this flag when
+        // it comes back, which happens strictly after this store — the only
         // way to stop it from restoring itself into a slot this call is
-        // about to empty. See `CallbackLease::drop`.
+        // about to empty. See `Latched::restore`.
         self.cleared.store(true, Ordering::SeqCst);
         let on_safe_area_change = self.on_safe_area_change.lock().take();
         let on_execution_state_change = self.on_execution_state_change.lock().take();
         // Off the owner thread this reaches nothing; the callback then
-        // retires at the owner's next lease, which sees `cleared`.
+        // retires at the owner's next call, whose slot sees `cleared`.
         let on_input = self.on_input.take();
         let held = std::mem::take(&mut self.input_feed.lock().held);
         let input_wake = self.input_wake.lock().take();
@@ -1024,11 +866,10 @@ impl WindowCallbacks {
                         {
                             // Closing the native registration is irreversible.
                             // Its application cancellation hook survives an
-                            // aborted causal callback, before capture retirement.
-                            let callback = self.on_close.lock().take();
-                            if let Some(callback) = callback {
-                                contain_owner_callback(callback);
-                            }
+                            // aborted causal callback, before capture retirement;
+                            // its own failure does not replace the first.
+                            call(&Closing(&self.on_close), run_close)
+                                .or_contain((), "a window's close callback");
                         }
                         WindowCallbackEvent::Clear(retired) => {
                             self.clear_now();
@@ -1062,55 +903,42 @@ impl WindowCallbacks {
                         input_result.get_or_insert(DispatchEventResult::DEFERRED);
                         continue;
                     }
-                    let mut lease = InputLease::take(&self.on_input, &self.cleared);
-                    let result = lease
-                        .callback_mut()
-                        .map_or_else(DispatchEventResult::default, |callback| callback(event));
                     // An outgoing callback replaced during its call retires
-                    // here, after its result; its capture failure is contained.
-                    lease.retire(false);
+                    // after its result; its capture failure is contained.
+                    let result = call(&self.input(), |callback| callback(event))
+                        .or_resume(DispatchEventResult::default());
                     input_result.get_or_insert(result);
                 }
                 WindowCallbackEvent::RequestFrame => {
-                    let mut lease = CallbackLease::take(&self.on_request_frame, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_request_frame), |callback| {
                         // Counted before the call, so a frame that unwinds
                         // still counts as one that ran.
                         self.frames_run.fetch_add(1, Ordering::Relaxed);
                         callback();
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::Resize(metrics) => {
                     // Queued delivery is already fenced by `clear_now` having
-                    // emptied this slot before the event runs, so this lease
+                    // emptied this slot before the event runs, so this slot
                     // answers to `cleared`. The immediate iOS
-                    // `dispatch_metrics_resize` leases the same slot against
+                    // `dispatch_metrics_resize` calls the same slot against
                     // `lifecycle_closed` instead: its fence has to close at the
                     // close REQUEST, which can arrive while a drain is still
                     // holding `clear_now` back.
-                    let mut lease = CallbackLease::take(&self.on_resize, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
-                        callback(metrics);
-                    }
+                    call(&self.queued(&self.on_resize), |callback| callback(metrics)).or_resume(());
                 }
                 WindowCallbackEvent::StateChanged => {
-                    let mut lease = CallbackLease::take(&self.on_state_changed, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
-                        callback();
-                    }
+                    call(&self.queued(&self.on_state_changed), |callback| callback()).or_resume(());
                 }
                 WindowCallbackEvent::Close => {
-                    let callback = self.on_close.lock().take();
-                    if let Some(callback) = callback {
-                        callback();
-                    }
+                    call(&Closing(&self.on_close), run_close).or_resume(());
                 }
                 WindowCallbackEvent::Execution(state) => {
-                    let mut lease =
-                        CallbackLease::take(&self.on_execution_state_change, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_execution_state_change), |callback| {
                         callback(state);
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::Active(is_active, commit) => {
                     self.deliver_status_observation(
@@ -1127,30 +955,28 @@ impl WindowCallbacks {
                     );
                 }
                 WindowCallbackEvent::Hover(is_hovered) => {
-                    let mut lease =
-                        CallbackLease::take(&self.on_hover_status_change, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_hover_status_change), |callback| {
                         callback(is_hovered);
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::AppearanceChanged => {
-                    let mut lease = CallbackLease::take(&self.on_appearance_changed, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_appearance_changed), |callback| {
                         callback();
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::DisplayChanged => {
-                    let mut lease = CallbackLease::take(&self.on_display_changed, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_display_changed), |callback| {
                         callback();
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::SurfaceStatus(has_surface) => {
-                    let mut lease =
-                        CallbackLease::take(&self.on_surface_status_change, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
+                    call(&self.queued(&self.on_surface_status_change), |callback| {
                         callback(has_surface);
-                    }
+                    })
+                    .or_resume(());
                 }
                 WindowCallbackEvent::Clear(retired) => {
                     self.clear_now();
@@ -1172,10 +998,7 @@ impl WindowCallbacks {
         if let Some(commit) = commit {
             commit();
         }
-        let mut lease = CallbackLease::take(slot, &self.cleared);
-        if let Some(callback) = lease.callback_mut() {
-            callback(value);
-        }
+        call(&self.queued(slot), |callback| callback(value)).or_resume(());
     }
 
     /// Dispatch an input event.
@@ -1308,7 +1131,7 @@ impl WindowCallbacks {
                 }
             }
         };
-        contain_owner_callback(|| drop(outgoing));
+        retire(outgoing);
         self.resume_input_delivery();
     }
 
@@ -1361,7 +1184,7 @@ impl WindowCallbacks {
     /// tail does not wait for unrelated input.
     pub fn set_input_wake(&self, wake: InputWake) {
         let outgoing = self.input_wake.lock().replace(wake);
-        contain_owner_callback(|| drop(outgoing));
+        retire(outgoing);
     }
 
     /// Deliver the pending snapshot and held input to the input callback.
@@ -1395,41 +1218,30 @@ impl WindowCallbacks {
             feed.held.len() + usize::from(feed.snapshot_pending)
         };
         for _ in 0..budget {
-            let mut lease = InputLease::take(&self.on_input, &self.cleared);
-            if lease.callback.is_none() {
+            // The entry is read once the callback is out of its slot, so
+            // nothing leaves the queue for an absent callback.
+            let mut snapshot = None;
+            let called = call(&self.input(), |callback| {
+                let input = match self.next_held_entry()? {
+                    HeldEntry::Snapshot(capabilities, registration) => {
+                        snapshot = Some(registration);
+                        PlatformInput::Capabilities(capabilities)
+                    }
+                    HeldEntry::Input(input) => input,
+                };
+                callback(input);
+                Some(())
+            });
+            let delivered = match called {
                 // Held until a registration; a snapshot is never emitted
                 // into an absent callback.
-                return false;
-            }
-            let entry = {
-                let mut feed = self.input_feed.lock();
-                if feed.snapshot_pending {
-                    if feed.failed_snapshots >= SNAPSHOT_ATTEMPTS {
-                        drop(feed);
-                        drop(lease);
-                        return false;
-                    }
-                    HeldEntry::Snapshot(feed.front, feed.registration)
-                } else if let Some(input) = feed.held.pop_front() {
-                    if let PlatformInput::Capabilities(capabilities) = &input {
-                        feed.front = *capabilities;
-                    }
-                    HeldEntry::Input(input)
-                } else {
-                    drop(feed);
-                    drop(lease);
-                    return false;
+                Called::Vacant | Called::Returned(None) => return false,
+                Called::Returned(Some(())) => true,
+                Called::Panicked(failure) => {
+                    failure.contain("a window's input callback; the queued input stays in order");
+                    false
                 }
             };
-            let (input, snapshot) = match entry {
-                HeldEntry::Snapshot(capabilities, registration) => (
-                    PlatformInput::Capabilities(capabilities),
-                    Some(registration),
-                ),
-                HeldEntry::Input(input) => (input, None),
-            };
-            let delivered = invoke_contained(&mut lease, input);
-            lease.retire(!delivered);
             match (delivered, snapshot) {
                 (true, Some(registration)) => self.snapshot_delivered(registration),
                 (true, None) => {}
@@ -1440,6 +1252,22 @@ impl WindowCallbacks {
         }
         // Input admitted during the pass waits for the next one.
         self.input_feed.lock().holds() && self.on_input.is_occupied() == Some(true)
+    }
+
+    /// The next entry a pass delivers: the snapshot a registration is owed,
+    /// or the oldest held input. `None` when nothing is held, or the snapshot
+    /// failed every pass it gets.
+    fn next_held_entry(&self) -> Option<HeldEntry> {
+        let mut feed = self.input_feed.lock();
+        if feed.snapshot_pending {
+            return (feed.failed_snapshots < SNAPSHOT_ATTEMPTS)
+                .then(|| HeldEntry::Snapshot(feed.front, feed.registration));
+        }
+        let input = feed.held.pop_front()?;
+        if let PlatformInput::Capabilities(capabilities) = &input {
+            feed.front = *capabilities;
+        }
+        Some(HeldEntry::Input(input))
     }
 
     fn snapshot_delivered(&self, registration: u64) {
@@ -1474,12 +1302,16 @@ impl WindowCallbacks {
             }
             (feed.front, feed.registration)
         };
-        let mut lease = InputLease::take(&self.on_input, &self.cleared);
-        if lease.callback.is_none() {
-            return false;
-        }
-        let delivered = invoke_contained(&mut lease, PlatformInput::Capabilities(capabilities));
-        lease.retire(!delivered);
+        let delivered = match call(&self.input(), |callback| {
+            callback(PlatformInput::Capabilities(capabilities));
+        }) {
+            Called::Vacant => return false,
+            Called::Returned(()) => true,
+            Called::Panicked(failure) => {
+                failure.contain("a window's input callback; the queued input stays in order");
+                false
+            }
+        };
         if delivered {
             self.snapshot_delivered(registration);
         } else if self.snapshot_failed(registration) {
@@ -1572,12 +1404,8 @@ impl WindowCallbacks {
         let _dispatch_guard = BooleanDispatchGuard {
             dispatching: &self.should_close_dispatching,
         };
-        let mut lease = CallbackLease::take(&self.on_should_close, &self.cleared);
-        if let Some(callback) = lease.callback_mut() {
-            callback()
-        } else {
-            true // Default: allow close
-        }
+        // Default: allow close.
+        call(&self.queued(&self.on_should_close), |callback| callback()).or_resume(true)
     }
 
     /// Deliver iOS lifecycle effects in its own serialized transaction, even when
@@ -1598,14 +1426,8 @@ impl WindowCallbacks {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
-        let mut lease = CallbackLease::take(slot, &self.lifecycle_closed);
-        contain_owner_callback(|| {
-            if let Some(callback) = lease.callback_mut() {
-                callback(value);
-            }
-        });
-        // Invocation has finished unwinding before a retired capture can panic.
-        contain_owner_callback(|| drop(lease));
+        call(&self.immediate(slot), |callback| callback(value))
+            .or_contain((), "a window's lifecycle callback");
     }
 
     /// Dispatch active status change (focus gained/lost).
@@ -1668,16 +1490,15 @@ impl WindowCallbacks {
         &self,
         callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
     ) {
-        let old = {
+        let retired = {
             let mut slot = self.on_safe_area_change.lock();
             if self.lifecycle_closed.load(Ordering::SeqCst) {
-                drop(slot);
-                contain_owner_callback(|| drop(callback));
-                return;
+                Some(callback)
+            } else {
+                slot.replace(callback)
             }
-            slot.replace(callback)
         };
-        contain_owner_callback(|| drop(old));
+        retire(retired);
     }
 
     /// Immediate metrics delivery, independently leased from the input FIFO.
@@ -1702,17 +1523,14 @@ impl WindowCallbacks {
             return;
         };
         // Latched on `lifecycle_closed`, deliberately not the `cleared` flag
-        // the queued Resize arm leases against (see `drain_events`'s own arm):
+        // the queued Resize arm calls against (see `drain_events`'s own arm):
         // this is an IMMEDIATE delivery, so it is fenced the moment a close is
         // requested — `clear()` sets this latch on entry — rather than at slot
         // teardown, which can sit behind a still-running drain.
-        let mut lease = CallbackLease::take(&self.on_resize, &self.lifecycle_closed);
-        contain_owner_callback(|| {
-            if let Some(callback) = lease.callback_mut() {
-                callback(metrics);
-            }
-        });
-        contain_owner_callback(|| drop(lease));
+        call(&self.immediate(&self.on_resize), |callback| {
+            callback(metrics);
+        })
+        .or_contain((), "a window's resize callback");
     }
 
     /// Replace an execution observer, disposing captures outside the storage lock.
@@ -1720,16 +1538,15 @@ impl WindowCallbacks {
         &self,
         callback: Box<dyn FnMut(WindowExecutionState) + Send>,
     ) {
-        let old = {
+        let retired = {
             let mut slot = self.on_execution_state_change.lock();
             if self.cleared.load(Ordering::SeqCst) {
-                drop(slot);
-                drop(callback);
-                return;
+                Some(callback)
+            } else {
+                slot.replace(callback)
             }
-            slot.replace(callback)
         };
-        drop(old);
+        retire(retired);
     }
 
     /// Deliver an owner-thread execution observation through the window FIFO.
@@ -1802,20 +1619,21 @@ impl Default for WindowCallbacks {
 ///
 /// Every backend window stores its callbacks in a [`WindowCallbacks`] — either
 /// as a bare field or behind an `Arc` (auto-deref makes one body cover both) —
-/// and every setter is the same one-liner: store the boxed callback in its
-/// slot, replacing any previous registration. Invoke inside an
+/// and every setter is the same one-liner: install the boxed callback in its
+/// slot through the call point, which retires any previous registration
+/// after the slot's lock is released. Invoke inside an
 /// `impl PlatformWindow for ...` block, naming the field that holds the
 /// [`WindowCallbacks`]:
 ///
 /// ```ignore
 /// impl PlatformWindow for MyWindow {
-///     crate::shared::impl_window_callback_setters!(callbacks);
+///     crate::owner::handlers::impl_window_callback_setters!(callbacks);
 ///     // ... the rest of the impl ...
 /// }
 /// ```
 ///
 /// The signatures below must match the `PlatformWindow` trait exactly; types
-/// are spelled with absolute paths so the expansion never depends on the
+/// and paths are spelled absolutely so the expansion never depends on the
 /// invoking module's imports.
 macro_rules! impl_window_callback_setters {
     ($callbacks_field:ident) => {
@@ -1829,26 +1647,26 @@ macro_rules! impl_window_callback_setters {
         }
 
         fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_request_frame.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_request_frame, callback);
         }
 
         fn on_resize(
             &self,
             callback: Box<dyn FnMut(::flui_foundation::geometry::WindowMetrics) + Send>,
         ) {
-            *self.$callbacks_field.on_resize.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_resize, callback);
         }
 
         fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_state_changed.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_state_changed, callback);
         }
 
         fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-            *self.$callbacks_field.on_close.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_close, callback);
         }
 
         fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-            *self.$callbacks_field.on_should_close.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_should_close, callback);
         }
 
         fn on_safe_area_change(
@@ -1865,32 +1683,47 @@ macro_rules! impl_window_callback_setters {
             self.$callbacks_field.set_execution_state_callback(callback);
         }
         fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            *self.$callbacks_field.on_active_status_change.lock() = Some(callback);
+            $crate::owner::call_point::install(
+                &self.$callbacks_field.on_active_status_change,
+                callback,
+            );
         }
 
         fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            *self.$callbacks_field.on_visibility_status_change.lock() = Some(callback);
+            $crate::owner::call_point::install(
+                &self.$callbacks_field.on_visibility_status_change,
+                callback,
+            );
         }
 
         fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            *self.$callbacks_field.on_hover_status_change.lock() = Some(callback);
+            $crate::owner::call_point::install(
+                &self.$callbacks_field.on_hover_status_change,
+                callback,
+            );
         }
 
         fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_appearance_changed.lock() = Some(callback);
+            $crate::owner::call_point::install(
+                &self.$callbacks_field.on_appearance_changed,
+                callback,
+            );
         }
 
         fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_display_changed.lock() = Some(callback);
+            $crate::owner::call_point::install(&self.$callbacks_field.on_display_changed, callback);
         }
 
         fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-            *self.$callbacks_field.on_surface_status_change.lock() = Some(callback);
+            $crate::owner::call_point::install(
+                &self.$callbacks_field.on_surface_status_change,
+                callback,
+            );
         }
     };
 }
 // Textual-scope escape: `pub(crate) use` gives the macro a normal path
-// (`crate::shared::impl_window_callback_setters`) without `#[macro_export]`,
+// (`crate::owner::handlers::impl_window_callback_setters`) without `#[macro_export]`,
 // which would put an intra-crate implementation detail on the public API.
 pub(crate) use impl_window_callback_setters;
 
@@ -1941,83 +1774,6 @@ mod tests {
     use crate::shared::hwnd_affinity;
 
     use super::*;
-
-    #[test]
-    fn session_end_hook_runs_without_the_lock_and_returns_to_its_slot() {
-        let handlers = Mutex::new(PlatformHandlers::new());
-        assert_eq!(
-            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
-            SessionEndAnswer::Proceed,
-            "no hook registered"
-        );
-
-        let phases = Arc::new(Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&phases);
-        let handlers = Arc::new(handlers);
-        let locked = Arc::clone(&handlers);
-        handlers.lock().session_end = Some(Box::new(move |phase| {
-            recorded.lock().push(phase);
-            // Not held while the hook runs: this would deadlock otherwise.
-            drop(locked.lock());
-            SessionEndAnswer::Block
-        }));
-
-        for phase in [SessionEndPhase::Query, SessionEndPhase::Ending] {
-            assert_eq!(
-                PlatformHandlers::run_session_end(&handlers, phase),
-                SessionEndAnswer::Block
-            );
-        }
-        assert_eq!(
-            *phases.lock(),
-            [SessionEndPhase::Query, SessionEndPhase::Ending],
-            "the hook came back after each run"
-        );
-    }
-
-    #[test]
-    fn session_end_hook_survives_its_own_panic() {
-        let handlers = Mutex::new(PlatformHandlers::new());
-        let runs = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&runs);
-        handlers.lock().session_end = Some(Box::new(move |_| {
-            assert!(
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
-                "the first run fails"
-            );
-            SessionEndAnswer::Proceed
-        }));
-
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending)
-        }));
-        assert!(outcome.is_err());
-        assert_eq!(
-            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
-            SessionEndAnswer::Proceed
-        );
-        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn session_end_hook_registered_while_running_replaces_the_running_one() {
-        let handlers = Arc::new(Mutex::new(PlatformHandlers::new()));
-        let registering = Arc::clone(&handlers);
-        handlers.lock().session_end = Some(Box::new(move |_| {
-            registering.lock().session_end = Some(Box::new(|_| SessionEndAnswer::Block));
-            SessionEndAnswer::Proceed
-        }));
-
-        assert_eq!(
-            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
-            SessionEndAnswer::Proceed
-        );
-        assert_eq!(
-            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
-            SessionEndAnswer::Block,
-            "the newer hook kept the slot"
-        );
-    }
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
         accepted_status_observations_survive_dispatch_unwind(false);
@@ -2237,12 +1993,15 @@ mod tests {
                 std::panic::panic_any(Hostile);
             }
         }
-        struct Guard(Option<Box<dyn FnMut() + Send>>);
+        // A teardown that runs a one-shot callback from a destructor, as the
+        // Win32 run guard runs the quit callback.
+        struct Guard(Mutex<Option<Box<dyn FnMut() + Send>>>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                crate::owner::panic_boundary::invoke_and_drop_owner_callback(
-                    self.0.take().expect("callback"),
-                );
+                call(&crate::owner::call_point::Once(&self.0), |callback| {
+                    callback();
+                })
+                .or_contain((), "the guarded callback");
             }
         }
         for already_unwinding in [false, true] {
@@ -2251,11 +2010,11 @@ mod tests {
             let capture = Capture(Arc::clone(&dropped));
             let observed = Arc::clone(&invoked);
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                let guard = Guard(Some(Box::new(move || {
+                let guard = Guard(Mutex::new(Some(Box::new(move || {
                     let _ = &capture;
                     observed.fetch_add(1, Ordering::SeqCst);
                     std::panic::panic_any(Hostile);
-                })));
+                }))));
                 assert!(!already_unwinding, "original bootstrap panic");
                 drop(guard);
             }));
@@ -2271,7 +2030,9 @@ mod tests {
                 assert!(outcome.is_ok());
             }
             assert_eq!(invoked.load(Ordering::SeqCst), 1);
-            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+            // The call failed: its captures are retained, never dropped into
+            // a second failure (ADR-0127 §2).
+            assert_eq!(dropped.load(Ordering::SeqCst), 0);
         }
     }
 

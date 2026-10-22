@@ -48,10 +48,36 @@ trait depends on `flui-platform` instead.
   `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
   the owner-thread storage for a value that is not `Send`, and
   `owner::panic_boundary` the containment a panic in user code meets before it
-  reaches the operating system. `owner` is the `base` of
+  reaches the operating system, `owner::call_point` the one point where the
+  platform calls a handler, and `owner::handlers` the application's handler set
+  and a window's callbacks. `owner` is the `base` of
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
   crate root only.
+- **The platform calls a handler at one point, with no lock or borrow held
+  (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
+  `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
+  `Mutex<Option<_>>`, the input callback's owner slot) under the slot's own
+  lock or borrow, releases it, runs the handler in a panic boundary and puts it
+  back unless one was installed meanwhile: the newer one stays and the one that
+  ran is retired once the lock is released. A slot can refuse the handler back
+  (a window that cleared, a loop that stopped accepting work), and a one-shot
+  call (`Once`: the quit handler) retires it. `install` replaces a handler and
+  `retire` drops any other user-owned value the same way, so a capture's
+  destructor may call the platform. A handler's panic is the call's `Failure`:
+  the caller resumes it where a Rust frame waits (headless, winit, a window's
+  FIFO) or contains it where the operating system called (Win32's exit policy
+  and session end, AppKit, UIKit); a handler displaced during a failed call is
+  retained, never dropped into a second failure (ADR-0127 §2). A shared hook
+  (the wake deadline, an `Arc`) is called as a clone and stays installed while
+  it runs. `PlatformHandlers` and `WindowCallbacks` call only through it, and
+  so does the system-notice channel. Tests: `owner::call_point::tests`; the
+  public-API tables in `tests/handler_reentry.rs` (headless, Win32 and winit,
+  each case on a worker thread so that a regression fails as a deadlock instead
+  of hanging), `winit_handlers_run_outside_the_state_lock`,
+  `native_host_events`' `a_hook_that_replaced_itself_and_failed_is_retained`
+  and `web_session_end_hook_reenters_the_platform`. Android and the Apple hosts
+  run the same call point and are type-checked only.
 - **`Platform` and `HostWindow` are sealed (ADR-0151 §5).** Each has a private
   supertrait: `Platform`'s is implemented for `HostPlatform<H>` alone,
   `HostWindow`'s for every type that implements the crate-private
@@ -1003,22 +1029,23 @@ one for Win32 makes that safe without changing a signature.
   foreign-thread refusal logs an error ("registration refused"): the caller has
   just lost a callback. An off-owner `open_window` returns
   `OpenWindowError::Backend`.
-- **Lease-style restore.** Dispatching the window-event or keyboard-layout
-  handler takes it out of its slot, runs it with no borrow held, and puts it
-  back only if the slot is still empty. A handler registered while it ran —
-  including by itself — wins, the rule `OwnerSignal::drive` already follows.
-  Before this, the old handler was put back unconditionally and the
-  replacement was silently lost.
-- **Quit order.** The run's teardown takes the quit callback while the owner
-  context exists, destroys the owner window, then runs the callback.
+- **Restore through the call point.** Dispatching the window-event or
+  keyboard-layout handler goes through `owner::call_point::call`: it is taken
+  out of its slot, run with no borrow held, and put back only if the slot is
+  still empty. A handler registered while it ran — including by itself — wins,
+  the rule `OwnerSignal::drive` already follows.
+- **Quit order.** The run's teardown keeps a handle to the handler set while
+  the owner context exists, destroys the owner window, runs the quit callback
+  once (its panic contained), then retires the handler set: the other handlers
+  drop contained, or stay alive when the teardown runs during an unwind.
 
 The other backends still store `Send` callbacks behind locks until their own
 steps.
 
 Tests (CI only type-checks Win32): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
-(run by `the_owner_thread_machinery_honours_its_contracts` in `shared/handlers.rs`), and the callback panic and re-entrancy rules by
-`tests/window_callback_unwind.rs`.
+(run by `the_owner_thread_machinery_honours_its_contracts` in `owner/handlers.rs`), and the callback panic and re-entrancy rules by
+`tests/window_callback_unwind.rs` and `tests/handler_reentry.rs`.
 
 ### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
 
@@ -1055,9 +1082,10 @@ A pending count, queued flag and active guard serialize owner-lane delivery,
 including callbacks that pump nested native events. Starting-phase signals wait
 until the loop runs. The registration current at delivery receives each signal;
 a replacement installed before that turn receives it. During delivery, callbacks
-are leased outside locks and restored only if no replacement exists and quit has
-not been requested. Active remains set through callback destruction, so a nested
-signal is retained until its predecessor's lease and cleanup finish.
+are called through the call point outside locks and restored only if no
+replacement exists and quit has not been requested. Active remains set through
+callback destruction, so a nested signal is retained until its predecessor's call
+and cleanup finish.
 
 Explicit quit fences registration, delivery, restoration and window admission
 immediately, including before deferred termination evaluation. Old delegates
@@ -1075,10 +1103,10 @@ root-window creation API. It needs a macOS host with an active GUI session.
 
 ### Headless explicit quit consumes its callback outside platform state
 
-`HeadlessLoop::quit` uses the same take-then-invoke discipline as its window
-close and exit-policy re-evaluation paths: it marks the loop stopped and takes
-the current quit callback under the state lock, then invokes and drops it after
-the lock is released. Recursive or repeated quit does not re-invoke that
+`HeadlessLoop::quit` uses the same discipline as its window close and
+exit-policy re-evaluation paths: it marks the loop stopped, then calls the
+current quit callback once through the call point (`Once`), which takes it out
+under the state lock and invokes and drops it after the lock is released. Recursive or repeated quit does not re-invoke that
 registration. This is consumption of the existing callback slot, not a new
 process-wide latch; registering a later callback still replaces the slot.
 Callback panics propagate to the Rust caller after releasing state, and the
@@ -1190,9 +1218,10 @@ consult the exit-policy hook itself: it posts one coalesced message to the
 owner message-only window, and `request_exit_policy_reevaluation` posts the
 same message from any thread (refused once the owner window is closed). The
 owner procedure then checks that no window is tracked and no quit is under way,
-leases the hook out of the handler set, runs it with no borrow held, restores it
-unless a newer hook replaced it, and checks the window count again, since the
-hook may have opened a replacement window. An allowed exit ends the loop the way
+calls the hook through the call point with no borrow of the handler set held,
+restores it unless a newer hook replaced it, and checks the window count again,
+since the hook may have opened a replacement window. A hook that panics is
+contained as a veto, and a hook it displaced is retained. An allowed exit ends the loop the way
 `quit` does. No hook allows the exit, as on winit. Deferring the decision keeps
 the hook, which re-enters the embedder, out of a `WM_DESTROY` nested inside
 embedder code that closed the window. The native rows in `tests/contract.rs`
@@ -1333,8 +1362,8 @@ is a skipped one, and the window paints nothing forever.
 
 **Choice:** `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`, a defaulted
 no-op, following the `on_active_status_change`/`on_visibility_status_change`
-family's shape: stored in `shared::handlers::WindowCallbacks`, dispatched through
-the same FIFO and `CallbackLease`. `false` means "release the surface before this
+family's shape: stored in `owner::handlers::WindowCallbacks`, dispatched through
+the same FIFO and the call point. `false` means "release the surface before this
 callback returns"; `true` means "a surface valid for the handle available now must
 exist", which the runner acts on unconditionally rather than by comparing it
 against what it already holds — that statelessness is the point, since a `false`
@@ -1931,8 +1960,8 @@ protocol's own. Win32's native backend is likewise unchanged.
 
 `WindowExecutionState` separates native execution permission from focus, visibility
 and GPU readiness (ADR-0072). The callback slot is private. iOS serializes native
-observations in a separate queue and delivers effects through immediate callback
-leases, independently of the general input/frame FIFO. Invocation and capture
+observations in a separate queue and delivers effects through immediate calls
+through the call point, independently of the general input/frame FIFO. Invocation and capture
 destruction are contained separately, outside storage locks. Only resource intents
 advance the generation: focus reentry cannot cancel a resource transition, while
 superseded resource continuations and queued restorations are rejected. A queued
@@ -1997,12 +2026,12 @@ platform input contract of logical pixels, including the upstream
 `PhysicalPosition` storage name. DOM button masks preserve X1/X2 on down, up,
 move and wheel events.
 
-Platform window-event handlers are leased outside the state mutex and restored
-unless the callback installed a replacement. Setter retirement also occurs
-outside the mutex. Quit commits stopped state and consumes its callback before
-invoking it, so reentry cannot invoke the same quit callback again. Owning
-callback envelopes remain outside the caught invocation; a failed displaced
-callback is retained rather than destroyed while propagating its first failure.
+Platform window-event handlers are called through the call point outside the
+state mutex and restored unless the callback installed a replacement. Setter
+retirement also occurs outside the mutex. Quit commits stopped state and consumes
+its callback in a one-shot call, so reentry cannot invoke the same quit callback
+again. A failed displaced callback is retained rather than destroyed while
+propagating its first failure.
 Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
@@ -3113,8 +3142,10 @@ host listens is not announced later. The session ends once per start-to-stop
 cycle, by whichever of `Stop` and `SaveState` comes first (the order differs
 below and above API 28; a Back that finishes the Activity never saves state),
 so the notice repeats on every trip to the background and asks for saving. The
-session-end hook is out of its slot while it runs and is put back even when it
-panics (`PlatformHandlers::run_session_end`).
+session-end hook is called through the call point: out of its slot while it
+runs, and put back even when it panics.
 
-**Verified by:** `android_lifecycle_mapping*` and `session_end_hook_*` on the
-host; the `MainEvent` match and the JNI read run only on a device.
+**Verified by:** `android_lifecycle_mapping*` and the call point's
+`a_panicking_handler_keeps_its_place_and_its_payload` and
+`a_handler_installed_during_a_call_replaces_the_one_that_ran` on the host; the
+`MainEvent` match and the JNI read run only on a device.

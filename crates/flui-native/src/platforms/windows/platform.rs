@@ -53,10 +53,10 @@ use super::{
 };
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
-    owner::OwnerHooks, owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
-    shared::hwnd_affinity::ContextLedger, shared::hwnd_affinity::UserDataRefusal,
-    shared::window_state::WindowStateCell,
+    owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers,
+    owner::handlers::WindowCallbacks, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::hwnd_affinity::ContextLedger,
+    shared::hwnd_affinity::UserDataRefusal, shared::window_state::WindowStateCell,
 };
 use flui_platform::{WindowAppearance, WindowEvent, WindowId};
 
@@ -66,7 +66,8 @@ static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
 #[path = "platform/wake_deadline.rs"]
 mod wake_deadline;
-use wake_deadline::{DeadlineArm, DeadlineDelivery, DeadlineQuery, WakeDeadlineHook};
+use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
+use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 pub(super) use wake_deadline::{FrameCount, ModalDelivery};
 
 #[path = "platform/pointer_messages.rs"]
@@ -520,7 +521,7 @@ impl WindowContext {
     /// Dispatch a window event to the platform-level handler.
     #[inline]
     pub(super) fn dispatch_event(&self, event: WindowEvent) {
-        self.with_leased_handler(
+        self.call_handler(
             |handlers| &mut handlers.window_event,
             |handler| handler(event),
         );
@@ -528,45 +529,30 @@ impl WindowContext {
 
     /// Dispatch a keyboard-layout change to the platform-level hook.
     pub(super) fn dispatch_keyboard_layout_change(&self) {
-        self.with_leased_handler(
+        self.call_handler(
             |handlers| &mut handlers.keyboard_layout_changed,
             |handler| handler(),
         );
     }
 
-    /// Runs one platform-level handler leased out of its slot: taken out, so
-    /// no `RefCell` borrow is held while it runs, then put back only if the
-    /// slot is still empty. A handler registered while this one was out —
-    /// including by this handler itself — is the newer registration and
-    /// wins; the leased one is then dropped. The same lease rule as
-    /// `OwnerSignal::drive`.
+    /// Runs one platform-level handler through the call point: out of its
+    /// slot, so no `RefCell` borrow is held while it runs, then put back
+    /// only if the slot is still empty. A handler registered while this one
+    /// was out — including by this handler itself — is the newer
+    /// registration and wins; the one that ran is then retired. Its panic
+    /// unwinds to the window procedure's boundary, which aborts.
     ///
     /// The restore touches `self` AFTER the handler returns, and the handler
     /// may have closed this very window — that is sound only because every
     /// caller holds a [`ContextGuard`] over `self`, which defers the
     /// context's free past the borrow even when the handler's close runs a
     /// nested `WM_DESTROY` (which merely retires it).
-    fn with_leased_handler<H>(
+    fn call_handler<H>(
         &self,
-        slot: impl Fn(&mut PlatformHandlers) -> &mut Option<H>,
-        call: impl FnOnce(&mut H),
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+        body: impl FnOnce(&mut H),
     ) {
-        let handler = slot(&mut self.handlers.borrow_mut()).take();
-        let Some(mut handler) = handler else {
-            return;
-        };
-        call(&mut handler);
-        let superseded = {
-            let mut handlers = self.handlers.borrow_mut();
-            let current = slot(&mut handlers);
-            if current.is_none() {
-                *current = Some(handler);
-                None
-            } else {
-                Some(handler)
-            }
-        };
-        drop(superseded);
+        call(&Field::new(&*self.handlers, project), body).or_resume(());
     }
 }
 
@@ -2220,20 +2206,10 @@ impl WindowsLoop {
                     continue;
                 }
 
-                let hook = self.deadline_hook();
-                let next = hook.map(|hook| {
-                    let custody = DeadlineQuery(Some(hook));
-                    let hook = custody
-                        .0
-                        .as_ref()
-                        .expect("BUG: a queried deadline hook is owned");
-                    let deadline = hook();
-                    let identity = Arc::downgrade(hook);
-                    // A replaced hook's final captures may themselves
-                    // replace registration or quit. Retire before validation.
-                    drop(custody);
-                    (deadline, identity)
-                });
+                // A replaced hook's final captures may themselves replace
+                // registration or quit: the query retires its clone before
+                // the answer is validated below.
+                let next = self.query_wake_deadline();
                 armed = match next {
                     Some((deadline, identity))
                         if self.deadline_hook().is_some_and(|hook| {
@@ -2315,6 +2291,29 @@ impl WindowsLoop {
         shares.handlers.borrow().wake_deadline.clone()
     }
 
+    /// Ask the wake-deadline hook through the call point: its answer, and
+    /// the identity of the hook that gave it, so an answer is never credited
+    /// to a replacement. `None` when no hook is installed or the platform no
+    /// longer accepts work. Its panic unwinds out of the loop.
+    fn query_wake_deadline(&self) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
+        if !self.owner_control.signal.accepting() {
+            return None;
+        }
+        let shares = self.owner_control.shares("query wake deadline").ok()?;
+        Self::ask_wake_deadline(&shares.handlers)
+    }
+
+    /// [`Self::query_wake_deadline`] over a handler set.
+    fn ask_wake_deadline(
+        handlers: &RefCell<PlatformHandlers>,
+    ) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
+        call(
+            &SharedField::new(handlers, |handlers| &mut handlers.wake_deadline),
+            |hook| Some((hook(), Arc::downgrade(hook))),
+        )
+        .or_resume(None)
+    }
+
     /// Ask every window of `windows` for the frame a delivered wake deadline
     /// is due: the main loop's delivery, and the modal drag loop's.
     pub(super) fn redraw_deadline_windows(windows: &WindowMap) {
@@ -2379,16 +2378,10 @@ impl WindowsLoop {
         frames: &FrameCount,
         delivered: &ModalDelivery,
     ) -> u32 {
-        let hook = handlers.borrow().wake_deadline.clone();
-        let queried = hook.map(|hook| {
-            let identity = Arc::downgrade(&hook);
-            let custody = DeadlineQuery(Some(hook));
-            let deadline = custody.0.as_ref().and_then(|hook| hook());
-            // A replaced hook's final captures may replace the registration
-            // again: retired before the answer is checked against it.
-            drop(custody);
-            (deadline, identity)
-        });
+        // A replaced hook's final captures may replace the registration
+        // again: the query retires its clone before the answer is checked
+        // against it.
+        let queried = Self::ask_wake_deadline(handlers);
         // The answer of a hook that is no longer installed is not its
         // replacement's: as in the main loop, the delivery record is keyed by
         // the hook as well as the instant.
@@ -2437,21 +2430,18 @@ impl WindowsLoop {
     ///
     /// Off the owner thread, or once the platform has shut down, the
     /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced handler is dropped after the `RefCell`
-    /// borrow ends, since its destructor may re-enter the platform.
+    /// calling thread. A replaced handler is retired through the call point
+    /// after the `RefCell` borrow ends, since its destructor may re-enter the
+    /// platform, in a boundary of its own: a capture that panics in `Drop`
+    /// must not unwind into the host.
     pub(super) fn register_handler<H>(
         &self,
         op: &'static str,
         callback: H,
-        slot: impl FnOnce(&mut PlatformHandlers) -> &mut Option<H>,
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
     ) {
         match self.owner_control.shares(op) {
-            Ok(shares) => {
-                let previous = slot(&mut shares.handlers.borrow_mut()).replace(callback);
-                // The replaced callback is retired in a boundary of its own: a
-                // capture that panics in `Drop` must not unwind into the host.
-                crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
-            }
+            Ok(shares) => install(&Field::new(&*shares.handlers, project), callback),
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
                     op,
@@ -2488,17 +2478,28 @@ impl host::Loop for WindowsLoop {
         struct RunGuard(Arc<WindowsLoop>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
-                // Take the quit callback while the owner context still
-                // exists, close (which frees that context on this thread),
-                // and only then run it: the callback still observes a
-                // closed platform.
-                let callback = match self.0.owner_control.shares("run teardown") {
-                    Ok(shares) => shares.handlers.borrow_mut().quit.take(),
-                    Err(_) => None,
-                };
+                // Hold the handler set while the owner context still exists,
+                // close (which frees that context on this thread), and only
+                // then run the quit callback: it still observes a closed
+                // platform. It runs once, and its panic is contained: this
+                // is a destructor, possibly of an unwind already under way.
+                let handlers = self
+                    .0
+                    .owner_control
+                    .shares("run teardown")
+                    .ok()
+                    .map(|shares| Rc::clone(&shares.handlers));
                 self.0.owner_control.close();
-                if let Some(callback) = callback {
-                    crate::owner::panic_boundary::invoke_and_drop_owner_callback(callback);
+                if let Some(handlers) = handlers {
+                    call(
+                        &Once(Field::new(&*handlers, |handlers| &mut handlers.quit)),
+                        |quit| quit(),
+                    )
+                    .or_contain((), "the quit callback");
+                    // The last handle to the handler set when the owner context
+                    // is gone: its handlers' destructors are user code, dropped
+                    // contained, or kept while an unwind is under way.
+                    retire(handlers);
                 }
             }
         }

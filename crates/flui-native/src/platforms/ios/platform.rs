@@ -55,8 +55,10 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::host::{self, Host};
+use crate::owner::call_point::{Called, Field, Once, SharedField, call, install, retire};
+use crate::owner::handlers::PlatformHandlers;
 use crate::platform::HostPlatform;
-use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
+use crate::shared::system_notice::SystemNotices;
 use crate::{
     host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError, owner::OwnerHooks,
     owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
@@ -230,40 +232,46 @@ impl IOSLoop {
                 message: "scene registration requires a live main-thread owner".into(),
             });
         }
-        let old = {
-            let mut state = self.state().borrow_mut();
-            state.registered = true;
-            state.handler.replace(callback)
-        };
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
+        self.state().borrow_mut().registered = true;
+        install(
+            &Field::new(self.state(), |state| &mut state.handler),
+            callback,
+        );
         Ok(())
     }
 
+    /// Deliver `event` to the scene consumer through the call point, with no
+    /// borrow of the scene state held. It goes back afterwards while the
+    /// owner still accepts work; a consumer registered meanwhile wins.
     fn emit_scene(&self, event: IOSSceneEvent) -> Result<(), crate::BootstrapError> {
-        let mut handler = self.state().borrow_mut().handler.take().ok_or_else(|| {
-            Box::new(PlatformError::Init {
+        let consumer = Field::new(self.state(), |state| &mut state.handler)
+            .restoring_while(|| self.signal.accepting());
+        match call(&consumer, |handler| handler(event)) {
+            Called::Vacant => Err(Box::new(PlatformError::Init {
                 message: "no scene consumer registered".into(),
-            }) as crate::BootstrapError
-        })?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(event)));
-        let old = {
-            let mut state = self.state().borrow_mut();
-            if state.handler.is_none() && self.signal.accepting() {
-                state.handler.replace(handler)
-            } else {
-                Some(handler)
-            }
-        };
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
-        match result {
-            Ok(result) => result,
-            Err(payload) => {
-                std::mem::forget(payload);
+            })),
+            Called::Returned(result) => result,
+            Called::Panicked(failure) => {
+                failure.contain("the scene consumer");
                 Err(Box::new(PlatformError::Init {
                     message: "scene consumer panicked".into(),
                 }))
             }
         }
+    }
+
+    /// One of the application's handlers, as a slot of the handler set.
+    fn handler<H>(
+        &self,
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
+        Field::new(&*self.handlers, project)
+    }
+
+    /// Retire the scene consumer outside the scene state's borrow.
+    fn retire_scene_consumer(&self) {
+        let consumer = self.state().borrow_mut().handler.take();
+        retire(consumer);
     }
 
     fn active(&self) -> Option<Arc<IOSWindow>> {
@@ -278,13 +286,12 @@ impl IOSLoop {
     /// must survive. There is no way to ask it to wait, so the answer is not
     /// read.
     fn announce_session_end(&self) {
-        let hook = self.handlers.lock().session_end.take();
-        if let Some(mut hook) = hook {
-            crate::owner::panic_boundary::contain_owner_callback(|| {
-                let _ = hook(flui_platform::SessionEndPhase::Ending);
-            });
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(hook));
-        }
+        // The session ends once: the hook is retired after this call.
+        let _answer = call(
+            &Once(self.handler(|handlers| &mut handlers.session_end)),
+            |hook| hook(SessionEndPhase::Ending),
+        )
+        .or_contain(SessionEndAnswer::Proceed, "the session-end hook");
     }
 
     /// UIKit's memory warning means the system is close to terminating the
@@ -297,11 +304,10 @@ impl IOSLoop {
     }
 
     fn invoke_quit(&self) {
-        let callback = self.handlers.lock().quit.take();
-        if let Some(mut callback) = callback {
-            crate::owner::panic_boundary::contain_owner_callback(&mut callback);
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
-        }
+        call(&Once(self.handler(|handlers| &mut handlers.quit)), |quit| {
+            quit();
+        })
+        .or_contain((), "the quit callback");
     }
 
     fn finish_quit(&self) {
@@ -324,8 +330,7 @@ impl IOSLoop {
         }
         if !self.state().borrow().draining {
             self.invoke_quit();
-            let callback = self.state().borrow_mut().handler.take();
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
+            self.retire_scene_consumer();
         }
     }
 
@@ -333,8 +338,11 @@ impl IOSLoop {
         if !self.signal.accepting() {
             return;
         }
-        let hook = self.handlers.lock().wake_deadline.clone();
-        let next = hook.and_then(|hook| hook());
+        let next = call(
+            &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
+            |hook| hook(),
+        )
+        .or_resume(None);
         let ticket = {
             let mut current = self.deadline.lock();
             if current.as_ref().map(|(_, deadline)| *deadline) == next {
@@ -456,7 +464,7 @@ impl host::Loop for IOSLoop {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.handlers.lock().quit = Some(callback);
+        install(&self.handler(|handlers| &mut handlers.quit), callback);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -475,7 +483,10 @@ impl host::Loop for IOSLoop {
         &self,
         hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
     ) {
-        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        install(
+            &self.handler(|handlers| &mut handlers.wake_deadline),
+            Arc::from(hook),
+        );
         let _ = self.signal.wake();
     }
 }
@@ -552,7 +563,10 @@ impl host::Window<IOSLoop> for IOSWindow {
     }
 
     fn on_event(owner: &IOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        owner.handlers.lock().window_event = Some(callback);
+        install(
+            &owner.handler(|handlers| &mut handlers.window_event),
+            callback,
+        );
     }
 }
 
@@ -597,8 +611,10 @@ impl host::Lifecycle<IOSLoop> for IOSLoop {
         owner: &IOSLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
-        let previous = owner.handlers.lock().session_end.replace(callback);
-        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
+        install(
+            &owner.handler(|handlers| &mut handlers.session_end),
+            callback,
+        );
     }
 
     fn on_host_notice(owner: &IOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
@@ -982,8 +998,7 @@ impl IOSLoop {
         self.poll_scene_installation();
         if !self.running.load(Ordering::SeqCst) {
             self.invoke_quit();
-            let callback = self.state().borrow_mut().handler.take();
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
+            self.retire_scene_consumer();
         }
     }
 

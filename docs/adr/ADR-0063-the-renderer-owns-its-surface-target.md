@@ -77,8 +77,8 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`), a `closed` flag set
      from `windowWillClose:` before callbacks are cleared, `window_handle()` → `Unavailable` when
      closed.
-   - `WindowCallbacks::clear()` latches: a `CallbackLease` returning after the clear drops its
-     callback instead of restoring it. That closes the #919 frame-closure → lane → renderer →
+   - `WindowCallbacks::clear()` latches: a callback that returns to its slot after the clear is
+     dropped instead of restored. That closes the #919 frame-closure → lane → renderer →
      surface → window cycle structurally on every backend with a clear site — android, macos,
      windows, winit and headless all have one.
    - Android reports `Unavailable` only for a *terminated* window (`native_window()` is `Some`
