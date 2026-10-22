@@ -196,8 +196,9 @@ impl Drop for RetryWake<'_> {
         crate::owner::apple::macos::owner_queue().exec_after(delay, move || {
             crate::owner::panic_boundary::os_entry(
                 "the preference retry's wake",
-                crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
-                || {
+                (),
+                crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
+                move || {
                     if let Some(signal) = signal.upgrade() {
                         let _ = signal.wake();
                     }

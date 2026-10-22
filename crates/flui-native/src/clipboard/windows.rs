@@ -411,7 +411,8 @@ unsafe extern "system" fn owner_procedure(
 ) -> LRESULT {
     os_entry(
         "the clipboard owner's procedure",
-        AfterPanic::Answer(|| LRESULT(0)),
+        (),
+        AfterPanic::Answer(|()| LRESULT(0)),
         // SAFETY: forwards Win32's own arguments unchanged, on the thread
         // Win32 delivers them on.
         || unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },

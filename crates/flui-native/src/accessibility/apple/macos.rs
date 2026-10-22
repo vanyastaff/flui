@@ -59,7 +59,8 @@ impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         os_entry(
             "AccessKit's activation",
-            AfterPanic::Answer(|| None),
+            (),
+            AfterPanic::Answer(|()| None),
             || {
                 // Order matters: mark active and tell the composition root *before*
                 // reading the retained tree — see the Windows twin for the cold-start
@@ -75,9 +76,14 @@ struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
-        os_entry("an AccessKit action", AfterPanic::Answer(|| ()), || {
-            self.0.notify_action(request);
-        });
+        os_entry(
+            "an AccessKit action",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                self.0.notify_action(request);
+            },
+        );
     }
 }
 

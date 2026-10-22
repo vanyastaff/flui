@@ -762,7 +762,8 @@ pub(crate) mod source {
             // A panic ends the enumeration with the monitors read so far.
             os_entry(
                 "the monitor enumeration",
-                AfterPanic::Answer(|| FALSE),
+                (),
+                AfterPanic::Answer(|()| FALSE),
                 || {
                     // SAFETY: `lparam.0` is the address of `monitors` below, cast to
                     // `isize`. `EnumDisplayMonitors` blocks until every callback

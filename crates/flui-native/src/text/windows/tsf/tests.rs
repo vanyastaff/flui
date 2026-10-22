@@ -66,13 +66,13 @@ fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
     let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
-    services.enter();
+    let entered = services.enter();
     assert_eq!(
         services.complete_composition(&erased(&store)),
         Ok(CompositionEnd::Deferred)
     );
     services.shutdown();
-    services.leave();
+    services.leave(entered);
     assert_eq!(store.composition(), None, "committed in place");
     assert_eq!(store.text(), "abかな", "keeping the text");
 }
@@ -83,13 +83,13 @@ fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
     let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
-    services.enter();
+    let entered = services.enter();
     assert_eq!(
         services.complete_composition(&erased(&store)),
         Ok(CompositionEnd::Deferred)
     );
     services.close_document();
-    services.leave();
+    services.leave(entered);
     assert_eq!(store.composition(), None, "committed in place");
     assert_eq!(store.text(), "abかな", "keeping the text");
     services.shutdown();
@@ -103,7 +103,7 @@ fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
     let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
-    services.enter();
+    let entered = services.enter();
     TextServices::retire_with_window(Rc::clone(&services));
     assert!(
         matches!(*services.serving.borrow(), Serving::Field(_)),
@@ -113,7 +113,7 @@ fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
         services.complete_composition(&erased(&store)),
         Ok(CompositionEnd::Deferred)
     );
-    services.leave();
+    services.leave(entered);
     assert!(services.is_shut_down(), "shut down once the call returned");
     assert_eq!(
         store.composition(),
@@ -133,14 +133,14 @@ fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
         services.complete_composition(&erased(&b)),
         Err(TextStoreHostError::NotFocused)
     );
-    services.enter();
+    let entered = services.enter();
     services.focus_store(Some(erased(&b)));
     assert_eq!(
         services.complete_composition(&erased(&a)),
         Err(TextStoreHostError::NotFocused),
         "the queued focus change counts"
     );
-    services.leave();
+    services.leave(entered);
     assert!(b.composition().is_some() && a.composition().is_some());
     services.shutdown();
     assert_eq!(
@@ -679,6 +679,41 @@ fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWN
     services.shutdown();
 }
 
+/// A TSF call whose failure escapes its own containment (the poisoning cannot
+/// queue the document's release while the queue is borrowed) is answered by
+/// the entry's boundary, and the entry depth it raised is restored as that
+/// panic unwinds: a host operation afterwards runs at once instead of being
+/// queued behind a call that will never leave. Red-check: pair `enter` and
+/// `leave` by hand again.
+fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
+    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let store = FailingStore::new("ab");
+    services.focus_store(Some(store.clone()));
+    let tsf_store = document_store(&services);
+    let document: &TsfStore_Impl = tsf_store
+        .cast_object_ref::<TsfStore>()
+        .expect("the document's own object");
+    store.fail_lock.set(true);
+    let queue = services.pending.borrow();
+    let answer = catch_unwind(AssertUnwindSafe(|| {
+        document.RequestLock(TS_LF_READ.0 | TS_LF_SYNC)
+    }));
+    drop(queue);
+    let answer = answer.expect("no panic leaves the COM entry");
+    assert_eq!(answer.map_err(|error| error.code()), Err(E_UNEXPECTED));
+    assert_eq!(
+        services.entry_depth.get(),
+        0,
+        "the entry left no depth behind"
+    );
+    services.focus_store(None);
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Nothing),
+        "a host operation after the call runs at once"
+    );
+    services.shutdown();
+}
+
 /// A document's store holds the window's `Rc` state, so it does not claim to
 /// be agile: another apartment reaches it through a proxy to TSF's.
 fn a_document_store_is_bound_to_its_apartment(hwnd: HWND) {
@@ -978,6 +1013,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "poisoned document with a panicking observer retirement",
             a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf,
+        ),
+        (
+            "TSF call failing past its poisoning",
+            a_tsf_call_failing_past_its_poisoning_leaves_no_depth,
         ),
         (
             "queued unfocus with a panicking teardown and diagnostic",

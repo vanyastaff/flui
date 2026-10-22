@@ -88,7 +88,8 @@ mod notices {
             let handler = RcBlock::new(move || {
                 os_entry(
                     "the memory-pressure source",
-                    AfterPanic::Answer(|| ()),
+                    (),
+                    AfterPanic::Answer(|()| ()),
                     || {
                         if let Some(level) = level_of(in_handler.data())
                             && let Some(notices) = notices.upgrade()

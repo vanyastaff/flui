@@ -170,7 +170,8 @@ impl ScreenObserver {
                 // owner, so the whole body runs inside the panic boundary.
                 crate::owner::panic_boundary::os_entry(
                     "the screen observer",
-                    crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                    (),
+                    crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
                     || {
                         if !active.load(Ordering::Acquire) {
                             return;

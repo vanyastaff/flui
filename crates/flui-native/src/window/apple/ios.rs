@@ -143,7 +143,7 @@ define_class!(
     impl FluiView {
         #[unsafe(method(traitCollectionDidChange:))]
         fn trait_collection_did_change(&self, previous: Option<&UITraitCollection>) {
-            os_entry("traitCollectionDidChange:", AfterPanic::Answer(|| ()), || {
+            os_entry("traitCollectionDidChange:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 // SAFETY: UIView's implementation receives the borrowed old traits.
                 let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
@@ -154,7 +154,7 @@ define_class!(
 
         #[unsafe(method(didMoveToWindow))]
         fn did_move_to_window(&self) {
-            os_entry("didMoveToWindow", AfterPanic::Answer(|| ()), || {
+            os_entry("didMoveToWindow", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 // SAFETY: UIView declares this selector and the receiver is pinned.
                 let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
@@ -165,7 +165,7 @@ define_class!(
 
         #[unsafe(method(onPencilHover:))]
         fn on_pencil_hover(&self, recognizer: &UIHoverGestureRecognizer) {
-            os_entry("onPencilHover:", AfterPanic::Answer(|| ()), || {
+            os_entry("onPencilHover:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 if self.window().is_none() { return; }
                 let events = self.ivars().input.borrow_mut().hover(recognizer, self);
@@ -178,7 +178,7 @@ define_class!(
 
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            os_entry("touchesBegan:withEvent:", AfterPanic::Answer(|| ()), || {
+            os_entry("touchesBegan:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 self.dispatch_touches(touches, TouchPhase::Began);
             });
@@ -186,7 +186,7 @@ define_class!(
 
         #[unsafe(method(touchesMoved:withEvent:))]
         fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            os_entry("touchesMoved:withEvent:", AfterPanic::Answer(|| ()), || {
+            os_entry("touchesMoved:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 self.dispatch_touches(touches, TouchPhase::Moved);
             });
@@ -194,7 +194,7 @@ define_class!(
 
         #[unsafe(method(touchesEnded:withEvent:))]
         fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            os_entry("touchesEnded:withEvent:", AfterPanic::Answer(|| ()), || {
+            os_entry("touchesEnded:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 self.dispatch_touches(touches, TouchPhase::Ended);
             });
@@ -202,7 +202,7 @@ define_class!(
 
         #[unsafe(method(touchesCancelled:withEvent:))]
         fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            os_entry("touchesCancelled:withEvent:", AfterPanic::Answer(|| ()), || {
+            os_entry("touchesCancelled:withEvent:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 self.dispatch_touches(touches, TouchPhase::Cancelled);
             });
@@ -210,7 +210,7 @@ define_class!(
 
         #[unsafe(method(layoutSubviews))]
         fn layout_subviews(&self) {
-            os_entry("layoutSubviews", AfterPanic::Answer(|| ()), || {
+            os_entry("layoutSubviews", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 // SAFETY: `super` is the `UIView` implementation of
                 // `layoutSubviews`; calling it is what a correct override does.
@@ -223,7 +223,7 @@ define_class!(
 
         #[unsafe(method(safeAreaInsetsDidChange))]
         fn safe_area_insets_did_change(&self) {
-            os_entry("safeAreaInsetsDidChange", AfterPanic::Answer(|| ()), || {
+            os_entry("safeAreaInsetsDidChange", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 // SAFETY: `super` resolves to the superclass named in the
                 // `#[unsafe(super(UIView))]` declaration above at compile time, so
@@ -241,7 +241,7 @@ define_class!(
         /// The `CADisplayLink` target: one tick per refresh requests a frame.
         #[unsafe(method(onDisplayLink:))]
         fn on_display_link(&self, link: &CADisplayLink) {
-            os_entry("onDisplayLink:", AfterPanic::Answer(|| ()), || {
+            os_entry("onDisplayLink:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 let current = self.ivars().display_link.borrow().as_ref()
                     .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
@@ -1643,7 +1643,7 @@ pub(crate) mod status_bar {
             fn preferred_status_bar_style(&self) -> UIStatusBarStyle {
                 os_entry(
                     "preferredStatusBarStyle",
-                    AfterPanic::Answer(|| UIStatusBarStyle::Default),
+                    (), AfterPanic::Answer(|()| UIStatusBarStyle::Default),
                     || status_bar_style(self.ivars().style.load(Ordering::Acquire)),
                 )
             }
@@ -1652,7 +1652,7 @@ pub(crate) mod status_bar {
             fn preferred_screen_edges_deferring_system_gestures(&self) -> UIRectEdge {
                 os_entry(
                     "preferredScreenEdgesDeferringSystemGestures",
-                    AfterPanic::Answer(UIRectEdge::empty),
+                    (), AfterPanic::Answer(|()| UIRectEdge::empty()),
                     || self.ivars().deferred_edges.get(),
                 )
             }
@@ -1746,8 +1746,9 @@ pub(crate) mod status_bar {
             DispatchQueue::main().exec_async(move || {
                 os_entry(
                     "the status bar's refresh",
-                    AfterPanic::Answer(|| ()),
-                    || {
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    move || {
                         let mtm = MainThreadMarker::new()
                             .expect("BUG: the main queue runs on the main thread");
                         status_bar.refresh(mtm);

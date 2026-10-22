@@ -31,8 +31,9 @@ impl<T: 'static> Drop for NativeOwner<T> {
             DispatchQueue::main().exec_async(move || {
                 crate::owner::panic_boundary::os_entry(
                     "a native owner's drop on main",
-                    crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
-                    || drop(value),
+                    (),
+                    crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
+                    move || drop(value),
                 );
             });
         }

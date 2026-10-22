@@ -554,23 +554,28 @@ pub(crate) mod macos {
         _sel: Sel,
         event: *mut AnyObject,
     ) {
-        os_entry("FLUIContentView's input", AfterPanic::Answer(|| ()), || {
-            // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
-            // on live objects); `event` is a valid NSEvent* for the duration of the
-            // call; `bounds` is a plain NSRect getter.
-            unsafe {
-                if let Some(ctx) = get_context(this) {
-                    let bounds: NSRect = msg_send![this, bounds];
-                    let inputs = ctx
-                        .input
-                        .borrow_mut()
-                        .convert(event.cast::<std::ffi::c_void>(), bounds.size.height);
-                    for input in inputs {
-                        dispatch_input_event(ctx, input);
+        os_entry(
+            "FLUIContentView's input",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
+                // on live objects); `event` is a valid NSEvent* for the duration of the
+                // call; `bounds` is a plain NSRect getter.
+                unsafe {
+                    if let Some(ctx) = get_context(this) {
+                        let bounds: NSRect = msg_send![this, bounds];
+                        let inputs = ctx
+                            .input
+                            .borrow_mut()
+                            .convert(event.cast::<std::ffi::c_void>(), bounds.size.height);
+                        for input in inputs {
+                            dispatch_input_event(ctx, input);
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     /// `keyDown:` — the input-context route while a text input is attached, the
@@ -593,7 +598,7 @@ pub(crate) mod macos {
     /// `interpretKeyEvents:` call, which is the only window in which the input
     /// context can call `doCommandBySelector:` back for this event.
     extern "C-unwind" fn key_down(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
-        os_entry("keyDown:", AfterPanic::Answer(|| ()), || {
+        os_entry("keyDown:", (), AfterPanic::Answer(|()| ()), || {
             // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
             // the duration of the call, and `interpretKeyEvents:` retains it for the
             // span of its own dispatch. The array is created by an NSArray class
@@ -649,7 +654,7 @@ pub(crate) mod macos {
     /// release normally. What is suppressed is exactly the release that lands
     /// inside an open composition.
     extern "C-unwind" fn key_up(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
-        os_entry("keyUp:", AfterPanic::Answer(|| ()), || {
+        os_entry("keyUp:", (), AfterPanic::Answer(|()| ()), || {
             // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
             // on live objects); `event` is a valid NSEvent* for the duration of the
             // call.
@@ -678,7 +683,7 @@ pub(crate) mod macos {
 
     /// mouseEntered: — report hover gained, then forward the pointer event.
     extern "C-unwind" fn mouse_entered(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-        os_entry("mouseEntered:", AfterPanic::Answer(|| ()), || {
+        os_entry("mouseEntered:", (), AfterPanic::Answer(|()| ()), || {
             dispatch_hover_change(this, true);
             handle_input_event(this, sel, event);
         });
@@ -686,7 +691,7 @@ pub(crate) mod macos {
 
     /// mouseExited: — report hover lost, then forward the pointer event.
     extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-        os_entry("mouseExited:", AfterPanic::Answer(|| ()), || {
+        os_entry("mouseExited:", (), AfterPanic::Answer(|()| ()), || {
             dispatch_hover_change(this, false);
             handle_input_event(this, sel, event);
         });
@@ -707,7 +712,7 @@ pub(crate) mod macos {
     ///
     /// [`DisplayPassGuard`]: crate::window::apple::macos::display_pass::DisplayPassGuard
     extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
-        os_entry("drawRect:", AfterPanic::Answer(|| ()), || {
+        os_entry("drawRect:", (), AfterPanic::Answer(|()| ()), || {
             // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
             // is the documented NSView teardown of the dirty region.
             unsafe {
@@ -761,7 +766,8 @@ pub(crate) mod macos {
     extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel: Sel) {
         os_entry(
             "viewDidChangeEffectiveAppearance",
-            AfterPanic::Answer(|| ()),
+            (),
+            AfterPanic::Answer(|()| ()),
             || {
                 // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
                 // thread; the super call is NSView's own (empty) implementation.
@@ -802,19 +808,17 @@ pub(crate) mod macos {
             // =================================================================
 
             // acceptsFirstResponder - Allow view to become first responder
+            // A constant answer runs no code, so it needs no boundary.
             extern "C-unwind" fn accepts_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
-                os_entry(
-                    "acceptsFirstResponder",
-                    AfterPanic::Answer(|| Bool::YES),
-                    || Bool::YES,
-                )
+                Bool::YES
             }
 
             // becomeFirstResponder
             extern "C-unwind" fn become_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
                 os_entry(
                     "becomeFirstResponder",
-                    AfterPanic::Answer(|| Bool::YES),
+                    (),
+                    AfterPanic::Answer(|()| Bool::YES),
                     || {
                         tracing::debug!("FLUIContentView became first responder");
                         Bool::YES
@@ -826,7 +830,8 @@ pub(crate) mod macos {
             extern "C-unwind" fn resign_first_responder(_this: &AnyObject, _sel: Sel) -> Bool {
                 os_entry(
                     "resignFirstResponder",
-                    AfterPanic::Answer(|| Bool::YES),
+                    (),
+                    AfterPanic::Answer(|()| Bool::YES),
                     || {
                         tracing::debug!("FLUIContentView resigned first responder");
                         Bool::YES
@@ -842,7 +847,7 @@ pub(crate) mod macos {
                 _sel: Sel,
                 _event: *mut AnyObject,
             ) {
-                os_entry("flagsChanged:", AfterPanic::Answer(|| ()), || {
+                os_entry("flagsChanged:", (), AfterPanic::Answer(|()| ()), || {
                     tracing::trace!("Modifier flags changed");
                 });
             }
@@ -856,7 +861,8 @@ pub(crate) mod macos {
             extern "C-unwind" fn dealloc(this: &AnyObject, _sel: Sel) {
                 os_entry(
                     "FLUIContentView's dealloc",
-                    AfterPanic::Answer(|| ()),
+                    (),
+                    AfterPanic::Answer(|()| ()),
                     || {
                         // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
                         // in `create_content_view`; reclaiming it here (exactly once, on
@@ -888,17 +894,11 @@ pub(crate) mod macos {
             // =================================================================
 
             extern "C-unwind" fn is_opaque(_this: &AnyObject, _sel: Sel) -> Bool {
-                // Our view is fully opaque
-                os_entry("isOpaque", AfterPanic::Answer(|| Bool::YES), || Bool::YES)
+                Bool::YES // Our view is fully opaque
             }
 
             extern "C-unwind" fn accepts_touch_events(_this: &AnyObject, _sel: Sel) -> Bool {
-                // Accept touch events for future trackpad gestures
-                os_entry(
-                    "acceptsTouchEvents",
-                    AfterPanic::Answer(|| Bool::YES),
-                    || Bool::YES,
-                )
+                Bool::YES // Accept touch events for future trackpad gestures
             }
 
             // =================================================================

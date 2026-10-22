@@ -139,7 +139,8 @@ impl CoreHaptics {
         let stopped = RcBlock::new(move |_reason: CHHapticEngineStoppedReason| {
             os_entry(
                 "the Core Haptics stopped handler",
-                AfterPanic::Answer(|| ()),
+                (),
+                AfterPanic::Answer(|()| ()),
                 || Self::engine_down(&stopped_owner),
             );
         });
@@ -147,7 +148,8 @@ impl CoreHaptics {
         let reset = RcBlock::new(move || {
             os_entry(
                 "the Core Haptics reset handler",
-                AfterPanic::Answer(|| ()),
+                (),
+                AfterPanic::Answer(|()| ()),
                 || Self::engine_down(&reset_owner),
             );
         });
@@ -190,8 +192,9 @@ impl CoreHaptics {
         DispatchQueue::main().exec_async(move || {
             os_entry(
                 "the Core Haptics restart",
-                AfterPanic::Answer(|| ()),
-                || {
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
                     if let Some(core) = owner.upgrade() {
                         core.restart();
                     }
@@ -221,7 +224,8 @@ impl CoreHaptics {
         let completion = RcBlock::new(move |error: *mut NSError| {
             os_entry(
                 "the Core Haptics restart's completion",
-                AfterPanic::Answer(|| ()),
+                (),
+                AfterPanic::Answer(|()| ()),
                 || {
                     let Some(core) = owner.upgrade() else {
                         return;

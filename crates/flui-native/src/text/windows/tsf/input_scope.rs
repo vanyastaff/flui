@@ -136,10 +136,11 @@ use com_object::{SingleScope, SingleScope_Impl};
 
 /// The boundary every vtable method of [`SingleScope`] crosses: a panic
 /// answers `E_UNEXPECTED`.
-fn scope_entry<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
+fn com_method<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
     os_entry(
         "the input scope",
-        AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+        (),
+        AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
         body,
     )
 }
@@ -150,7 +151,7 @@ impl ITfInputScope_Impl for SingleScope_Impl {
         pprginputscopes: *mut *mut InputScope,
         pccount: *mut u32,
     ) -> windows_core::Result<()> {
-        scope_entry(|| {
+        com_method(|| {
             if pprginputscopes.is_null() || pccount.is_null() {
                 return Err(windows::Win32::Foundation::E_POINTER.into());
             }
@@ -175,19 +176,19 @@ impl ITfInputScope_Impl for SingleScope_Impl {
         _ppbstrphrases: *mut *mut BSTR,
         _pccount: *mut u32,
     ) -> windows_core::Result<()> {
-        scope_entry(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetRegularExpression(&self) -> windows_core::Result<BSTR> {
-        scope_entry(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetSRGS(&self) -> windows_core::Result<BSTR> {
-        scope_entry(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 
     fn GetXML(&self) -> windows_core::Result<BSTR> {
-        scope_entry(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 }
 

@@ -1,8 +1,8 @@
 //! The COM objects of OLE drag and drop: the data object and drop source a
 //! session hands `DoDragDrop`, and the drop target each window registers.
 //!
-//! Every vtable method is a boundary: its body runs under [`com_boundary`]
-//! or [`hresult_boundary`], so a panic (a hostile diagnostics subscriber, a
+//! Every vtable method is a boundary: its body runs under [`com_method`]
+//! or [`com_hresult`], so a panic (a hostile diagnostics subscriber, a
 //! provider) never unwinds into OLE; it answers `E_UNEXPECTED` and its
 //! payload is retained.
 
@@ -52,19 +52,21 @@ pub(super) use objects::{
 pub(crate) use objects::WindowDropTarget;
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
-fn com_boundary<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
+fn com_method<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
     os_entry(
         "OLE drag and drop",
-        AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+        (),
+        AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
         body,
     )
 }
 
-/// [`com_boundary`] for a method that answers an `HRESULT` of its own.
-fn hresult_boundary(body: impl FnOnce() -> HRESULT) -> HRESULT {
+/// [`com_method`] for a method that answers an `HRESULT` of its own.
+fn com_hresult(body: impl FnOnce() -> HRESULT) -> HRESULT {
     os_entry(
         "OLE drag and drop",
-        AfterPanic::Answer(|| E_UNEXPECTED),
+        (),
+        AfterPanic::Answer(|()| E_UNEXPECTED),
         body,
     )
 }
@@ -244,7 +246,7 @@ impl Drop for SourceData {
 
 impl IDataObject_Impl for SourceData_Impl {
     fn GetData(&self, format: *const FORMATETC) -> windows_core::Result<STGMEDIUM> {
-        com_boundary(|| {
+        com_method(|| {
             let entry = self.entry(format)?;
             let bytes = self.serve(entry)?;
             let global = write_global(&bytes)?;
@@ -261,18 +263,18 @@ impl IDataObject_Impl for SourceData_Impl {
         _format: *const FORMATETC,
         _medium: *mut STGMEDIUM,
     ) -> windows_core::Result<()> {
-        com_boundary(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 
     fn QueryGetData(&self, format: *const FORMATETC) -> HRESULT {
-        hresult_boundary(|| {
+        com_hresult(|| {
             self.entry(format)
                 .map_or_else(|error| error.code(), |_| S_OK)
         })
     }
 
     fn GetCanonicalFormatEtc(&self, _in: *const FORMATETC, out: *mut FORMATETC) -> HRESULT {
-        hresult_boundary(|| {
+        com_hresult(|| {
             // SAFETY: OLE passes a writable `FORMATETC`, or null.
             if let Some(out) = unsafe { out.as_mut() } {
                 out.ptd = std::ptr::null_mut();
@@ -287,11 +289,11 @@ impl IDataObject_Impl for SourceData_Impl {
         _medium: *const STGMEDIUM,
         _release: BOOL,
     ) -> windows_core::Result<()> {
-        com_boundary(|| Err(E_NOTIMPL.into()))
+        com_method(|| Err(E_NOTIMPL.into()))
     }
 
     fn EnumFormatEtc(&self, direction: u32) -> windows_core::Result<IEnumFORMATETC> {
-        com_boundary(|| {
+        com_method(|| {
             if direction != DATADIR_GET.0 as u32 {
                 return Err(E_NOTIMPL.into());
             }
@@ -310,21 +312,21 @@ impl IDataObject_Impl for SourceData_Impl {
         _advf: u32,
         _sink: Ref<'_, IAdviseSink>,
     ) -> windows_core::Result<u32> {
-        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
+        com_method(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 
     fn DUnadvise(&self, _connection: u32) -> windows_core::Result<()> {
-        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
+        com_method(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 
     fn EnumDAdvise(&self) -> windows_core::Result<IEnumSTATDATA> {
-        com_boundary(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
+        com_method(|| Err(OLE_E_ADVISENOTSUPPORTED.into()))
     }
 }
 
 impl IEnumFORMATETC_Impl for FormatList_Impl {
     fn Next(&self, count: u32, out: *mut FORMATETC, fetched: *mut u32) -> HRESULT {
-        hresult_boundary(|| {
+        com_hresult(|| {
             let start = self.next.get().min(self.formats.len());
             let wanted = usize::try_from(count).unwrap_or(usize::MAX);
             let take = wanted.min(self.formats.len() - start);
@@ -345,7 +347,7 @@ impl IEnumFORMATETC_Impl for FormatList_Impl {
     }
 
     fn Skip(&self, count: u32) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             let skipped = self
                 .next
                 .get()
@@ -356,14 +358,14 @@ impl IEnumFORMATETC_Impl for FormatList_Impl {
     }
 
     fn Reset(&self) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             self.next.set(0);
             Ok(())
         })
     }
 
     fn Clone(&self) -> windows_core::Result<IEnumFORMATETC> {
-        com_boundary(|| {
+        com_method(|| {
             Ok(FormatList {
                 formats: Rc::clone(&self.formats),
                 next: Cell::new(self.next.get()),
@@ -382,7 +384,7 @@ impl DropSource {
 
 impl IDropSource_Impl for DropSource_Impl {
     fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
-        hresult_boundary(
+        com_hresult(
             || match continue_drag(escape.as_bool(), keys.0, self.began) {
                 DragContinuation::Continue => S_OK,
                 DragContinuation::Drop => DRAGDROP_S_DROP,
@@ -392,7 +394,7 @@ impl IDropSource_Impl for DropSource_Impl {
     }
 
     fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
-        hresult_boundary(|| DRAGDROP_S_USEDEFAULTCURSORS)
+        DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
 
@@ -472,7 +474,7 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             let effect = effect_slot(effect)?;
             let allowed = actions_of(effect.0);
             *effect = DROPEFFECT_NONE;
@@ -511,7 +513,7 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             let effect = effect_slot(effect)?;
             let allowed = actions_of(effect.0);
             *effect = DROPEFFECT_NONE;
@@ -540,7 +542,7 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
     }
 
     fn DragLeave(&self) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             self.leave();
             Ok(())
         })
@@ -553,7 +555,7 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        com_boundary(|| {
+        com_method(|| {
             let effect = effect_slot(effect)?;
             let allowed = actions_of(effect.0);
             *effect = DROPEFFECT_NONE;

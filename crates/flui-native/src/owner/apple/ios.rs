@@ -344,21 +344,26 @@ impl IOSLoop {
         let signal = OwnerSignal::new(Arc::new(move || {
             let identity = Arc::clone(&signal_identity);
             dispatch2::DispatchQueue::main().exec_async(move || {
-                os_entry("the UIKit owner turn", AfterPanic::Answer(|| ()), || {
-                    FluiAppDelegate::with_platform(|platform| {
-                        if Arc::ptr_eq(&platform.identity, &identity) {
-                            let quitting = platform.signal.drive();
-                            platform.poll_scene_installation();
-                            if quitting {
-                                platform.finish_quit();
-                            } else {
-                                crate::owner::panic_boundary::contain_owner_callback(|| {
-                                    platform.arm_deadline();
-                                });
+                os_entry(
+                    "the UIKit owner turn",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    move || {
+                        FluiAppDelegate::with_platform(|platform| {
+                            if Arc::ptr_eq(&platform.identity, &identity) {
+                                let quitting = platform.signal.drive();
+                                platform.poll_scene_installation();
+                                if quitting {
+                                    platform.finish_quit();
+                                } else {
+                                    crate::owner::panic_boundary::contain_owner_callback(|| {
+                                        platform.arm_deadline();
+                                    });
+                                }
                             }
-                        }
-                    });
-                });
+                        });
+                    },
+                );
             });
             Ok(())
         }));
@@ -547,8 +552,9 @@ impl IOSLoop {
         let _ = dispatch2::DispatchQueue::main().after(when, move || {
             os_entry(
                 "the UIKit owner deadline",
-                AfterPanic::Answer(|| ()),
-                || {
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
                     FluiAppDelegate::with_platform(|platform| {
                         if !Arc::ptr_eq(&platform.identity, &identity) {
                             return;
@@ -852,7 +858,7 @@ define_class!(
             // A bootstrap that panicked did not launch.
             os_entry(
                 "application:didFinishLaunchingWithOptions:",
-                AfterPanic::Answer(|| false),
+                (), AfterPanic::Answer(|()| false),
                 run_pending_bootstrap,
             )
         }
@@ -861,7 +867,7 @@ define_class!(
         /// none to give, so the process ends.
         #[unsafe(method_id(application:configurationForConnectingSceneSession:options:))]
         fn configuration(&self, _application: &UIApplication, session: &UISceneSession, _options: &AnyObject) -> Retained<UISceneConfiguration> {
-            os_entry("application:configurationForConnectingSceneSession:options:", AfterPanic::Abort, || {
+            os_entry("application:configurationForConnectingSceneSession:options:", (), AfterPanic::Abort, || {
                 let marker = MainThreadMarker::new().expect("BUG: UIKit delegate runs on main");
                 let configuration = UISceneConfiguration::initWithName_sessionRole(marker.alloc(), Some(&NSString::from_str("FLUI")), &session.role());
                 // SAFETY: the registered class implements UISceneDelegate.
@@ -872,7 +878,7 @@ define_class!(
 
         #[unsafe(method(application:didDiscardSceneSessions:))]
         fn discarded(&self, _application: &UIApplication, sessions: &NSSet<UISceneSession>) {
-            os_entry("application:didDiscardSceneSessions:", AfterPanic::Answer(|| ()), || {
+            os_entry("application:didDiscardSceneSessions:", (), AfterPanic::Answer(|()| ()), || {
                 Self::with_platform(|platform| {
                     for session in sessions { platform.enqueue(SceneAction::Discard(IOSSceneSessionId(session.persistentIdentifier().to_string()), false)); }
                 });
@@ -886,7 +892,7 @@ define_class!(
         /// "after `run`" for the runner to use. Each step is contained apart.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _application: &UIApplication) {
-            os_entry("applicationWillTerminate:", AfterPanic::Answer(|| ()), || {
+            os_entry("applicationWillTerminate:", (), AfterPanic::Answer(|()| ()), || {
                 crate::owner::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — ending the session, then firing the quit handler"));
                 Self::with_platform(IOSLoop::announce_session_end);
                 Self::with_platform(IOSLoop::finish_quit);
@@ -897,7 +903,7 @@ define_class!(
         /// system is close to terminating it.
         #[unsafe(method(applicationDidReceiveMemoryWarning:))]
         fn did_receive_memory_warning(&self, _application: &UIApplication) {
-            os_entry("applicationDidReceiveMemoryWarning:", AfterPanic::Answer(|| ()), || {
+            os_entry("applicationDidReceiveMemoryWarning:", (), AfterPanic::Answer(|()| ()), || {
                 Self::with_platform(IOSLoop::warn_of_memory_pressure);
             });
         }
@@ -1429,7 +1435,7 @@ pub(crate) fn request_close(id: WindowId) {
         close();
     } else {
         dispatch2::DispatchQueue::main().exec_async(move || {
-            os_entry("a scene close", AfterPanic::Answer(|| ()), close);
+            os_entry("a scene close", (), AfterPanic::Answer(|()| ()), close);
         });
     }
 }
@@ -1450,7 +1456,7 @@ define_class!(
         /// so the process ends.
         #[unsafe(method_id(init))]
         fn init(this: Allocated<Self>) -> Retained<Self> {
-            os_entry("FluiSceneDelegate's init", AfterPanic::Abort, || {
+            os_entry("FluiSceneDelegate's init", (), AfterPanic::Abort, || {
                 let this = this.set_ivars(SceneDelegateIvars { origin: RefCell::new(None) });
                 // SAFETY: `NSObject`'s `init` on the allocated receiver whose
                 // Rust ivars were set just above, as `define_class!` requires.
@@ -1459,7 +1465,7 @@ define_class!(
         }
         #[unsafe(method(scene:willConnectToSession:options:))]
         fn connect(&self, scene: &UIScene, _session: &UISceneSession, _options: &AnyObject) {
-            os_entry("scene:willConnectToSession:options:", AfterPanic::Answer(|| ()), || {
+            os_entry("scene:willConnectToSession:options:", (), AfterPanic::Answer(|()| ()), || {
                 FluiAppDelegate::with_platform(|platform| {
                     if let Some(scene) = scene.downcast_ref::<UIWindowScene>() {
                         let origin = platform.connect(scene);
@@ -1472,15 +1478,15 @@ define_class!(
             });
         }
         #[unsafe(method(sceneDidDisconnect:))]
-        fn disconnect(&self, scene: &UIScene) { self.send(scene, SceneAction::Disconnect); }
+        fn disconnect(&self, scene: &UIScene) { Self::scene_event(self, scene, SceneAction::Disconnect); }
         #[unsafe(method(sceneDidBecomeActive:))]
-        fn active(&self, scene: &UIScene) { self.send(scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Active)); }
+        fn active(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Active)); }
         #[unsafe(method(sceneWillResignActive:))]
-        fn inactive(&self, scene: &UIScene) { self.send(scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Inactive)); }
+        fn inactive(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Inactive)); }
         #[unsafe(method(sceneDidEnterBackground:))]
-        fn background(&self, scene: &UIScene) { self.send(scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Background)); }
+        fn background(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Background)); }
         #[unsafe(method(sceneWillEnterForeground:))]
-        fn foreground(&self, scene: &UIScene) { self.send(scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Foreground)); }
+        fn foreground(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Foreground)); }
     }
     unsafe impl NSObjectProtocol for FluiSceneDelegate {}
     unsafe impl UISceneDelegate for FluiSceneDelegate {}
@@ -1488,22 +1494,27 @@ define_class!(
 impl FluiSceneDelegate {
     /// The boundary of the scene's lifecycle methods: `action` of the scene's
     /// origin is queued, while the scene is the one this delegate connected.
-    fn send(&self, scene: &UIScene, action: impl FnOnce(SceneOrigin) -> SceneAction) {
-        os_entry("a UIKit scene event", AfterPanic::Answer(|| ()), || {
-            use objc2::DefinedClass;
-            let origin = self
-                .ivars()
-                .origin
-                .borrow()
-                .as_ref()
-                .and_then(|(origin, weak)| {
-                    weak.load()
-                        .filter(|current| std::ptr::eq::<UIScene>(&raw const **current, scene))
-                        .map(|_| origin.clone())
-                });
-            if let Some(origin) = origin {
-                FluiAppDelegate::with_platform(|platform| platform.enqueue(action(origin)));
-            }
-        });
+    fn scene_event(&self, scene: &UIScene, action: impl FnOnce(SceneOrigin) -> SceneAction) {
+        os_entry(
+            "a UIKit scene event",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                use objc2::DefinedClass;
+                let origin = self
+                    .ivars()
+                    .origin
+                    .borrow()
+                    .as_ref()
+                    .and_then(|(origin, weak)| {
+                        weak.load()
+                            .filter(|current| std::ptr::eq::<UIScene>(&raw const **current, scene))
+                            .map(|_| origin.clone())
+                    });
+                if let Some(origin) = origin {
+                    FluiAppDelegate::with_platform(|platform| platform.enqueue(action(origin)));
+                }
+            },
+        );
     }
 }

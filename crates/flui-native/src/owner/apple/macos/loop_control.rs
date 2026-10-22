@@ -27,7 +27,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
-    owner::panic_boundary::{AfterPanic, os_entry},
+    owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
 };
 use flui_platform::PlatformWindow;
 
@@ -148,6 +148,14 @@ impl LoopControl {
         });
     }
 
+    /// Whether a session end is announced or its reply owed: a terminate
+    /// request whose handling panicked lets it go on.
+    fn session_ending(&self) -> bool {
+        self.terminate_gate
+            .try_lock()
+            .is_some_and(|gate| gate.session_ending())
+    }
+
     /// `applicationShouldTerminate:`. A quit nobody announced goes through the
     /// run loop's orderly stop and is cancelled here; a session end is answered
     /// at once, or after the application releases its holds.
@@ -159,7 +167,11 @@ impl LoopControl {
                 NSApplicationTerminateReply::TerminateCancel
             }
             Termination::Now => {
-                self.finish_session_end(Reply::AlreadyAnswered);
+                // The session ends whatever telling the application raised:
+                // contained apart, so a panic there cannot cancel the logout.
+                contain_os_entry("applicationShouldTerminate:", || {
+                    self.finish_session_end(Reply::AlreadyAnswered);
+                });
                 NSApplicationTerminateReply::TerminateNow
             }
             Termination::Later { epoch } => {
@@ -181,8 +193,9 @@ impl LoopControl {
         owner_queue().exec_after(delay, move || {
             os_entry(
                 "a deferred owner-lane task",
-                AfterPanic::Answer(|| ()),
-                || {
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
                     if let Some(control) = weak.upgrade() {
                         body(&control);
                     }
@@ -509,7 +522,7 @@ define_class!(
         fn should_reopen(&self, _app: &NSApplication, _has_visible_windows: bool) -> bool {
             os_entry(
                 "applicationShouldHandleReopen:hasVisibleWindows:",
-                AfterPanic::Answer(|| false),
+                (), AfterPanic::Answer(|()| false),
                 || {
                     if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
                     false
@@ -519,13 +532,15 @@ define_class!(
 
         // An ordinary quit never runs user teardown inside the Objective-C
         // callback: it queues the request and cancels this one. A session
-        // end is answered here, since the system waits for the answer. A
-        // panic cancels the termination.
+        // end is answered here, since the system waits for the answer. After
+        // a panic, a session end goes on and any other quit is cancelled
+        // (`reply_after_panic`).
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
             os_entry(
                 "applicationShouldTerminate:",
-                AfterPanic::Answer(|| NSApplicationTerminateReply::TerminateCancel),
+                self,
+                AfterPanic::Answer(reply_after_panic),
                 || {
                     self.ivars().upgrade().map_or(
                         NSApplicationTerminateReply::TerminateCancel,
@@ -536,6 +551,28 @@ define_class!(
         }
     }
 );
+
+/// What a log of the delegate's entries shows: which object it is.
+impl std::fmt::Debug for LoopDelegate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoopDelegate").finish_non_exhaustive()
+    }
+}
+
+/// What `applicationShouldTerminate:` answers when its handling panicked: a
+/// session end goes on, since cancelling it holds the user's logout up; any
+/// other quit is cancelled, as an ordinary one is.
+fn reply_after_panic(delegate: &LoopDelegate) -> NSApplicationTerminateReply {
+    if delegate
+        .ivars()
+        .upgrade()
+        .is_some_and(|control| control.session_ending())
+    {
+        NSApplicationTerminateReply::TerminateNow
+    } else {
+        NSApplicationTerminateReply::TerminateCancel
+    }
+}
 
 /// Scope guard retains the non-owning delegate until after cleanup and detachment.
 pub(super) struct LoopOwnership {

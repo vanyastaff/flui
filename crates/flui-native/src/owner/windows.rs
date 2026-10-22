@@ -1047,11 +1047,16 @@ impl WindowsLoop {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        panic_boundary::os_entry("FLUI's window procedure", AfterPanic::Abort, || {
-            // SAFETY: arguments forwarded verbatim from Win32's dispatch of
-            // this registered `WNDPROC` — see `# Safety` above.
-            unsafe { dispatch_window_message::<H>(hwnd, msg, wparam, lparam) }
-        })
+        panic_boundary::os_entry(
+            "FLUI's window procedure",
+            (msg, hwnd),
+            AfterPanic::Abort,
+            || {
+                // SAFETY: arguments forwarded verbatim from Win32's dispatch of
+                // this registered `WNDPROC` — see `# Safety` above.
+                unsafe { dispatch_window_message::<H>(hwnd, msg, wparam, lparam) }
+            },
+        )
     }
 
     /// Run the Windows message loop (internal implementation)

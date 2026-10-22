@@ -155,13 +155,14 @@ mod handler {
         /// The boundary every callback crosses: `read` makes the reading the
         /// callback reports, if any, and a panic must not unwind into the
         /// system. A queue borrowed elsewhere drops the reading.
-        fn entry(
+        fn com_method(
             &self,
             read: impl FnOnce() -> Option<ViewportReading>,
         ) -> windows_core::Result<()> {
             os_entry(
                 "a DirectManipulation viewport handler",
-                AfterPanic::Answer(|| Err(E_UNEXPECTED.into())),
+                (),
+                AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
                 || {
                     if let Some(reading) = read()
                         && let Ok(mut queue) = self.queue.try_borrow_mut()
@@ -181,14 +182,16 @@ mod handler {
             current: DIRECTMANIPULATION_STATUS,
             _previous: DIRECTMANIPULATION_STATUS,
         ) -> windows_core::Result<()> {
-            self.entry(|| ViewportStatus::from_raw(current.0).map(ViewportReading::Status))
+            Handler::com_method(self, || {
+                ViewportStatus::from_raw(current.0).map(ViewportReading::Status)
+            })
         }
 
         fn OnViewportUpdated(
             &self,
             _viewport: Ref<'_, IDirectManipulationViewport>,
         ) -> windows_core::Result<()> {
-            self.entry(|| None)
+            Handler::com_method(self, || None)
         }
 
         fn OnContentUpdated(
@@ -196,7 +199,7 @@ mod handler {
             _viewport: Ref<'_, IDirectManipulationViewport>,
             content: Ref<'_, IDirectManipulationContent>,
         ) -> windows_core::Result<()> {
-            self.entry(|| {
+            Handler::com_method(self, || {
                 let mut matrix = [0.0_f32; 6];
                 if let Some(content) = content.as_ref() {
                     // SAFETY: `matrix` is a live, writable array of the six

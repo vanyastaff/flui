@@ -363,7 +363,8 @@ pub(crate) mod source {
     unsafe extern "C" fn on_refresh_rate(period_nanos: i64, data: *mut c_void) {
         os_entry(
             "the choreographer's refresh-rate callback",
-            AfterPanic::Answer(|| ()),
+            (),
+            AfterPanic::Answer(|()| ()),
             || {
                 // SAFETY: `data` is the `Arc<Invalidator>` pointer registered with
                 // this callback, which stays allocated until the callback is

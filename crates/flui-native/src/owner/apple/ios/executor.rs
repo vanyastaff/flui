@@ -31,7 +31,8 @@ impl PlatformExecutor for IOSExecutor {
         .exec_async(move || {
             crate::owner::panic_boundary::os_entry(
                 "a background task",
-                crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                (),
+                crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
                 task,
             );
         });

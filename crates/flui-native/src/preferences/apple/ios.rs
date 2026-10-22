@@ -126,7 +126,8 @@ impl IOSPreferences {
             // any callback captures inside the panic boundary.
             crate::owner::panic_boundary::os_entry(
                 "the preference observer",
-                crate::owner::panic_boundary::AfterPanic::Answer(|| ()),
+                (),
+                crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
                 || {
                     if callback_active.load(Ordering::Acquire)
                         && let Some(signal) = signal.upgrade()

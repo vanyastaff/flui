@@ -318,7 +318,7 @@ impl JavaView {
         self.app.run_on_java_main_thread(Box::new(move || {
             // Contained here, not by the main-thread loop around this closure,
             // which would swallow the panic before `failed` ran.
-            let worked = contained("a FluiView call", || {
+            let worked = jni_native("a FluiView call", || {
                 this.view().is_some_and(|view| {
                     this.attached(|env| call(env, view.as_ref()))
                         .inspect_err(|error| {
@@ -650,8 +650,8 @@ fn bridge(handle: jlong) -> Option<Arc<JavaView>> {
 
 /// Run a native method's body, containing a panic before it reaches the JVM:
 /// the method then answers its type's default.
-fn contained<T: Default>(method: &'static str, body: impl FnOnce() -> T) -> T {
-    os_entry(method, AfterPanic::Answer(T::default), body)
+fn jni_native<T: Default>(method: &'static str, body: impl FnOnce() -> T) -> T {
+    os_entry(method, (), AfterPanic::Answer(|()| T::default()), body)
 }
 
 fn strings(env: &mut Env<'_>, array: &JObjectArray<'_>) -> jni::errors::Result<Vec<String>> {
@@ -689,7 +689,7 @@ extern "system" fn native_drag<'local>(
     local: jboolean,
     result: jboolean,
 ) -> jboolean {
-    contained("nativeDrag", || {
+    jni_native("nativeDrag", || {
         let Some(view) = bridge(handle) else {
             return false;
         };
@@ -721,7 +721,7 @@ extern "system" fn native_drop<'local>(
     html: JString<'local>,
     uris: JObjectArray<'local>,
 ) -> jlong {
-    contained("nativeDrop", || {
+    jni_native("nativeDrop", || {
         let Some(view) = bridge(handle) else {
             return 0;
         };
@@ -760,7 +760,7 @@ extern "system" fn native_ime_state<'local>(
     composition_end: jint,
     generation: jint,
 ) {
-    contained("nativeImeState", || {
+    jni_native("nativeImeState", || {
         let Some(view) = bridge(handle) else {
             return;
         };
@@ -788,7 +788,7 @@ extern "system" fn native_ime_action<'local>(
     action: jint,
     uptime_ms: jlong,
 ) {
-    contained("nativeImeAction", || {
+    jni_native("nativeImeAction", || {
         if let Some(view) = bridge(handle) {
             view.reply(view.input_method.editor_action(action, uptime_ms));
         }
@@ -801,7 +801,7 @@ extern "system" fn native_ime_cursor_updates<'local>(
     handle: jlong,
     mode: jint,
 ) {
-    contained("nativeImeCursorUpdates", || {
+    jni_native("nativeImeCursorUpdates", || {
         if let Some(view) = bridge(handle) {
             view.reply(view.input_method.cursor_updates(mode));
         }
@@ -813,7 +813,7 @@ extern "system" fn native_settings_changed<'local>(
     _class: JClass<'local>,
     handle: jlong,
 ) {
-    contained("nativeSettingsChanged", || {
+    jni_native("nativeSettingsChanged", || {
         if let Some(view) = bridge(handle) {
             view.push_event(ViewEvent::SettingsChanged);
         }
@@ -825,7 +825,7 @@ extern "system" fn native_insets_changed<'local>(
     _class: JClass<'local>,
     handle: jlong,
 ) {
-    contained("nativeInsetsChanged", || {
+    jni_native("nativeInsetsChanged", || {
         if let Some(view) = bridge(handle) {
             view.push_event(ViewEvent::InsetsChanged);
         }

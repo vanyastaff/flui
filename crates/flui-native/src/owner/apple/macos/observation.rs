@@ -40,11 +40,16 @@ impl Observation {
         let block = {
             let active = Arc::clone(&active);
             RcBlock::new(move |_: NonNull<NSNotification>| {
-                os_entry("a notification observer", AfterPanic::Answer(|| ()), || {
-                    if active.load(Ordering::Acquire) {
-                        handler();
-                    }
-                });
+                os_entry(
+                    "a notification observer",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    || {
+                        if active.load(Ordering::Acquire) {
+                            handler();
+                        }
+                    },
+                );
             })
         };
         // SAFETY: no object filter and no queue, so the block runs on the

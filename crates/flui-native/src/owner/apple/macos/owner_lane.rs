@@ -158,7 +158,7 @@ pub(crate) fn exec_on_owner<R: Send>(
         // infallible (`Cell::set`); were it to, the lane's state is torn and
         // the process ends.
         let result = owner.exec_sync(move || {
-            os_entry("the owner lane", AfterPanic::Abort, || {
+            os_entry("the owner lane", (), AfterPanic::Abort, move || {
                 let _guard = OnOwnerQueueGuard::new(owner);
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
             })
@@ -196,8 +196,9 @@ pub(crate) fn exec_async_guarded(
     owner.exec_async(move || {
         os_entry(
             "an owner-lane teardown tail",
-            AfterPanic::Answer(|| ()),
-            || {
+            (),
+            AfterPanic::Answer(|()| ()),
+            move || {
                 let _guard = OnOwnerQueueGuard::new(owner);
                 f();
             },

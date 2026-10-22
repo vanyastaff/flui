@@ -179,8 +179,9 @@ impl WakePump {
         owner_queue().exec_after(delay, move || {
             os_entry(
                 "the AppKit wake pump's tick",
-                AfterPanic::Answer(|| ()),
-                || {
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
                     pump.fire(generation);
                 },
             );
@@ -191,13 +192,18 @@ impl WakePump {
     ///
     /// A tick whose hook or wake panics stops the chain the way
     /// [`TickPlan::Stop`] does, so the next `arm` schedules again instead of
-    /// reading the failed tick as still queued.
+    /// reading the failed tick as still queued; a newer tick the hook
+    /// scheduled before it panicked stays queued.
     fn fire(self: &Arc<Self>, generation: u64) {
         if self.generation.load(Ordering::Acquire) != generation {
             // A later arm superseded this tick; it owns the deadline now.
             return;
         }
-        let unfinished = StopUnlessFinished(Some(&self.pending_at));
+        let unfinished = StopUnlessFinished(Some(Tick {
+            pump: self,
+            generation,
+            pending_at: self.pending_at.load(Ordering::Acquire),
+        }));
         self.run_tick();
         unfinished.finish();
     }
@@ -248,9 +254,19 @@ impl WakePump {
     }
 }
 
+/// The tick a [`StopUnlessFinished`] guards: its generation and the
+/// `pending_at` it found.
+struct Tick<'a> {
+    pump: &'a WakePump,
+    generation: u64,
+    pending_at: u64,
+}
+
 /// Clears [`WakePump::pending_at`] when dropped before [`Self::finish`]: a tick
-/// that unwound has scheduled nothing, so no tick is queued.
-struct StopUnlessFinished<'a>(Option<&'a AtomicU64>);
+/// that unwound has scheduled nothing, so no tick is queued, unless the hook
+/// scheduled a newer one before it panicked (a new generation and instant),
+/// which stays.
+struct StopUnlessFinished<'a>(Option<Tick<'a>>);
 
 impl StopUnlessFinished<'_> {
     /// The tick ran to its end and left `pending_at` as its plan set it.
@@ -261,8 +277,15 @@ impl StopUnlessFinished<'_> {
 
 impl Drop for StopUnlessFinished<'_> {
     fn drop(&mut self) {
-        if let Some(pending_at) = self.0 {
-            pending_at.store(0, Ordering::Release);
+        if let Some(tick) = self.0.take()
+            && tick.pump.generation.load(Ordering::Acquire) == tick.generation
+        {
+            let _ = tick.pump.pending_at.compare_exchange(
+                tick.pending_at,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
         }
     }
 }
@@ -361,6 +384,46 @@ mod tests {
             pump.pending_at.load(Ordering::Acquire),
             0,
             "the failed tick still reads as queued"
+        );
+    }
+
+    /// A hook that scheduled a newer tick before it panicked keeps that tick:
+    /// only the failed tick stops reading as queued. Red-check: clear
+    /// `pending_at` without comparing the generation and instant.
+    #[test]
+    fn a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick() {
+        use std::sync::atomic::AtomicBool;
+
+        let pump = silent_pump();
+        let weak = Arc::downgrade(&pump);
+        let rearmed = AtomicBool::new(false);
+        pump.handlers.lock().wake_deadline =
+            Some(Arc::new(move || -> Option<web_time::Instant> {
+                if !rearmed.swap(true, Ordering::AcqRel)
+                    && let Some(pump) = weak.upgrade()
+                {
+                    pump.schedule(web_time::Instant::now() + Duration::from_millis(50));
+                }
+                panic!("a wake hook that re-armed, then failed")
+            }));
+        pump.pending_at.store(
+            micros_since_base(web_time::Instant::now() + Duration::from_millis(5)),
+            Ordering::Release,
+        );
+        let generation = pump.generation.load(Ordering::Acquire);
+
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pump.fire(generation);
+        }));
+
+        assert!(
+            fired.is_err(),
+            "the hook's panic reaches the tick's boundary"
+        );
+        assert_ne!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "the newer tick the hook scheduled no longer reads as queued"
         );
     }
 }

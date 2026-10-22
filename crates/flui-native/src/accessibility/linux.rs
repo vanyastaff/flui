@@ -60,7 +60,8 @@ impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         os_entry(
             "AccessKit's activation",
-            AfterPanic::Answer(|| None),
+            (),
+            AfterPanic::Answer(|()| None),
             || {
                 // Order matters: mark active and tell the composition root *before*
                 // reading `latest`. The listener typically enables semantics, and on a
@@ -80,7 +81,8 @@ impl DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {
         os_entry(
             "AccessKit's deactivation",
-            AfterPanic::Answer(|| ()),
+            (),
+            AfterPanic::Answer(|()| ()),
             || {
                 self.0.notify_activation(false);
             },
@@ -92,9 +94,14 @@ struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
-        os_entry("an AccessKit action", AfterPanic::Answer(|| ()), || {
-            self.0.notify_action(request);
-        });
+        os_entry(
+            "an AccessKit action",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                self.0.notify_action(request);
+            },
+        );
     }
 }
 

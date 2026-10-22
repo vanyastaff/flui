@@ -260,7 +260,8 @@ impl PreferenceSource {
                 .TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
                     os_entry(
                         "the text-scale delegate",
-                        AfterPanic::Answer(|| Ok(())),
+                        (),
+                        AfterPanic::Answer(|()| Ok(())),
                         || {
                             text.notify();
                             Ok(())
@@ -276,7 +277,8 @@ impl PreferenceSource {
                 .AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
                     os_entry(
                         "the animations delegate",
-                        AfterPanic::Answer(|| Ok(())),
+                        (),
+                        AfterPanic::Answer(|()| Ok(())),
                         || {
                             motion.notify();
                             Ok(())

@@ -2200,7 +2200,7 @@ unsafe extern "system" fn cloak_changed(
     // The visibility callback is user code. As in `window_proc`, the state
     // behind a panic mid-dispatch may be torn: it is logged, then the process
     // aborts.
-    os_entry("the cloak-change hook", AfterPanic::Abort, || {
+    os_entry("the cloak-change hook", hwnd, AfterPanic::Abort, || {
         if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
             return;
         }

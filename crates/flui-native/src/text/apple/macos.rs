@@ -297,7 +297,8 @@ extern "C-unwind" fn insert_text(
     // call, and its bytes are copied before this function returns.
     os_entry(
         "insertText:replacementRange:",
-        AfterPanic::Answer(|| ()),
+        (),
+        AfterPanic::Answer(|()| ()),
         || unsafe {
             let Some(ctx) = get_view_context(this) else {
                 return;
@@ -332,7 +333,8 @@ extern "C-unwind" fn set_marked_text(
     // the live argument for the duration of the call, copied out immediately.
     os_entry(
         "setMarkedText:selectedRange:replacementRange:",
-        AfterPanic::Answer(|| ()),
+        (),
+        AfterPanic::Answer(|()| ()),
         || unsafe {
             let Some(ctx) = get_view_context(this) else {
                 return;
@@ -370,7 +372,7 @@ extern "C-unwind" fn set_marked_text(
 /// callback needs no `hasMarkedText` check of its own.
 extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry("unmarkText", AfterPanic::Answer(|| ()), || unsafe {
+    os_entry("unmarkText", (), AfterPanic::Answer(|()| ()), || unsafe {
         if let Some(ctx) = get_view_context(this) {
             ctx.text_input.borrow_mut().clear_marked_text();
             emit_ime(
@@ -389,7 +391,8 @@ extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
     os_entry(
         "hasMarkedText",
-        AfterPanic::Answer(|| Bool::NO),
+        (),
+        AfterPanic::Answer(|()| Bool::NO),
         || unsafe {
             match get_view_context(this) {
                 Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => Bool::YES,
@@ -407,17 +410,22 @@ fn not_found() -> NSRange {
 /// `markedRange` — the range of the composition, in UTF-16 units.
 extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry("markedRange", AfterPanic::Answer(not_found), || unsafe {
-        let Some(ctx) = get_view_context(this) else {
-            return not_found();
-        };
-        let state = ctx.text_input.borrow();
-        if state.marked_text.is_empty() {
-            not_found()
-        } else {
-            NSRange::new(state.marked_range.0, state.marked_range.1)
-        }
-    })
+    os_entry(
+        "markedRange",
+        (),
+        AfterPanic::Answer(|()| not_found()),
+        || unsafe {
+            let Some(ctx) = get_view_context(this) else {
+                return not_found();
+            };
+            let state = ctx.text_input.borrow();
+            if state.marked_text.is_empty() {
+                not_found()
+            } else {
+                NSRange::new(state.marked_range.0, state.marked_range.1)
+            }
+        },
+    )
 }
 
 /// `selectedRange` — the caret's range within the composition.
@@ -427,17 +435,22 @@ extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
 /// documents that pair as "no selection".
 extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry("selectedRange", AfterPanic::Answer(not_found), || unsafe {
-        let Some(ctx) = get_view_context(this) else {
-            return not_found();
-        };
-        let state = ctx.text_input.borrow();
-        if state.marked_text.is_empty() {
-            not_found()
-        } else {
-            NSRange::new(state.selected_range.0, state.selected_range.1)
-        }
-    })
+    os_entry(
+        "selectedRange",
+        (),
+        AfterPanic::Answer(|()| not_found()),
+        || unsafe {
+            let Some(ctx) = get_view_context(this) else {
+                return not_found();
+            };
+            let state = ctx.text_input.borrow();
+            if state.marked_text.is_empty() {
+                not_found()
+            } else {
+                NSRange::new(state.selected_range.0, state.selected_range.1)
+            }
+        },
+    )
 }
 
 /// `validAttributesForMarkedText` — the attributes this view honours.
@@ -452,7 +465,8 @@ extern "C-unwind" fn valid_attributes_for_marked_text(
     // always provides; it returns an autoreleased empty array.
     os_entry(
         "validAttributesForMarkedText",
-        AfterPanic::Answer(std::ptr::null_mut),
+        (),
+        AfterPanic::Answer(|()| std::ptr::null_mut()),
         || unsafe { msg_send![objc2::class!(NSArray), array] },
     )
 }
@@ -470,7 +484,8 @@ extern "C-unwind" fn attributed_substring_for_proposed_range(
 ) -> *mut AnyObject {
     os_entry(
         "attributedSubstringForProposedRange:actualRange:",
-        AfterPanic::Answer(std::ptr::null_mut),
+        (),
+        AfterPanic::Answer(|()| std::ptr::null_mut()),
         || {
             // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
             // null or a valid writable `NSRange*` — which is what
@@ -501,7 +516,8 @@ extern "C-unwind" fn first_rect_for_character_range(
     // no screen rectangle to answer with.
     os_entry(
         "firstRectForCharacterRange:actualRange:",
-        AfterPanic::Answer(zero_rect),
+        (),
+        AfterPanic::Answer(|()| zero_rect()),
         || unsafe {
             write_actual_range(actual_range, not_found());
             let Some(ctx) = get_view_context(this) else {
@@ -550,11 +566,7 @@ extern "C-unwind" fn character_index_for_point(
     _sel: Sel,
     _point: NSPoint,
 ) -> NSUInteger {
-    os_entry(
-        "characterIndexForPoint:",
-        AfterPanic::Answer(|| NSNotFound as NSUInteger),
-        || NSNotFound as NSUInteger,
-    )
+    NSNotFound as NSUInteger
 }
 
 /// `doCommandBySelector:` — a key the input method declined.
@@ -575,7 +587,8 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
     // the only window in which this callback runs.
     os_entry(
         "doCommandBySelector:",
-        AfterPanic::Answer(|| ()),
+        (),
+        AfterPanic::Answer(|()| ()),
         || unsafe {
             let Some(ctx) = get_view_context(this) else {
                 return;

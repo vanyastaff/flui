@@ -3,12 +3,12 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, HWND_MESSAGE, IsWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_GETTEXTLENGTH,
+    WM_GETTEXTLENGTH, WM_QUERYENDSESSION,
 };
 use windows::core::w;
 
@@ -321,6 +321,83 @@ fn broadcast_subscribers_hear_a_message_in_order() {
             vec!["first", "second"]
         ),
         "a message nobody answers gets the default procedure's answer"
+    );
+}
+
+/// A `tracing` subscriber that keeps the `entry` and `panic` fields of every
+/// event that has a panic.
+struct Logged(Arc<Mutex<Vec<(String, String)>>>);
+
+impl tracing::Subscriber for Logged {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Fields {
+            entry: String,
+            panic: Option<String>,
+        }
+        impl tracing::field::Visit for Fields {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                match field.name() {
+                    "entry" => value.clone_into(&mut self.entry),
+                    "panic" => self.panic = Some(value.to_owned()),
+                    _ => {}
+                }
+            }
+
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        if let Some(panic) = fields.panic {
+            self.0
+                .lock()
+                .expect("the log is not poisoned")
+                .push((fields.entry, panic));
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A subscriber's panic is logged with its text under the receiver's name,
+/// and a session-end query no subscriber answered for that case is granted:
+/// refusing it would hold the user's logoff up. Red-check: contain the
+/// subscribers in one generic containment again, or answer 0 after a panic.
+#[test]
+fn a_failing_subscriber_is_logged_and_a_session_end_still_granted() {
+    let receiver = super::broadcast::Receiver::new([Rc::new(Listener {
+        name: "failing",
+        answers: &[],
+        after_panic: None,
+        panics_on: Some(WM_QUERYENDSESSION),
+    }) as Rc<dyn Subscriber>])
+    .expect("receiver");
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let answer = tracing::subscriber::with_default(Logged(Arc::clone(&log)), || {
+        receiver.send_with_for_test(WM_QUERYENDSESSION, 0, 0)
+    });
+    assert_eq!(answer, 1, "the session end is granted");
+    let log = log.lock().expect("the log is not poisoned");
+    assert!(
+        log.iter().any(|(entry, panic)| {
+            entry == "the broadcast receiver's procedure"
+                && panic.contains("a subscriber that panics")
+        }),
+        "the subscriber's failure is logged with its text: {log:?}"
     );
 }
 

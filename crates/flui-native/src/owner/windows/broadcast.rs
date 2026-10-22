@@ -14,13 +14,16 @@ use windows::{
         UI::WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
             GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WINDOW_STYLE,
-            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WM_QUERYENDSESSION, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW,
         },
     },
     core::{PCWSTR, w},
 };
 
-use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
+use crate::owner::panic_boundary::{
+    AfterPanic, contain_os_entry, contain_owner_callback, os_entry,
+};
 
 /// What one feature does with the messages the receiver hears. Runs on the
 /// owner thread, inside the receiver's window procedure.
@@ -222,64 +225,81 @@ impl Receiver {
     }
 }
 
+/// The receiver's procedure as the log names it, and each subscriber it runs.
+const PROCEDURE: &str = "the broadcast receiver's procedure";
+
+// SAFETY: Win32 invokes this exact signature for the dedicated registered class.
 unsafe extern "system" fn procedure(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    os_entry(
-        "the broadcast receiver's procedure",
-        AfterPanic::Answer(|| LRESULT(0)),
-        || {
-            // A subscriber's contained panic answers what the subscribers set below,
-            // 0 otherwise.
-            let result = Cell::new(LRESULT(0));
-            contain_owner_callback(|| {
-                // SAFETY: this class receives only its own boxed Context during native
-                // creation. Only this owner reaches userdata. It is detached before
-                // destruction returns, and no pointer borrow crosses a user callback.
-                unsafe {
-                    if message == WM_NCCREATE {
-                        let create = &*(lparam.0 as *const CREATESTRUCTW);
-                        let context = create.lpCreateParams.cast::<Context>();
-                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, context as isize);
-                        (*context).hwnd.set(Some(hwnd));
-                    }
-                    let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
-                    if !context.is_null() {
-                        if message == WM_NCDESTROY {
-                            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                            (*context).hwnd.set(None);
-                        } else if message == WM_CLOSE {
-                            // This internal receiver is retired by the host, not by
-                            // ordinary window-close routing or last-user-window policy.
-                            return;
-                        } else {
-                            // Cloned out of the context: a subscriber may drop the
-                            // platform, and nothing borrowed from userdata survives
-                            // user code.
-                            let subscribers = Rc::clone(&(*context).subscribers);
-                            result.set(
-                                subscribers
-                                    .iter()
-                                    .find_map(|subscriber| subscriber.answer_after_panic(message))
-                                    .unwrap_or(LRESULT(0)),
-                            );
-                            for subscriber in subscribers.iter() {
-                                if let Some(answer) =
-                                    subscriber.message(hwnd, message, wparam, lparam)
-                                {
-                                    result.set(answer);
-                                    return;
-                                }
-                            }
+    os_entry(PROCEDURE, message, AfterPanic::Answer(unanswered), || {
+        // SAFETY: Win32's own arguments to this class's procedure, on the
+        // owner thread that created the receiver.
+        unsafe { receive(hwnd, message, wparam, lparam) }
+    })
+}
+
+/// What a message gets when the receiver could not answer it: 0, except a
+/// session-end query, which is granted. Refusing it holds the user's logoff
+/// up, and only a subscriber decides that (`lifecycle::windows` grants the
+/// query after its own panic too).
+fn unanswered(message: u32) -> LRESULT {
+    LRESULT(isize::from(message == WM_QUERYENDSESSION))
+}
+
+/// The receiver's dispatch: its own messages, then the subscribers in order
+/// until one answers. Each subscriber runs in a containment of its own, logged
+/// with its panic's text; a message whose subscriber panicked gets what a
+/// subscriber answers for that case, else [`unanswered`]'s answer.
+///
+/// # Safety
+///
+/// `hwnd`, `message`, `wparam` and `lparam` are Win32's arguments to this
+/// class's procedure, on the thread that created the window.
+unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // SAFETY: this class receives only its own boxed Context during native
+    // creation. Only this owner reaches userdata. It is detached before
+    // destruction returns, and no pointer borrow crosses a user callback.
+    unsafe {
+        if message == WM_NCCREATE {
+            let create = &*(lparam.0 as *const CREATESTRUCTW);
+            let context = create.lpCreateParams.cast::<Context>();
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, context as isize);
+            (*context).hwnd.set(Some(hwnd));
+        }
+        let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
+        if !context.is_null() {
+            if message == WM_NCDESTROY {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                (*context).hwnd.set(None);
+            } else if message == WM_CLOSE {
+                // This internal receiver is retired by the host, not by
+                // ordinary window-close routing or last-user-window policy.
+                return LRESULT(0);
+            } else {
+                // Cloned out of the context: a subscriber may drop the
+                // platform, and nothing borrowed from userdata survives user
+                // code.
+                let subscribers = Rc::clone(&(*context).subscribers);
+                for subscriber in subscribers.iter() {
+                    match contain_os_entry(PROCEDURE, || {
+                        subscriber.message(hwnd, message, wparam, lparam)
+                    }) {
+                        Some(Some(answer)) => return answer,
+                        Some(None) => {}
+                        None => {
+                            return subscribers
+                                .iter()
+                                .find_map(|subscriber| subscriber.answer_after_panic(message))
+                                .unwrap_or_else(|| unanswered(message));
                         }
                     }
-                    result.set(DefWindowProcW(hwnd, message, wparam, lparam));
                 }
-            });
-            result.get()
-        },
-    )
+            }
+        }
+        DefWindowProcW(hwnd, message, wparam, lparam)
+    }
 }
