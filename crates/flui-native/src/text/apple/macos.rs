@@ -771,15 +771,11 @@ impl PlatformTextInput for MacOSTextInput {
     }
 }
 
-impl crate::text::TextInput for MacOSTextInput {
-    fn ime(self: std::sync::Arc<Self>) -> Option<std::sync::Arc<dyn PlatformTextInput>> {
-        Some(self)
-    }
-
-    fn store_host(
-        self: std::rc::Rc<Self>,
-    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        None
+impl crate::text::TextInput for std::sync::Arc<MacOSTextInput> {
+    fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
+        Some(crate::text::WindowTextInput::Ime(
+            std::sync::Arc::clone(self) as std::sync::Arc<dyn PlatformTextInput>,
+        ))
     }
 }
 

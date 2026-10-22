@@ -50,36 +50,62 @@ pub(crate) mod windows;
 ))]
 pub(crate) mod winit;
 
-/// The text position of a host's table (ADR-0151 §3): what a window hands out
-/// for text input.
+/// The text position of a host's table (ADR-0151 §3): the handle a window
+/// holds its text input by, which it hands out through the contract's
+/// accessors (`PlatformWindow::text_input`, `HostWindow::text_store_host`).
 ///
-/// An input method reaches the focused field in one of two ways, and a
-/// platform's text input takes one of them:
-///
-/// - **IME requests**: the field tells the input method whether it may
-///   compose and where its caret is ([`PlatformTextInput`]); AppKit, winit and
-///   the headless host.
-/// - **The field's store**: the platform reads it (TSF) or mirrors it into an
-///   editor of its own (Android's `FluiView`, the browser's `EditContext` or
-///   textarea), and the window serves the field through a [`TextStoreHost`].
-///
-/// [`Absent`] takes neither.
+/// A platform's text input reaches the focused field in one of two ways,
+/// [`WindowTextInput`]'s variants; [`Absent`] hands out none.
 pub trait TextInput: 'static {
-    /// This text input as the receiver of a field's IME requests; `None` when
-    /// it serves the field's store instead.
-    fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>>;
+    /// What the window hands out for text input; `None` where the platform
+    /// has none.
+    fn window_text_input(&self) -> Option<WindowTextInput>;
+}
 
-    /// This text input as the host a field's store is served through; `None`
-    /// when it takes IME requests instead.
-    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>>;
+/// How a window's text input reaches the focused field.
+pub enum WindowTextInput {
+    /// The field tells the input method whether it may compose and where its
+    /// caret is: AppKit, winit and the headless host.
+    Ime(Arc<dyn PlatformTextInput>),
+    /// The platform reads the field's store (TSF) or mirrors it into an
+    /// editor of its own (Android's `FluiView`, the browser's `EditContext` or
+    /// textarea), and the window serves the field through this host.
+    Store(Rc<dyn TextStoreHost>),
+}
+
+impl WindowTextInput {
+    /// The IME requests' receiver, for `PlatformWindow::text_input`; `None`
+    /// for a store host.
+    #[must_use]
+    pub fn ime(self) -> Option<Arc<dyn PlatformTextInput>> {
+        match self {
+            Self::Ime(input) => Some(input),
+            Self::Store(_) => None,
+        }
+    }
+
+    /// The store host, for `HostWindow::text_store_host`; `None` for an IME
+    /// requests' receiver.
+    #[must_use]
+    pub fn store_host(self) -> Option<Rc<dyn TextStoreHost>> {
+        match self {
+            Self::Ime(_) => None,
+            Self::Store(host) => Some(host),
+        }
+    }
+}
+
+impl std::fmt::Debug for WindowTextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Ime(_) => "WindowTextInput::Ime",
+            Self::Store(_) => "WindowTextInput::Store",
+        })
+    }
 }
 
 impl TextInput for Absent<position::Text> {
-    fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>> {
-        None
-    }
-
-    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
+    fn window_text_input(&self) -> Option<WindowTextInput> {
         None
     }
 }

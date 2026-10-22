@@ -1081,15 +1081,11 @@ mod input {
         }
     }
 
-    impl crate::text::TextInput for WebTextInput {
-        fn ime(
-            self: std::sync::Arc<Self>,
-        ) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
-            None
-        }
-
-        fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
-            Some(self)
+    impl crate::text::TextInput for Rc<WebTextInput> {
+        fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
+            Some(crate::text::WindowTextInput::Store(
+                Rc::clone(self) as Rc<dyn TextStoreHost>
+            ))
         }
     }
 

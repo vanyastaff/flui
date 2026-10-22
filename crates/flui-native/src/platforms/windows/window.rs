@@ -1787,11 +1787,13 @@ impl crate::host_window::HostWindow for WindowsWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        use crate::text::{TextInput, WindowTextInput};
         super::platform::with_window_context(self.hwnd, "text_store_host", |context| {
             let services = context.text_services.borrow().clone();
-            services.map(|services| services as Rc<dyn flui_platform::text_store::TextStoreHost>)
+            services.as_ref().and_then(TextInput::window_text_input)
         })
         .flatten()
+        .and_then(WindowTextInput::store_host)
     }
 }
 

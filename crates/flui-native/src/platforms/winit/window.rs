@@ -862,9 +862,12 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(Arc::new(crate::text::winit::WinitTextInput::new(
-            Arc::clone(&self.window),
+        use crate::text::{TextInput as _, WindowTextInput};
+        Arc::new(crate::text::winit::WinitTextInput::new(Arc::clone(
+            &self.window,
         )))
+        .window_text_input()
+        .and_then(WindowTextInput::ime)
     }
 
     fn as_any(&self) -> &dyn Any {

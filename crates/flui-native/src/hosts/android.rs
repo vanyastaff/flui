@@ -24,7 +24,7 @@ impl Host for Android {
     type Window = AndroidWindow;
     type Displays = AndroidDisplays;
     type Input = AndroidInputState;
-    type Text = AndroidTextInput;
+    type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = MockClipboard;
     type Drag = AndroidTransfer;

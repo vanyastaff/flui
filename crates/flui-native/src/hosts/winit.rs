@@ -28,7 +28,7 @@ impl Host for Winit {
     type Window = WinitWindow;
     type Displays = WinitDisplaySource;
     type Input = WinitLoop;
-    type Text = WinitTextInput;
+    type Text = std::sync::Arc<WinitTextInput>;
     // The AT-SPI bridge exists on Linux with the `a11y` feature.
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     type Accessibility = UnixAccessibility;

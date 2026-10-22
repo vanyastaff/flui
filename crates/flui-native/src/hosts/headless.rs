@@ -23,7 +23,7 @@ impl Host for Headless {
     type Window = MockWindow;
     type Displays = HeadlessDisplays;
     type Input = HeadlessInputDevices;
-    type Text = FakeTextInput;
+    type Text = std::sync::Arc<FakeTextInput>;
     type Accessibility = FakeAccessibility;
     type Clipboard = InMemoryClipboard;
     type Drag = DragDouble;

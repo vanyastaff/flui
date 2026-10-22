@@ -1401,7 +1401,10 @@ impl PlatformWindow for MockWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
+        use crate::text::{TextInput as _, WindowTextInput};
+        self.text_input
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {

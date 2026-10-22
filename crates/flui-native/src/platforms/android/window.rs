@@ -462,8 +462,10 @@ impl crate::host_window::HostWindow for AndroidWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        use crate::text::{TextInput as _, WindowTextInput};
         self.text_input()
-            .map(|input| input as Rc<dyn flui_platform::text_store::TextStoreHost>)
+            .and_then(|input| input.window_text_input())
+            .and_then(WindowTextInput::store_host)
     }
 }
 

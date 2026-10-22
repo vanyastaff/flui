@@ -30,7 +30,7 @@ impl Host for Windows {
     type Window = WindowsWindow;
     type Displays = WindowsDisplays;
     type Input = WindowsLoop;
-    type Text = TextServices;
+    type Text = Rc<TextServices>;
     #[cfg(feature = "a11y")]
     type Accessibility = WindowsAccessibility;
     #[cfg(not(feature = "a11y"))]

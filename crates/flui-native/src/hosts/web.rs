@@ -21,7 +21,7 @@ impl Host for Web {
     type Window = WebWindow;
     type Displays = WebDisplays;
     type Input = WebLoop;
-    type Text = WebTextInput;
+    type Text = std::rc::Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WebClipboard;
     type Drag = WebTransfer;

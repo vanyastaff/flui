@@ -1106,7 +1106,10 @@ impl PlatformWindow for MacOSWindow {
                 self.owner_is_main,
             ))
         });
-        Some(Arc::clone(text_input) as Arc<dyn flui_platform::PlatformTextInput>)
+        use crate::text::{TextInput as _, WindowTextInput};
+        text_input
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     fn physical_size(&self) -> Size<i32> {

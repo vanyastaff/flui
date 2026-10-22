@@ -55,7 +55,7 @@ impl Host for Apple {
     type Input = IOSLoop;
 
     #[cfg(target_os = "macos")]
-    type Text = MacOSTextInput;
+    type Text = std::sync::Arc<MacOSTextInput>;
     #[cfg(target_os = "ios")]
     type Text = Absent<position::Text>;
 

@@ -442,7 +442,6 @@ mod input {
     use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::PlatformTextInput;
     use flui_platform::text_store::{
         CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
@@ -991,13 +990,11 @@ mod input {
         }
     }
 
-    impl crate::text::TextInput for AndroidTextInput {
-        fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>> {
-            None
-        }
-
-        fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
-            Some(self)
+    impl crate::text::TextInput for Rc<AndroidTextInput> {
+        fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
+            Some(crate::text::WindowTextInput::Store(
+                Rc::clone(self) as Rc<dyn TextStoreHost>
+            ))
         }
     }
 

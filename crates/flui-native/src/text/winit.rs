@@ -1,12 +1,12 @@
 //! The winit host's text input: winit's IME enablement and cursor area.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
 use winit::window::Window;
+
+use super::WindowTextInput;
 
 /// [`PlatformTextInput`] for a winit window.
 ///
@@ -32,13 +32,11 @@ impl std::fmt::Debug for WinitTextInput {
     }
 }
 
-impl super::TextInput for WinitTextInput {
-    fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(self)
-    }
-
-    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
-        None
+impl super::TextInput for Arc<WinitTextInput> {
+    fn window_text_input(&self) -> Option<WindowTextInput> {
+        Some(WindowTextInput::Ime(
+            Arc::clone(self) as Arc<dyn PlatformTextInput>
+        ))
     }
 }
 

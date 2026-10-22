@@ -1,13 +1,13 @@
 //! The headless host's text input: a recorder of the IME requests a window's
 //! presentation sends.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
 use parking_lot::Mutex;
+
+use super::WindowTextInput;
 
 /// Recording fake for [`PlatformTextInput`], backing the headless backend's
 /// [`PlatformWindow::text_input`](flui_platform::PlatformWindow::text_input).
@@ -73,12 +73,10 @@ impl PlatformTextInput for FakeTextInput {
     }
 }
 
-impl super::TextInput for FakeTextInput {
-    fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(self)
-    }
-
-    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
-        None
+impl super::TextInput for Arc<FakeTextInput> {
+    fn window_text_input(&self) -> Option<WindowTextInput> {
+        Some(WindowTextInput::Ime(
+            Arc::clone(self) as Arc<dyn PlatformTextInput>
+        ))
     }
 }
