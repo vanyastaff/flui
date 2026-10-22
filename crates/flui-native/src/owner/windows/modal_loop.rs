@@ -47,7 +47,7 @@ impl WindowContext {
         let pacing = &self.modal_pacing;
         if pacing.depth.replace(pacing.depth.get().saturating_add(1)) == 0 {
             pacing.delivered.clear();
-            arm(hwnd, super::modal_pace::MODAL_FRAME_PACE_MS);
+            arm(hwnd, crate::owner::modal_pace::MODAL_FRAME_PACE_MS);
         }
     }
 

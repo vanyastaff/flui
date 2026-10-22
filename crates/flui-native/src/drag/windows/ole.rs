@@ -80,7 +80,7 @@ use crate::owner::panic_boundary::{contain_owner_callback, owner_callback_panick
 use crate::owner::slot::OwnerSlot;
 use crate::owner::windows::WindowsLoop;
 use crate::owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow};
-use crate::owner::windows::modal_pace::MODAL_FRAME_PACE_MS;
+use crate::owner::modal_pace::MODAL_FRAME_PACE_MS;
 use crate::platforms::windows::platform::WindowRef;
 use flui_platform::pointer::PointerKind;
 

@@ -2,7 +2,7 @@
 //! the bytes each clipboard format carries, `DROPEFFECT` mapping and when the
 //! drop source ends the modal loop. The COM shell around it runs only on
 //! Windows (`drag::windows::ole`); how often that loop asks for frames
-//! is the owner's (`owner::windows::modal_pace`).
+//! is the owner's (`owner::modal_pace`).
 
 use std::path::PathBuf;
 use std::sync::Arc;

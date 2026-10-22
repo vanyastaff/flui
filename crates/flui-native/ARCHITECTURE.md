@@ -107,7 +107,7 @@ trait depends on `flui-platform` instead.
     owner delivers the frames due while the modal loop runs
     (`OwnerWindow::deliver_modal_frames`, which holds the owner's state weakly),
     and it cancels a session that has not started when the window is
-    destroyed. The modal pace is the owner's (`owner::windows::modal_pace`),
+    destroyed. The modal pace is the owner's (`owner::modal_pace`),
     shared with `DefWindowProc`'s move and size loops. Tests:
     `ole_drag_and_drop_on_real_windows`,
     `a_replaced_wake_hook_gets_its_modal_frame`.
@@ -3040,7 +3040,7 @@ loop's wait does dispatch; the transport's hook asks the owner
 (`OwnerWindow::deliver_modal_frames`), which delivers a due wake deadline as the
 main loop would (once per frame generation), sends `WM_PAINT` to every
 invalidated window with `UpdateWindow`, and answers how long to wait by the
-owner's modal pace (`owner::windows::modal_pace`, which `DefWindowProc`'s move
+owner's modal pace (`owner::modal_pace`, which `DefWindowProc`'s move
 and size loops share). The session's
 callbacks run with no `RefCell` borrow or lock held across a COM call or a
 dispatch: the provider is leased out of the data object while it runs, so a

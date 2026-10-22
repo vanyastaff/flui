@@ -25,7 +25,6 @@ pub(crate) mod control;
 #[cfg(test)]
 mod modal_frame_tests;
 pub(crate) mod modal_loop;
-pub(crate) mod modal_pace;
 #[cfg(test)]
 mod tests;
 mod wake_deadline;
@@ -1003,7 +1002,7 @@ impl WindowsLoop {
             // earlier paint fails the call harmlessly. Nothing is borrowed.
             let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
         }
-        modal_pace::modal_frame_wait_ms(deadline, now)
+        crate::owner::modal_pace::modal_frame_wait_ms(deadline, now)
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.

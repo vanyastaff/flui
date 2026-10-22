@@ -16,9 +16,10 @@
 //! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
-//!   decision around one native poll. A loop that serves several features
-//!   through one operating-system object dispatches through hooks declared
-//!   beside it, which the host registers.
+//!   decision around one native poll, and `modal_pace`, how often a Windows
+//!   modal loop asks for frames, both pure and checked on every host. A loop
+//!   that serves several features through one operating-system object
+//!   dispatches through hooks declared beside it, which the host registers.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -51,6 +52,8 @@ pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(test, windows))]
+pub(crate) mod modal_pace;
 pub(crate) mod panic_boundary;
 pub(crate) mod positions;
 #[cfg(any(test, target_os = "android"))]
@@ -61,11 +64,6 @@ pub(crate) mod slot;
 pub(crate) mod web;
 #[cfg(windows)]
 pub(crate) mod windows;
-// The modal pace is a pure rule of the Windows loop: `test` checks it on every
-// host.
-#[cfg(all(test, not(windows)))]
-#[path = "windows/modal_pace.rs"]
-mod windows_modal_pace;
 #[cfg(all(
     feature = "winit-backend",
     any(target_os = "windows", target_os = "macos", target_os = "linux")

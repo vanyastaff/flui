@@ -15,7 +15,7 @@
 //! button state OLE passes it, so a case could not choose when and where it
 //! drops. The decidable rules behind these cases (`continue_drag`, the format
 //! and effect mapping) run beside `ole_model`, the modal frame pace beside
-//! `owner::windows::modal_pace`.
+//! `owner::modal_pace`.
 
 use std::cell::{Cell, RefCell};
 use std::num::{NonZeroU32, NonZeroU64};

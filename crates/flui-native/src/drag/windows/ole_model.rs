@@ -5,7 +5,7 @@
 //! functions over bytes and integers, so every host checks them; the COM
 //! objects of the OLE half (`ole`) only move bytes in and out of global
 //! memory. How often that loop asks for frames is the owner's
-//! (`owner::windows::modal_pace`).
+//! (`owner::modal_pace`).
 
 #![forbid(unsafe_code)]
 
