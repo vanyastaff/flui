@@ -30,10 +30,15 @@ pub struct IOSSceneAttachmentId(pub(super) u64);
 /// owner thread through its call point.
 pub(crate) trait SceneConsumer {
     /// `window` connected to `session` as `attachment`; `reconnect` says the
-    /// session installed its application before. The consumer hands
-    /// `pending` what the loop watches of the installation, whose
-    /// acknowledgement wakes the owner through `wake`, before the application
-    /// sees the window.
+    /// session installed its application before. Returns what the loop
+    /// watches of the window's installation, whose acknowledgement wakes the
+    /// owner through `wake`: an accepted connection always carries one, so
+    /// the loop publishes the window or rolls it back. The application may
+    /// have completed or dropped the installation before this returns.
+    ///
+    /// # Errors
+    /// What the application's handler reports; the loop rolls the
+    /// connection back.
     fn connected(
         &mut self,
         session: IOSSceneSessionId,
@@ -41,8 +46,7 @@ pub(crate) trait SceneConsumer {
         window: Arc<dyn HostWindow>,
         reconnect: bool,
         wake: PlatformProxy,
-        pending: &mut dyn FnMut(Box<dyn SceneInstallation>),
-    ) -> Result<(), BootstrapError>;
+    ) -> Result<Box<dyn SceneInstallation>, BootstrapError>;
 
     /// `attachment` of `session` was lost; the session may connect again.
     fn disconnected(

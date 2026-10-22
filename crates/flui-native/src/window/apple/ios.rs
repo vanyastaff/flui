@@ -1464,8 +1464,8 @@ impl std::fmt::Debug for IOSSceneEvent {
 pub(crate) type SceneHandler = Box<dyn FnMut(IOSSceneEvent) -> Result<(), BootstrapError>>;
 
 /// The application's handler as the loop calls it: each call becomes the
-/// [`IOSSceneEvent`] it describes, and a connection hands the loop the pending
-/// side of the window's installation before the application sees it.
+/// [`IOSSceneEvent`] it describes, and a connection returns the loop the
+/// pending side of the installation it hands the application.
 struct EventConsumer(SceneHandler);
 
 impl SceneConsumer for EventConsumer {
@@ -1476,17 +1476,16 @@ impl SceneConsumer for EventConsumer {
         window: Arc<dyn HostWindow>,
         reconnect: bool,
         wake: PlatformProxy,
-        pending: &mut dyn FnMut(Box<dyn SceneInstallation>),
-    ) -> Result<(), BootstrapError> {
+    ) -> Result<Box<dyn SceneInstallation>, BootstrapError> {
         let (installation, watched) = WindowInstallation::channel(wake);
-        pending(Box::new(watched));
         (self.0)(IOSSceneEvent::Connected {
             session,
             attachment,
             window,
             reconnect,
             installation,
-        })
+        })?;
+        Ok(Box::new(watched))
     }
 
     fn disconnected(

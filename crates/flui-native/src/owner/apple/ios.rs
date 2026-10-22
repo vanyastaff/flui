@@ -417,10 +417,10 @@ impl IOSLoop {
     /// Tell the scene consumer what `tell` says, through the call point, with
     /// no borrow of the scene state held. It goes back afterwards while the
     /// owner still accepts work; a consumer registered meanwhile wins.
-    fn tell_scene_consumer(
+    fn tell_scene_consumer<T>(
         &self,
-        tell: impl FnOnce(&mut dyn SceneConsumer) -> Result<(), crate::BootstrapError>,
-    ) -> Result<(), crate::BootstrapError> {
+        tell: impl FnOnce(&mut dyn SceneConsumer) -> Result<T, crate::BootstrapError>,
+    ) -> Result<T, crate::BootstrapError> {
         let consumer = Field::new(self.state(), |state| &mut state.handler)
             .restoring_while(|| self.signal.accepting());
         match call(&consumer, |consumer| tell(consumer.as_mut())) {
@@ -1243,22 +1243,6 @@ impl IOSLoop {
                 let proxy = crate::PlatformProxy::new(Arc::new(
                     crate::owner::signal::SignalTransport::new(&self.signal),
                 ));
-                // The record keeps what the loop watches of the installation
-                // before the application sees the window, which may complete
-                // it at once.
-                let mut scene = Some(scene);
-                let mut keep = |completion: Box<dyn SceneInstallation>| {
-                    if let Some(scene) = scene.take()
-                        && let Some(record) = self.state().borrow_mut().session.as_mut()
-                    {
-                        record.installation = Some(PendingSceneInstallation {
-                            origin: origin.clone(),
-                            scene,
-                            resource_generation,
-                            completion,
-                        });
-                    }
-                };
                 let result = self.tell_scene_consumer(|consumer| {
                     consumer.connected(
                         origin.session.clone(),
@@ -1266,13 +1250,26 @@ impl IOSLoop {
                         Arc::clone(&window) as Arc<dyn HostWindow>,
                         reconnect,
                         proxy,
-                        &mut keep,
                     )
                 });
-                if let Err(error) = result {
-                    tracing::error!(%error, "scene installation failed");
-                    self.enqueue(SceneAction::Rollback(origin));
-                    return;
+                let completion = match result {
+                    Ok(completion) => completion,
+                    Err(error) => {
+                        tracing::error!(%error, "scene installation failed");
+                        self.enqueue(SceneAction::Rollback(origin));
+                        return;
+                    }
+                };
+                // The record keeps what the loop watches of the installation;
+                // the poll below reads an outcome the application already
+                // reached.
+                if let Some(record) = self.state().borrow_mut().session.as_mut() {
+                    record.installation = Some(PendingSceneInstallation {
+                        origin: origin.clone(),
+                        scene,
+                        resource_generation,
+                        completion,
+                    });
                 }
                 installation.origin = None;
                 self.poll_scene_installation();
