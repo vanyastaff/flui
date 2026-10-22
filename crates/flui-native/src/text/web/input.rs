@@ -36,12 +36,12 @@ use flui_platform::text_store::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
-use super::ime::{diff, input_mode};
+use super::ime::input_mode;
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::platforms::web::events::{KeyRoute, is_focus_handoff};
 use crate::platforms::web::registration::{EditorSlot, Listener};
 use crate::platforms::web::window::FocusSync;
-use crate::text::ime::{document_text, scalar_spans};
+use crate::text::ime::{diff, document_text, scalar_spans};
 
 #[wasm_bindgen(inline_js = "
 export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }

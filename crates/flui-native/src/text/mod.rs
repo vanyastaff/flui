@@ -3,7 +3,7 @@
 //!
 //! The model is what more than one platform uses: [`ime`], what the Android
 //! and web hosts mirror of a focused field (its text with a protected field
-//! masked), `sizing`, the native
+//! masked, and the one edit between two versions of it), `sizing`, the native
 //! text size an owner captures for a presentation, and [`TextInput`], the
 //! text position of a host's table. Beside it:
 //!

@@ -1,7 +1,8 @@
 //! The decidable half of the web backend's text input (ADR-0090): when a key
-//! belongs to an input method, and what a hidden `<textarea>`'s change was.
-//! Cfg-free plain functions over integers and UTF-16, so Linux CI pins them;
-//! `text::web::input` reads the DOM.
+//! belongs to an input method, and which virtual keyboard a field asks for.
+//! What a hidden `<textarea>`'s change was is the mirror's one edit
+//! ([`crate::text::ime::diff`]). Cfg-free plain functions over integers, so
+//! Linux CI pins them; `text::web::input` reads the DOM.
 
 #![forbid(unsafe_code)]
 
@@ -31,64 +32,6 @@ pub const fn key_composition(
     } else {
         ImeComposition::Inactive
     }
-}
-
-/// One edit between two versions of a text, in UTF-16 code units: the
-/// range `start..old_end` of the old text became `start..new_end` of the
-/// new one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextDiff {
-    /// Where the texts first differ.
-    pub start: usize,
-    /// The end of the replaced range in the old text.
-    pub old_end: usize,
-    /// The end of the inserted range in the new text.
-    pub new_end: usize,
-}
-
-/// The one edit that turns `old` into `new`: the longest common prefix and,
-/// of what remains, the longest common suffix are kept. `None` when the
-/// texts are equal. A surrogate pair is never split: an edit boundary inside
-/// one moves outward.
-#[must_use]
-pub fn diff(old: &[u16], new: &[u16]) -> Option<TextDiff> {
-    if old == new {
-        return None;
-    }
-    let mut start = old
-        .iter()
-        .zip(new)
-        .take_while(|(old, new)| old == new)
-        .count();
-    // A shared high surrogate whose low half differs is part of the edit.
-    if start > 0 && is_high_surrogate(old[start - 1]) {
-        start -= 1;
-    }
-    let room = old.len().min(new.len()) - start;
-    let mut suffix = old
-        .iter()
-        .rev()
-        .zip(new.iter().rev())
-        .take(room)
-        .take_while(|(old, new)| old == new)
-        .count();
-    // A shared low surrogate whose high half differs is part of the edit.
-    if suffix > 0 && is_low_surrogate(old[old.len() - suffix]) {
-        suffix -= 1;
-    }
-    Some(TextDiff {
-        start,
-        old_end: old.len() - suffix,
-        new_end: new.len() - suffix,
-    })
-}
-
-const fn is_high_surrogate(unit: u16) -> bool {
-    matches!(unit, 0xD800..=0xDBFF)
-}
-
-const fn is_low_surrogate(unit: u16) -> bool {
-    matches!(unit, 0xDC00..=0xDFFF)
 }
 
 /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the

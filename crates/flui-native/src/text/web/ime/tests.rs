@@ -1,13 +1,13 @@
-//! The decidable half of the web backend's text input (`text::web::ime`):
-//! which keys belong to the input method, and the one edit between two
-//! versions of a hidden textarea's text. The DOM side runs in Chrome
-//! (`tests/web_browser.rs`).
+//! The decidable half of the web backend's text input (`text::web::ime`,
+//! with the mirror in `text::ime`): which keys belong to the input method,
+//! and the one edit between two versions of a hidden textarea's text. The DOM
+//! side runs in Chrome (`tests/web_browser.rs`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{IME_PROCESS_KEY_CODE, TextDiff, diff, input_mode, key_composition};
-use crate::text::ime::{PROTECTED_UNIT, document_text, scalar_spans};
+use super::{IME_PROCESS_KEY_CODE, input_mode, key_composition};
+use crate::text::ime::{PROTECTED_UNIT, TextDiff, diff, document_text, scalar_spans};
 use flui_platform::keyboard::ImeComposition;
 use flui_platform::text_store::{
     InMemoryTextStore, LockGrant, LockTiming, TextInputPurpose, TextStore,

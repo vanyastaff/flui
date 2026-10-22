@@ -27,8 +27,7 @@ use flui_platform::text_store::{
     TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
-use crate::text::ime::document_text;
-use crate::text::web::ime::diff;
+use crate::text::ime::{diff, document_text};
 
 pub use crate::text::ime::PROTECTED_UNIT;
 

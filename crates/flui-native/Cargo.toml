@@ -595,7 +595,7 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = []
+features = ["text"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
