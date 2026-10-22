@@ -84,6 +84,24 @@ class FakeCanvas extends EventTarget {
     setAttribute() {}
 }
 
+// The page's own `flui-canvas`. With no CSS size the browser lays it out at its
+// backing store's size in CSS pixels; with a CSS width alone, at that width and
+// the store's aspect ratio. A size set on its style wins.
+class PageCanvas extends FakeCanvas {
+    constructor(cssWidth) {
+        super();
+        const declared = cssWidth === null ? {} : { width: `${cssWidth}px` };
+        this.declared = declared;
+        this.style = { setProperty(name, value) { declared[name] = value; } };
+        const px = name => (declared[name] === undefined ? undefined : parseFloat(declared[name]));
+        Object.defineProperty(this, 'clientWidth', { get: () => px('width') ?? this.width });
+        Object.defineProperty(this, 'clientHeight', {
+            get: () => px('height')
+                ?? (declared.width === undefined ? this.height : Math.round(px('width') * this.height / this.width)),
+        });
+    }
+}
+
 // `windowManagement`: 'none' omits the API; 'granted', 'prompt' and 'legacy'
 // (only the older permission name is known) set the permission it reports.
 export function installDisplayProbe(windowManagement) {
@@ -149,6 +167,10 @@ export function installDisplayProbe(windowManagement) {
         return {
             paddingTop: padding, paddingRight: padding, paddingBottom: padding, paddingLeft: padding,
             writingMode: 'horizontal-tb',
+            getPropertyValue: name => ({
+                width: `${element.clientWidth}px`,
+                height: `${element.clientHeight}px`,
+            })[name] ?? '',
         };
     });
     windowListeners = [];
@@ -248,6 +270,9 @@ function layOut(width, height, deviceWidth, deviceHeight, padding, boxes) {
     lastCanvas.clientWidth = width;
     lastCanvas.clientHeight = height;
     lastCanvas.padding = padding;
+    report(width, height, deviceWidth, deviceHeight, padding, boxes);
+}
+function report(width, height, deviceWidth, deviceHeight, padding, boxes) {
     const content = { width: width - 2 * padding, height: height - 2 * padding };
     const entry = {
         target: lastCanvas,
@@ -271,6 +296,21 @@ export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding =
 export function changeCanvasBoxes(width, height, deviceWidth, deviceHeight, padding, changed) {
     layOut(width, height, deviceWidth, deviceHeight, padding, changed.split(' '));
 }
+// The page holds a `PageCanvas`, with a CSS width of `cssWidth` or no CSS size.
+export function putCanvasInPage(cssWidth) {
+    lastCanvas = new PageCanvas(cssWidth ?? null);
+    document.getElementById = id => (id === 'flui-canvas' ? lastCanvas : null);
+}
+// The browser lays the canvas out again: every observer reports the box it has
+// now, at the current ratio.
+export function reportCanvasBox() {
+    const width = lastCanvas.clientWidth;
+    const height = lastCanvas.clientHeight;
+    report(width, height, Math.round(width * ratio), Math.round(height * ratio), 0,
+        ['content-box', 'device-pixel-content-box', 'border-box']);
+}
+// The page canvas's inline CSS width and height, '' where none is set.
+export function canvasCssSize() { return [lastCanvas.declared.width ?? '', lastCanvas.declared.height ?? '']; }
 export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
 export function setHidden(value) {
@@ -357,6 +397,12 @@ extern "C" {
         padding: f64,
         changed: &str,
     );
+    #[wasm_bindgen(js_name = putCanvasInPage)]
+    fn put_canvas_in_page(css_width: Option<u32>);
+    #[wasm_bindgen(js_name = reportCanvasBox)]
+    fn report_canvas_box();
+    #[wasm_bindgen(js_name = canvasCssSize)]
+    fn canvas_css_size() -> Vec<String>;
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1392,6 +1438,48 @@ async fn web_window_backing_store_keeps_to_the_ratio_a_device_size_contradicts()
     drop(window);
     running.quit();
     settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_leaves_a_page_canvas_box_where_it_was() {
+    // The page's CSS width, the box the page lays the 300×150 canvas out at,
+    // and the inline CSS width and height the window leaves on it.
+    let cases: [(Option<u32>, [u32; 2], [&str; 2]); 2] = [
+        // No CSS size: the box is the store's size, so the window pins it.
+        (None, [300, 150], ["300px", "150px"]),
+        // A CSS width: the height is the width at the store's aspect ratio,
+        // which a store at the box's ratio keeps, so the page's CSS stays.
+        (Some(400), [400, 200], ["400px", ""]),
+    ];
+    for (css_width, [width, height], inline) in cases {
+        install_probe("none");
+        install_resize_observer(true);
+        let probe = Probe;
+        set_pixel_ratio(2.0);
+        put_canvas_in_page(css_width);
+        let running = Running::start();
+        settle().await;
+        let (window, _resized) = open_recorded_window(&running);
+
+        // Each report is the box the browser laid out after the last store.
+        for _ in 0..3 {
+            report_canvas_box();
+            settle().await;
+        }
+        assert_eq!(
+            canvas_backing_size(),
+            [width * 2, height * 2],
+            "{css_width:?}: the store at 2× did not grow the box"
+        );
+        assert_eq!(window.logical_size().width, f64::from(width));
+        assert_eq!(window.logical_size().height, f64::from(height));
+        assert_eq!(canvas_css_size(), inline, "{css_width:?}");
+
+        drop(window);
+        running.quit();
+        settle().await;
+        drop(probe);
+    }
 }
 
 #[wasm_bindgen_test]

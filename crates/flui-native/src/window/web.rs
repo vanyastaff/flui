@@ -191,6 +191,37 @@ fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
     }
 }
 
+/// Pin, as its inline CSS size, each side of the canvas's box that is the
+/// size of its backing store. A canvas laid out at its own size (no CSS width
+/// or height, or `auto`) is as many CSS pixels as its `width`/`height`
+/// attributes, so the store [`apply_backing_size`] writes at a pixel ratio
+/// above 1 would grow the box it is computed from, at every report. Scaling
+/// the store finds those sides: one laid out from the store's size moves,
+/// while one the page sized, or one laid out from the store's aspect ratio
+/// alone (a CSS width with an `auto` height), stays and is left to the page.
+/// The pin is the computed size, the box as it is under any `box-sizing`.
+fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasElement) {
+    let (width, height) = (canvas.width(), canvas.height());
+    let before = (canvas.client_width(), canvas.client_height());
+    canvas.set_width(width.saturating_mul(2));
+    canvas.set_height(height.saturating_mul(2));
+    let after = (canvas.client_width(), canvas.client_height());
+    canvas.set_width(width);
+    canvas.set_height(height);
+    let Ok(Some(computed)) = window.get_computed_style(canvas) else {
+        return;
+    };
+    let style = canvas.style();
+    for (side, follows_store) in [
+        ("width", after.0 != before.0),
+        ("height", after.1 != before.1),
+    ] {
+        if follows_store && let Ok(size) = computed.get_property_value(side) {
+            let _ = style.set_property(side, &size);
+        }
+    }
+}
+
 impl WebWindow {
     /// Create a new WebWindow backed by a `<canvas>` element.
     ///
@@ -203,7 +234,9 @@ impl WebWindow {
     /// window's logical size is therefore the canvas's CSS box, read from
     /// the live layout, and it is the page's to set: a canvas the page put
     /// in the document keeps whatever styling the page gave it (`width:
-    /// 100vw; height: 100vh`, a fixed frame, a flex child — all fine), and
+    /// 100vw; height: 100vh`, a fixed frame, a flex child — all fine),
+    /// except that a side the page leaves to the canvas's own size is pinned
+    /// at the box it has (see `pin_store_sized_box`), and
     /// a canvas this constructor creates is styled to fill the viewport
     /// (`display: block; width: 100vw; height: 100vh`), which is what an
     /// application with no page of its own means. The requested
@@ -265,6 +298,8 @@ impl WebWindow {
         // Refuse an existing live owner before changing its sizing, focusability
         // or title. The claim compares the actual DOM object, never its label.
         let claim = CanvasClaim::acquire(&canvas)?;
+
+        pin_store_sized_box(&window, &canvas);
 
         // The layout's box is the size; the requested size is the fallback
         // for a canvas that has none yet, and becomes its CSS size then —
