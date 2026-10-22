@@ -1,7 +1,7 @@
 //! What the AppKit and UIKit windows report and are asked, as pure rules:
-//! where an `NSWindow` is ([`frame`]), which mode it is in and how to reach
-//! another ([`mode`]), and which screen edges a UIKit window defers its system
-//! gestures on ([`screen_edges`]).
+//! where an `NSWindow` is ([`frame`]), which mode it is in, how to reach
+//! another and whether it is seen ([`mode`]), and which screen edges a UIKit
+//! window defers its system gestures on ([`screen_edges`]).
 //!
 //! Nothing here calls the OS, so `test` keeps the rules checked on every host.
 
@@ -332,8 +332,8 @@ pub(crate) mod frame {
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod mode {
-    //! Which [`WindowMode`] an `NSWindow` is in, and the AppKit requests that take
-    //! it to another.
+    //! Which [`WindowMode`] an `NSWindow` is in, the AppKit requests that take
+    //! it to another, and whether its occlusion state says it is seen.
     //!
     //! AppKit has no mode property: a window is full screen when its style mask
     //! says so, miniaturized when `isMiniaturized`, and zoomed (maximized) when its
@@ -343,6 +343,8 @@ pub(crate) mod mode {
     use std::time::{Duration, Instant};
 
     use flui_platform::WindowMode;
+
+    use crate::window::state::{ModeFlags, mode_of};
 
     /// What AppKit says about a window, as plain flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,23 +365,22 @@ pub(crate) mod mode {
         pub(crate) const fn is_maximized(self) -> bool {
             self.zoomed && self.resizable
         }
-    }
 
-    /// The mode a window with these flags is in.
-    ///
-    /// Full screen outranks the rest and a miniaturized window outranks a zoomed
-    /// one. `isZoomed` is also true for a window that cannot be resized and for one
-    /// whose frame merely equals the standard frame, so a zoom counts only when the
-    /// window is resizable.
-    pub(crate) const fn mode_of(flags: WindowFlags) -> WindowMode {
-        if flags.fullscreen {
-            WindowMode::Fullscreen
-        } else if flags.miniaturized {
-            WindowMode::Minimized
-        } else if flags.is_maximized() {
-            WindowMode::Maximized
-        } else {
-            WindowMode::Normal
+        /// What these flags say of the window, which `mode_of` decides the mode
+        /// from.
+        ///
+        /// `isZoomed` is also true for a window that cannot be resized and for
+        /// one whose frame merely equals the standard frame, so a zoom counts
+        /// only when the window is resizable. AppKit does not miniaturize a
+        /// full-screen window (it leaves full screen first, see [`steps_to`]),
+        /// so `isMiniaturized` counts only outside full screen: a window whose
+        /// style mask says full screen is in full screen.
+        pub(crate) const fn mode_flags(self) -> ModeFlags {
+            ModeFlags {
+                minimized: self.miniaturized && !self.fullscreen,
+                fullscreen: self.fullscreen,
+                maximized: self.is_maximized(),
+            }
         }
     }
 
@@ -387,6 +388,20 @@ pub(crate) mod mode {
     /// miniaturized window is not `isVisible`, but the user sees it there.
     pub(crate) const fn is_shown(on_screen: bool, miniaturized: bool) -> bool {
         on_screen || miniaturized
+    }
+
+    /// `NSWindowOcclusionStateVisible` (`NSWindow.h`: `1 << 1`) — the only bit
+    /// AppKit defines in `NSWindowOcclusionState`.
+    pub(crate) const OCCLUSION_STATE_VISIBLE: u64 = 1 << 1;
+
+    /// Whether an `NSWindowOcclusionState` raw value means the window's surface
+    /// is seen. AppKit reports "visible" as a positive bit (set when at least
+    /// part of the window is on screen and composed), so the polarity of
+    /// `on_visibility_status_change` (`is_visible`) is the bit itself — no
+    /// negation, unlike winit's `Occluded` event.
+    #[must_use]
+    pub(crate) const fn occlusion_state_is_visible(occlusion_state: u64) -> bool {
+        occlusion_state & OCCLUSION_STATE_VISIBLE != 0
     }
 
     /// One AppKit request on the way to a mode.
@@ -420,7 +435,7 @@ pub(crate) mod mode {
     pub(crate) fn steps_to(flags: WindowFlags, target: WindowMode) -> Vec<ModeStep> {
         use ModeStep::{Deminiaturize, EnterFullscreen, ExitFullscreen, Miniaturize, Unzoom, Zoom};
 
-        let current = mode_of(flags);
+        let current = mode_of(flags.mode_flags());
         if current == target {
             return Vec::new();
         }
@@ -584,7 +599,11 @@ pub(crate) mod mode {
                 ("", Normal),
             ];
             for (letters, expected) in rows {
-                assert_eq!(mode_of(flags(letters)), expected, "flags {letters:?}");
+                assert_eq!(
+                    mode_of(flags(letters).mode_flags()),
+                    expected,
+                    "flags {letters:?}"
+                );
             }
         }
 
@@ -593,6 +612,15 @@ pub(crate) mod mode {
             assert!(is_shown(true, false));
             assert!(is_shown(false, true));
             assert!(!is_shown(false, false));
+        }
+
+        /// AppKit's visible bit is the visibility.
+        #[test]
+        fn appkit_occlusion_reports_the_visible_bit() {
+            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE));
+            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE | 1));
+            assert!(!occlusion_state_is_visible(0));
+            assert!(!occlusion_state_is_visible(1 << 3));
         }
 
         #[test]

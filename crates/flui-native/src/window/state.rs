@@ -1,6 +1,7 @@
 //! The window state every backend keeps: the snapshot it last published and
 //! the rule for when it is read from the OS again (ADR-0237), built like
-//! the display source (`display::source`).
+//! the display source (`display::source`), and the one rule that decides a
+//! window's mode from what its window system says of it (`mode_of`).
 
 #![forbid(unsafe_code)]
 
@@ -9,27 +10,42 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flui_platform::WindowState;
 use parking_lot::Mutex;
 
-/// The mode of a window from what the window system says of it. A minimized
-/// window is hidden whatever else is set; a fullscreen one often keeps its
-/// maximized flag, so fullscreen comes before maximized.
+/// What a window system says of a window, as the three facts its mode is
+/// decided from. Each platform reads them from its own report (winit's
+/// queries, AppKit's style mask and flags, the X11 window manager's
+/// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
 #[cfg(any(
-    all(
-        feature = "winit-backend",
-        any(windows, target_os = "macos", target_os = "linux")
-    ),
+    windows,
+    target_os = "macos",
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
-pub(crate) const fn mode_of(
-    minimized: bool,
-    fullscreen: bool,
-    maximized: bool,
-) -> flui_platform::WindowMode {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ModeFlags {
+    /// The window is minimized: iconic, in the Dock or on the taskbar.
+    pub(crate) minimized: bool,
+    /// The window covers its monitor without a frame.
+    pub(crate) fullscreen: bool,
+    /// The window is maximized.
+    pub(crate) maximized: bool,
+}
+
+/// The mode of a window with these flags. A minimized window is hidden
+/// whatever else is set; a fullscreen one often keeps its maximized flag, so
+/// fullscreen comes before maximized.
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    all(target_os = "linux", feature = "winit-backend"),
+    test
+))]
+pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
-    if minimized {
+    if flags.minimized {
         WindowMode::Minimized
-    } else if fullscreen {
+    } else if flags.fullscreen {
         WindowMode::Fullscreen
-    } else if maximized {
+    } else if flags.maximized {
         WindowMode::Maximized
     } else {
         WindowMode::Normal
@@ -182,9 +198,9 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{WindowGeometry, WindowMode, WindowRevision, WindowState};
+    use flui_platform::{WindowGeometry, WindowRevision, WindowState};
 
-    use super::{WindowStateCell, mode_of};
+    use super::WindowStateCell;
 
     fn state(width: f64) -> WindowState {
         WindowState::new(
@@ -258,44 +274,123 @@ mod tests {
             "a frozen cell stays frozen even for a sample equal to its state"
         );
     }
+}
 
+/// The table of the one mode rule, which every window system's reading of its
+/// own report is held to: a row's flags, put as that system reports them and
+/// read back by the system's own reading, decide the row's mode.
+#[cfg(test)]
+mod mapping {
+    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_platform::WindowMode::{self, Fullscreen, Maximized, Minimized, Normal};
+
+    use super::{ModeFlags, mode_of};
+    use crate::window::apple::geometry::mode::WindowFlags;
+    use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
+    use crate::window::windows::mode::NativeMode;
+
+    const fn flags(minimized: bool, fullscreen: bool, maximized: bool) -> ModeFlags {
+        ModeFlags {
+            minimized,
+            fullscreen,
+            maximized,
+        }
+    }
+
+    /// (case, what the window system says, mode)
+    const ROWS: [(&str, ModeFlags, WindowMode); 8] = [
+        ("nothing set", flags(false, false, false), Normal),
+        ("maximized", flags(false, false, true), Maximized),
+        ("fullscreen", flags(false, true, false), Fullscreen),
+        ("minimized", flags(true, false, false), Minimized),
+        (
+            "fullscreen that kept its maximized flag",
+            flags(false, true, true),
+            Fullscreen,
+        ),
+        (
+            "minimized from fullscreen",
+            flags(true, true, false),
+            Minimized,
+        ),
+        (
+            "minimized from maximized",
+            flags(true, false, true),
+            Minimized,
+        ),
+        ("all three", flags(true, true, true), Minimized),
+    ];
+
+    /// The properties an X11 window manager keeps for such a window:
+    /// `WM_STATE` iconic and `_NET_WM_STATE_HIDDEN` for a minimized one, the
+    /// fullscreen atom, and both maximized atoms.
+    fn x11(said: ModeFlags) -> ModeFlags {
+        let wm_state = if said.minimized {
+            WmState::Iconic
+        } else {
+            WmState::Normal
+        };
+        mode_flags(
+            Some(wm_state),
+            NetWmState {
+                hidden: said.minimized,
+                maximized_horz: said.maximized,
+                maximized_vert: said.maximized,
+                fullscreen: said.fullscreen,
+            },
+        )
+    }
+
+    /// AppKit's flags for such a window: AppKit leaves full screen before it
+    /// miniaturizes a window, and a maximized window is a zoomed resizable one.
+    fn appkit(said: ModeFlags) -> ModeFlags {
+        WindowFlags {
+            fullscreen: said.fullscreen && !said.minimized,
+            miniaturized: said.minimized,
+            zoomed: said.maximized,
+            resizable: true,
+        }
+        .mode_flags()
+    }
+
+    /// The mode a Win32 window tracks for such a window: a fullscreen window
+    /// keeps the rectangle it returns to, also while it is minimized, and a
+    /// fullscreen window's maximized flag is its own business.
+    fn win32(said: ModeFlags) -> ModeFlags {
+        let back = Bounds::new(Point::new(10, 20), Size::new(800, 600));
+        let mode = if said.minimized {
+            NativeMode::Minimized {
+                from_fullscreen: said.fullscreen.then_some(back),
+            }
+        } else if said.fullscreen {
+            NativeMode::Fullscreen {
+                restore_bounds: back,
+            }
+        } else if said.maximized {
+            NativeMode::Maximized
+        } else {
+            NativeMode::Normal
+        };
+        mode.flags()
+    }
+
+    /// A window system's reading of its own report of a window.
+    type Reading = fn(ModeFlags) -> ModeFlags;
+
+    /// Every window system decides a row's mode alike; winit's three queries
+    /// are the flags as they stand.
     #[test]
-    fn window_mode_precedence() {
-        // (case, minimized, fullscreen, maximized, mode)
-        let table = [
-            ("nothing set", false, false, false, WindowMode::Normal),
-            ("maximized", false, false, true, WindowMode::Maximized),
-            ("fullscreen", false, true, false, WindowMode::Fullscreen),
-            ("minimized", true, false, false, WindowMode::Minimized),
-            (
-                "fullscreen that kept its maximized flag",
-                false,
-                true,
-                true,
-                WindowMode::Fullscreen,
-            ),
-            (
-                "minimized from fullscreen",
-                true,
-                true,
-                false,
-                WindowMode::Minimized,
-            ),
-            (
-                "minimized from maximized",
-                true,
-                false,
-                true,
-                WindowMode::Minimized,
-            ),
-            ("all three", true, true, true, WindowMode::Minimized),
+    fn every_window_system_decides_the_mode_alike() {
+        let readings: [(&str, Reading); 4] = [
+            ("winit", |said| said),
+            ("X11", x11),
+            ("AppKit", appkit),
+            ("Win32", win32),
         ];
-        for (case, minimized, fullscreen, maximized, expected) in table {
-            assert_eq!(
-                mode_of(minimized, fullscreen, maximized),
-                expected,
-                "{case}"
-            );
+        for (case, said, mode) in ROWS {
+            for (system, read) in readings {
+                assert_eq!(mode_of(read(said)), mode, "{system}: {case}");
+            }
         }
     }
 }

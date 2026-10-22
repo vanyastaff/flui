@@ -26,6 +26,7 @@ use wasm_bindgen::{JsCast, prelude::*};
 use crate::{
     host, host_window::HostWindow, owner::OpenWindowError, owner::handlers::WindowCallbacks,
     owner::signal::OwnerSignal, owner::web::WebLoop, window::state::WindowStateCell,
+    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
@@ -667,7 +668,7 @@ impl WebWindow {
                 .expect("BUG: window construction verified the canvas document"),
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
-            observed: Cell::new(self.state.lock().visible),
+            observed: Cell::new(ReportedVisibility::new(self.state.lock().visible)),
             accepting,
             publisher: self.publisher(),
         }
@@ -749,7 +750,7 @@ pub(crate) struct VisibilitySync {
     pub(crate) document: web_sys::Document,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
-    observed: Cell<bool>,
+    observed: Cell<ReportedVisibility>,
     accepting: Rc<Cell<bool>>,
     publisher: StatePublisher,
 }
@@ -758,9 +759,15 @@ impl VisibilitySync {
     pub(crate) fn sync(&self) {
         let visible = !self.document.hidden();
         // A host getter can synchronously retire this registration.
-        if !self.accepting.get() || self.observed.replace(visible) == visible {
+        if !self.accepting.get() {
             return;
         }
+        let mut observed = self.observed.get();
+        let report = observed.report(visible);
+        self.observed.set(observed);
+        let Some(visible) = report else {
+            return;
+        };
         let state = Arc::clone(&self.state);
         let cell = Arc::clone(&self.publisher.cell);
         self.callbacks
