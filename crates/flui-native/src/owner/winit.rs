@@ -318,6 +318,11 @@ pub struct WinitLoop {
     #[cfg(target_os = "linux")]
     host_notice_start: Box<dyn HostNoticeStart>,
 
+    /// Run where a turn reads what wakes asked of it, before the
+    /// application's turn: a test wakes the owner from here.
+    #[cfg(test)]
+    pub(crate) turn_read_hook_for_test: Mutex<Option<Box<dyn FnMut() + Send>>>,
+
     state: Arc<Mutex<WinitLoopState>>,
 }
 
@@ -468,6 +473,8 @@ impl WinitLoop {
             notices: H::notices(),
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            turn_read_hook_for_test: Mutex::new(None),
             preference_start: H::preferences(),
             #[cfg(target_os = "linux")]
             host_notice_start: H::host_notices(),
@@ -478,6 +485,14 @@ impl WinitLoop {
             .notices
             .mark_held_stale_on_wake(Arc::downgrade(&platform.displays) as _);
         platform
+    }
+
+    /// Run the test's read, as the loop's own reads run in a turn.
+    #[cfg(test)]
+    fn run_turn_read_hook_for_test(&self) {
+        if let Some(read) = self.turn_read_hook_for_test.lock().as_mut() {
+            read();
+        }
     }
 
     /// The shell windows opened from here will be on, before any exists.
@@ -1896,6 +1911,13 @@ impl WinitApp {
             self.request_exit(event_loop);
             return;
         }
+        // Begun before the reads below (host notices, the portal's
+        // appearance, X11 window properties, Windows preferences), so a wake
+        // that lands while they run posts the next turn instead of being
+        // settled by this one's drive with its change unread.
+        let turn = signal
+            .as_deref()
+            .map(crate::owner::signal::OwnerSignal::begin_turn);
         if self.control.take_quit_requested() {
             self.complete_pending_closes(event_loop);
             self.request_exit(event_loop);
@@ -1956,16 +1978,24 @@ impl WinitApp {
             }
         }
 
+        // An accepted reading is owed to this turn's drive, not a wake: a
+        // wake now would post a turn of its own with nothing left to read.
         #[cfg(windows)]
-        self.refresh_preferences();
+        if self.refresh_preferences()
+            && let Some(turn) = &turn
+        {
+            turn.owe();
+        }
         #[cfg(target_os = "linux")]
         self.deliver_portal_appearance();
         #[cfg(target_os = "linux")]
         self.deliver_host_notices();
         #[cfg(target_os = "linux")]
         self.refresh_x11_windows();
-        if let Some(signal) = signal
-            && signal.drive()
+        #[cfg(test)]
+        self.platform.run_turn_read_hook_for_test();
+        if let Some(turn) = turn
+            && turn.drive()
         {
             self.request_exit(event_loop);
             return;

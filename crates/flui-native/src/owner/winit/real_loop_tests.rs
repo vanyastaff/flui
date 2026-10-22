@@ -928,6 +928,117 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
     worker.join().expect("worker thread does not panic");
 }
 
+/// A wake that lands while a turn reads what wakes asked of it (an X11
+/// window's properties, host notices, the portal's appearance) gets a turn of
+/// its own, which reads again. Were it folded into the turn under way, that
+/// turn's drive would settle it with the change unread, and the loop would
+/// sleep until some unrelated wake.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "winit requires AppKit's event loop on the real main thread; \
+              the test harness runs this on an ordinary test thread"
+)]
+fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
+    let event_loop = build_test_event_loop();
+    install_test_owner_signal(&platform, &event_loop);
+    let signal = platform
+        .owner_signal
+        .lock()
+        .clone()
+        .expect("the test installed an owner signal");
+    // An application's turn, as a running app has one.
+    signal
+        .register(Box::new(|| {}))
+        .expect("the owner registers its turn");
+    let event_loop_proxy = event_loop.create_proxy();
+    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = event_loop_proxy.send_event(());
+    });
+    let (control, receiver) = control_lane(wake_owner);
+    platform
+        .install_control_lane(thread::current().id(), control.clone())
+        .expect("first install succeeds");
+
+    // Set by the worker once the loop runs: the next read wakes the owner.
+    let armed = Arc::new(AtomicBool::new(false));
+    // The owner was woken while a turn read.
+    let woke_while_reading = Arc::new(AtomicBool::new(false));
+    // A later turn read again.
+    let read_again = Arc::new(AtomicBool::new(false));
+    *platform.turn_read_hook_for_test.lock() = Some(Box::new({
+        let armed = Arc::clone(&armed);
+        let woke_while_reading = Arc::clone(&woke_while_reading);
+        let read_again = Arc::clone(&read_again);
+        let signal = Arc::downgrade(&signal);
+        move || {
+            if woke_while_reading.load(Ordering::SeqCst) {
+                read_again.store(true, Ordering::SeqCst);
+            } else if armed.load(Ordering::SeqCst)
+                && let Some(signal) = signal.upgrade()
+            {
+                woke_while_reading.store(true, Ordering::SeqCst);
+                signal.wake().expect("the owner accepts a wake");
+            }
+        }
+    }));
+
+    let platform_for_worker = Arc::clone(&platform);
+    let worker_signal = Arc::clone(&signal);
+    let worker = thread::spawn(move || {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            wait_for_running(&platform_for_worker);
+            armed.store(true, Ordering::SeqCst);
+            worker_signal.wake().expect("the owner accepts a wake");
+            // Bounded: without a turn of its own the wake is never read.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !read_again.load(Ordering::SeqCst) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                woke_while_reading.load(Ordering::SeqCst),
+                "the turn the worker woke for never read"
+            );
+            assert!(
+                read_again.load(Ordering::SeqCst),
+                "the wake that landed while the loop read got no turn of its own"
+            );
+        }));
+        control.request_quit();
+        if let Err(payload) = outcome {
+            resume_unwind(payload);
+        }
+    });
+
+    let mut app = WinitApp {
+        platform: Arc::clone(&platform),
+        owner_platform: host,
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        preference_source: None,
+        #[cfg(windows)]
+        broadcasts: None,
+        #[cfg(target_os = "macos")]
+        preference_observers: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        display_watch: None,
+        on_ready: None,
+        control: receiver,
+        quit_notified: false,
+        in_flight_replies: Vec::new(),
+        bootstrap_error: None,
+        self_close_deadline: None,
+        self_close_route: SelfCloseRoute::default(),
+    };
+    event_loop
+        .run_app(&mut app)
+        .expect("event loop runs to completion");
+    worker.join().expect("worker thread does not panic");
+}
+
 /// Which of the two close-related global `WindowEvent`s a test saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GlobalCloseEvent {

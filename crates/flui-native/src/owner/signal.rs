@@ -2,11 +2,15 @@
 //!
 //! The signal carries admission and scheduling state only; the owner-turn
 //! callback waits between turns in a [`TurnSlot`] passed to
-//! [`OwnerSignal::register_in`] and [`OwnerSignal::drive_in`]. A backend
+//! [`OwnerSignal::register_in`] and `OwnerSignal::drive_in`. A backend
 //! that keeps an `OwnerTurnSlot` (Windows only) in owner-only state therefore never has
 //! its callback dropped by whichever thread closes or drops the last
 //! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
 //! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
+//!
+//! A posted turn is begun before the loop reads anything a wake asked it to
+//! read ([`OwnerSignal::begin_turn`]), and driven after: a wake that lands
+//! while the loop reads posts the next turn, which reads again.
 use super::handlers::{InputWake, WindowCallbacks};
 use super::panic_boundary::contain_owner_callback;
 use crate::{PlatformError, ProxySendError, WakeRegistrationError};
@@ -290,67 +294,41 @@ impl OwnerSignal {
         }
     }
 
-    /// One finite turn over the signal's own shared slot.
-    pub(crate) fn drive(&self) -> bool {
-        self.drive_in(&self.shared)
-    }
-    /// One finite turn over `slot`. `true` asks the native owner to perform its quit path.
-    pub(crate) fn drive_in(&self, slot: &dyn TurnSlot) -> bool {
+    /// Begin the turn the loop was woken for: from here on a wake posts a
+    /// turn of its own instead of joining this one.
+    ///
+    /// A loop that reads what wakes ask of it before the application's turn
+    /// (a source a background thread fills: an X11 window's properties, host
+    /// notices, the portal's appearance) begins the turn, reads, then drives
+    /// it. A wake that lands while it reads finds this turn already reading,
+    /// so it posts the next one, which reads again; were it folded into this
+    /// turn, the drive would settle it and what it asked for would wait for
+    /// some later, unrelated wake.
+    pub(crate) fn begin_turn(&self) -> OwnerTurn<'_> {
         debug_assert_eq!(self.owner(), std::thread::current().id());
-        let mut callback = {
-            let mut state = self.state.lock();
-            state.queued = false;
-            if state.active {
-                return false;
-            }
-            if state.quit {
-                state.quit = false;
-                return true;
-            }
-            if state.accepting && state.running && !state.input_resumes.is_empty() {
-                // Held window input resumes in its own turn, before the
-                // application's turn; resumes it asks for get a later turn.
-                state.active = true;
-                drop(state);
-                self.run_input_resumes();
-                self.state.lock().active = false;
-                if let Err(error) = self.schedule() {
-                    contain_owner_callback(|| {
-                        tracing::error!(%error, "owner turn could not be rearmed");
-                    });
-                }
-                return false;
-            }
-            if !state.accepting || !state.running || !state.pending {
-                return false;
-            }
-            // With no callback registered the wake stays owed: registering
-            // one schedules the turn that runs it.
-            let Some(callback) = slot.take() else {
-                return false;
-            };
-            state.pending = false;
-            state.active = true;
-            Some(callback)
-        };
-        contain_owner_callback(|| {
-            if let Some(callback) = callback.as_mut() {
-                callback();
-            }
-        });
-        {
-            let state = self.state.lock();
-            if state.accepting {
-                callback = callback.and_then(|callback| slot.restore(callback));
-            }
+        self.state.lock().queued = false;
+        OwnerTurn {
+            signal: self,
+            driven: false,
         }
-        // Nested native loops during Drop must observe active and leave pending work alone.
-        contain_owner_callback(|| drop(callback));
-        self.state.lock().active = false;
+    }
+    /// One finite turn over the signal's own shared slot, begun and driven
+    /// at once: for a loop that reads nothing of its own first.
+    pub(crate) fn drive(&self) -> bool {
+        self.begin_turn().drive()
+    }
+    /// [`drive`](Self::drive) over `slot`. `true` asks the native owner to
+    /// perform its quit path.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn drive_in(&self, slot: &dyn TurnSlot) -> bool {
+        self.begin_turn().drive_in(slot)
+    }
+    /// Post the turn that work still owed asks for; a failure is logged, the
+    /// work stays owed.
+    fn rearm(&self) {
         if let Err(error) = self.schedule() {
             contain_owner_callback(|| tracing::error!(%error, "owner turn could not be rearmed"));
         }
-        false
     }
     /// Stops admission and scheduling, and drops the callback in the
     /// signal's own shared slot. A slot held by owner-side state is the
@@ -371,6 +349,99 @@ impl OwnerSignal {
 impl Drop for OwnerSignal {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// A turn the loop has begun ([`OwnerSignal::begin_turn`]) and has yet to
+/// drive. Dropped without being driven (a read that unwinds, a loop that
+/// returns early), it posts the next turn for whatever work is owed, so that
+/// work never waits for an unrelated wake.
+#[must_use = "a begun turn is driven once the loop has read what wakes asked of it"]
+pub(crate) struct OwnerTurn<'signal> {
+    signal: &'signal OwnerSignal,
+    /// Set once the application's turn has run; an undriven turn rearms when
+    /// dropped.
+    driven: bool,
+}
+
+impl OwnerTurn<'_> {
+    /// The application's turn has work: a read on the owner thread found
+    /// something it must see (the winit loop's Windows preferences). Unlike a
+    /// wake, this posts nothing; the drive that follows runs it, or the drop
+    /// of an undriven turn posts it.
+    #[cfg(all(windows, feature = "winit-backend"))]
+    pub(crate) fn owe(&self) {
+        let mut state = self.signal.state.lock();
+        if state.accepting {
+            state.pending = true;
+        }
+    }
+    /// The application's turn over the signal's own shared slot. `true` asks
+    /// the native owner to perform its quit path.
+    pub(crate) fn drive(self) -> bool {
+        let shared = &self.signal.shared;
+        self.drive_in(shared)
+    }
+    /// The application's turn over `slot`, which the caller's owner-side
+    /// state holds. `true` asks the native owner to perform its quit path.
+    pub(crate) fn drive_in(mut self, slot: &dyn TurnSlot) -> bool {
+        self.driven = true;
+        let signal = self.signal;
+        let mut callback = {
+            let mut state = signal.state.lock();
+            if state.active {
+                return false;
+            }
+            if state.quit {
+                state.quit = false;
+                return true;
+            }
+            if state.accepting && state.running && !state.input_resumes.is_empty() {
+                // Held window input resumes in its own turn, before the
+                // application's turn; resumes it asks for get a later turn.
+                state.active = true;
+                drop(state);
+                signal.run_input_resumes();
+                signal.state.lock().active = false;
+                signal.rearm();
+                return false;
+            }
+            if !state.accepting || !state.running || !state.pending {
+                return false;
+            }
+            // With no callback registered the wake stays owed: registering
+            // one schedules the turn that runs it.
+            let Some(callback) = slot.take() else {
+                return false;
+            };
+            state.pending = false;
+            state.active = true;
+            Some(callback)
+        };
+        contain_owner_callback(|| {
+            if let Some(callback) = callback.as_mut() {
+                callback();
+            }
+        });
+        {
+            let state = signal.state.lock();
+            if state.accepting {
+                callback = callback.and_then(|callback| slot.restore(callback));
+            }
+        }
+        // Nested native loops during Drop must observe active and leave pending work alone.
+        contain_owner_callback(|| drop(callback));
+        signal.state.lock().active = false;
+        signal.rearm();
+        false
+    }
+}
+
+impl Drop for OwnerTurn<'_> {
+    fn drop(&mut self) {
+        if !self.driven {
+            self.signal.rearm();
+        }
     }
 }
 

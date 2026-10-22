@@ -2183,11 +2183,135 @@ mod tests {
         signal.close();
     }
 
+    /// A loop that reads what wakes asked of it begins the turn, reads, then
+    /// drives. A wake that lands while it reads posts the next turn, and the
+    /// loop reads again there: a change recorded during the first read is not
+    /// left for an unrelated later wake.
+    fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        signal
+            .register(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("register");
+        signal.start().expect("start");
+        // What a background source records for the loop to read, and wakes
+        // the owner for.
+        let changes = Arc::new(Mutex::new(Vec::<u32>::new()));
+        changes.lock().push(1);
+        signal.wake().expect("wake");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+
+        let mut read = Vec::new();
+        let mut turns = 0;
+        // The loop: one pass per posted turn.
+        while turns < posts.load(Ordering::SeqCst) {
+            turns += 1;
+            let turn = signal.begin_turn();
+            read.extend(std::mem::take(&mut *changes.lock()));
+            if turns == 1 {
+                // The source records another change while the loop reads.
+                changes.lock().push(2);
+                signal.wake().expect("wake");
+            }
+            assert!(!turn.drive());
+        }
+        assert_eq!(
+            read,
+            [1, 2],
+            "the change made during the read was never read"
+        );
+        assert_eq!(turns, 2);
+        // The wake during the read was the first turn's to run: the second
+        // turn only read.
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        signal.close();
+    }
+
+    /// A turn begun and dropped before it was driven (a read that unwinds, a
+    /// loop that returns early) posts the next turn for the work still owed,
+    /// so the application's turn never waits for an unrelated wake.
+    fn an_undriven_turn_posts_the_next_one() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        signal
+            .register(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("register");
+        signal.start().expect("start");
+        signal.wake().expect("wake");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            let _turn = signal.begin_turn();
+            panic!("a read panics before the turn is driven");
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(
+            posts.load(Ordering::SeqCst),
+            2,
+            "the undriven turn posted no turn for the work it left owed"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!signal.drive());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the posted turn runs it");
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        signal.close();
+    }
+
+    /// A read inside a turn that finds work for the application's turn owes
+    /// it to that turn: the drive runs it, and nothing is posted for it.
+    #[cfg(all(windows, feature = "winit-backend"))]
+    fn a_turn_owed_by_its_read_posts_nothing() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        signal
+            .register(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("register");
+        signal.start().expect("start");
+
+        let turn = signal.begin_turn();
+        turn.owe();
+        assert!(!turn.drive());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            posts.load(Ordering::SeqCst),
+            0,
+            "an owed turn posted a turn of its own"
+        );
+        signal.close();
+    }
+
     /// The owner-thread machinery's contracts: hostile callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
     /// existing unwind), the HWND user-data refusal precedence holds, and the
-    /// owner signal coalesces a burst and gives a re-entrant wake a later turn.
+    /// owner signal coalesces a burst and gives a re-entrant wake a later turn,
+    /// gives a wake that lands while the loop reads a turn that reads again,
+    /// posts the next turn when a begun turn is dropped undriven, and runs
+    /// work a read owes to its turn without posting another.
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
@@ -2228,6 +2352,19 @@ mod tests {
             (
                 "worker burst and reentrant wake",
                 worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn,
+            ),
+            (
+                "a wake while the loop reads",
+                a_wake_while_the_loop_reads_gets_a_turn_that_reads_again,
+            ),
+            (
+                "an undriven turn",
+                an_undriven_turn_posts_the_next_one,
+            ),
+            #[cfg(all(windows, feature = "winit-backend"))]
+            (
+                "a turn owed by its read",
+                a_turn_owed_by_its_read_posts_nothing,
             ),
             (
                 "off-owner normal diagnostics",

@@ -249,11 +249,18 @@ impl WinitApp {
             self.broadcasts = Some(receiver);
         }
         opened?;
-        self.refresh_preferences();
+        // Outside any turn: an accepted reading asks for one.
+        if self.refresh_preferences() {
+            let _ = signal.wake();
+        }
         Ok(())
     }
 
     /// Publishes before owner delivery; errors retain the native source's retry.
+    /// `true` when a reading was accepted, which the application's turn must
+    /// see: the caller owes it that turn, inside a turn it has begun
+    /// ([`OwnerTurn::owe`](crate::owner::signal::OwnerTurn::owe)) or with a
+    /// wake.
     #[cfg(windows)]
     pub(super) fn refresh_preferences(&self) -> bool {
         let Some(source) = &self.preference_source else {
@@ -270,21 +277,22 @@ impl WinitApp {
         let accepted = matches!(&observation, PreferenceObservation::Observed(_));
         self.platform
             .with_state(|state| state.preferences = observation);
-        if accepted {
-            let signal = self.platform.owner_signal.lock().clone();
-            if let Some(signal) = signal {
-                let _ = signal.wake();
-            }
-        }
         accepted
     }
 
+    /// Read the preferences and, when a reading was accepted, run the
+    /// application's turn that sees it: owed to a turn begun here, so the
+    /// reading costs no posted turn of its own.
     #[cfg(windows)]
     pub(super) fn deliver_preferences(&self) -> bool {
         if !self.refresh_preferences() {
             return false;
         }
         let signal = self.platform.owner_signal.lock().clone();
-        signal.is_some_and(|signal| signal.drive() || signal.quitting())
+        signal.is_some_and(|signal| {
+            let turn = signal.begin_turn();
+            turn.owe();
+            turn.drive() || signal.quitting()
+        })
     }
 }
