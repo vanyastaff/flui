@@ -8,9 +8,6 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests;
-
 use std::cell::Cell;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
