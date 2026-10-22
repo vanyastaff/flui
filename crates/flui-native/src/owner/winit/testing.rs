@@ -37,7 +37,7 @@ use super::{
     FileDrops, HostDisplays, LoopInput, LoopWindow, LoopWindows, PreferenceStart, SelfCloseRoute,
     WindowSeed, WinitApp, WinitHost, WinitLoop, WinitRunState,
 };
-use crate::error::{BootstrapError, PlatformError};
+use crate::error::PlatformError;
 use crate::host::{self, Absent, Host, position};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
@@ -208,7 +208,8 @@ impl WinitApp {
 
     /// The failure `on_ready` returned, which `run` reports once the loop
     /// unwound.
-    pub(crate) fn bootstrap_error_for_test(&self) -> Option<&BootstrapError> {
+    #[cfg(windows)]
+    pub(crate) fn bootstrap_error_for_test(&self) -> Option<&crate::error::BootstrapError> {
         self.bootstrap_error.as_ref()
     }
 }
