@@ -1,13 +1,12 @@
 //! The decidable half of the Android backend's input method
-//! (`shared::android_ime`, ADR-0247): how `FluiView`'s mirror reports become
+//! (`text::android::ime`, ADR-0247): how `FluiView`'s mirror reports become
 //! ordered edits of the field's store, which edits a newer owner snapshot
 //! drops, and what a key, an editor action and a stylus press become. The JNI
 //! side runs on a device.
 
 use std::rc::Rc;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_native::shared::android_ime::{
+use super::{
     EditorState, IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
     IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, PROTECTED_UNIT, Replayed, Snapshot,
     TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
@@ -15,6 +14,7 @@ use flui_native::shared::android_ime::{
     cursor_anchor, editor_action_key, editor_info, key_composition, replay_current,
     starts_handwriting,
 };
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::{ImeComposition, NamedKey};
 use flui_platform::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
@@ -380,7 +380,7 @@ fn the_cursor_anchor_is_in_physical_pixels() {
 
 #[test]
 fn android_ime_adapter() {
-    super::run_table(
+    crate::table_test::run_table(
         "android_ime_adapter",
         &[
             (

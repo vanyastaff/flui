@@ -751,22 +751,17 @@ impl WindowsWindow {
                 haptics: super::haptics::WindowsHaptics::new(this),
                 drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), this),
             });
-            // The wrapper owns the window from here: a panic out of the
-            // activation (or anything after it) drops it, which destroys the
-            // window and retires its context.
-            let touchpad_apartment = apartment.clone();
-            if !Self::activate_text_services(this, apartment) {
-                return Err(OpenWindowError::Backend {
-                    message: "the window was destroyed while its text services activated".into(),
-                });
-            }
+            // The wrapper owns the window from here: a panic out of what
+            // follows drops it, which destroys the window and retires its
+            // context.
 
             // From here on the window takes drags, from this process or
             // another (ADR-0211).
             super::drag::register_target(this, drag);
 
-            // The hooks of the window class learn of the window: the precision
-            // touchpad's viewport is created there.
+            // The hooks of the window class learn of the window: its text
+            // services activate and the precision touchpad's viewport is
+            // created there.
             let mut client = windows::Win32::Foundation::RECT::default();
             let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 (client.right - client.left, client.bottom - client.top)
@@ -778,9 +773,18 @@ impl WindowsWindow {
                 &crate::owner::windows::CreatedWindow {
                     hwnd,
                     client_size: size,
-                    apartment: touchpad_apartment,
+                    apartment,
                 },
             );
+            // A message a hook dispatched may have destroyed the window: the
+            // open then fails instead of returning a wrapper around the dead
+            // handle.
+            if this.with_context("window_created", |_| ()).is_none() {
+                return Err(OpenWindowError::Backend {
+                    message: "the window was destroyed while its class's hooks learned of it"
+                        .into(),
+                });
+            }
 
             // The window is still hidden: put it where and in the mode it
             // opens, then show it now, later (first frame) or never (hidden).
@@ -872,54 +876,6 @@ impl WindowsWindow {
             && super::platform::with_window_context(self.hwnd, "owns_handle", |context| {
                 context.identity == self.identity
             }) == Some(true)
-    }
-
-    /// Activate TSF for the window just installed, on its owner thread, and
-    /// hold the connection in its context (ADR-0135 §3): from here on the
-    /// window offers its text-store host. TSF's calls read the window's
-    /// context (its scale), so it is installed first. A failure leaves the
-    /// window without a host, and text input takes the `WM_CHAR` path, as
-    /// it does with no `apartment` (the platform's is reachable on its owner
-    /// thread only, where windows are opened).
-    ///
-    /// Returns whether the window is still alive: a message the activation
-    /// dispatched may have destroyed it, and the open then fails.
-    fn activate_text_services(
-        window: super::platform::WindowRef,
-        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-    ) -> bool {
-        let hwnd = window.hwnd();
-        let Some(apartment) = apartment else {
-            tracing::warn!(
-                ?hwnd,
-                "no COM apartment for TSF; text input falls back to WM_CHAR"
-            );
-            return true;
-        };
-        #[cfg(test)]
-        if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
-            hook(hwnd);
-        }
-        match super::text_services::TextServices::activate(window, apartment) {
-            Ok(services) => {
-                let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
-                    c.text_services.replace(Some(Rc::clone(&services)))
-                });
-                if installed.is_none() {
-                    // The window is already gone (destroyed by a message
-                    // the activation dispatched): deactivate at once.
-                    super::text_services::TextServices::retire_with_window(services);
-                }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "TSF did not activate for this window; text input falls back to WM_CHAR"
-                );
-            }
-        }
-        super::platform::with_window_context(hwnd, "text_services", |_| ()).is_some()
     }
 
     /// Apply Windows 11 features automatically
@@ -2961,14 +2917,6 @@ impl Drop for WindowsWindow {
             };
         }
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Runs as a window's text services are about to activate: lets a test
-    /// stand in for a message the activation dispatches.
-    pub(super) static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
-        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

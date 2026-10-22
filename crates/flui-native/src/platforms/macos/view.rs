@@ -26,7 +26,7 @@
 //! The class is built with objc2's imperative `ClassBuilder` (the successor to
 //! `objc` 0.2's `ClassDecl`) rather than the declarative `define_class!` macro,
 //! because the `NSTextInputClient` methods are registered by a *separate*
-//! function in [`super::text_input`] — the macro wants all methods in one
+//! function in [`crate::text::apple::macos`] — the macro wants all methods in one
 //! block, and the split is what keeps the IME conformance's eleven callbacks
 //! beside the state they read.
 
@@ -44,8 +44,8 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSRect, NSRectEdge};
 
 use super::events::MacInputState;
-use super::text_input::{TextInputState, add_text_input_methods};
 use crate::owner::handlers::WindowCallbacks;
+use crate::text::apple::macos::{TextInputState, add_text_input_methods};
 
 // ============================================================================
 // FLUIContentView Creation
@@ -94,16 +94,16 @@ pub fn create_content_view(
 }
 
 /// Context stored in NSView ivar
-pub(super) struct ViewContext {
+pub(crate) struct ViewContext {
     scale_factor: f64,
     pub(super) callbacks: Weak<WindowCallbacks>,
 
     /// The `NSTextInputClient` composition state this view is driven through
-    /// (see [`super::text_input`]). A `RefCell` because the AppKit callbacks and
-    /// the routed [`super::text_input::MacOSTextInput`] bodies both reach it
+    /// (see [`crate::text::apple::macos`]). A `RefCell` because the AppKit callbacks and
+    /// the routed [`crate::text::apple::macos::MacOSTextInput`] bodies both reach it
     /// through a shared `&ViewContext`, and every one of them either runs on the
     /// main thread (AppKit's delivery contract) or under the owner-lane guard.
-    pub(super) text_input: RefCell<TextInputState>,
+    pub(crate) text_input: RefCell<TextInputState>,
     input: RefCell<MacInputState>,
     /// The appearance last reported to `on_appearance_changed`; AppKit also
     /// re-resolves the effective appearance for changes that keep the theme,
@@ -119,10 +119,10 @@ pub(super) struct ViewContext {
 ///
 /// Converts the event and dispatches it through the per-window callbacks.
 ///
-/// `pub(super)` because `super::text_input`'s `doCommandBySelector:` is the
+/// `pub(crate)` because `text::apple::macos`'s `doCommandBySelector:` is the
 /// second caller: the key event an input method declined is handed back here to
 /// take the ordinary keyboard path.
-pub(super) extern "C-unwind" fn handle_input_event(
+pub(crate) extern "C-unwind" fn handle_input_event(
     this: &AnyObject,
     _sel: Sel,
     event: *mut AnyObject,
@@ -180,7 +180,7 @@ extern "C-unwind" fn key_down(this: &AnyObject, _sel: Sel, event: *mut AnyObject
         // and a press must reach the application exactly once — either as a
         // composition/commit through the input context, or as a key event
         // through the keyboard conversion, never both (see the module doc of
-        // `super::text_input`).
+        // `text::apple::macos`).
         let ime_allowed = ctx.text_input.borrow().ime_allowed;
         if !ime_allowed {
             handle_input_event(this, objc2::sel!(keyDown:), event);
@@ -577,7 +577,7 @@ fn get_or_create_view_class() -> &'static AnyClass {
 ///
 /// `view` must be a live FLUIContentView whose `context_ptr` ivar is either
 /// null or points to a `ViewContext` owned by that view.
-pub(super) unsafe fn get_context(view: &AnyObject) -> Option<&ViewContext> {
+pub(crate) unsafe fn get_context(view: &AnyObject) -> Option<&ViewContext> {
     // SAFETY: per the function contract the ivar is null or a valid
     // Box<ViewContext> pointer owned by the view; the returned shared
     // reference cannot outlive the view method invocation that holds `view`.
@@ -643,7 +643,7 @@ unsafe fn content_view_context_ptr(view: *mut AnyObject) -> Option<*mut ViewCont
 ///
 /// `view` must be null or a live `NSView*`, and `body` must not hold on to what
 /// it is given past its own return (it may not: the reference is scoped to it).
-pub(super) unsafe fn with_view_context<R>(
+pub(crate) unsafe fn with_view_context<R>(
     view: *mut AnyObject,
     body: impl FnOnce(&ViewContext) -> R,
 ) -> Option<R> {
@@ -672,9 +672,9 @@ pub(super) unsafe fn with_view_context_mut<R>(
 
 /// Dispatch input event to the window's callbacks
 ///
-/// `pub(super)` for [`super::text_input`], whose IME events take this same
+/// `pub(crate)` for [`crate::text::apple::macos`], whose IME events take this same
 /// throat so they are ordered against pointer and keyboard events.
-pub(super) fn dispatch_input_event(ctx: &ViewContext, input: flui_platform::PlatformInput) {
+pub(crate) fn dispatch_input_event(ctx: &ViewContext, input: flui_platform::PlatformInput) {
     if let Some(callbacks) = ctx.callbacks.upgrade() {
         let _result = callbacks.dispatch_input(input);
     } else {

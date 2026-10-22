@@ -17,6 +17,10 @@
 //! needs answered at once (a drag's acceptance, a drop's result, the input
 //! method's reads) comes from state the owner published earlier: the drop
 //! feedback the target cached, and the mirror of the focused field.
+//!
+//! The view serves several features and names none of the text feature's
+//! types: the mirror of the field the view edits is a [`FieldMirror`], which
+//! the host's table hands the view ([`AndroidHost`](super::AndroidHost)).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,12 +35,11 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use crate::owner::signal::OwnerSignal;
-use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
-use crate::platforms::android::AndroidTransfer;
 use crate::platforms::android::preferences::with_activity;
+use crate::platforms::android::{AndroidTransfer, AndroidWindow};
 
 /// The view's classes, compiled from `android/java` (see the module doc).
 const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
@@ -48,8 +51,9 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 pub(crate) enum ViewEvent {
     /// The view's installation finished, whether or not it worked.
     Installed,
-    /// One input method edit of the focused field.
-    Ime(ImeEdit),
+    /// What a feature made of a report on the Java main thread, done to the
+    /// window on the owner in order with the rest; dropped with no window.
+    Window(Box<dyn FnOnce(&AndroidWindow) + Send>),
     /// `performEditorAction(action)`, at `uptime_ms` on the event clock.
     EditorAction {
         /// The `EditorInfo.IME_ACTION_*` the input method performed.
@@ -73,6 +77,33 @@ pub(crate) enum ViewEvent {
     InsetsChanged,
 }
 
+/// The mirror of the field `FluiView` edits, which the text feature keeps.
+///
+/// The input method reads and edits the view's copy of the focused field on
+/// the Java main thread and never waits for the owner; the owner publishes the
+/// field to the view, and the view reports what the input method made of it.
+/// The mirror holds what the view holds, so that each report becomes one edit
+/// of the field, which it queues for the owner through the view.
+pub(crate) trait FieldMirror: Send + Sync {
+    /// The view now holds `text`, which the owner published as `generation`:
+    /// the reports that follow are diffed against it. On the owner thread.
+    fn hold(&self, generation: u32, text: &str);
+
+    /// `nativeImeState`: what the view holds after an input method edit made
+    /// on the publication `generation` names: its `text`, the `selection`'s
+    /// anchor and moving end, and the composing span's start and end (`-1` for
+    /// none), in UTF-16 code units as Java counts them. On the Java main
+    /// thread, under no lock of the view.
+    fn report(
+        &self,
+        view: &JavaView,
+        generation: u32,
+        text: String,
+        selection: [i32; 2],
+        composition: [i32; 2],
+    );
+}
+
 /// Where the view is in its life.
 enum Install {
     /// Posted to the Java main thread, not run yet.
@@ -87,8 +118,6 @@ enum Install {
 
 struct State {
     install: Install,
-    /// The field text the view holds, which each report is diffed against.
-    mirror: Mirror,
     /// What the view reported, oldest first.
     events: VecDeque<ViewEvent>,
     /// The `Box<Weak<JavaView>>` the view holds as its handle, freed on the
@@ -103,6 +132,8 @@ pub(crate) struct JavaView {
     api: AndroidApi,
     signal: Weak<OwnerSignal>,
     transfer: Arc<AndroidTransfer>,
+    /// The mirror of the field the view edits.
+    mirror: Arc<dyn FieldMirror>,
     state: Mutex<State>,
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
@@ -119,15 +150,20 @@ impl std::fmt::Debug for JavaView {
 
 impl JavaView {
     /// The bridge, with the view's installation posted to the Java main thread.
-    pub(super) fn start(app: AndroidApp, signal: Weak<OwnerSignal>, api: AndroidApi) -> Arc<Self> {
+    pub(super) fn start(
+        app: AndroidApp,
+        signal: Weak<OwnerSignal>,
+        api: AndroidApi,
+        mirror: Arc<dyn FieldMirror>,
+    ) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
             app,
             api,
             signal,
             transfer: Arc::new(AndroidTransfer::new(this.clone())),
+            mirror,
             state: Mutex::new(State {
                 install: Install::Pending,
-                mirror: Mirror::default(),
                 events: VecDeque::new(),
                 handle: None,
             }),
@@ -185,9 +221,9 @@ impl JavaView {
         self.push_event(ViewEvent::Drag(event));
     }
 
-    /// The view now holds `snapshot`: later reports are diffed against it.
-    pub(crate) fn install_mirror(&self, snapshot: &Snapshot) {
-        self.state.lock().mirror.install(snapshot);
+    /// The mirror of the field the view edits.
+    pub(crate) fn field_mirror(&self) -> &dyn FieldMirror {
+        &*self.mirror
     }
 
     /// Run `call` with the view on the Java main thread, if it is installed
@@ -323,15 +359,6 @@ impl JavaView {
                 free_handle(handle as *mut Weak<JavaView>);
             }
         }));
-    }
-
-    /// The view's report of its mirror: the edit it makes, queued for the owner.
-    fn report(&self, generation: u32, state: &EditorState) {
-        let edit = self.state.lock().mirror.report(generation, state);
-        if let Some(edit) = edit {
-            self.set_composing(edit.composes());
-            self.push_event(ViewEvent::Ime(edit));
-        }
     }
 }
 
@@ -680,14 +707,13 @@ extern "system" fn native_ime_state<'local>(
         let jni::Outcome::Ok(text) = text else {
             return;
         };
-        let state = EditorState {
-            text: text.unwrap_or_default(),
-            selection_start,
-            selection_end,
-            composition_start,
-            composition_end,
-        };
-        view.report(generation.cast_unsigned(), &state);
+        view.mirror.report(
+            &view,
+            generation.cast_unsigned(),
+            text.unwrap_or_default(),
+            [selection_start, selection_end],
+            [composition_start, composition_end],
+        );
     });
 }
 

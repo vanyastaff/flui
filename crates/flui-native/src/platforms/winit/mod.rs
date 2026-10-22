@@ -32,5 +32,4 @@ pub(crate) mod window_plan;
 pub use clipboard::ArboardClipboard;
 pub use data_transfer::WinitDataTransfer;
 pub(crate) use display::WinitDisplaySource;
-pub(crate) use window::WinitTextInput;
 pub use window::WinitWindow;

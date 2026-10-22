@@ -1,8 +1,9 @@
 //! Owner-acquired, detached native numeric text sizing.
-
-#[cfg(all(test, not(target_os = "android")))]
-#[path = "platforms/android/text_sizing.rs"]
-mod android_capture_tests;
+//!
+//! The owner acquires a presentation's converter
+//! ([`OwnerPlatform::capture_text_sizing`]); the platforms whose system text
+//! size is not one linear scale capture it natively (`text::android::sizing`,
+//! `text::apple::ios`).
 
 use flui_foundation::{TextSize, TextSizeRequest};
 use std::{
@@ -11,6 +12,22 @@ use std::{
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use crate::host_window::{HostWindow, OwnerThreadToken};
+use crate::owner::OwnerPlatform;
+
+impl OwnerPlatform {
+    /// Acquire a detached numeric text converter for this native presentation.
+    ///
+    /// # Errors
+    /// Refuses unavailable native contexts and failed capture/query admission.
+    pub fn capture_text_sizing(
+        &self,
+        window: &Arc<dyn HostWindow>,
+    ) -> Result<TextSizingCaptureState, TextSizingCaptureError> {
+        window.capture_text_sizing(OwnerThreadToken::new())
+    }
+}
 
 /// Readiness of one presentation's detached conversion context.
 #[derive(Debug)]
@@ -63,9 +80,9 @@ pub(crate) enum NativeSizing {
     #[cfg(test)]
     Test(Box<dyn Fn(TextSizeRequest) -> Result<TextSize, TextSizingCaptureError> + Send + Sync>),
     #[cfg(target_os = "android")]
-    Android(crate::platforms::android::text_sizing::Snapshot),
+    Android(super::android::sizing::Snapshot),
     #[cfg(target_os = "ios")]
-    UIKit(crate::platforms::ios::text_sizing::Snapshot),
+    UIKit(super::apple::ios::Snapshot),
 }
 
 /// A frozen native converter, independent of live Resources or trait lookup.

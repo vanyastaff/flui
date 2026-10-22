@@ -1,7 +1,9 @@
 //! The decidable half of the web backend's text input (ADR-0090): when a key
 //! belongs to an input method, and what a hidden `<textarea>`'s change was.
 //! Cfg-free plain functions over integers and UTF-16, so Linux CI pins them;
-//! `platforms::web::text_input` reads the DOM.
+//! `text::web::input` reads the DOM.
+
+#![forbid(unsafe_code)]
 
 use flui_platform::keyboard::ImeComposition;
 use flui_platform::text_store::TextInputPurpose;
@@ -103,3 +105,6 @@ pub const fn input_mode(purpose: TextInputPurpose) -> &'static str {
         _ => "text",
     }
 }
+
+#[cfg(test)]
+mod tests;

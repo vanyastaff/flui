@@ -1,15 +1,19 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
+use std::sync::Arc;
+
 use android_activity::AndroidApp;
 
 use crate::host::{Absent, Host, position};
-use crate::owner::android::AndroidLoop;
+use crate::owner::android::java_view::FieldMirror;
+use crate::owner::android::{AndroidHost, AndroidLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput,
-    AndroidTransfer, AndroidWindow, MockClipboard,
+    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer,
+    AndroidWindow, MockClipboard,
 };
+use crate::text::android::{AndroidTextInput, ViewMirror};
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -31,6 +35,13 @@ impl Host for Android {
     type Lifecycle = AndroidLoop;
     type Chrome = AndroidSystemChrome;
     type Storage = AndroidLoop;
+}
+
+impl AndroidHost for Android {
+    /// The text input's mirror of the focused field.
+    fn field_mirror() -> Arc<dyn FieldMirror> {
+        Arc::new(ViewMirror::default())
+    }
 }
 
 /// Android platform implementation using `android-activity`
@@ -57,6 +68,6 @@ impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new(app))
+        Self::from_loop(AndroidLoop::new::<Android>(app))
     }
 }

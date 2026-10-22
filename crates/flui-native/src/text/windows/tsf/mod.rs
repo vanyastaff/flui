@@ -38,6 +38,11 @@
 //!
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
+// TSF is COM: direct Win32 calls and `#[implement]` objects have no safe
+// wrapper. Every `unsafe` block carries its own `// SAFETY:` comment stating
+// the invariant that makes it sound.
+#![expect(unsafe_code)]
+
 mod document;
 mod input_scope;
 #[cfg(test)]
@@ -70,8 +75,8 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
-use super::platform::WindowRef;
 use crate::owner::windows::com_apartment::ComApartment;
+use crate::platforms::windows::platform::WindowRef;
 
 #[cfg(test)]
 thread_local! {
@@ -372,7 +377,7 @@ impl TextServices {
     /// application code the teardown reaches is logged, not raised, the log
     /// contained as [`Self::leave`]'s is; after a failure the services are
     /// retained, not destroyed (ADR-0127).
-    pub(super) fn retire_with_window(services: Rc<Self>) {
+    pub(crate) fn retire_with_window(services: Rc<Self>) {
         let mut calls = OwnerCalls::new();
         calls.run(|| {
             services.run_host_op(HostOp::Shutdown);
@@ -392,7 +397,7 @@ impl TextServices {
     /// the sink are application code and a user-installed `tracing`
     /// subscriber: from the window procedure a failure there is logged, not
     /// raised.
-    pub(super) fn window_moved(&self) {
+    pub(crate) fn window_moved(&self) {
         let Some(store) = self.focused_state().map(|state| Rc::clone(&state.store)) else {
             return;
         };
@@ -804,7 +809,17 @@ impl std::fmt::Debug for TextServices {
     }
 }
 
-impl crate::host::Text for TextServices {}
+impl crate::text::TextInput for TextServices {
+    fn ime(
+        self: std::sync::Arc<Self>,
+    ) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
+        Some(self)
+    }
+}
 
 impl TextStoreHost for TextServices {
     /// Queued when called under a TSF call into a store.

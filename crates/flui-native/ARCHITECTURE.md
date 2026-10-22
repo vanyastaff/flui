@@ -78,9 +78,11 @@ trait depends on `flui-platform` instead.
     class once per process, so the class registration records its host and a
     loop for another host is refused with `PlatformError::Init`. Today the
     hooks are the window's procedure (`platforms::windows::WindowProc`, which
-    still answers every message, its default included) and the precision
-    touchpad, whose `created` gives each new window its DirectManipulation
-    viewport. Tests: `a_window_message_reaches_the_hooks_in_order`,
+    still answers every message, its default included), the text services
+    (`text::windows::Tsf`), whose `created` activates each new window's TSF
+    connection, and the precision touchpad, whose `created` gives it its
+    DirectManipulation viewport; a window a hook's message destroyed fails
+    its open. Tests: `a_window_message_reaches_the_hooks_in_order`,
     `a_second_host_is_refused_the_window_class`.
   - The owner control owns the broadcast receiver and builds it from the
     subscribers the host names over its objects (`OwnerObjects`): the
@@ -93,9 +95,33 @@ trait depends on `flui-platform` instead.
     otherwise. winit on Windows builds a receiver of its own for its
     preference source. Test: `broadcast_subscribers_hear_a_message_in_order`.
 
+  On Android the table implements `owner::android::AndroidHost`, which names
+  the features' objects `FluiView` hands its reports: today the text
+  feature's mirror of the field the view edits (`field_mirror`).
+
   Until each feature takes its own state, a loop still holds the state the
   table's positions read (windows, displays, preferences, drag, notices) and
   calls that feature's code by name.
+- **A feature is a directory of `flui-native`: its model beside one module
+  per platform (ADR-0151 §10).** `text` is the first: the model is `ime`
+  (what the Android and web hosts mirror of a focused field, and the one edit
+  between two versions of it), `sizing` (the native text size an owner
+  captures; `OwnerPlatform::capture_text_sizing` is implemented there) and
+  `TextInput`, the trait of the table's `Text` position: a platform's text
+  input either takes a field's IME requests (`PlatformTextInput`: AppKit,
+  winit, headless) or serves the field's store (`TextStoreHost`: TSF, Android,
+  web), and `Absent<position::Text>` takes neither. Beside it: `windows`
+  (`tsf`, the pure `geometry`, the `Tsf` class hook), `apple::{macos, ios}`,
+  `android` (the pure `ime`, `input`, `sizing`), `web` (the pure `ime`,
+  `input`), `winit` and `headless`. `cargo xtask module-dag` lists `text` in
+  `features`: a platform module names its model, `owner/` and the crate-level
+  modules not yet moved, never another platform's module, and `owner/` names
+  no text type. The pure halves of `android` and `web` are built on every
+  target and public, hidden from the documentation, because the backend
+  conformance table in `tests/` decodes a composing key with them; `windows`
+  is built for tests on every host, which check its geometry there. Tests of
+  the model and the pure halves sit beside them (`text::android::ime::tests`,
+  `text::web::ime::tests`, `text::windows::geometry::tests`).
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -630,7 +656,7 @@ quiescent point is still inside that dispatch.
 
 ### The web window serves the focused field's store to the browser's input method
 
-`platforms::web::text_input::WebTextInput` is the web window's
+`text::web::WebTextInput` is the web window's
 `TextStoreHost` (ADR-0090, ADR-0135), reached through
 `OwnerPlatform::text_store_host` as Win32's text services are. The focused
 field's store is mirrored into an `EditContext` on the canvas where the
@@ -638,7 +664,7 @@ browser has one (Chromium; web-sys binds none, so the crate declares it) and
 into a hidden `<textarea>` beside the canvas where it does not. The browser
 edits its copy and reports each edit (`textupdate`, or the textarea's
 `input`, diffed against the text the host last gave it by
-`shared::web_text::diff`); the host applies it to the store under an
+`text::ime::diff`, the mirror's one edit); the host applies it to the store under an
 asynchronous lock, the text a composition inserted marked composing until
 `compositionend`. The application's changes reach the copy through the store's
 observer. Offsets are UTF-16 code units throughout. A request the presentation
@@ -652,7 +678,7 @@ A key the input method processes is the input method's: it reaches the window
 marked `ImeComposition::Active` when its event composes, when it carries the
 input method's key code 229 (WebKit dispatches the key that ends a composition
 after `compositionend`, with `isComposing` false), or while the surface
-composes (`shared::web_text::key_composition`). No shortcut, focus traversal
+composes (`text::web::ime::key_composition`). No shortcut, focus traversal
 or drag cancellation takes such a key, and its default stays the input
 method's, so Escape cancels the composition first. A key the application
 handles has its default prevented, so the browser does not also type it into
@@ -1091,11 +1117,14 @@ by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 
 ### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
 
-A window's TSF connection (`text_services::TextServices`, ADR-0135 §3) lives in its
-`WindowContext`, activated on the owner thread right after the context is installed (TSF's
-calls read the context's scale), so the host exists before any field can focus; a lazy
-activation would put the first `ITfThreadMgr::Activate` inside a focus change, under owner
-code. A failed activation leaves `None` and the `WM_CHAR` path. `WM_DESTROY` deactivates it
+A window's TSF connection (`text::windows::TextServices`, ADR-0135 §3) lives in its
+`WindowContext`, activated on the owner thread once the context is installed, by the text
+feature's hook on FLUI's window class (`text::windows::Tsf`, whose `created` the class's hooks
+hear before the precision touchpad's; TSF's calls read the context's scale), so the host exists
+before any field can focus; a lazy activation would put the first `ITfThreadMgr::Activate`
+inside a focus change, under owner code. A failed activation leaves `None` and the `WM_CHAR`
+path; a window a message of the activation destroyed fails its open
+(`a_window_destroyed_during_activation_fails_the_open`). `WM_DESTROY` deactivates it
 after the close callbacks (the presentation's close unfocuses its field through the still
 active host) and before the context retires; the shutdown is a host operation, so one that
 arrives inside a TSF call into a store waits for that call. Its application-code failures are
@@ -2985,8 +3014,8 @@ owner, which delivers them in order each loop turn, and contains a panic before 
 JVM. The view holds a `Box<Weak<JavaView>>` as its handle; `detach` clears the view's copy and
 then frees it, both on the Java main thread, the only thread that calls the view's natives.
 
-The window's `TextStoreHost` is `text_input::AndroidTextInput`. The input method edits the
-view's mirror; `shared::android_ime::Mirror` turns each report into one edit against the
+The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
+view's mirror; `text::android::ime::Mirror` turns each report into one edit against the
 snapshot the view holds, and the host replays it under an async lock, dropping one made on an
 older snapshot than it published last (`replay_current`). A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
@@ -2997,7 +3026,14 @@ feedback; `drag::AndroidDragSource` serves the whole clip at the start (`clip_pa
 `ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
 window reports no drag source and `outgoing_drag()` `Unavailable`.
 
-`android_ime_adapter` and `android_drag_mapping` (`tests/android_ime.rs`,
+The view names no text type: the mirror is the text feature's `ViewMirror`, a
+`java_view::FieldMirror` the host's table hands the view (`owner::android::AndroidHost`).
+The view passes it each `nativeImeState` report on the Java main thread, and the mirror
+queues the edit it makes as a `ViewEvent::Window`, which the owner runs against the window in
+order with the view's other reports; an editor action reaches the window as the key it stands
+for (`AndroidWindow::editor_action`).
+
+`android_ime_adapter` and `android_drag_mapping` (`src/text/android/ime/tests.rs`,
 `tests/android_drag.rs`) pin the pure halves in Linux CI, with the Android rows of
 `backend_conformance` and `input_capabilities_contracts`. A run on a device
 covered the JNI half: a drag started there dropped on its own window, and the default

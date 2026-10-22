@@ -1,5 +1,9 @@
 //! Frozen traits map a regular system reference font to a numeric point size.
 
+// UIKit's font and text-style constants are extern statics read through
+// objc: no safe wrapper. Every `unsafe` block carries its own `// SAFETY:`.
+#![expect(unsafe_code)]
+
 use crate::TextSizingCaptureError as Error;
 use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
 use objc2::rc::Retained;
@@ -11,7 +15,7 @@ use objc2_ui_kit::{
 };
 
 pub(crate) struct Snapshot {
-    pub(super) traits: Retained<UITraitCollection>,
+    pub(crate) traits: Retained<UITraitCollection>,
 }
 
 impl Snapshot {

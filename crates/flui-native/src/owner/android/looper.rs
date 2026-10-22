@@ -176,7 +176,8 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    pub(crate) fn new(app: AndroidApp) -> Self {
+    /// The loop of host `H`, whose table names what `FluiView` reports to.
+    pub(crate) fn new<H: super::AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -192,7 +193,12 @@ impl AndroidLoop {
             AndroidApi::UNKNOWN
         });
         tracing::info!(api = %api, "Android API level");
-        let java_view = java_view::JavaView::start(app.clone(), Arc::downgrade(&owner_signal), api);
+        let java_view = java_view::JavaView::start(
+            app.clone(),
+            Arc::downgrade(&owner_signal),
+            api,
+            H::field_mirror(),
+        );
         let owner = Arc::downgrade(&owner_signal);
         Self {
             java_view,
@@ -313,9 +319,9 @@ impl AndroidLoop {
                         window.refresh_capabilities();
                     }
                 }
-                java_view::ViewEvent::Ime(edit) => {
-                    if let Some(input) = window.as_ref().and_then(|window| window.text_input()) {
-                        input.apply(edit);
+                java_view::ViewEvent::Window(work) => {
+                    if let Some(window) = &window {
+                        work(window);
                     }
                 }
                 java_view::ViewEvent::CursorUpdates(mode) => {
@@ -325,13 +331,7 @@ impl AndroidLoop {
                 }
                 java_view::ViewEvent::EditorAction { action, uptime_ms } => {
                     if let Some(window) = &window {
-                        if let Some(input) = window.text_input() {
-                            input.editor_action();
-                        }
-                        let (key, shift) = crate::shared::android_ime::editor_action_key(action);
-                        for input in input::editor_action_keys(key, shift, uptime_ms) {
-                            window.callbacks().dispatch_input(input);
-                        }
+                        window.editor_action(action, uptime_ms);
                     }
                 }
                 java_view::ViewEvent::Drag(event) => match &window {
@@ -386,13 +386,7 @@ impl AndroidLoop {
             let Some(input) = window.text_input() else {
                 return;
             };
-            if crate::shared::android_ime::starts_handwriting(
-                pen,
-                input.field_bounds(),
-                press.sample.position.get(),
-            ) {
-                input.start_handwriting(handwriting);
-            }
+            input.offer_pen(handwriting, press.sample.position.get());
         }
     }
 

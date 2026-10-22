@@ -20,6 +20,8 @@
 //!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
 //!   │                         and slot, the panic boundary, the one call
 //!   │                         point for handlers and the handler registry
+//!   ├─ text/                - Text input and the system text size: the
+//!   │                         model and one module per platform
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │
@@ -152,8 +154,9 @@
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, `platforms::android::memory`, and the loops
-// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`) carries its
+// `platforms::winit`, `platforms::android::memory`, the loops
+// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, and the text
+// services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios`) carries its
 // own module-level `#![expect(unsafe_code)]` where it is declared, and the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
@@ -168,8 +171,6 @@
 
 pub mod config;
 pub mod error;
-mod text_sizing;
-pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 // Reachable so a crate outside can show that a table missing a position does
@@ -187,6 +188,12 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
+// Reachable for the text position's trait, which bounds a host's table, and
+// for the backend conformance table, which decodes a composing key with the
+// Android and web rules; not an embedding API.
+#[doc(hidden)]
+pub mod text;
+pub use text::sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 
 // Re-export configuration types
 // ==================== Platform Detection ====================

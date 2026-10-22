@@ -6,10 +6,11 @@ use crate::host::Host;
 use crate::owner::headless::HeadlessLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DragDouble, FakeAccessibility, FakeSystemChrome, FakeTextInput, HeadlessDisplays,
-    HeadlessHostEvents, HeadlessInputDevices, HeadlessPreferences, MockWindow,
+    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessDisplays, HeadlessHostEvents,
+    HeadlessInputDevices, HeadlessPreferences, MockWindow,
 };
 use crate::storage::UserDataDirs;
+use crate::text::headless::FakeTextInput;
 
 /// The headless host's table.
 #[derive(Debug)]

@@ -7,9 +7,10 @@ use crate::platform::HostPlatform;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::platforms::linux::UnixAccessibility;
 use crate::platforms::winit::{
-    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitTextInput, WinitWindow,
+    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
 };
 use crate::storage::UserDataDirs;
+use crate::text::winit::WinitTextInput;
 
 /// The winit host's table.
 #[derive(Debug)]

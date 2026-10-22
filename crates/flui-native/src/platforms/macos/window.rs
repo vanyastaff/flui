@@ -130,7 +130,7 @@ pub struct MacOSWindow {
     /// accessibility slot above is one: the capability is discovered through a
     /// `&self` accessor and must be handed out as one shared instance per
     /// window, not a fresh one per call.
-    text_input: std::sync::OnceLock<Arc<super::text_input::MacOSTextInput>>,
+    text_input: std::sync::OnceLock<Arc<crate::text::apple::macos::MacOSTextInput>>,
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
@@ -689,7 +689,7 @@ impl MacOSWindow {
 /// thread — so the lane, not a call-graph fact or a debug assert, is the
 /// enforcement. A free function rather than a method so it can be exercised
 /// on any lane without constructing a real window.
-pub(super) fn route_on_owner<R: Send>(
+pub(crate) fn route_on_owner<R: Send>(
     owner: &'static dispatch::Queue,
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
@@ -1087,7 +1087,7 @@ impl PlatformWindow for MacOSWindow {
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the
-    /// content view carries (see `super::text_input`). Without this override
+    /// content view carries (see `text::apple::macos`). Without this override
     /// the trait default (`None`) leaves the native backend with no IME at all
     /// while the optional winit fallback has one.
     ///
@@ -1099,7 +1099,7 @@ impl PlatformWindow for MacOSWindow {
     /// window's own close.
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
-            Arc::new(super::text_input::MacOSTextInput::new(
+            Arc::new(crate::text::apple::macos::MacOSTextInput::new(
                 self.view,
                 Arc::clone(&self.closed),
                 self.owner,

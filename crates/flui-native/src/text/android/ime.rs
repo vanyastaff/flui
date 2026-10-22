@@ -16,7 +16,9 @@
 //! is the authority; the mirror never is.
 //!
 //! Cfg-free plain values over UTF-16, so Linux CI pins them;
-//! `platforms::android` moves them across JNI.
+//! `text::android` moves them across JNI.
+
+#![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{ImeComposition, NamedKey};
@@ -25,10 +27,10 @@ use flui_platform::text_store::{
     TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
-use super::ime_text::document_text;
-use super::web_text::diff;
+use crate::text::ime::document_text;
+use crate::text::web::ime::diff;
 
-pub use super::ime_text::PROTECTED_UNIT;
+pub use crate::text::ime::PROTECTED_UNIT;
 
 /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
 pub const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
@@ -181,8 +183,14 @@ pub struct Mirror {
 impl Mirror {
     /// The view now holds `snapshot`.
     pub fn install(&mut self, snapshot: &Snapshot) {
-        self.generation = snapshot.generation;
-        self.units = snapshot.text.encode_utf16().collect();
+        self.hold(snapshot.generation, &snapshot.text);
+    }
+
+    /// The view now holds `text`, published as `generation`: a snapshot's
+    /// text, which is all of it the reports are diffed against.
+    pub fn hold(&mut self, generation: u32, text: &str) {
+        self.generation = generation;
+        self.units = text.encode_utf16().collect();
     }
 
     /// The generation of the snapshot the view holds.
@@ -397,3 +405,6 @@ pub fn starts_handwriting(
                 && point.y <= field.origin.y + field.size.height
         })
 }
+
+#[cfg(test)]
+mod tests;

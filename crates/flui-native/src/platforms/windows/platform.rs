@@ -32,13 +32,13 @@ use windows::Win32::{
 use super::{
     display::WindowsDisplays,
     events::{get_x_lparam, get_y_lparam},
-    text_services::TextServices,
     window::{NativeMode, WindowsWindow},
 };
 use crate::owner::call_point::{Field, call};
 use crate::owner::windows::{
     WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
 };
+use crate::text::windows::TextServices;
 use crate::{
     config::WindowConfiguration, owner::handlers::PlatformHandlers,
     owner::handlers::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
@@ -70,26 +70,26 @@ mod display_message_tests;
 /// [`Self::with_context`] reaches only the context this window was created
 /// with. Plain values, so an `Arc`-shared object can hold one on any thread.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct WindowRef {
+pub(crate) struct WindowRef {
     hwnd: isize,
     identity: WindowIdentity,
 }
 
 impl WindowRef {
-    pub(super) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
+    pub(crate) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
         Self {
             hwnd: hwnd.0 as isize,
             identity,
         }
     }
 
-    pub(super) fn hwnd(self) -> HWND {
+    pub(crate) fn hwnd(self) -> HWND {
         HWND(self.hwnd as *mut core::ffi::c_void)
     }
 
     /// [`with_window_context`] for this window only: `None` off its owner
     /// thread, after it closed, or when its handle now names another window.
-    pub(super) fn with_context<R>(
+    pub(crate) fn with_context<R>(
         self,
         op: &'static str,
         f: impl FnOnce(&WindowContext) -> R,

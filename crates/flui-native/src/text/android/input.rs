@@ -10,7 +10,7 @@
 //! view reports is replayed into the store under an asynchronous lock, in
 //! order, now if the store is free and else when its frame transaction lets
 //! it; an edit made on a snapshot older than the latest one the owner
-//! published is dropped (`shared::android_ime`). When the field changes
+//! published is dropped (`text::android::ime`). When the field changes
 //! outside the input method's edits (the application's own edit, a moved
 //! caret) the store's observer publishes a new snapshot: a text change
 //! restarts the input method, a selection change only tells it.
@@ -23,22 +23,64 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::{Bounds, Point};
+use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
     CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
     TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
 };
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::owner::panic_boundary::contain_owner_callback;
-use crate::shared::android_ime::{
-    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Snapshot, cursor_anchor, editor_info,
-    replay_current,
+use super::ime::{
+    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, EditorState, ImeEdit, Mirror, Snapshot,
+    cursor_anchor, editor_info, replay_current, starts_handwriting,
 };
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
 
-use crate::owner::android::java_view::JavaView;
+use crate::owner::android::java_view::{FieldMirror, JavaView, ViewEvent};
+use crate::platforms::android::AndroidWindow;
+
+/// The text `FluiView` holds of the focused field, as the owner last published
+/// it or the input method last reported it: each report becomes one edit of
+/// the field against it, which the window's text input replays.
+#[derive(Debug, Default)]
+pub(crate) struct ViewMirror(parking_lot::Mutex<Mirror>);
+
+impl FieldMirror for ViewMirror {
+    fn hold(&self, generation: u32, text: &str) {
+        self.0.lock().hold(generation, text);
+    }
+
+    fn report(
+        &self,
+        view: &JavaView,
+        generation: u32,
+        text: String,
+        selection: [i32; 2],
+        composition: [i32; 2],
+    ) {
+        let state = EditorState {
+            text,
+            selection_start: selection[0],
+            selection_end: selection[1],
+            composition_start: composition[0],
+            composition_end: composition[1],
+        };
+        let edit = self.0.lock().report(generation, &state);
+        if let Some(edit) = edit {
+            view.set_composing(edit.composes());
+            view.push_event(ViewEvent::Window(Box::new(
+                move |window: &AndroidWindow| {
+                    if let Some(input) = window.text_input() {
+                        input.apply(edit);
+                    }
+                },
+            )));
+        }
+    }
+}
 
 /// A host request made while the host was already inside a call into a
 /// store: applied, in order, when that call returns.
@@ -93,7 +135,8 @@ impl Drop for Entered<'_> {
 /// Publish `snapshot` to the view: it becomes the mirror the next reports are
 /// diffed against, and the view takes it as `how` says.
 fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32, i32, bool)) {
-    view.install_mirror(&snapshot);
+    view.field_mirror()
+        .hold(snapshot.generation, &snapshot.text);
     view.set_composing(snapshot.composition.is_some());
     let [
         selection_start,
@@ -148,7 +191,7 @@ fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32,
 }
 
 impl AndroidTextInput {
-    pub(super) fn new(view: Arc<JavaView>, api: AndroidApi) -> Rc<Self> {
+    pub(crate) fn new(view: Arc<JavaView>, api: AndroidApi) -> Rc<Self> {
         Rc::new_cyclic(|this| Self {
             view,
             handwriting: api.since::<StylusHandwriting>(),
@@ -163,7 +206,7 @@ impl AndroidTextInput {
     }
 
     /// The window closed: detach the focused field, if any, for good.
-    pub(super) fn retire(&self) {
+    pub(crate) fn retire(&self) {
         self.retired.set(true);
         self.pending.borrow_mut().clear();
         self.detach();
@@ -427,9 +470,17 @@ impl AndroidTextInput {
         });
     }
 
+    /// A pen tip touched down at `point`: inside the focused field, its stroke
+    /// is handed to the input method's handwriting.
+    pub(crate) fn offer_pen(&self, handwriting: Since<StylusHandwriting>, point: Point<f64>) {
+        if starts_handwriting(true, self.field_bounds(), point) {
+            self.start_handwriting(handwriting);
+        }
+    }
+
     /// The focused field's bounds, for a stylus press that may start
     /// handwriting; `None` when no field is focused or laid out.
-    pub(crate) fn field_bounds(&self) -> Option<Bounds<f64>> {
+    fn field_bounds(&self) -> Option<Bounds<f64>> {
         let store = self.focused()?;
         let found: Rc<Cell<Option<Bounds<f64>>>> = Rc::default();
         let out = Rc::clone(&found);
@@ -440,7 +491,7 @@ impl AndroidTextInput {
     }
 
     /// Hand the stylus stroke that just began to the input method.
-    pub(crate) fn start_handwriting(&self, _handwriting: Since<StylusHandwriting>) {
+    fn start_handwriting(&self, _handwriting: Since<StylusHandwriting>) {
         self.view.post(|env, view| {
             let started = env
                 .call_method(view, jni_str!("startHandwriting"), jni_sig!("()Z"), &[])?
@@ -488,7 +539,15 @@ impl TextStoreHost for AndroidTextInput {
     }
 }
 
-impl crate::host::Text for AndroidTextInput {}
+impl crate::text::TextInput for AndroidTextInput {
+    fn ime(self: Arc<Self>) -> Option<Arc<dyn PlatformTextInput>> {
+        None
+    }
+
+    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
+        Some(self)
+    }
+}
 
 /// What the store tells the view when the application changes the field.
 struct MirrorObserver {

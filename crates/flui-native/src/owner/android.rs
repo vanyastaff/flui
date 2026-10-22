@@ -8,8 +8,10 @@
 //! - [`ndk`]: the API level and the NDK functions that exist only from a given
 //!   level on, found by name when the platform is built.
 //!
-//! Window, input, text, display, drag, haptics and preferences stay in
-//! `platforms::android`; the loop reaches them there.
+//! Window, input, display, drag, haptics and preferences stay in
+//! `platforms::android`; the loop reaches them there. The view serves several
+//! features, so what it hands a feature's state is named by the host's table
+//! ([`AndroidHost`]), not by the view.
 
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
@@ -19,3 +21,11 @@ pub(crate) mod ndk;
 
 #[cfg(target_os = "android")]
 pub(crate) use looper::AndroidLoop;
+
+/// What an Android host's table names for its owner thread (ADR-0151 §10):
+/// the features' objects `FluiView` hands what it reports.
+#[cfg(target_os = "android")]
+pub(crate) trait AndroidHost: 'static {
+    /// A new mirror of the field the view edits, one per view.
+    fn field_mirror() -> std::sync::Arc<dyn java_view::FieldMirror>;
+}

@@ -2,8 +2,9 @@
 //! places its windows against (TSF `ITextStoreACP::GetTextExt`), and a
 //! screen point as the logical point it asks about (`GetACPFromPoint`).
 //!
-//! Cfg-free so its table runs on every host; the Win32 text services are its
-//! one consumer. The store answers in window-root logical pixels
+//! Free of `windows` types and built for tests on every host, so its table
+//! runs there; the Win32 text services are its one consumer. The store
+//! answers in window-root logical pixels
 //! (ADR-0030 §7); the screen wants whole physical pixels. Three rules decide
 //! the conversion:
 //!
@@ -18,6 +19,8 @@
 //! - an edge closer than [`SNAP_TOLERANCE`] device pixels to a whole pixel is
 //!   that pixel, so float noise from the multiplication (`0.1 × 3.0`) does
 //!   not grow the rect by one.
+
+#![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point};
 
@@ -141,3 +144,6 @@ fn whole_i32(value: f64) -> Result<i32, ScreenRectError> {
     }
     Ok(value as i32)
 }
+
+#[cfg(test)]
+mod tests;

@@ -3,6 +3,8 @@
 //! unit of a character-bounds request belongs to. Cfg-free plain values over
 //! UTF-16, so Linux CI pins them.
 
+#![forbid(unsafe_code)]
+
 use flui_platform::text_store::{TextStoreRead, Utf16Offset, Utf16Range};
 
 /// What a protected field's text reads as in a mirror: one bullet per code

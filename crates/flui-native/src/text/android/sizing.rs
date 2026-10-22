@@ -2,7 +2,7 @@
 
 use crate::{
     CapturedTextSizing, TextSizingCaptureError as Error, TextSizingCaptureState as Capture,
-    owner::signal::OwnerSignal, text_sizing::NativeSizing,
+    owner::signal::OwnerSignal, text::sizing::NativeSizing,
 };
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
@@ -173,7 +173,7 @@ struct State {
     retry: Option<Instant>,
 }
 
-pub(super) struct Acquisition {
+pub(crate) struct Acquisition {
     state: Mutex<State>,
 }
 
@@ -240,7 +240,7 @@ impl Drop for Receipt {
 }
 
 impl Acquisition {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State {
                 authority: Arc::new(AtomicBool::new(true)),
@@ -252,7 +252,7 @@ impl Acquisition {
         })
     }
 
-    pub(super) fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         let retired = {
             let mut state = self.state.lock();
             state.authority.store(false, Ordering::Release);
@@ -264,7 +264,7 @@ impl Acquisition {
     }
 
     #[cfg(target_os = "android")]
-    pub(super) fn fence(&self) {
+    pub(crate) fn fence(&self) {
         self.state.lock().authority.store(false, Ordering::Release);
     }
 
@@ -364,7 +364,7 @@ impl Acquisition {
     }
 
     #[cfg(target_os = "android")]
-    pub(super) fn poll(
+    pub(crate) fn poll(
         self: &Arc<Self>,
         app: &AndroidApp,
         signal: &Weak<OwnerSignal>,

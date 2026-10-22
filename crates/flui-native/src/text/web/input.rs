@@ -12,7 +12,7 @@
 //! through the store's observer. Offsets are UTF-16 code units on both sides.
 //!
 //! A key the input method processes stays the input method's (decided by
-//! `shared::web_text::key_composition`): the window delivers it
+//! `text::web::ime::key_composition`): the window delivers it
 //! marked composing while the surface composes, so no shortcut or drag
 //! cancellation takes Escape from the input method. Keys the application
 //! handles have their default prevented, so the browser does not also type
@@ -36,13 +36,12 @@ use flui_platform::text_store::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
+use super::ime::{diff, input_mode};
 use crate::owner::panic_boundary::contain_owner_callback;
-use crate::shared::ime_text::{document_text, scalar_spans};
-use crate::shared::web_text::{diff, input_mode};
-
-use super::events::{KeyRoute, is_focus_handoff};
-use super::registration::{EditorSlot, Listener};
-use super::window::FocusSync;
+use crate::platforms::web::events::{KeyRoute, is_focus_handoff};
+use crate::platforms::web::registration::{EditorSlot, Listener};
+use crate::platforms::web::window::FocusSync;
+use crate::text::ime::{document_text, scalar_spans};
 
 #[wasm_bindgen(inline_js = "
 export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -200,7 +199,7 @@ fn snapshot(store: &dyn TextStore) -> Option<(String, Selection)> {
 }
 
 impl WebTextInput {
-    pub(super) fn new(
+    pub(crate) fn new(
         canvas: &web_sys::HtmlCanvasElement,
         editor: EditorSlot,
         accepting: Rc<Cell<bool>>,
@@ -224,7 +223,7 @@ impl WebTextInput {
     }
 
     /// The window closed: detach the focused field, if any, for good.
-    pub(super) fn retire(&self) {
+    pub(crate) fn retire(&self) {
         self.retired.set(true);
         self.pending.borrow_mut().clear();
         self.detach();
@@ -665,7 +664,7 @@ impl WebTextInput {
             .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
         parent.insert_before(&element, self.canvas.next_sibling().as_ref())?;
         self.editor.set(Some(element.unchecked_ref()));
-        let canvas_focused = super::registration::effective_focus(&self.canvas);
+        let canvas_focused = crate::platforms::web::registration::effective_focus(&self.canvas);
         if canvas_focused {
             let _ = element.focus();
         }
@@ -996,7 +995,17 @@ impl std::fmt::Debug for WebTextInput {
     }
 }
 
-impl crate::host::Text for WebTextInput {}
+impl crate::text::TextInput for WebTextInput {
+    fn ime(
+        self: std::sync::Arc<Self>,
+    ) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn store_host(self: Rc<Self>) -> Option<Rc<dyn TextStoreHost>> {
+        Some(self)
+    }
+}
 
 impl TextStoreHost for WebTextInput {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {

@@ -5,10 +5,10 @@ use crate::host::{Absent, Host, position};
 use crate::owner::web::WebLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
-    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebPreferences, WebTextInput,
-    WebTransfer, WebWindow,
+    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebPreferences, WebTransfer, WebWindow,
 };
 use crate::storage::UserDataDirs;
+use crate::text::web::WebTextInput;
 
 /// The web host's table.
 #[derive(Debug)]
