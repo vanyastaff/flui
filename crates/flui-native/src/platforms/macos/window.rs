@@ -50,7 +50,7 @@ const NO: Bool = Bool::NO;
 
 use super::{display::MacosDisplays, view};
 use crate::{
-    config::WindowConfiguration, owner::OpenWindowError, shared::WindowCallbacks,
+    config::WindowConfiguration, owner::OpenWindowError, owner::handlers::WindowCallbacks,
     shared::window_state::WindowStateCell,
 };
 use flui_platform::{
@@ -1439,7 +1439,7 @@ impl PlatformWindow for MacOSWindow {
 
     // ==================== Callback Registration ====================
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
         &self,

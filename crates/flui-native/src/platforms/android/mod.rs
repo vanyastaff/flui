@@ -86,14 +86,27 @@ pub use window::AndroidWindow;
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::{
-    error::BootstrapError, error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks,
-    owner::OwnerPlatform, owner::signal::OwnerSignal, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback, redraw_poll::RedrawPoll,
-    shared::PlatformHandlers, shared::android_display::LoopTurn,
-    shared::android_display::poll_timeout, shared::android_lifecycle::ActivityEvent,
-    shared::android_lifecycle::ActivityLifecycle, shared::android_lifecycle::ActivityTarget,
-    shared::android_lifecycle::Reaction, shared::android_ndk::LoadedLibraries,
-    shared::android_ndk::SymbolSource, shared::os_version::android::AndroidApi,
+    error::BootstrapError,
+    error::PlatformError,
+    owner::DirectOwnerHooks,
+    owner::OwnerHooks,
+    owner::OwnerPlatform,
+    owner::call_point::{Field, SharedField, call, install},
+    owner::handlers::PlatformHandlers,
+    owner::signal::OwnerSignal,
+    platform::Platform,
+    platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
+    redraw_poll::RedrawPoll,
+    shared::android_display::LoopTurn,
+    shared::android_display::poll_timeout,
+    shared::android_lifecycle::ActivityEvent,
+    shared::android_lifecycle::ActivityLifecycle,
+    shared::android_lifecycle::ActivityTarget,
+    shared::android_lifecycle::Reaction,
+    shared::android_ndk::LoadedLibraries,
+    shared::android_ndk::SymbolSource,
+    shared::os_version::android::AndroidApi,
     shared::os_version::android::StylusHandwriting,
 };
 use flui_platform::{Clipboard, PlatformWindow, data_transfer::DataTransferSource};
@@ -165,6 +178,21 @@ impl std::fmt::Debug for AndroidLoop {
 }
 
 impl AndroidLoop {
+    /// One of the application's handlers, as a slot of the handler set.
+    fn handler<H>(
+        &self,
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<PlatformHandlers>, H> {
+        Field::new(&*self.handlers, project)
+    }
+
+    /// Run the application's quit handler through the call point, with no
+    /// lock of the handler set held: it may install another handler or call
+    /// back into the platform.
+    fn invoke_quit(&self) {
+        call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
+    }
+
     pub(crate) fn new(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
@@ -559,7 +587,11 @@ impl ActivityTarget for AndroidLoop {
     /// [`SessionEndPhase::Ending`] only: no query, no block.
     fn session_ended(&self) {
         // The system does not wait for an answer: there is nothing to veto.
-        let _answer = PlatformHandlers::run_session_end(&self.handlers, SessionEndPhase::Ending);
+        let _answer = call(
+            &self.handler(|handlers| &mut handlers.session_end),
+            |hook| hook(SessionEndPhase::Ending),
+        )
+        .or_resume(flui_platform::SessionEndAnswer::Proceed);
     }
 
     fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
@@ -647,10 +679,13 @@ impl host::Loop for AndroidLoop {
             // not stale from whenever the hook was installed. Lock
             // discipline (ADR-0038 §5, the same rule winit's own
             // `about_to_wait` follows): the hook itself re-enters
-            // `flui-app` -- clone the `Arc` out, drop the lock, THEN call
-            // it, never while `self.handlers` is still held.
-            let wake_deadline_hook = self.handlers.lock().wake_deadline.clone();
-            let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
+            // `flui-app`, so it is called through the call point, never
+            // while `self.handlers` is held.
+            let wake_deadline = call(
+                &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
+                |hook| hook(),
+            )
+            .or_resume(None);
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
             if deadline_due {
                 // Owner services remain deliverable while execution gates frames.
@@ -1011,8 +1046,9 @@ impl host::Loop for AndroidLoop {
             tracing::debug!("Android: loop exited; window released and its callbacks cleared");
         }
 
-        // Invoke quit handlers
-        self.handlers.lock().invoke_quit();
+        // The quit handler runs with no lock held: it may install another
+        // handler or call back into the platform.
+        self.invoke_quit();
         tracing::info!("Android platform event loop finished");
 
         if let Some(source) = bootstrap_error {
@@ -1035,7 +1071,7 @@ impl host::Loop for AndroidLoop {
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.handlers.lock().quit = Some(callback);
+        install(&self.handler(|handlers| &mut handlers.quit), callback);
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -1054,12 +1090,15 @@ impl host::Loop for AndroidLoop {
     /// `now >= deadline` once per iteration and forcing a dispatch when due
     /// (see that loop's own comment). Storage is the identical
     /// `PlatformHandlers::wake_deadline` slot winit uses, for the same
-    /// `Arc`-cloned-out-of-the-lock consultation discipline (ADR-0038 §5).
+    /// call-a-clone-outside-the-lock consultation discipline (ADR-0038 §5).
     fn set_wake_deadline_hook(
         &self,
         hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
     ) {
-        self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        install(
+            &self.handler(|handlers| &mut handlers.wake_deadline),
+            Arc::from(hook),
+        );
     }
 }
 
@@ -1119,8 +1158,10 @@ impl host::Lifecycle<AndroidLoop> for AndroidLoop {
         owner: &AndroidLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform::SessionEndAnswer + Send>,
     ) {
-        let replaced = owner.handlers.lock().session_end.replace(callback);
-        drop(replaced);
+        install(
+            &owner.handler(|handlers| &mut handlers.session_end),
+            callback,
+        );
     }
 
     fn on_host_notice(owner: &AndroidLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {

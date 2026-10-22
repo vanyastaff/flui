@@ -21,6 +21,7 @@ use crate::{
     host,
     host_window::HostWindow,
     owner::OpenWindowError,
+    owner::call_point::install,
     platforms::winit::{
         ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
         control::ControlSendError,
@@ -143,9 +144,10 @@ impl host::Window<WinitLoop> for WinitWindow {
     }
 
     fn on_event(owner: &WinitLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        owner.with_state(|state| {
-            state.handlers.window_event = Some(callback);
-        });
+        install(
+            &owner.handler(|state| &mut state.handlers.window_event),
+            callback,
+        );
     }
 }
 
@@ -245,7 +247,10 @@ impl host::Lifecycle<WinitLoop> for WinitLoop {
         owner: &WinitLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
-        owner.with_state(|state| state.handlers.session_end = Some(callback));
+        install(
+            &owner.handler(|state| &mut state.handlers.session_end),
+            callback,
+        );
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -268,9 +273,7 @@ impl host::Lifecycle<WinitLoop> for WinitLoop {
     }
 
     fn on_reopen(owner: &WinitLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.with_state(|state| {
-            state.handlers.reopen = Some(callback);
-        });
+        install(&owner.handler(|state| &mut state.handlers.reopen), callback);
     }
 
     fn activate(_: &WinitLoop, _ignoring_other_apps: bool) {

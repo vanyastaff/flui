@@ -40,7 +40,8 @@ use std::{
 use parking_lot::Mutex;
 
 use super::owner_lane::owner_queue;
-use crate::shared::PlatformHandlers;
+use crate::owner::call_point::{SharedField, call};
+use crate::owner::handlers::PlatformHandlers;
 
 /// How long after a redraw request the pump looks at the hook a second time
 /// when the first look found no deadline.
@@ -154,14 +155,16 @@ impl WakePump {
         self.schedule(target);
     }
 
-    /// Consult the installed hook, with the platform's handler lock released.
-    ///
-    /// The `Arc` is cloned out first and called after the guard drops, because
-    /// the hook walks every hosted UI runtime and takes gesture-arena locks — the
-    /// exact re-entrancy [`PlatformHandlers::wake_deadline`] warns about.
+    /// Consult the installed hook through the call point, with the platform's
+    /// handler lock released, because the hook walks every hosted UI runtime
+    /// and takes gesture-arena locks — the exact re-entrancy
+    /// [`PlatformHandlers::wake_deadline`] warns about.
     fn consult(&self) -> Option<web_time::Instant> {
-        let hook = self.handlers.lock().wake_deadline.clone();
-        hook.and_then(|hook| hook())
+        call(
+            &SharedField::new(&*self.handlers, |handlers| &mut handlers.wake_deadline),
+            |hook| hook(),
+        )
+        .or_resume(None)
     }
 
     /// Schedule one tick for `target`, superseding any tick before it.

@@ -44,7 +44,7 @@ use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
 use super::status_bar::FluiViewController;
-use crate::shared::WindowCallbacks;
+use crate::owner::handlers::WindowCallbacks;
 use crate::shared::apple_display_identity::change_screen;
 use crate::shared::display_link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
@@ -971,7 +971,7 @@ impl IOSWindow {
     }
 
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
-        use crate::shared::LifecycleEvent;
+        use crate::owner::handlers::LifecycleEvent;
         use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
             let mut state = self.lifecycle.lock();
@@ -1089,7 +1089,7 @@ impl IOSWindow {
             return;
         }
         self.begin_retirement();
-        use crate::shared::LifecycleEvent;
+        use crate::owner::handlers::LifecycleEvent;
         self.callbacks
             .dispatch_lifecycle_immediate(LifecycleEvent::Execution(
                 WindowExecutionState::Detached,
@@ -1309,7 +1309,7 @@ impl PlatformWindow for IOSWindow {
         self
     }
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
         &self,

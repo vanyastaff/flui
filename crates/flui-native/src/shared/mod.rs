@@ -100,7 +100,6 @@ pub(crate) mod dispatch_memory_pressure;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod display_link_rate;
 pub mod events;
-mod handlers;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
 pub(crate) mod system_notice;
@@ -190,11 +189,6 @@ pub(crate) mod web_feature;
 // UIKit consumes this acknowledgement and `flui-app` names it; its transport
 // contract runs on every host.
 pub mod window_installation;
-
-#[cfg(target_os = "ios")]
-pub(crate) use handlers::LifecycleEvent;
-pub(crate) use handlers::impl_window_callback_setters;
-pub use handlers::{InputCallback, InputWake, PlatformHandlers, WindowCallbacks};
 
 #[cfg(target_os = "ios")]
 pub(crate) mod apple_scene_error;

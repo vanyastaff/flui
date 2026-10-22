@@ -10,6 +10,7 @@ use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use winit::event_loop::ActiveEventLoop;
 
 use super::{WinitApp, WinitLoop};
+use crate::owner::call_point::call;
 use crate::platforms::linux::{
     host_notices::{HostEvent, HostNoticeSource},
     x11_window_probe::X11WindowProbe,
@@ -18,21 +19,16 @@ use crate::platforms::linux::{
 impl WinitLoop {
     /// One phase of a session end: the hook the host registered is asked and
     /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
-    /// registered. The hook runs outside the state lock (ADR-0039) and is
-    /// restored unless a newer one replaced it meanwhile.
+    /// registered. The hook runs through the call point, outside the state
+    /// lock (ADR-0039), and is restored unless a newer one replaced it
+    /// meanwhile — even when it panicked, so a later session end still reaches
+    /// the host; its panic reaches the caller.
     pub(super) fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let Some(mut hook) = self.with_state(|state| state.handlers.session_end.take()) else {
-            return SessionEndAnswer::Proceed;
-        };
-        // The hook goes back even if it panicked: a later session end still
-        // reaches the host.
-        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(phase)));
-        self.with_state(|state| {
-            if state.handlers.session_end.is_none() {
-                state.handlers.session_end = Some(hook);
-            }
-        });
-        answer.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        call(
+            &self.handler(|state| &mut state.handlers.session_end),
+            |hook| hook(phase),
+        )
+        .or_resume(SessionEndAnswer::Proceed)
     }
 
     /// The X11 window probe, started on first use. `None` when the platform

@@ -18,10 +18,10 @@
 //!   ├─ host_window.rs       - HostWindow: PlatformWindow + accessibility
 //!   ├─ host.rs, hosts/      - A host's table of positions, one per host
 //!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
-//!   │                         and slot, the panic boundary
+//!   │                         and slot, the panic boundary, the one call
+//!   │                         point for handlers and the handler registry
 //!   │
 //!   ├─ shared/              - Shared infrastructure
-//!   │   └─ handlers.rs      - Callback registry
 //!   │
 //!   └─ platforms/           - Concrete implementations
 //!       ├─ winit/           - Cross-platform (Windows/macOS/Linux)
@@ -231,8 +231,8 @@ pub use hosts::WindowsPlatform;
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 pub use hosts::WinitPlatform;
-// Re-export shared infrastructure
-pub use shared::{PlatformHandlers, WindowCallbacks};
+// The application's handler set and a window's callbacks (`owner/handlers.rs`).
+pub use owner::handlers::{InputCallback, InputWake, PlatformHandlers, WindowCallbacks};
 // Re-export task types
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from

@@ -80,8 +80,10 @@ impl host::Lifecycle<WebLoop> for PageObservers {
         owner: &WebLoop,
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
-        let previous = owner.with_state(|state| state.handlers.session_end.replace(callback));
-        drop(previous);
+        crate::owner::call_point::install(
+            &WebLoop::handler(&owner.state, |state| &mut state.handlers.session_end),
+            callback,
+        );
     }
 
     fn on_host_notice(_: &WebLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {

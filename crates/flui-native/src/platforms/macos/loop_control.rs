@@ -27,8 +27,12 @@ use super::{
     window::MacOSWindow,
 };
 use crate::{
-    error::PlatformError, shared::PlatformHandlers, shared::terminate_gate::ANNOUNCEMENT_LIFETIME,
-    shared::terminate_gate::DEFERRAL_LIMIT, shared::terminate_gate::TerminateGate,
+    error::PlatformError,
+    owner::call_point::{Called, Field, Once, call, retire},
+    owner::handlers::PlatformHandlers,
+    shared::terminate_gate::ANNOUNCEMENT_LIFETIME,
+    shared::terminate_gate::DEFERRAL_LIMIT,
+    shared::terminate_gate::TerminateGate,
     shared::terminate_gate::Termination,
 };
 use flui_platform::PlatformWindow;
@@ -201,26 +205,23 @@ impl LoopControl {
         }
     }
 
-    /// Ask the session-end hook, outside every lock. A hook that panics lets
-    /// the session end; a missing one does too.
+    /// One of the application's handlers, as a slot of the handler set that
+    /// takes a handler back only while the loop still accepts work.
+    fn handler<H>(
+        &self,
+        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
+    ) -> Field<'_, Mutex<PlatformHandlers>, H, impl Fn() -> bool + '_> {
+        Field::new(&*self.handlers, project).restoring_while(|| self.accepts_windows())
+    }
+
+    /// Ask the session-end hook through the call point, outside every lock. A
+    /// hook that panics lets the session end; a missing one does too.
     fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let Some(mut hook) = self.handlers.lock().session_end.take() else {
-            return SessionEndAnswer::Proceed;
-        };
-        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(phase)))
-            .unwrap_or_else(|payload| {
-                report_contained_panic(payload);
-                SessionEndAnswer::Proceed
-            });
-        {
-            let mut handlers = self.handlers.lock();
-            if self.accepts_windows() && handlers.session_end.is_none() {
-                handlers.session_end = Some(hook);
-                return answer;
-            }
-        }
-        cleanup_step(|| drop(hook));
-        answer
+        call(
+            &self.handler(|handlers| &mut handlers.session_end),
+            |hook| hook(phase),
+        )
+        .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
     }
 
     pub(super) fn accepts_windows(&self) -> bool {
@@ -230,19 +231,17 @@ impl LoopControl {
             && self.owner_signal.accepting()
     }
 
-    /// Replacements and rejected registrations are destroyed outside both locks.
+    /// Replacements and rejected registrations are retired outside both locks.
     pub(super) fn set_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        let mut callback = Some(callback);
-        let previous = {
+        let retired = {
             let mut handlers = self.handlers.lock();
             if self.accepts_windows() {
-                std::mem::replace(&mut handlers.reopen, callback.take())
+                handlers.reopen.replace(callback)
             } else {
-                None
+                Some(callback)
             }
         };
-        cleanup_step(|| drop(previous));
-        cleanup_step(|| drop(callback));
+        retire(retired);
     }
 
     fn request_reopen(self: &Arc<Self>) {
@@ -326,19 +325,10 @@ impl LoopControl {
                 }
                 state.pending_reopens -= 1;
             }
-            let mut callback = self.handlers.lock().reopen.take();
-            cleanup_step(|| {
-                if let Some(callback) = callback.as_mut() {
-                    callback();
-                }
-            });
-            {
-                let mut handlers = self.handlers.lock();
-                if self.accepts_windows() && handlers.reopen.is_none() {
-                    handlers.reopen = callback.take();
-                }
-            }
-            cleanup_step(|| drop(callback));
+            call(&self.handler(|handlers| &mut handlers.reopen), |reopen| {
+                reopen();
+            })
+            .or_contain((), "the reopen callback");
         }
     }
 
@@ -410,31 +400,21 @@ impl LoopControl {
         }
         // The hook may replace itself, open a window, request another turn, or quit.
         // Both invocation AND destruction of the displaced hook are outside locks.
-        let hook = self.handlers.lock().exit_policy.take();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            hook.as_ref().is_none_or(|hook| hook())
-        }));
-        let mut hook = hook;
-        {
-            let mut handlers = self.handlers.lock();
-            if self.accepts_windows() && handlers.exit_policy.is_none() {
-                handlers.exit_policy = hook.take();
-            }
-        }
-        cleanup_step(|| drop(hook));
-        match result {
-            Ok(allow)
-                if allow
-                    && self.state.lock().phase == Phase::Running
-                    && self.windows.lock().is_empty() =>
-            {
+        // No hook allows the exit.
+        let allowed = match call(
+            &self.handler(|handlers| &mut handlers.exit_policy),
+            |hook| hook(),
+        ) {
+            Called::Vacant => true,
+            Called::Returned(allow) => allow,
+            Called::Panicked(failure) => {
+                failure.contain("the exit-policy hook");
                 self.quit();
+                return;
             }
-            Ok(_) => {}
-            Err(payload) => {
-                report_contained_panic(payload);
-                self.quit();
-            }
+        };
+        if allowed && self.state.lock().phase == Phase::Running && self.windows.lock().is_empty() {
+            self.quit();
         }
     }
 
@@ -478,14 +458,15 @@ impl LoopControl {
         let remaining = std::mem::take(&mut *self.windows.lock());
         cleanup_step(|| drop(remaining));
         cleanup_step(|| drop(windows));
-        let callback = self.handlers.lock().quit.take();
-        if let Some(callback) = callback {
-            cleanup_step(callback);
-        }
+        call(
+            &Once(Field::new(&*self.handlers, |handlers| &mut handlers.quit)),
+            |quit| quit(),
+        )
+        .or_contain((), "the quit callback");
         let reopen = self.handlers.lock().reopen.take();
-        cleanup_step(|| drop(reopen));
+        retire(reopen);
         let handlers = std::mem::take(&mut *self.handlers.lock());
-        cleanup_step(|| drop(handlers));
+        retire(handlers);
         self.state.lock().phase = Phase::Stopped;
     }
 }

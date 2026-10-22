@@ -35,7 +35,7 @@ use icu_properties::{CodePointMapData, props::GeneralCategory};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use crate::shared::WindowCallbacks;
+use crate::owner::handlers::WindowCallbacks;
 use flui_platform::{PlatformInput, WindowExecutionState};
 
 use super::{

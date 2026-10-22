@@ -16,6 +16,8 @@ use std::sync::{Arc, Weak};
 use flui_platform::SystemNotice;
 use parking_lot::Mutex;
 
+use crate::owner::call_point::{Field, call, install};
+
 /// Something a platform caches about displays or windows, and can mark stale.
 pub(crate) trait StaleOnWake: Send + Sync {
     /// Mark the cached value stale: the next read asks the operating system.
@@ -43,30 +45,25 @@ struct Delivery {
     delivering: bool,
 }
 
-/// Ends a walk over the pending notices, however it ends, and gives the hook
-/// back to its slot unless the host replaced it meanwhile.
-struct Walk<'a> {
-    notices: &'a SystemNotices,
-    hook: Option<SystemNoticeHook>,
-}
+/// Ends a walk over the pending notices, however it ends.
+struct Walk<'a>(&'a SystemNotices);
 
 impl Drop for Walk<'_> {
     fn drop(&mut self) {
-        let mut state = self.notices.state.lock();
-        if let Some(hook) = self.hook.take()
-            && state.hook.is_none()
-        {
-            state.hook = Some(hook);
-        }
-        state.delivering = false;
+        self.0.state.lock().delivering = false;
     }
 }
 
 impl SystemNotices {
-    /// Install the host's hook, replacing an earlier one.
+    /// The host's hook, as a slot of the delivery state.
+    fn hook(&self) -> Field<'_, Mutex<Delivery>, SystemNoticeHook> {
+        Field::new(&self.state, |delivery| &mut delivery.hook)
+    }
+
+    /// Install the host's hook, replacing an earlier one; the earlier one is
+    /// dropped outside the channel's lock.
     pub(crate) fn set_hook(&self, hook: SystemNoticeHook) {
-        let replaced = self.state.lock().hook.replace(hook);
-        drop(replaced);
+        install(&self.hook(), hook);
     }
 
     /// Mark `cache` stale whenever the machine wakes, for as long as it lives.
@@ -82,12 +79,14 @@ impl SystemNotices {
     /// [`mark_stale_on_wake`](Self::mark_stale_on_wake) first, at once, even
     /// when the host is busy with an earlier notice.
     ///
-    /// The hook runs with no lock of this channel held. A notice that arrives
-    /// from inside the hook (or while another thread's dispatch is running it)
-    /// is queued behind the one being delivered and heard, in order, as soon as
-    /// the hook returns. A hook that panics keeps its place: the next dispatch
-    /// calls it again, and the notices queued behind the failure are still
-    /// delivered then.
+    /// The hook runs through the call point, with no lock of this channel
+    /// held, and goes back to its slot between notices, so a replacement
+    /// installed meanwhile is not displaced. A notice that arrives from inside
+    /// the hook (or while another thread's dispatch is running it) is queued
+    /// behind the one being delivered and heard, in order, as soon as the hook
+    /// returns. A hook that panics keeps its place and its panic reaches the
+    /// caller: the next dispatch calls it again, and the notices queued behind
+    /// the failure are still delivered then.
     pub(crate) fn dispatch(&self, notice: SystemNotice) {
         if notice == SystemNotice::Wake {
             let live: Vec<Arc<dyn StaleOnWake>> = self
@@ -108,39 +107,21 @@ impl SystemNotices {
             }
             state.delivering = true;
         }
-        let mut walk = Walk {
-            notices: self,
-            hook: None,
-        };
+        let _walk = Walk(self);
         loop {
-            let next = {
+            let notice = {
                 let mut state = self.state.lock();
+                if state.hook.is_none() {
+                    // Nobody to tell: what was accepted has no listener.
+                    state.pending.clear();
+                    return;
+                }
                 let Some(notice) = state.pending.pop_front() else {
                     return;
                 };
-                if let Some(hook) = state.hook.take() {
-                    Some((notice, hook))
-                } else {
-                    // Nobody to tell: what was accepted has no listener.
-                    state.pending.clear();
-                    None
-                }
+                notice
             };
-            let Some((notice, hook)) = next else {
-                return;
-            };
-            walk.hook = Some(hook);
-            if let Some(hook) = walk.hook.as_mut() {
-                hook(notice);
-            }
-            // Back to its slot between notices, so a replacement installed
-            // meanwhile is not displaced.
-            let mut state = self.state.lock();
-            if let Some(hook) = walk.hook.take()
-                && state.hook.is_none()
-            {
-                state.hook = Some(hook);
-            }
+            call(&self.hook(), |hook| hook(notice)).or_resume(());
         }
     }
 }

@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use super::AndroidLoop;
 use crate::host;
 use crate::{
-    owner::OpenWindowError, owner::slot::OwnerSlot, shared::WindowCallbacks,
+    owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::slot::OwnerSlot,
     shared::input_availability::AndroidInputApis, shared::os_version::android::AndroidApi,
     shared::os_version::android::DragSource, shared::os_version::android::GestureExclusion,
     shared::os_version::android::TouchpadGestures, shared::window_state::WindowStateCell,
@@ -516,7 +516,10 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     }
 
     fn on_event(owner: &AndroidLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        owner.handlers.lock().window_event = Some(callback);
+        crate::owner::call_point::install(
+            &owner.handler(|handlers| &mut handlers.window_event),
+            callback,
+        );
     }
 }
 
@@ -700,7 +703,7 @@ impl PlatformWindow for AndroidWindow {
 
     // ==================== Callback Registration ====================
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     // ==================== Window Handles (GPU integration) ====================
 

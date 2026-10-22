@@ -17,10 +17,11 @@
 //! arbitrary later misbehavior (see `docs/PANIC-POLICY.md` — a panic is a
 //! bug report, never control flow).
 //!
-//! Recoverable owner callbacks use a different boundary: their state and callback
-//! lease are restored independently, and callback invocation and capture cleanup
-//! are contained separately. This does not relax the abort policy for a torn
-//! visible-window WNDPROC transaction described above.
+//! Recoverable owner callbacks use a different boundary: the call point
+//! (`super::call_point`) settles a handler's slot independently of its call, and
+//! callback invocation and capture cleanup are contained separately. This does
+//! not relax the abort policy for a torn visible-window WNDPROC transaction
+//! described above.
 //!
 //! The payload-to-message rule is the pure, decidable part; it lives here,
 //! compiled under `test` on every host, so the Linux-executed suite pins it
@@ -93,14 +94,6 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
             None
         }
     }
-}
-
-/// Invoke and destroy a leased callback in separate panic boundaries. Moving
-/// both into one catch would double-panic if invocation and capture Drop panic.
-#[cfg(any(target_os = "windows", test))]
-pub(crate) fn invoke_and_drop_owner_callback(mut callback: Box<dyn FnMut() + Send>) {
-    contain_owner_callback(&mut callback);
-    contain_owner_callback(|| drop(callback));
 }
 
 /// Keep an owner-affine resource whose final owner was dropped on another thread.
