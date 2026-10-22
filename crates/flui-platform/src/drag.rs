@@ -20,6 +20,7 @@ use crate::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferError, TransferFormat, TransferPayload,
 };
+use crate::{Unsupported, UnsupportedReason};
 
 /// Why a drag could not start, or could not continue as asked (ADR-0211 §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -43,9 +44,24 @@ pub enum DragError {
     #[error("the drag session is closed")]
     SessionClosed,
     /// This backend cannot start an OS drag session (X11, a window without a
-    /// drag source). The session stays in-window.
-    #[error("this backend cannot start an OS drag session")]
-    Unavailable,
+    /// drag source), or not for this contact. The session stays in-window.
+    #[error("no OS drag session can start: {0}")]
+    Unsupported(#[from] Unsupported),
+}
+
+impl DragError {
+    /// What is not here, when that is why the drag could not reach the OS.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::IdExhausted
+            | Self::NoAllowedActions
+            | Self::NoOutsideActions
+            | Self::NoSerializedRepresentation
+            | Self::SessionClosed => None,
+        }
+    }
 }
 
 impl From<IdExhausted> for DragError {
@@ -290,7 +306,7 @@ pub trait PlatformDragSource: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`DragError::Unavailable`] when the OS refuses or cannot (winit's
+    /// [`DragError::Unsupported`] when the OS refuses or cannot (winit's
     /// `NotSupported` on X11); the session then stays in-window.
     fn start(&self, request: OsDragRequest) -> Result<(), DragError>;
 }
@@ -414,7 +430,7 @@ pub const fn validate_session(
 ///
 /// # Errors
 ///
-/// [`DragError::Unavailable`] when the drag needs the OS and the backend has
+/// [`DragError::Unsupported`] when the drag needs the OS and the backend has
 /// none; the session stays in-window.
 pub const fn plan_os_session(
     start: OsDragStart,
@@ -451,7 +467,9 @@ pub const fn plan_os_session(
     if available {
         Ok(Some(plan))
     } else {
-        Err(DragError::Unavailable)
+        Err(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotOnThisPlatform,
+        )))
     }
 }
 

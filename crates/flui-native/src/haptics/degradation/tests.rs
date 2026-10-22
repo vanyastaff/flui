@@ -664,7 +664,10 @@ fn web_rows() {
 }
 
 fn linux_rows() {
-    assert_eq!(linux(), HapticOutcome::Unavailable);
+    assert_eq!(
+        linux().unsupported().map(|unsupported| unsupported.reason),
+        Some(flui_platform::UnsupportedReason::NotOnThisPlatform)
+    );
 }
 
 #[test]

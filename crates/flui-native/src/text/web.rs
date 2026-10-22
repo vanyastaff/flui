@@ -1075,7 +1075,10 @@ mod input {
             store: &Rc<dyn TextStore>,
         ) -> Result<CompositionEnd, TextStoreHostError> {
             if self.retired.get() {
-                return Err(TextStoreHostError::Unavailable);
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NoWindow,
+                )
+                .into());
             }
             // The focus a queued request will give is the one asked about.
             let queued = self.pending.borrow().iter().rev().find_map(|op| match op {

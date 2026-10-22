@@ -24,7 +24,14 @@ use flui_platform::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::{DispatchEventResult, PlatformInput, PlatformWindow, WindowExecutionState};
+use flui_platform::{
+    DispatchEventResult, PlatformInput, PlatformWindow, Unsupported, UnsupportedReason,
+    WindowExecutionState,
+};
+
+/// A drag the OS cannot take: the window has no drag source.
+const NO_OS_DRAG: DragError =
+    DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
@@ -660,7 +667,7 @@ fn a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window() {
             .pointer_moved(Offset::new(100_000.0, 10.0), None)
             .expect("live")
     });
-    assert_eq!(outcome, MoveOutcome::Refused(DragError::Unavailable));
+    assert_eq!(outcome, MoveOutcome::Refused(NO_OS_DRAG));
     runtime.enter_pending_os_drags();
     assert_eq!(
         session.stage(),

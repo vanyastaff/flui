@@ -1497,13 +1497,21 @@ impl PlatformWindow for MacOSWindow {
                 flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
-                _ => WindowCommandError::Unsupported,
+                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
+                other => WindowCommandError::Backend {
+                    message: other.to_string(),
+                },
             })?,
             WindowCommand::Hide => self.hide()?,
             WindowCommand::Activate => self.activate(),
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         self.publish_state();
         Ok(())

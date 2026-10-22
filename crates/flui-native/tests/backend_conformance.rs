@@ -51,7 +51,12 @@ use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+
+/// What a table answers for a request its actuator cannot play: this device
+/// has none for it.
+const NO_ACTUATOR: HapticOutcome =
+    HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
 use flui_platform::{DispatchEventResult, PlatformInput};
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
@@ -347,18 +352,18 @@ impl PlatformHaptics for TableHaptics {
             }
             Some(Fault::FeedbackFallsBack) => return HapticOutcome::FellBack,
             Some(Fault::StaleSourceRefused) if request.source.is_some() => {
-                return HapticOutcome::Unavailable;
+                return Unsupported::new(UnsupportedReason::Unavailable).into();
             }
             _ => {}
         }
         match self.table {
             HapticsTable::Win32 { pen } => windows_feedback(kind, Self::pen(pen).as_ref())
-                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+                .map_or(NO_ACTUATOR, |(_, outcome)| outcome),
             HapticsTable::AppKit => macos_feedback(kind).1,
             HapticsTable::UiKit => ios_feedback(kind, true).1,
             HapticsTable::Android => android_feedback(kind, AndroidHapticsApi::SegmentFeedback).1,
             HapticsTable::Web => web_feedback(kind, WebVibration::Available)
-                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+                .map_or(NO_ACTUATOR, |(_, outcome)| outcome),
         }
     }
 
@@ -370,12 +375,12 @@ impl PlatformHaptics for TableHaptics {
     ) -> HapticOutcome {
         match self.table {
             HapticsTable::Win32 { pen } => windows_pattern(pattern, Self::pen(pen).as_ref())
-                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+                .map_or(NO_ACTUATOR, |(_, outcome)| outcome),
             HapticsTable::AppKit => macos_pattern(),
             HapticsTable::UiKit => ios_pattern(CoreHapticsEngine::Running),
             HapticsTable::Android => android_pattern(pattern, &Self::vibrator()).1,
             HapticsTable::Web => web_pattern(pattern, WebVibration::Available)
-                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+                .map_or(NO_ACTUATOR, |(_, outcome)| outcome),
         }
     }
 
@@ -836,7 +841,7 @@ impl PlatformDragSource for ProfileDragSource {
     }
 
     fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
-        Err(DragError::Unavailable)
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
     }
 }
 

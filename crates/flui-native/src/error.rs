@@ -55,13 +55,17 @@ pub enum PlatformError {
         /// What failed, without exposing a native error type.
         message: String,
     },
-    /// The display source could not complete a sample, or this build has no
-    /// display source. The host keeps the last snapshot it accepted.
+    /// The display source could not complete a sample. The host keeps the
+    /// last snapshot it accepted.
     #[error("could not read the displays: {message}")]
     Displays {
         /// What failed, without exposing a native error type.
         message: String,
     },
+    /// What the call needs is not on this host: its table's position for it
+    /// is absent (a host with no display source).
+    #[error("this host cannot do this: {0}")]
+    Unsupported(#[from] flui_platform::Unsupported),
     /// Platform initialization failed: no backend is available for this
     /// target/configuration, or the backend's own OS-level setup (COM,
     /// NSApplication, …) failed.

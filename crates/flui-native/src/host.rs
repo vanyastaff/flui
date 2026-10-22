@@ -39,8 +39,8 @@ use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, H
 use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
     PlatformSystemChrome, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
-    SystemPreferences, SystemUiOverlayStyle, WindowCapabilities, WindowEvent, WindowId,
-    WindowOptions,
+    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowEvent, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -324,13 +324,18 @@ pub mod position {
     pub enum Storage {}
 }
 
+/// What [`Absent`] answers wherever its position can say "not here".
+const NOT_ON_THIS_PLATFORM: Unsupported = Unsupported::new(UnsupportedReason::NotOnThisPlatform);
+
 /// Position `F` is not on this platform.
 ///
-/// The one type a table names for a missing position. It answers in the
-/// position's own words for "not here": no window opens, no display is read,
-/// a drag offers nothing, a haptic is [`HapticOutcome::Unavailable`], the
-/// preferences are unknown, the data has nowhere to go, and every registration
-/// is dropped unused because nothing will call it.
+/// The one type a table names for a missing position. Wherever its position
+/// can say "not here" it answers [`Unsupported`] with
+/// [`UnsupportedReason::NotOnThisPlatform`]: no window opens, no display is
+/// read, a haptic plays nothing. Where the position has no such answer, it
+/// answers as having nothing: a drag offers nothing, the preferences are
+/// unknown, the data has nowhere to go, and every registration is dropped
+/// unused because nothing will call it.
 pub struct Absent<F>(PhantomData<fn() -> F>);
 
 impl<F> Absent<F> {
@@ -348,10 +353,7 @@ impl<O> Window<O> for Absent<position::Window> {
     type Shared = ();
 
     fn open(_: &O, _: &Arc<()>, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        // Not `Unavailable`, which promises a later call may succeed.
-        Err(OpenWindowError::Backend {
-            message: "this platform opens no windows".to_owned(),
-        })
+        Err(NOT_ON_THIS_PLATFORM.into())
     }
 
     fn active(_: &O, (): &()) -> Option<WindowId> {
@@ -373,9 +375,7 @@ impl<O> Window<O> for Absent<position::Window> {
 
 impl<O> Displays<O> for Absent<position::Displays> {
     fn snapshot(_: &O) -> Result<DisplaySnapshot, PlatformError> {
-        Err(PlatformError::Displays {
-            message: "this platform has no display source".to_owned(),
-        })
+        Err(NOT_ON_THIS_PLATFORM.into())
     }
 }
 
@@ -433,11 +433,11 @@ impl PlatformHaptics for Absent<position::Haptics> {
     fn perform(&self, _: HapticFeedback) {}
 
     fn perform_with(&self, _: HapticFeedback, _: &HapticRequest) -> HapticOutcome {
-        HapticOutcome::Unavailable
+        NOT_ON_THIS_PLATFORM.into()
     }
 
     fn play(&self, _: &HapticPattern, _: HapticFeedback, _: &HapticRequest) -> HapticOutcome {
-        HapticOutcome::Unavailable
+        NOT_ON_THIS_PLATFORM.into()
     }
 
     fn capabilities(&self, _: Option<DeviceId>) -> HapticCapabilities {

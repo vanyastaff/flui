@@ -47,7 +47,7 @@ use crate::haptics::degradation::{
 };
 use crate::owner::apple::ios::NativeOwner;
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 /// Whether the generators take a view (iOS 17.5+).
 fn view_bound() -> bool {
@@ -417,7 +417,7 @@ impl PlatformHaptics for IOSHaptics {
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
         // Requests run on the owner thread, which UIKit makes the main thread.
         let Some(mtm) = MainThreadMarker::new() else {
-            return HapticOutcome::Unavailable;
+            return Unsupported::new(UnsupportedReason::Unavailable).into();
         };
         let bound = view_bound();
         let (generator, outcome) = ios_feedback(feedback, bound);
@@ -432,7 +432,7 @@ impl PlatformHaptics for IOSHaptics {
         request: &HapticRequest,
     ) -> HapticOutcome {
         let Some(mtm) = MainThreadMarker::new() else {
-            return HapticOutcome::Unavailable;
+            return Unsupported::new(UnsupportedReason::Unavailable).into();
         };
         let outcome = ios_pattern(self.core.engine_state(mtm));
         if outcome == HapticOutcome::Submitted && self.core.play(mtm, &ios_pattern_parts(pattern)) {

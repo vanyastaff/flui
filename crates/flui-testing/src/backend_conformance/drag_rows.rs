@@ -38,7 +38,7 @@ fn at_start_timing<B: BackendUnderTest>(backend: &mut B) -> Result<OsDragStart, 
 }
 
 /// A backend with a drag source claims outgoing drags, one without claims none, and a drag that
-/// needs the OS on the latter fails with `DragError::Unavailable` instead of starting.
+/// needs the OS on the latter fails with `DragError::Unsupported` instead of starting.
 pub(super) fn outgoing_drag_is_delivered_as_claimed<B: BackendUnderTest>(
     backend: &mut B,
 ) -> Outcome {
@@ -60,7 +60,7 @@ pub(super) fn outgoing_drag_is_delivered_as_claimed<B: BackendUnderTest>(
                 false,
                 false,
             );
-            if refused == Err(DragError::Unavailable) {
+            if matches!(refused, Err(DragError::Unsupported(_))) {
                 Ok(RowOutcome::Held)
             } else {
                 Err(format!(

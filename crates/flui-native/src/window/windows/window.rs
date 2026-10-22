@@ -35,10 +35,10 @@ use windows::{
 };
 
 use flui_platform::{
-    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints, Unsupported,
+    UnsupportedReason, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
+    WindowCommand, WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowState,
 };
 
 use super::proc::{
@@ -1074,7 +1074,10 @@ impl WindowsWindow {
                 | WindowMode::Maximized
                 | WindowMode::Fullscreen
         ) {
-            return Err(WindowCommandError::Unsupported);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NotOnThisPlatform,
+            )
+            .into());
         }
         if self.awaiting_reveal() {
             self.set_fullscreen(mode == WindowMode::Fullscreen);
@@ -1260,9 +1263,9 @@ impl crate::host_window::HostWindow for WindowsWindow {
     /// creating thread it is the window's TSF connection (ADR-0135 §3):
     /// `None` when TSF did not activate for it, or once the window is
     /// destroyed; a host read before that answers
-    /// [`TextStoreHostError::Unavailable`] from then on.
+    /// [`TextStoreHostError::Unsupported`] from then on.
     ///
-    /// [`TextStoreHostError::Unavailable`]: flui_platform::text_store::TextStoreHostError::Unavailable
+    /// [`TextStoreHostError::Unsupported`]: flui_platform::text_store::TextStoreHostError::Unsupported
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
@@ -1376,12 +1379,14 @@ impl PlatformWindow for WindowsWindow {
                 .preferences
                 .mouse_gestures(dpi)?
                 .native_mouse_geometry()
-                .ok_or(PreferenceQueryError::Unavailable)?;
+                .ok_or(PreferenceQueryError::Unsupported(Unsupported::new(
+                    UnsupportedReason::Unavailable,
+                )))?;
             Ok(Some(GestureGeometry::from_native_mouse(&native)?))
         })
         .map_err(|refusal| match refusal {
             UserDataRefusal::ForeignThread => PreferenceQueryError::WrongThread,
-            _ => PreferenceQueryError::Unavailable,
+            _ => Unsupported::new(UnsupportedReason::NoWindow).into(),
         })?
     }
 
@@ -1478,12 +1483,20 @@ impl PlatformWindow for WindowsWindow {
                 flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
-                _ => WindowCommandError::Unsupported,
+                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
+                other => WindowCommandError::Backend {
+                    message: other.to_string(),
+                },
             })?,
             WindowCommand::Activate => self.activate(),
             // Every other command is refused by `admit` through a capability
             // this backend leaves `false`.
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
             ctx.publish_window_state(self.hwnd);

@@ -838,7 +838,10 @@ impl TextStoreHost for TextServices {
         store: &Rc<dyn TextStore>,
     ) -> Result<CompositionEnd, TextStoreHostError> {
         if self.is_shut_down() {
-            return Err(TextStoreHostError::Unavailable);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NoWindow,
+            )
+            .into());
         }
         if !self
             .focused_store()

@@ -604,7 +604,10 @@ impl PlatformWindow for AndroidWindow {
                 .upgrade()
                 .is_some_and(|signal| signal.accepting())
         {
-            return Err(flui_platform::PreferenceQueryError::Unavailable);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::Unavailable,
+            )
+            .into());
         }
         crate::preferences::android::geometry(&self.app).map(Some)
     }
@@ -657,7 +660,10 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(CursorError::Unsupported)
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {

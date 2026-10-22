@@ -977,8 +977,18 @@ mod input {
             &self,
             store: &Rc<dyn TextStore>,
         ) -> Result<CompositionEnd, TextStoreHostError> {
-            if self.retired.get() || !self.view.is_ready() {
-                return Err(TextStoreHostError::Unavailable);
+            // Retired with its window for good; a view not ready yet may be.
+            if self.retired.get() {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NoWindow,
+                )
+                .into());
+            }
+            if !self.view.is_ready() {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::Unavailable,
+                )
+                .into());
             }
             let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
                 HostOp::Focus(store) => Some(store.clone()),

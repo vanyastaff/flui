@@ -42,7 +42,7 @@ use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, Plat
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
-    PlatformWindow, WindowId,
+    PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
@@ -348,7 +348,9 @@ impl PlatformDragSource for HeadlessOsDrags {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let end = (*self.end.lock()).ok_or(DragError::Unavailable)?;
+        let end = (*self.end.lock()).ok_or(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotRegistered,
+        )))?;
         let OsDragRequest {
             representations,
             allowed,

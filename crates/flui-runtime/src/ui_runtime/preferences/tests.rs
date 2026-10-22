@@ -197,7 +197,9 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             QUERY.with(|slot| *slot.borrow_mut() = Some(callback));
             window.panic_query.store(panics, Ordering::Relaxed);
         } else {
-            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unavailable);
+            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ));
             DIAGNOSTIC.with(|slot| *slot.borrow_mut() = Some(callback));
         }
         let old = SystemPreferences::default()

@@ -507,6 +507,7 @@ use std::{
 use flui_foundation::DataTransferId;
 #[cfg(windows)]
 use flui_platform::{
+    Unsupported, UnsupportedReason,
     data_transfer::{
         DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
         RepresentationDescriptor, RepresentationIndex, TransferError, TransferLimits,
@@ -757,22 +758,25 @@ impl OleTransfer {
     /// Accept a session of a `kind` contact and post its start to the owner
     /// window.
     fn start(&self, request: OsDragRequest, kind: Option<PointerKind>) -> Result<(), DragError> {
-        let owner = self.owner().ok_or(DragError::Unavailable)?;
+        let not_now = DragError::from(Unsupported::new(UnsupportedReason::Unavailable));
+        let owner = self.owner().ok_or(not_now)?;
         if owner.running.get() || owner.pending.borrow().is_some() {
             // One OS session at a time, as the OS runs one modal loop.
-            return Err(DragError::Unavailable);
+            return Err(not_now);
         }
         // OLE's loop follows the mouse alone: a drag no mouse button holds
         // stays in its window rather than starting a session that cancels at
         // its first question (ADR-0211 §11).
-        let began = os_loop_buttons(kind, mouse_buttons_held()).ok_or(DragError::Unavailable)?;
+        let began = os_loop_buttons(kind, mouse_buttons_held()).ok_or(DragError::from(
+            Unsupported::new(UnsupportedReason::NotOnThisPlatform),
+        ))?;
         *owner.pending.borrow_mut() = Some(PendingStart { request, began });
         if self.post_start() {
             Ok(())
         } else {
             let refused = owner.pending.borrow_mut().take();
             drop(refused);
-            Err(DragError::Unavailable)
+            Err(not_now)
         }
     }
 

@@ -12,7 +12,12 @@
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
-use flui_platform::StorageError;
+use flui_platform::{StorageError, Unsupported, UnsupportedReason};
+
+/// A storage root whose file system takes no locks: a write based on a
+/// version cannot be made safely on this device.
+const NO_LOCKS: StorageError =
+    StorageError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
 
 /// `ERROR_INVALID_FUNCTION`: a file system without byte-range locks.
 #[cfg(windows)]
@@ -61,7 +66,7 @@ pub(super) fn lock_error(error: &io::Error) -> StorageError {
     #[cfg(not(any(windows, unix)))]
     let unsupported_code = false;
     if unsupported_code || error.kind() == ErrorKind::Unsupported {
-        StorageError::LockUnsupported
+        NO_LOCKS
     } else {
         storage_error(error)
     }
@@ -186,7 +191,7 @@ mod tests {
                 "lock: unsupported kind",
                 lock,
                 ErrorKind::Unsupported.into(),
-                StorageError::LockUnsupported,
+                super::NO_LOCKS,
             ),
             (
                 "lock: missing root",
@@ -237,19 +242,19 @@ mod tests {
                 "lock: ERROR_NOT_SUPPORTED",
                 lock,
                 io::Error::from_raw_os_error(50),
-                StorageError::LockUnsupported,
+                super::NO_LOCKS,
             ),
             (
                 "lock: ERROR_INVALID_FUNCTION",
                 lock,
                 io::Error::from_raw_os_error(1),
-                StorageError::LockUnsupported,
+                super::NO_LOCKS,
             ),
             (
                 "lock: ERROR_CALL_NOT_IMPLEMENTED",
                 lock,
                 io::Error::from_raw_os_error(120),
-                StorageError::LockUnsupported,
+                super::NO_LOCKS,
             ),
             (
                 "lock: ERROR_LOCK_VIOLATION",
@@ -288,7 +293,7 @@ mod tests {
                 "lock: ENOLCK",
                 lock,
                 io::Error::from_raw_os_error(super::ENOLCK),
-                StorageError::LockUnsupported,
+                super::NO_LOCKS,
             ),
         ]);
         let wrong: Vec<String> = rows

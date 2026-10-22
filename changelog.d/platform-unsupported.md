@@ -5,9 +5,26 @@
   (`NotOnThisPlatform`, `NotOnThisDevice`, `NotDeclared { what }`, `Unavailable`,
   `NotRegistered`, `NoWindow`). No reason names an operating-system version. `flui-sdk`
   re-exports both from `platform`.
+- **`flui-platform`**: every error and outcome that can mean absence answers
+  `unsupported() -> Option<Unsupported>` and converts from `Unsupported`.
+- **`flui-native`**: `OpenWindowError::Unsupported` and `PlatformError::Unsupported`, which a
+  host whose table leaves the window or the display position out answers with
+  `NotOnThisPlatform`.
 
 ### Changed
 
+- **`flui-platform`**: the unit variants that said "not here" carry an `Unsupported` with its
+  reason: `WindowCommandError::Unsupported(_)`, `WindowShowError::Unsupported(_)`,
+  `CursorError::Unsupported(_)`, `DragError::Unsupported(_)` (was `DragError::Unavailable`),
+  `HapticOutcome::Unsupported(_)` (was `HapticOutcome::Unavailable`),
+  `StorageError::Unsupported(_)` (was `StorageError::Unavailable` and
+  `StorageError::LockUnsupported`, now `NotOnThisDevice`),
+  `PreferenceQueryError::Unsupported(_)` (was `PreferenceQueryError::Unavailable`) and
+  `TextStoreHostError::Unsupported(_)` (was `TextStoreHostError::Unavailable`). `CursorError`
+  is `#[non_exhaustive]`.
 - **`flui-platform`**: `Availability` is named at the crate root
   (`flui_platform::Availability`), not in `input_capabilities`; `flui-sdk` keeps it at
   `platform::input_capabilities::Availability` under `unstable-input`.
+- **`flui-native`**: a window's haptics answer why nothing played: no pen in range of a Win32
+  window is `Unavailable` and a pen without a controller `NotOnThisDevice`; a browser without
+  vibration is `NotOnThisDevice` and a page before user activation `Unavailable`.

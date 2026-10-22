@@ -32,7 +32,9 @@ use flui_platform::data_transfer::{
     TransferPayload, TransferRequest, TransferUri,
 };
 use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
-use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput};
+use flui_platform::{
+    DispatchEventResult, DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
+};
 use windows::Win32::Foundation::{
     DRAGDROP_E_ALREADYREGISTERED, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, HWND, LPARAM, POINT, POINTL,
     S_OK, WPARAM,
@@ -809,8 +811,11 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     by_pen.pointer = Some(pen);
     let pen_started = drag.start(by_pen);
     hold_mouse_buttons(0);
-    assert_eq!(unheld, Err(DragError::Unavailable), "no mouse button");
-    assert_eq!(pen_started, Err(DragError::Unavailable), "a pen contact");
+    let mouse_only = Err(DragError::from(Unsupported::new(
+        UnsupportedReason::NotOnThisPlatform,
+    )));
+    assert_eq!(unheld, mouse_only, "no mouse button");
+    assert_eq!(pen_started, mouse_only, "a pen contact");
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert_eq!(ended.get(), None, "a refused start is not told it ended");
     assert!(!transport.is_running());
@@ -839,7 +844,13 @@ fn a_start_is_deferred_to_the_owner_turn() {
     hold_mouse_buttons(0);
     assert_eq!(started, Ok(()));
     assert_eq!(ended.get(), None, "DoDragDrop ran inside the start");
-    assert_eq!(refused, Err(DragError::Unavailable));
+    assert_eq!(
+        refused,
+        Err(DragError::from(Unsupported::new(
+            UnsupportedReason::Unavailable
+        ))),
+        "one session at a time"
+    );
     assert!(
         pump_until(|| ended.get().is_some(), Duration::from_secs(10)),
         "the session never ran"

@@ -207,7 +207,9 @@ fn refresh(
         query = Some(
             presentation
                 .with_window(|window| window.gesture_geometry())
-                .unwrap_or(Err(PreferenceQueryError::Unavailable)),
+                .unwrap_or(Err(PreferenceQueryError::Unsupported(
+                    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow),
+                ))),
         );
     });
     let mut diagnostic = None;

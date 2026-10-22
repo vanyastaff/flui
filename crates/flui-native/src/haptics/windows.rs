@@ -6,7 +6,8 @@
 //! pen read most recently, through the `SimpleHapticsController` that
 //! `PenDevice::GetFromPointerId` hands out for its pointer. With no pen in
 //! range, or a pen without a controller, both tiers are
-//! [`HapticOutcome::Unavailable`].
+//! [`HapticOutcome::Unsupported`]: `Unavailable` while no pen is in range,
+//! `NotOnThisDevice` for a pen without the waveform.
 //!
 //! What plays is the degradation table's (`haptics::degradation`); the
 //! controller is read on each request, since the pen behind a pointer is the
@@ -40,7 +41,16 @@ use super::degradation::{
 };
 use crate::owner::windows::WindowRef;
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+
+/// Nothing plays now: no pen is in range, or the worker cannot take the
+/// request; a later request may play.
+const NOT_NOW: HapticOutcome =
+    HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::Unavailable));
+
+/// Nothing plays on this pen: its controller has no waveform for the request.
+const NOT_ON_THIS_PEN: HapticOutcome =
+    HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
 
 /// A pen's controller with what the table needs to know about it, and the
 /// feedback object of each waveform it lists.
@@ -424,13 +434,16 @@ impl WindowsHaptics {
         u32::try_from(pointer).ok()
     }
 
-    /// The controller of [`Self::pen_pointer`]'s pen.
-    fn pen(&self, source: Option<DeviceId>) -> Option<Pen> {
-        Pen::of_pointer(self.pen_pointer(source)?)
+    /// The controller of [`Self::pen_pointer`]'s pen, or what a request
+    /// reports for want of one: [`NOT_NOW`] with no pen in range,
+    /// [`NOT_ON_THIS_PEN`] for a pen the OS has no controller for.
+    fn pen(&self, source: Option<DeviceId>) -> Result<Pen, HapticOutcome> {
+        let pointer = self.pen_pointer(source).ok_or(NOT_NOW)?;
+        Pen::of_pointer(pointer).ok_or(NOT_ON_THIS_PEN)
     }
 
     /// Hand `commands` to the worker and report `outcome`, or
-    /// [`HapticOutcome::Unavailable`] when they cannot be played.
+    /// [`HapticOutcome::Unsupported`] when they cannot be played.
     fn submit(
         &self,
         pen: &Pen,
@@ -438,10 +451,10 @@ impl WindowsHaptics {
         outcome: HapticOutcome,
     ) -> HapticOutcome {
         let Some(playback) = pen.playback(commands) else {
-            return HapticOutcome::Unavailable;
+            return NOT_ON_THIS_PEN;
         };
         let Some(mailbox) = self.worker.get_or_init(spawn_worker) else {
-            return HapticOutcome::Unavailable;
+            return NOT_NOW;
         };
         match mailbox.post(playback) {
             // The replaced request never played; this one replaces it.
@@ -449,7 +462,7 @@ impl WindowsHaptics {
                 drop(replaced);
                 outcome
             }
-            Err(_) => HapticOutcome::Unavailable,
+            Err(_) => NOT_NOW,
         }
     }
 }
@@ -460,8 +473,9 @@ impl PlatformHaptics for WindowsHaptics {
     }
 
     fn perform_with(&self, feedback: HapticFeedback, request: &HapticRequest) -> HapticOutcome {
-        let Some(pen) = self.pen(request.source) else {
-            return HapticOutcome::Unavailable;
+        let pen = match self.pen(request.source) {
+            Ok(pen) => pen,
+            Err(outcome) => return outcome,
         };
         match windows_feedback(feedback, Some(&pen.facts)) {
             Some((waveform, outcome)) => self.submit(
@@ -469,7 +483,7 @@ impl PlatformHaptics for WindowsHaptics {
                 pen_timeline(&[pen_feedback_step(waveform)], &pen.facts),
                 outcome,
             ),
-            None => HapticOutcome::Unavailable,
+            None => NOT_ON_THIS_PEN,
         }
     }
 
@@ -479,8 +493,9 @@ impl PlatformHaptics for WindowsHaptics {
         fallback: HapticFeedback,
         request: &HapticRequest,
     ) -> HapticOutcome {
-        let Some(pen) = self.pen(request.source) else {
-            return HapticOutcome::Unavailable;
+        let pen = match self.pen(request.source) {
+            Ok(pen) => pen,
+            Err(outcome) => return outcome,
         };
         match windows_pattern(pattern, Some(&pen.facts)) {
             Some((steps, HapticOutcome::Approximated)) => self.submit(
@@ -492,12 +507,12 @@ impl PlatformHaptics for WindowsHaptics {
                 outcome if outcome.played() => HapticOutcome::FellBack,
                 outcome => outcome,
             },
-            None => HapticOutcome::Unavailable,
+            None => NOT_ON_THIS_PEN,
         }
     }
 
     fn capabilities(&self, source: Option<DeviceId>) -> HapticCapabilities {
-        windows_capabilities(self.pen(source).as_ref().map(|pen| &pen.facts))
+        windows_capabilities(self.pen(source).ok().as_ref().map(|pen| &pen.facts))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -539,19 +554,25 @@ mod tests {
             .expect("a valid pattern")
     }
 
-    fn assert_unavailable(haptics: &dyn flui_platform::PlatformHaptics, when: &str) {
+    /// Every request of both tiers reports `refused`, and the actuator claims
+    /// nothing.
+    fn assert_unavailable(
+        haptics: &dyn flui_platform::PlatformHaptics,
+        refused: HapticOutcome,
+        when: &str,
+    ) {
         for timing in [HapticTiming::Immediate, HapticTiming::FramePresented] {
             let request = HapticRequest::new(timing);
             for kind in HapticFeedback::ALL {
                 assert_eq!(
                     haptics.perform_with(kind, &request),
-                    HapticOutcome::Unavailable,
+                    refused,
                     "{kind:?} {when}"
                 );
             }
             assert_eq!(
                 haptics.play(&taps(), HapticFeedback::Drop, &request),
-                HapticOutcome::Unavailable,
+                refused,
                 "a pattern {when}"
             );
         }
@@ -573,7 +594,7 @@ mod tests {
             )
             .expect("window");
         let haptics = window.haptics().expect("a Win32 window has an actuator");
-        assert_unavailable(haptics.as_ref(), "with no pen in range");
+        assert_unavailable(haptics.as_ref(), super::NOT_NOW, "with no pen in range");
 
         let win32 = window
             .as_any()
@@ -598,6 +619,7 @@ mod tests {
         );
         assert_unavailable(
             haptics.as_ref(),
+            super::NOT_ON_THIS_PEN,
             "for a pen pointer the OS has no pen device for",
         );
     }

@@ -1298,7 +1298,10 @@ impl PlatformWindow for IOSWindow {
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         // iOS has no pointer cursor on a touch device.
-        Err(CursorError::Unsupported)
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 
     /// `UIWindow` has no title, frame, position or commands, so a scene's

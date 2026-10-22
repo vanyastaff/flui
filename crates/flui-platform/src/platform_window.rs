@@ -14,8 +14,9 @@ use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
 use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
+    Unsupported, UnsupportedReason, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowId,
+    WindowShowError, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -95,8 +96,9 @@ pub enum WindowAt {
 /// use std::any::Any;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+///     CursorError, CursorIcon, PlatformWindow, Unsupported, UnsupportedReason,
+///     WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
+///     WindowShowError, WindowState,
 /// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
@@ -133,7 +135,7 @@ pub enum WindowAt {
 ///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-///         Err(CursorError::Unsupported)
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
 ///     }
 ///     fn as_any(&self) -> &dyn Any {
 ///         self
@@ -142,7 +144,7 @@ pub enum WindowAt {
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
-/// assert_eq!(window.show(), Err(WindowShowError::Unsupported));
+/// assert!(matches!(window.show(), Err(WindowShowError::Unsupported(_))));
 /// ```
 ///
 /// The accessibility bridge is not part of this contract; a window that
@@ -152,8 +154,9 @@ pub enum WindowAt {
 /// use std::any::Any;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+///     CursorError, CursorIcon, PlatformWindow, Unsupported, UnsupportedReason,
+///     WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
+///     WindowShowError, WindowState,
 /// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
@@ -190,7 +193,7 @@ pub enum WindowAt {
 ///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-///         Err(CursorError::Unsupported)
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
 ///     fn as_any(&self) -> &dyn Any {
@@ -200,7 +203,7 @@ pub enum WindowAt {
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
-/// assert_eq!(window.show(), Err(WindowShowError::Unsupported));
+/// assert!(matches!(window.show(), Err(WindowShowError::Unsupported(_))));
 /// ```
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
@@ -483,7 +486,7 @@ pub trait PlatformWindow: Send + Sync {
     /// Returns unsupported when the backend cannot perform this operation,
     /// closed after native teardown, or a native operation failure.
     fn show(&self) -> Result<(), WindowShowError> {
-        Err(WindowShowError::Unsupported)
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
     }
 
     /// The embedder has presented the first frame into this window's

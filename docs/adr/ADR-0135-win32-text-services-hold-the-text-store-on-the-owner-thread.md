@@ -44,7 +44,7 @@ composition must still end somewhere.
    could not), `Deferred` (the request arrived inside a platform call into a store; the host
    keeps the store, ends the composition when that call returns, and commits it in place itself
    if the platform then cannot or has shut down), `TextStoreHostError::NotFocused` for any other
-   store, or `TextStoreHostError::Unavailable` once the window's text services are gone. On
+   store, or `TextStoreHostError::Unsupported` once the window's text services are gone. On
    `Abandoned` and either error the caller commits in place:
    `text_store::commit_composition_in_place` clears the composing range under an asynchronous
    lock and keeps the text, the one function every caller uses; it returns the lock's outcome,

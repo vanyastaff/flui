@@ -126,7 +126,9 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     window.close();
     assert_eq!(
         window.gesture_geometry(),
-        Err(flui_platform::PreferenceQueryError::Unavailable)
+        Err(flui_platform::PreferenceQueryError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow)
+        ))
     );
 }
 

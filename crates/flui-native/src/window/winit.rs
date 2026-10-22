@@ -408,7 +408,12 @@ impl WinitWindow {
                 self.window.set_minimized(false);
                 self.window.set_maximized(false);
             }
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         Ok(())
     }
@@ -702,12 +707,20 @@ impl PlatformWindow for WinitWindow {
                 flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
-                _ => WindowCommandError::Unsupported,
+                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
+                other => WindowCommandError::Backend {
+                    message: other.to_string(),
+                },
             })?,
             WindowCommand::Hide => self.make_hidden(),
             WindowCommand::Activate => self.window.focus_window(),
             // `admit` refuses a command this window does not know.
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         // The snapshot first, so a visibility report never runs ahead of
         // `state()`; both after the command's native work.
@@ -722,7 +735,10 @@ impl PlatformWindow for WinitWindow {
         }
         // Winit cannot unminimize or focus Wayland windows.
         if !self.capabilities.shows {
-            return Err(flui_platform::WindowShowError::Unsupported);
+            return Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NotOnThisPlatform,
+            )
+            .into());
         }
         self.make_visible();
         self.window.set_minimized(false);

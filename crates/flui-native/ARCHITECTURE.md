@@ -1054,7 +1054,7 @@ long-press trigger, typically), and then stores every representation the
 request names through `setData` and its actions as `effectAllowed`. Otherwise
 the `dragstart` is cancelled and the press continues as pointer input, which
 Chrome keeps delivering, and a session the runtime starts later in that press
-is refused as `DragError::Unavailable` so it stays in its window. A waiting
+is refused as `DragError::Unsupported` (`Unavailable`) so it stays in its window. A waiting
 session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
 `dropEffect` is the end it reports. A provider that panics at `dragstart` is
 contained and reported (`drag::web::mapping::serve_stored`), its session
@@ -2406,7 +2406,7 @@ requests focus; operating-system focus policy still decides whether focus moves.
 AppKit deminiaturizes then orders the window forward. Win32 queries
 `WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
 placement, using `SW_SHOW` for non-minimized windows. Winit 0.30.13 Wayland reveal
-is rejected as `WindowShowError::Unsupported` before mutation because unminimize
+is rejected as `WindowShowError::Unsupported` (`NotOnThisPlatform`) before mutation because unminimize
 and focus are unsupported there. Closed retained windows return `Closed`.
 
 Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
@@ -3405,7 +3405,7 @@ A window's drag source starts the session the runtime asks for, but not inside
 the call. The host calls it once its outermost runtime callback ends, which is
 still inside the window's own callback drain; a modal loop there would queue the
 source window's input and frames until the drag ended. So the start records the
-request (one at a time; a second is refused with `DragError::Unavailable`) and
+request (one at a time; a second is refused with `DragError::Unsupported`, `Unavailable`) and
 posts `START_DRAG` to the owner window, whose procedure hands it to the
 transport's own `OwnerMessages` hook, which runs `DoDragDrop` on a fresh turn of
 the message loop; a request whose message never runs is told `Cancelled` when
@@ -3414,7 +3414,7 @@ alone, and a pen or touch contact the window takes as `WM_POINTER` is never
 promoted to mouse input, so it sets no mouse button in the key state the loop
 reads: a start whose contact is a pen or touch (by the window's pointer
 registry), or with no mouse button held, is refused with
-`DragError::Unavailable` and the drag stays in its window (ADR-0211 §11,
+`DragError::Unsupported` (`NotOnThisPlatform`) and the drag stays in its window (ADR-0211 §11,
 `a_drag_the_os_loop_cannot_carry_stays_in_its_window`, the pure rule
 `os_loop_buttons`). The drop source drops when the buttons held at the start
 are released and cancels on Escape or on another button.

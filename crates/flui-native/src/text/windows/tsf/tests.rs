@@ -145,7 +145,9 @@ fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
     services.shutdown();
     assert_eq!(
         services.complete_composition(&erased(&b)),
-        Err(TextStoreHostError::Unavailable)
+        Err(TextStoreHostError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow)
+        ))
     );
 }
 
@@ -764,7 +766,9 @@ fn a_window_offers_its_text_services_as_its_host() {
     window.close();
     assert_eq!(
         host.complete_composition(&erased(&store)),
-        Err(TextStoreHostError::Unavailable),
+        Err(TextStoreHostError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NoWindow)
+        )),
         "the destroyed window's text services are shut down"
     );
     assert!(

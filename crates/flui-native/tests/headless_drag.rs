@@ -193,7 +193,9 @@ fn driving_the_double_out_of_order_is_an_error() {
         .expect("no session runs yet");
     assert_eq!(
         desktop.dnd.start_foreign(text("second"), MOVE),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "the OS runs one session at a time"
     );
     assert_eq!(

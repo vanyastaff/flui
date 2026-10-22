@@ -1099,7 +1099,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert!(started().prevented);
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "too late for this press: the session stays in its window"
     );
     press_mouse("pointerup", 40.0, 30.0);
@@ -1113,7 +1115,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert_eq!(ended.borrow().last(), Some(&OsDragEnd::Cancelled));
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "no press"
     );
 }

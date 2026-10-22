@@ -336,7 +336,7 @@ use std::{
 use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_os = "android")]
 use flui_platform::{
-    DragDropEvent,
+    DragDropEvent, Unsupported, UnsupportedReason,
     data_transfer::{
         DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
         RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
@@ -865,9 +865,15 @@ impl PlatformDragSource for AndroidDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let startable = self.start_drag.is_some()
-            && self.view.is_ready()
-            && self.running.is_occupied() == Some(false);
+        // A device whose Android cannot start a drag never will; a view not
+        // ready yet, or one running a drag, may later.
+        let refused = if self.start_drag.is_none() {
+            Some(UnsupportedReason::NotOnThisDevice)
+        } else if !self.view.is_ready() || self.running.is_occupied() != Some(false) {
+            Some(UnsupportedReason::Unavailable)
+        } else {
+            None
+        };
         let OsDragRequest {
             key,
             representations,
@@ -876,10 +882,10 @@ impl PlatformDragSource for AndroidDragSource {
             on_end,
             ..
         } = request;
-        if !startable {
+        if let Some(reason) = refused {
             contain_owner_callback(|| drop(provider));
             contain_owner_callback(|| drop(on_end));
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(reason).into());
         }
         let payloads: Vec<Option<TransferPayload>> = (0..representations.len())
             .map(|index| serve(&mut provider, u16::try_from(index).unwrap_or(u16::MAX)))
@@ -890,7 +896,7 @@ impl PlatformDragSource for AndroidDragSource {
             self.running.replace(Running { allowed, on_end }).map(drop)
         {
             contain_owner_callback(|| drop(on_end));
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         self.view.transfer().set_own(Some(allowed));
         let session = match key.representation().format {

@@ -1092,7 +1092,12 @@ impl PlatformWindow for WebWindow {
             }
             // Every other command is refused by `admit` through a capability
             // this backend leaves `false`.
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         // The page answers a fullscreen request later, with
         // `fullscreenchange`; the title is ours to report at once.

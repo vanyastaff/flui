@@ -165,7 +165,7 @@ impl OwnerPreferences for NoPreferences {
         &self,
         _: u32,
     ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError> {
-        Err(flui_platform::PreferenceQueryError::Unavailable)
+        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotRegistered).into())
     }
 }
 
@@ -248,7 +248,10 @@ impl PlatformDragSource for NoDrag {
     }
 
     fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
-        Err(DragError::Unavailable)
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 }
 

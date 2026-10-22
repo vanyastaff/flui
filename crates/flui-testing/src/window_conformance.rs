@@ -130,11 +130,11 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
         let answer = window.apply(command.clone());
         fixture.settle();
         match (capable, &answer) {
-            (false, Err(WindowCommandError::Unsupported)) | (true, Ok(())) => {}
+            (false, Err(WindowCommandError::Unsupported(_))) | (true, Ok(())) => {}
             (false, other) => broken.push(format!(
                 "{command:?} is not supported but answered {other:?}, not Unsupported"
             )),
-            (true, Err(WindowCommandError::Unsupported)) => {
+            (true, Err(WindowCommandError::Unsupported(_))) => {
                 broken.push(format!("{command:?} is supported but was refused"));
             }
             (true, Err(other)) => {

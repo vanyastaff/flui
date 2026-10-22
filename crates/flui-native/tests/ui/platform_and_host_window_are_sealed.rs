@@ -182,7 +182,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
-        Err(CursorError::Unsupported)
+        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 
     fn as_any(&self) -> &dyn Any {

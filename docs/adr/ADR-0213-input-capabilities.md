@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/input/availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §4: `Availability` is `flui_platform::Availability`, beside `Unsupported`, and ADR-0211's
+  matching error is `DragError::Unsupported`.
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 3's delivery rules
@@ -40,7 +43,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`), input
    regions and outgoing drags to the OS. Haptics and IME keep answering through their handles;
    nothing is reported twice. `outgoing_drag()` is the one authoritative answer for starting an
-   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unavailable` is
+   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unsupported` is
    the matching error.
 
    ```rust
