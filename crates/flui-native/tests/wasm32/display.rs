@@ -1338,6 +1338,53 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
 }
 
 #[wasm_bindgen_test]
+async fn web_window_backing_store_keeps_to_the_ratio_a_device_size_contradicts() {
+    install_probe("none");
+    install_resize_observer(true);
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let (window, resized) = open_recorded_window(&running);
+    lay_out_canvas(300, 150, 300, 150);
+    settle().await;
+    assert_eq!(canvas_backing_size(), [300, 150]);
+
+    // The window moves to a display of twice the density. The ratio watch
+    // runs before the observer reports the box at the new ratio, and the
+    // 300×150 report is the box at 1×.
+    set_pixel_ratio(2.0);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [600, 300],
+        "the estimate at 2×, not the 1× report"
+    );
+    assert_eq!(physical_size(&window), [600, 300]);
+    assert_eq!(*resized.lock().expect("resizes"), [2.0]);
+
+    // Chrome's device emulation reports the device-pixel box in the screen's
+    // own pixels while `devicePixelRatio` is the emulated 2×.
+    lay_out_canvas(300, 150, 300, 150);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [600, 300],
+        "a device size 2× contradicts is not the store"
+    );
+    assert_eq!(physical_size(&window), [600, 300]);
+    assert_eq!(resized.lock().expect("resizes").len(), 1, "nothing changed");
+
+    // The box the browser lays out at 2× is the store again.
+    lay_out_canvas(300, 150, 601, 300);
+    settle().await;
+    assert_eq!(canvas_backing_size(), [601, 300], "the reported size");
+
+    drop(window);
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
 async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pixels() {
     install_probe("none");
     install_resize_observer(false);

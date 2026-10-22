@@ -166,6 +166,17 @@ impl DeviceSize {
             height: (height * scale).round() as u32,
         }
     }
+
+    /// Whether the browser can have laid a `width`×`height` box out at this
+    /// size at `scale`. The box is `clientWidth`/`clientHeight`, snapped to
+    /// whole CSS pixels, up to one off the size laid out; the device box is
+    /// snapped to whole device pixels, up to one off that size times
+    /// `scale`.
+    fn fits(self, width: f64, height: f64, scale: f64) -> bool {
+        let slack = scale + 1.0;
+        (f64::from(self.width) - width * scale).abs() <= slack
+            && (f64::from(self.height) - height * scale).abs() <= slack
+    }
 }
 
 /// Size the canvas's backing store so the surface renders one texel per
@@ -540,10 +551,13 @@ pub(super) struct LayoutSync {
 
 /// A `ResizeObserverEntry`'s `devicePixelContentBoxSize`: the device pixels
 /// the browser laid the box out at, exact where the estimate can be a pixel
-/// off. It holds while the CSS box it was reported for does, across a change
-/// of the device pixel ratio too: the device-pixel observer reports a ratio
-/// change that moves the device box, so one it does not report left the box
-/// as it was, which the estimate at the new ratio may not be.
+/// off. It holds while the CSS box it was reported for does and the ratio in
+/// effect can lay that box out at that size ([`DeviceSize::fits`]): across a
+/// small ratio change the observer does not report, which left the device
+/// box as it was. A size the ratio contradicts is in other pixels: the box at
+/// the old ratio, which the pixel-ratio watch replaces before the observer
+/// reports the new one, or the screen's own, which Chrome's device emulation
+/// reports while `devicePixelRatio` is the emulated ratio.
 #[derive(Clone, Copy)]
 struct ObservedSize {
     css: (f64, f64),
@@ -567,10 +581,10 @@ impl LayoutSync {
 
     /// Bring the backing store and the tracked size up to the layout; see
     /// [`WebWindow::layout_sync`]. The backing store is the observed device
-    /// size while the CSS box is the one it was observed for, and the
-    /// estimate otherwise: a `resize` event can run before the observer
-    /// reports the new box. The state lock is released before the dispatch,
-    /// which runs embedder callbacks.
+    /// size while it holds ([`ObservedSize`]), and the estimate otherwise: a
+    /// `resize` event can run before the observer reports the new box. The
+    /// state lock is released before the dispatch, which runs embedder
+    /// callbacks.
     pub(super) fn sync(&self) {
         let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
             return;
@@ -578,7 +592,9 @@ impl LayoutSync {
         let backing = self
             .observed
             .get()
-            .filter(|observed| observed.css == (width, height))
+            .filter(|observed| {
+                observed.css == (width, height) && observed.device.fits(width, height, scale_factor)
+            })
             .map_or_else(
                 || DeviceSize::estimate(width, height, scale_factor),
                 |observed| observed.device,
