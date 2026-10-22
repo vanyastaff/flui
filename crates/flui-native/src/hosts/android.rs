@@ -6,15 +6,17 @@ use std::sync::{Arc, Weak};
 use android_activity::AndroidApp;
 
 use crate::clipboard::android::MockClipboard;
+use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::{Absent, Host, position};
 use crate::owner::android::java_view::{InputMethod, JavaView, ViewTransfer};
-use crate::owner::android::{AndroidHost, AndroidLoop};
+use crate::owner::android::ndk::SymbolSource;
+use crate::owner::android::{AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
-use crate::platforms::android::{
-    AndroidDisplays, AndroidInputState, AndroidSystemChrome, AndroidWindow,
-};
+use crate::platforms::android::{AndroidInputState, AndroidSystemChrome, AndroidWindow};
+use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
 /// The Android host's table.
@@ -26,7 +28,7 @@ impl Host for Android {
 
     type Loop = AndroidLoop;
     type Window = AndroidWindow;
-    type Displays = AndroidDisplays;
+    type Displays = AndroidLoop;
     type Input = AndroidInputState;
     type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
@@ -55,6 +57,14 @@ impl AndroidHost for Android {
     /// `FluiView`'s drag and drop.
     fn transfer(view: Weak<JavaView>) -> Arc<dyn ViewTransfer> {
         AndroidTransfer::for_view(view)
+    }
+
+    fn displays(
+        api: AndroidApi,
+        library: Arc<dyn SymbolSource>,
+        owner: Weak<OwnerSignal>,
+    ) -> Arc<dyn HostDisplays> {
+        Arc::new(AndroidDisplays::new(api, library, owner))
     }
 }
 

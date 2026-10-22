@@ -6,9 +6,10 @@
 //! callback and enters `UIApplicationMain`, and the `AppDelegate` this module
 //! declares runs it from `application:didFinishLaunchingWithOptions:` — the
 //! process bootstrap. The scene delegate owns subsequent window attachments.
-//! Windows, displays, the clipboard and the other features keep their code
-//! under `platforms::ios` and reach the owner thread through what this module
-//! re-exports.
+//! Windows, the clipboard and the other features keep their code under
+//! `platforms::ios` and reach the owner thread through what this module
+//! re-exports. The loop holds the displays through [`HostDisplays`], which the
+//! table makes ([`IosHost`]).
 //!
 //! # Lifecycle
 //!
@@ -35,11 +36,10 @@
 //! independent; no OS background execution entitlement is implied.
 
 mod executor;
-mod native_owner;
 mod scene;
 
+pub(crate) use super::NativeOwner;
 pub use executor::IOSExecutor;
-pub(crate) use native_owner::NativeOwner;
 use scene::SceneHandler;
 pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};
 
@@ -76,9 +76,73 @@ use crate::{
 };
 use flui_platform::{PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId};
 
-use crate::platforms::ios::{
-    IOSPreferences, IOSWindow, IosDisplays, LifecycleObservation, ScreenObserver,
-};
+use crate::owner::watch::Watch;
+use crate::platforms::ios::{IOSPreferences, IOSWindow, LifecycleObservation};
+use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
+use objc2_quartz_core::CADisplayLink;
+use objc2_ui_kit::UIScreen;
+
+/// What the iOS host's table names for its owner thread (ADR-0151 §10): the
+/// displays the loop holds. The owner reaches them through the hook and names
+/// no feature.
+pub(crate) trait IosHost: 'static {
+    /// The displays, made once per loop on the main thread: the loop holds
+    /// them for the table's displays position and hands them to every window
+    /// it opens.
+    fn displays(marker: MainThreadMarker) -> Arc<dyn HostDisplays>;
+}
+
+/// The number the iOS display source gives a `UIScreen` it retains: it keys
+/// the screen's display and the link periods windows measure on it, and is
+/// never given to another screen while the platform lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ScreenNumber(pub(crate) u64);
+
+/// The screen a window is on, as the display source names it: the display's
+/// id, and the number the source keys the screen by. The default names no
+/// screen, which a window detached from its scene has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ScreenIdentity {
+    /// The display, once the snapshot can hold it.
+    pub(crate) id: Option<DisplayId>,
+    /// The source's number for the screen; `None` once the numbers are used
+    /// up.
+    pub(crate) number: Option<ScreenNumber>,
+}
+
+/// The host's screens as the loop and the windows it opens reach them, which
+/// the table makes ([`IosHost::displays`]). A window's display link reports
+/// the cadence it measures here, since `UIScreen` reports none.
+pub(crate) trait HostDisplays: Send + Sync {
+    /// The displays now: the last sample while nothing has invalidated it,
+    /// otherwise a fresh one.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the snapshot revision space is used up.
+    fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError>;
+
+    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
+    /// again. Any thread.
+    fn invalidate(&self);
+
+    /// The identity of `screen`, which the source retains.
+    fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity;
+
+    /// Record the period `window`'s display link measured on screen `number`,
+    /// and mark the snapshot stale.
+    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod);
+
+    /// Forget `window`'s period on screen `number`: its link is gone.
+    fn forget_link_period(&self, number: ScreenNumber, window: WindowId);
+
+    /// Ask `link` to run at the best rate `screen` sustains on the version the
+    /// platform runs on.
+    fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen);
+
+    /// Mark the screens stale and wake the owner behind `signal` on screen and
+    /// scene notifications, until the watch is dropped.
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+}
 
 #[derive(Clone)]
 struct SceneOrigin {
@@ -148,10 +212,11 @@ pub struct IOSLoop {
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
-    pub(crate) displays: Arc<IosDisplays>,
+    /// The screens, as the table made them; shared with every window.
+    pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
     /// notifications; main-thread owned like `preferences`.
-    _screen_observer: NativeOwner<ScreenObserver>,
+    _screen_observer: NativeOwner<Watch>,
     /// Where the memory warning goes on its way to the host.
     notices: Arc<SystemNotices>,
 }
@@ -163,7 +228,7 @@ impl std::fmt::Debug for IOSLoop {
 }
 
 impl IOSLoop {
-    pub(crate) fn new() -> Result<Self, PlatformError> {
+    pub(crate) fn new<H: IosHost>() -> Result<Self, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Init {
                 message: "IOSPlatform::new must run on the main thread (UIKit is \
@@ -193,8 +258,8 @@ impl IOSLoop {
             });
             Ok(())
         }));
-        let displays = Arc::new(IosDisplays::new(marker));
-        let screen_observer = ScreenObserver::new(&displays, &signal);
+        let displays = H::displays(marker);
+        let screen_observer = Arc::clone(&displays).observe(&signal);
         Ok(Self {
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
@@ -543,6 +608,17 @@ impl host::Services for IOSLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`IosHost::displays`]), on the main thread.
+impl host::Displays<IOSLoop> for IOSLoop {
+    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        owner.displays.snapshot(marker)
     }
 }
 

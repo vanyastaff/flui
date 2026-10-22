@@ -7,7 +7,7 @@
 //!
 //! - **NSApplication**: Main application and event loop
 //! - **NSWindow**: Window management
-//! - **NSScreen**: Display enumeration and info
+//! - **NSScreen**: Display enumeration and info (`display::apple::macos`)
 //! - **NSRunLoop**: Owner-thread application event loop
 //!   (`owner/apple/macos.rs`)
 //! - **GCD/Tokio**: Background task execution
@@ -63,7 +63,6 @@
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-pub(super) mod display;
 mod display_pass;
 mod events;
 mod liquid_glass;
@@ -76,7 +75,6 @@ pub(crate) mod window;
 mod window_ext;
 mod window_tiling;
 
-pub(crate) use display::{MacosDisplays, ScreenObserver};
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub(crate) use preferences::{PreferenceObservers, PreferenceSource};
 pub(crate) use system_notices::SystemNoticeSources;

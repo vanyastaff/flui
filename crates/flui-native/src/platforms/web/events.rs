@@ -39,10 +39,10 @@ use crate::owner::handlers::WindowCallbacks;
 use flui_platform::{PlatformInput, WindowExecutionState};
 
 use super::{
-    display_events::PixelRatioWatch,
     registration::{Registration, effective_focus},
     window::WebWindow,
 };
+use crate::display::web::PixelRatioWatch;
 
 /// Register all DOM event listeners on the canvas.
 ///

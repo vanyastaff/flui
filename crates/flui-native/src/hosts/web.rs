@@ -5,13 +5,14 @@ use std::sync::Arc;
 use flui_platform::Clipboard;
 
 use crate::clipboard::web::WebClipboard;
+use crate::display::web::WebDisplays;
 use crate::drag::web::WebTransfer;
 use crate::error::PlatformError;
 use crate::haptics::web::WebHaptics;
 use crate::host::{Absent, Host, position};
-use crate::owner::web::{HostDrag, WebHost, WebLoop};
+use crate::owner::web::{HostDisplays, HostDrag, WebHost, WebLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::web::{PageObservers, WebDisplays, WebPreferences, WebWindow};
+use crate::platforms::web::{PageObservers, WebPreferences, WebWindow};
 use crate::storage::UserDataDirs;
 use crate::text::web::WebTextInput;
 
@@ -24,7 +25,7 @@ impl Host for Web {
 
     type Loop = WebLoop;
     type Window = WebWindow;
-    type Displays = WebDisplays;
+    type Displays = WebLoop;
     type Input = WebLoop;
     type Text = std::rc::Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
@@ -38,6 +39,10 @@ impl Host for Web {
 }
 
 impl WebHost for Web {
+    fn displays() -> Arc<dyn HostDisplays> {
+        WebDisplays::new()
+    }
+
     /// The page's own clipboard, which reads only its own writes.
     fn clipboard() -> Arc<dyn Clipboard> {
         Arc::new(WebClipboard::new())

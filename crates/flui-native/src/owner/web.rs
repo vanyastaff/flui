@@ -33,16 +33,21 @@ use crate::{
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{Clipboard, WindowEvent, WindowId};
+use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, WindowEvent, WindowId};
 
+use crate::owner::watch::Watch;
 use crate::platforms::web::registration::Registration;
-use crate::platforms::web::{DisplayObservers, PageObservers, WebDisplays, WebPreferences};
+use crate::platforms::web::{PageObservers, WebPreferences};
 use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
-/// clipboard and the drag-and-drop transport the loop holds. The owner reaches
-/// them through hooks and names no feature.
+/// displays, the clipboard and the drag-and-drop transport the loop holds.
+/// The owner reaches them through hooks and names no feature.
 pub(crate) trait WebHost: 'static {
+    /// The displays, made once per loop: the loop holds them for the table's
+    /// displays position and hands them to the window it opens.
+    fn displays() -> Arc<dyn HostDisplays>;
+
     /// The clipboard, made once per loop: the loop holds it and answers the
     /// table's clipboard position from it.
     fn clipboard() -> Arc<dyn Clipboard>;
@@ -98,6 +103,29 @@ impl host::Drag<WebLoop> for WebLoop {
     }
 }
 
+/// The page's screens as the loop and its window reach them, which the table
+/// makes ([`WebHost::displays`]). The page has one thread, so they need not be
+/// `Send`.
+pub(crate) trait HostDisplays {
+    /// The cached snapshot, sampled from the browser when an event
+    /// invalidated it.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the snapshot revision space is used up.
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
+
+    /// The display the window is on; `None` when the platform has no id for it.
+    fn current_display(&self) -> Option<DisplayId>;
+
+    /// Feed one animation-frame timestamp (milliseconds): `true` when the
+    /// published period changed, so the owner is woken to sample again.
+    fn frame(&self, timestamp_ms: f64) -> bool;
+
+    /// Keep the snapshot current from the browser's events, each of which
+    /// wakes the owner behind `signal`, until the watch is dropped.
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+}
+
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
 /// once the closure exists.
@@ -115,10 +143,11 @@ pub struct WebLoop {
     pub(crate) drag: Arc<dyn HostDrag>,
     pub(crate) signal: Arc<OwnerSignal>,
     pub(crate) preferences: RefCell<Option<WebPreferences>>,
-    pub(crate) displays: Arc<WebDisplays>,
+    /// The screens, as the table made them; shared with the window.
+    pub(crate) displays: Arc<dyn HostDisplays>,
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
-    display_observers: RefCell<Option<DisplayObservers>>,
+    display_observers: RefCell<Option<Watch>>,
     /// The listeners that report the page being hidden and shown again; present
     /// while the platform runs.
     page_observers: RefCell<Option<PageObservers>>,
@@ -184,7 +213,7 @@ impl WebLoop {
             drag: H::drag(),
             signal,
             preferences: RefCell::new(Some(preferences)),
-            displays: WebDisplays::new(),
+            displays: H::displays(),
             display_observers: RefCell::new(None),
             page_observers: RefCell::new(None),
         })
@@ -326,7 +355,7 @@ impl host::Loop for WebLoop {
         // Display events wake the owner through the same signal; they are
         // observed from here on so the first snapshot already follows them.
         *self.display_observers.borrow_mut() =
-            Some(DisplayObservers::start(&self.displays, &self.signal));
+            Some(Arc::clone(&self.displays).observe(&self.signal));
 
         // The page being hidden is the end of the session: the browser may
         // discard it without another event.
@@ -455,6 +484,14 @@ impl host::Services for WebLoop {
     ) -> crate::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
         let _ = (directory, suggested_name);
         crate::Task::ready(Ok(None))
+    }
+}
+
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`WebHost::displays`]).
+impl host::Displays<WebLoop> for WebLoop {
+    fn snapshot(owner: &WebLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
     }
 }
 

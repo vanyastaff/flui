@@ -65,16 +65,16 @@ use windows::{
 };
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
-use crate::platforms::windows::display::WindowsDisplays;
 use crate::platforms::windows::platform::{WindowMap, WindowRef};
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
     owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
-    shared::hwnd_affinity::UserDataRefusal,
+    shared::hwnd_affinity::UserDataRefusal, shared::system_notice::StaleOnWake,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
+use flui_platform::{DisplayId, DisplaySnapshot};
 pub(crate) use wake_deadline::FrameCount;
 use wake_deadline::ModalDelivery;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
@@ -94,8 +94,9 @@ pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
 /// hooks of FLUI's window class and the subscribers of the broadcast receiver,
-/// each in the order a message reaches them, and the drag-and-drop transport
-/// the loop holds. The owner dispatches through them and names no feature.
+/// each in the order a message reaches them, and the displays and the
+/// drag-and-drop transport the loop holds. The owner dispatches through them
+/// and names no feature.
 pub(crate) trait WindowsHost: 'static {
     /// The hooks of FLUI's window class; its procedure is
     /// `window_proc::<Self>`.
@@ -104,11 +105,41 @@ pub(crate) trait WindowsHost: 'static {
     /// The broadcast receiver's subscribers, made from the owner's objects.
     fn broadcast_subscribers(owner: &control::OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>>;
 
+    /// The displays, made once per loop: the loop holds them for the table's
+    /// displays position and hands them to every window it opens.
+    fn displays() -> Arc<dyn HostDisplays>;
+
     /// The drag-and-drop transport, made once per loop on the owner thread.
     /// The loop holds it and answers the table's drag position from it, the
     /// owner window hands it the transport's own messages, and every window
     /// the loop opens takes and starts drags through it.
     fn drag() -> Arc<dyn HostDrag>;
+}
+
+/// The host's monitors as the loop and the windows it opens reach them, which
+/// the table makes ([`WindowsHost::displays`]). A wake marks them stale.
+pub(crate) trait HostDisplays: StaleOnWake {
+    /// The snapshot: the last sample, or a fresh one when none was taken or
+    /// something invalidated it.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the snapshot revision space is used up.
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
+
+    /// Record that the monitors may have changed: the next
+    /// [`snapshot`](Self::snapshot) samples again. Any thread, at any point.
+    fn invalidate(&self);
+
+    /// The display `hwnd` is on, from the last sample; never samples.
+    fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId>;
+
+    /// The handle of the monitor nearest `hwnd`, `None` for none: what a window
+    /// compares to learn that a move took it to another monitor.
+    fn nearest_monitor(&self, hwnd: HWND) -> Option<std::num::NonZeroIsize>;
+
+    /// How many times the monitors were read.
+    #[cfg(test)]
+    fn sample_count(&self) -> usize;
 }
 
 /// The host's drag-and-drop transport as the loop, its owner window and the
@@ -423,8 +454,9 @@ pub struct WindowsLoop {
     /// Window configuration (shared across all windows)
     pub(crate) config: WindowConfiguration,
 
-    /// The monitors this platform last sampled and the registry of their ids.
-    pub(crate) displays: Arc<WindowsDisplays>,
+    /// The monitors this platform last sampled and the registry of their ids,
+    /// as the table made them.
+    pub(crate) displays: Arc<dyn HostDisplays>,
 
     /// Records the owner thread so the thread-affine Win32 operations below
     /// can `debug_assert` their caller (ADR-0039). Bound at construction —
@@ -443,8 +475,8 @@ pub struct WindowsLoop {
 // only an `Arc`-shared signal and a locked address (its owner-thread state,
 // callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
 // reached only through the owner-thread gate `OwnerControl::shares`), the
-// executors are `Arc`-shared and internally synchronized, `displays` is a
-// registry and a snapshot each behind a lock, and `config` is plain data. The
+// executors are `Arc`-shared and internally synchronized, `displays` is
+// `Send + Sync` by its trait's bound, and `config` is plain data. The
 // only non-`Sync` member is `message_window: HWND`, a bare address that is
 // never dereferenced here.
 //
@@ -556,9 +588,9 @@ impl WindowsLoop {
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
         let drag = drag();
-        let displays = Arc::new(WindowsDisplays::new());
+        let displays = H::displays();
         let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
-        notices.mark_stale_on_wake(&displays);
+        notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
@@ -1380,6 +1412,15 @@ impl host::Services for WindowsLoop {
     fn compositor_name(&self) -> &'static str {
         // Nothing reads it; the name leaves `Platform` with the other services.
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the displays the table
+/// made ([`WindowsHost::displays`]), so the position and the hook name one
+/// object.
+impl host::Displays<WindowsLoop> for WindowsLoop {
+    fn snapshot(owner: &WindowsLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
     }
 }
 

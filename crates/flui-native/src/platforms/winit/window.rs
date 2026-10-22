@@ -24,9 +24,9 @@ use winit::{
 
 #[cfg(target_os = "linux")]
 use super::super::linux::x11_window_probe::X11WindowProbe;
-use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell};
 use crate::host_window::HostWindow;
+use crate::owner::winit::HostDisplays;
 use crate::owner::winit::control::ControlSender;
 use crate::shared::window_state::{WindowStateCell, mode_of};
 use flui_platform::{
@@ -74,7 +74,7 @@ pub struct WinitWindow {
     close_lane: ControlSender,
     /// The platform's native display source, by which this window names its
     /// display.
-    displays: Arc<WinitDisplaySource>,
+    displays: Arc<dyn HostDisplays>,
     /// The display last reported through `on_display_changed`, so a hint fires
     /// when the window really moved.
     reported_display: parking_lot::Mutex<Option<DisplayId>>,
@@ -167,7 +167,7 @@ impl WinitWindow {
         id: WindowId,
         window: Arc<Window>,
         close_lane: ControlSender,
-        displays: Arc<WinitDisplaySource>,
+        displays: Arc<dyn HostDisplays>,
         options: &WindowOptions,
         plan: &OpenPlan,
         frame_inset: Arc<FrameInset>,

@@ -3,10 +3,9 @@
 //! Linux windows, input and the event loop come from the winit fallback host
 //! (`WinitPlatform`) until the native Linux host (Wayland and X11) replaces it
 //! (ADR-0151 section 11). What is native already lives here, and the winit host
-//! uses it:
+//! uses it (the outputs of a Wayland compositor or an X server are the display
+//! feature's, `display::linux`):
 //!
-//! - `display`: the outputs of a Wayland compositor or an X server, with their
-//!   refresh rates and a notice when they change, read on a thread of its own;
 //! - `host_notices`: sleep and wake, shutdown, the screen lock and memory
 //!   pressure, from the login manager and the kernel;
 //! - `lifecycle_model`: the pure models behind those adapters and the X11 probe;
@@ -15,7 +14,6 @@
 //!
 //! The AT-SPI adapter is the accessibility feature's (`accessibility::linux`).
 
-pub(crate) mod display;
 #[cfg(feature = "winit-backend")]
 pub(crate) mod host_notices;
 #[cfg(feature = "winit-backend")]

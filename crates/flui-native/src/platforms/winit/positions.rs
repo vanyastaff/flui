@@ -15,13 +15,9 @@ use flui_platform::{
 use crate::owner::winit::PreferenceObservation;
 use crate::owner::winit::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
 use crate::{
-    error::PlatformError,
-    host,
-    host_window::HostWindow,
-    owner::OpenWindowError,
-    owner::call_point::install,
-    owner::winit::control::ControlSendError,
-    platforms::winit::{WinitDisplaySource, WinitWindow},
+    error::PlatformError, host, host_window::HostWindow, owner::OpenWindowError,
+    owner::call_point::install, owner::winit::control::ControlSendError,
+    platforms::winit::WinitWindow,
 };
 use flui_foundation::{ClaimOutcome, geometry::Size};
 
@@ -144,18 +140,6 @@ impl host::Window<WinitLoop> for WinitWindow {
             &owner.handler(|state| &mut state.handlers.window_event),
             callback,
         );
-    }
-}
-
-// The answer is the native source of the OS (Windows: `QueryDisplayConfig`,
-// macOS: `NSScreen`, Linux: the compositor), kept between calls and read
-// again only after an event marked it stale: the host asks on every owner
-// wake. It needs no event loop, so it answers before `Platform::run`; on
-// Linux that first answer is read once on a connection that then closes,
-// and the display thread takes over when the loop resumes.
-impl host::Displays<WinitLoop> for WinitDisplaySource {
-    fn snapshot(owner: &WinitLoop) -> Result<flui_platform::DisplaySnapshot, PlatformError> {
-        owner.displays.snapshot()
     }
 }
 

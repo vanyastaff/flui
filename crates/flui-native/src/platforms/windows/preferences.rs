@@ -26,8 +26,8 @@ use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG, SPI_GETWHEELSCROLLCHARS,
-    SPI_GETWHEELSCROLLLINES, SPI_SETWORKAREA, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
+    SPI_GETWHEELSCROLLLINES, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_SETTINGCHANGE,
 };
 use windows::core::{Interface, RuntimeName};
 
@@ -45,8 +45,6 @@ struct Invalidation {
     accepting: AtomicBool,
     pending: AtomicBool,
     signal: Weak<OwnerSignal>,
-    /// The monitors a display message invalidates.
-    displays: Arc<super::display::WindowsDisplays>,
 }
 
 impl Invalidation {
@@ -60,26 +58,13 @@ impl Invalidation {
             let _ = signal.wake();
         }
     }
-
-    /// The displays may have changed: invalidate the snapshot and wake the
-    /// owner, which samples it on its next turn. Touches a flag and posts a
-    /// wake, so the receiver's window procedure runs no user code. The flag
-    /// holds the debt when the wake cannot be posted.
-    fn notify_displays(&self) {
-        self.displays.invalidate();
-        if self.accepting.load(Ordering::Acquire)
-            && let Some(signal) = self.signal.upgrade()
-            && signal.accepting()
-        {
-            let _ = signal.wake();
-        }
-    }
 }
 
-/// The preference source's part of the system's broadcasts: setting and
-/// display changes, which mark the preferences and the displays stale and wake
-/// the owner. It shares the source's admission, so once the source is gone a
-/// receiver that outlives it marks nothing pending and wakes nobody.
+/// The preference source's part of the system's broadcasts: setting changes,
+/// which mark the preferences stale and wake the owner. It only observes, so
+/// every other subscriber hears the same message. It shares the source's
+/// admission, so once the source is gone a receiver that outlives it marks
+/// nothing pending and wakes nobody.
 pub(crate) struct PreferenceBroadcasts(Arc<Invalidation>);
 
 impl Subscriber for PreferenceBroadcasts {
@@ -87,32 +72,20 @@ impl Subscriber for PreferenceBroadcasts {
         &self,
         _hwnd: HWND,
         message: u32,
-        wparam: WPARAM,
+        _wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Option<LRESULT> {
         if message == WM_SETTINGCHANGE {
             self.0.notify();
-            // A work-area change (taskbar moved or resized) alters a
-            // display's usable bounds, which the snapshot carries.
-            if wparam.0 == SPI_SETWORKAREA.0 as usize {
-                self.0.notify_displays();
-            }
-            Some(LRESULT(0))
-        } else if message == WM_DISPLAYCHANGE {
-            // Only invalidates and wakes: the message can arrive inside
-            // a COM call of ours, so no sampling happens here.
-            self.0.notify_displays();
-            Some(LRESULT(0))
-        } else {
-            None
         }
+        None
     }
 }
 
 /// Native subscriptions and interfaces belong to the owner context, not its
 /// Send + Sync platform wrapper. Interfaces retire before WinRT. The system's
-/// setting and display broadcasts reach it through the owner's broadcast
-/// receiver ([`Self::broadcasts`]).
+/// setting broadcasts reach it through the owner's broadcast receiver
+/// ([`Self::broadcasts`]).
 pub struct PreferenceSource {
     invalidation: Arc<Invalidation>,
     ui: UISettings,
@@ -146,11 +119,8 @@ impl crate::host::Preferences<crate::owner::windows::WindowsLoop> for Preference
 
 impl PreferenceSource {
     /// A source that wakes the owner behind `signal` when a preference
-    /// changes, and invalidates `displays` when the displays do.
-    pub(crate) fn new(
-        signal: &Arc<OwnerSignal>,
-        displays: &Arc<super::display::WindowsDisplays>,
-    ) -> Result<Self, PlatformError> {
+    /// changes.
+    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
         // Direct activation avoids the generated process-wide factory cache,
@@ -166,7 +136,6 @@ impl PreferenceSource {
             accepting: AtomicBool::new(true),
             pending: AtomicBool::new(true),
             signal: Arc::downgrade(signal),
-            displays: Arc::clone(displays),
         });
         let mut source = Self {
             invalidation,
@@ -204,8 +173,7 @@ impl PreferenceSource {
         self.invalidation.pending.load(Ordering::Acquire)
     }
 
-    /// What the owner's broadcast receiver tells this source: setting and
-    /// display changes.
+    /// What the owner's broadcast receiver tells this source: setting changes.
     pub(crate) fn broadcasts(&self) -> PreferenceBroadcasts {
         PreferenceBroadcasts(Arc::clone(&self.invalidation))
     }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use objc2::MainThreadMarker;
 
-use super::{IOSPreferences, IOSWindow, IosDisplays};
+use super::{IOSPreferences, IOSWindow};
 use crate::PlatformError;
 use crate::host;
 use crate::host_window::HostWindow;
@@ -13,8 +13,7 @@ use crate::owner::apple::IOSLoop;
 use crate::owner::call_point::install;
 use flui_foundation::geometry::Size;
 use flui_platform::{
-    DisplaySnapshot, PlatformWindow, SystemPreferences, WindowCapabilities, WindowEvent, WindowId,
-    WindowOptions,
+    PlatformWindow, SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
 };
 
 impl host::Window<IOSLoop> for IOSWindow {
@@ -40,15 +39,6 @@ impl host::Window<IOSLoop> for IOSWindow {
             &owner.handler(|handlers| &mut handlers.window_event),
             callback,
         );
-    }
-}
-
-impl host::Displays<IOSLoop> for IosDisplays {
-    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "UIKit display sampling must run on the main thread".into(),
-        })?;
-        owner.displays.snapshot(marker)
     }
 }
 

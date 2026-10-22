@@ -21,12 +21,12 @@ use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSou
 use super::broadcast::Subscriber;
 use super::control::{OwnerControl, OwnerMessages, OwnerObjects, OwnerPost, OwnerWindow};
 use super::{
-    CreatedWindow, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
-    WindowsLoop, dispatch_window_message, window_created,
+    CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages,
+    WindowsHost, WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::config::WindowConfiguration;
+use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
-use crate::platforms::windows::display::WindowsDisplays;
 use crate::platforms::windows::platform::WindowRef;
 
 thread_local! {
@@ -94,6 +94,10 @@ impl WindowsHost for TestHost {
 
     fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         Vec::new()
+    }
+
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(WindowsDisplays::new())
     }
 
     fn drag() -> Arc<dyn HostDrag> {

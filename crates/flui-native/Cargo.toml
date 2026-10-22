@@ -463,7 +463,7 @@ winit-backend = [
 web = []
 
 # Linux display server protocols: each connects to its compositor to read the
-# outputs and their refresh rates (`platforms::linux::display`). On other
+# outputs and their refresh rates (`display::linux`). On other
 # targets the features exist and add nothing.
 wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
 x11 = ["dep:x11rb", "dep:rustix"]
@@ -595,17 +595,22 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = ["text", "clipboard", "drag", "accessibility", "haptics"]
+features = ["display", "text", "clipboard", "drag", "accessibility", "haptics"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
 hosts = "hosts"
 # `platforms/` is taken apart into the features (ADR-0151 §10): a feature
-# reaches a module under it only through an exception below, each with the task
-# that removes it.
+# reaches a module under it only through an exception below, each naming in
+# `reason` the move that removes it.
 retiring = ["platforms"]
-# Each edge from a feature into `platforms/`.
+# The one edge between platform files (the winit host on Linux reads the
+# compositor's outputs through the Linux source, which leaves with winit), then
+# each edge from a feature into `platforms/`.
 exceptions = [
+    { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
+    { from = "display::android", to = "platforms::android::preferences", exit = "ADR-0151", since = "2026-10-22", reason = "the Android display source samples through `with_activity`, the JNI Activity helper the preference file holds; it goes when the preferences become a feature directory and the helper moves into owner/android (ADR-0151 §10)" },
+    { from = "display::apple::ios", to = "platforms::ios::os_version", exit = "ADR-0151", since = "2026-10-22", reason = "the iOS display source reads the OS version through `platforms::ios::os_version::read`, widened to `pub(crate)` for it; it goes when the version gates become `version/` (ADR-0151 §10)" },
     { from = "text::android", to = "platforms::android::input", exit = "ADR-0151", since = "2026-10-22", reason = "the input method's editor action arrives as the key the Android input decoder builds (`editor_action_keys`); it goes when the input becomes a feature directory and the key reaches the text input through the input feature's model (ADR-0151 §10)" },
     { from = "text::android", to = "platforms::android::window", exit = "ADR-0151", since = "2026-10-22", reason = "the work the input method's calls hand the owner runs against `AndroidWindow`, which holds the window's text input; it goes when the window becomes a feature directory and hands out its text input through the text position (ADR-0151 §10)" },
     { from = "text::apple::macos", to = "platforms::macos::view", exit = "ADR-0151", since = "2026-10-22", reason = "the `NSTextInputClient` methods are added to the AppKit content view's class and read its context and key path; it goes when the view becomes the input feature's (ADR-0151 §10)" },

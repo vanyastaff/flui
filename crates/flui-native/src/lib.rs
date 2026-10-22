@@ -20,6 +20,8 @@
 //!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
 //!   │                         and slot, the panic boundary, the one call
 //!   │                         point for handlers and the handler registry
+//!   ├─ display/             - The displays: the registry and snapshot model
+//!   │                         beside one file per platform
 //!   ├─ text/                - Text input and the system text size: the
 //!   │                         model and one module per platform
 //!   │
@@ -160,10 +162,11 @@
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
 // `platforms::winit`, `platforms::android::memory`, the loops
 // `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, and the
-// platform files of the features that call the OS directly (the text services
-// `text::windows::tsf`, `text::apple::macos`, `text::apple::ios` among them)
-// carries its own module-level `#![expect(unsafe_code)]` where it is declared,
-// and the two small marker-trait impls in `window.rs`/`task.rs` carry
+// platform files of the features that call the OS directly (the display sources
+// `display::windows::source`, `display::apple::{macos, ios}` and the text
+// services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios` among
+// them) carries its own module-level `#![expect(unsafe_code)]` where it is
+// declared, and the two small marker-trait impls in `window.rs`/`task.rs` carry
 // item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
@@ -178,6 +181,7 @@
 pub(crate) mod accessibility;
 pub(crate) mod clipboard;
 pub mod config;
+mod display;
 pub(crate) mod drag;
 pub mod error;
 // Reachable for the backend conformance suite, which reads every backend's

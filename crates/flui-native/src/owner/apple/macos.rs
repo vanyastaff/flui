@@ -2,10 +2,11 @@
 //! the owner lane every thread-affine AppKit call travels through, and the wake
 //! pump that actuates the registered wake deadline.
 //!
-//! [`MacOSLoop`] is the loop of the macOS host's table; windows, displays,
-//! the clipboard and the other features keep their code under
-//! `platforms::macos` and reach the owner thread through what this module
-//! re-exports.
+//! [`MacOSLoop`] is the loop of the macOS host's table; windows, the
+//! clipboard and the other features keep their code under `platforms::macos`
+//! and reach the owner thread through what this module re-exports. The loop
+//! holds the displays through [`HostDisplays`], which the table makes
+//! ([`MacosHost`]).
 
 // `NSApplication.activateIgnoringOtherApps`, which the loop calls as the
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
@@ -23,19 +24,50 @@ pub(crate) use owner_lane::{
 };
 pub(crate) use wake_pump::WeakWakePump;
 
+/// What the macOS host's table names for its owner thread (ADR-0151 §10): the
+/// displays the loop holds. The owner reaches them through the hook and names
+/// no feature.
+pub(crate) trait MacosHost: 'static {
+    /// The displays, made once per loop: the loop holds them for the table's
+    /// displays position and hands them to every window it opens.
+    fn displays() -> Arc<dyn HostDisplays>;
+}
+
+/// The host's screens as the loop and the windows it opens reach them, which
+/// the table makes ([`MacosHost::displays`]). A wake marks them stale.
+pub(crate) trait HostDisplays: StaleOnWake {
+    /// The displays now: the last sample while nothing has invalidated it,
+    /// otherwise a fresh one.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the snapshot revision space is used up.
+    fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError>;
+
+    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
+    /// again. Any thread.
+    fn invalidate(&self);
+
+    /// The id of the display `screen` is on; `None` for a screen the source
+    /// leaves out.
+    fn id_of(&self, screen: &NSScreen) -> Option<DisplayId>;
+
+    /// Mark the screens stale and wake the owner behind `signal` when AppKit
+    /// reports a change of screen parameters, until the watch is dropped.
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+}
+
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use flui_foundation::OwnerAffinity;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::NSApplication;
+use objc2_app_kit::{NSApplication, NSScreen};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::platforms::macos::{
-    MacOSWindow, MacosDisplays, PreferenceObservers, PreferenceSource, ScreenObserver,
-    SystemNoticeSources,
+    MacOSWindow, PreferenceObservers, PreferenceSource, SystemNoticeSources,
 };
 use crate::{
     config::WindowConfiguration,
@@ -44,15 +76,19 @@ use crate::{
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
+    owner::apple::NativeOwner,
     owner::call_point::{Field, install},
     owner::handlers::PlatformHandlers,
+    owner::signal::OwnerSignal,
+    owner::watch::Watch,
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
-    shared::system_notice::SystemNotices,
+    shared::system_notice::{StaleOnWake, SystemNotices},
 };
 use flui_platform::{
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowOptions,
+    DisplayId, DisplaySnapshot, PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    WindowOptions,
 };
 
 /// The macOS host's loop: the state every position of its table reads.
@@ -88,13 +124,14 @@ pub struct MacOSLoop {
     /// Window configuration
     pub(crate) config: WindowConfiguration,
 
-    /// The id registry and last snapshot of the displays; shared with every
-    /// window so each names its screen by the same identity.
-    pub(crate) displays: Arc<MacosDisplays>,
+    /// The id registry and last snapshot of the displays, as the table made
+    /// them; shared with every window so each names its screen by the same
+    /// identity.
+    pub(crate) displays: Arc<dyn HostDisplays>,
 
     /// Marks `displays` stale and wakes the owner when AppKit reports a
     /// change of screen parameters; removed when the platform is dropped.
-    _screen_observer: ScreenObserver,
+    _screen_observer: NativeOwner<Watch>,
 
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
@@ -130,11 +167,15 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 }
 
 // SAFETY: the NSApplication pointer is a process-wide singleton only messaged
-// from the main thread (AppKit convention); all other fields are
-// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to
-// be shareable.
+// from the main thread (AppKit convention); the screen observer is a
+// `NativeOwner`, which only the main thread reads and which releases its value
+// there wherever the loop is dropped; the preference observers hold
+// notification-centre tokens, which any thread may remove; every other field
+// is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper
+// to be shareable.
 unsafe impl Send for MacOSLoop {}
-// SAFETY: see `Send` above — interior mutability is Mutex-guarded and the raw
+// SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
+// screen observer is reached only through a main-thread marker, and the raw
 // pointer is main-thread-affine by AppKit convention.
 unsafe impl Sync for MacOSLoop {}
 
@@ -159,8 +200,8 @@ impl std::fmt::Debug for MacOSLoop {
 }
 
 impl MacOSLoop {
-    pub(crate) fn new() -> Result<Self, PlatformError> {
-        Self::with_config(WindowConfiguration::default())
+    pub(crate) fn new<H: MacosHost>() -> Result<Self, PlatformError> {
+        Self::with_config::<H>(WindowConfiguration::default())
     }
 
     /// One of the application's handlers, as a slot of the handler set.
@@ -171,7 +212,9 @@ impl MacOSLoop {
         Field::new(&*self.handlers, project)
     }
 
-    pub(crate) fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
+    pub(crate) fn with_config<H: MacosHost>(
+        config: WindowConfiguration,
+    ) -> Result<Self, PlatformError> {
         // AppKit is touched below (`sharedApplication`,
         // `setActivationPolicy`), so the main-thread requirement starts HERE,
         // not at `run` — `MainThreadMarker::new()` both checks it and produces
@@ -218,10 +261,13 @@ impl MacOSLoop {
             let loop_control = LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let (preferences, preference_observers) =
                 PreferenceSource::new(&loop_control.owner_signal);
-            let displays = Arc::new(MacosDisplays::new());
-            let screen_observer = ScreenObserver::new(&displays, &loop_control.owner_signal);
+            let displays = H::displays();
+            let screen_observer = NativeOwner::new(
+                Arc::clone(&displays).observe(&loop_control.owner_signal),
+                mtm,
+            );
             let notices = Arc::new(SystemNotices::default());
-            notices.mark_stale_on_wake(&displays);
+            notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -402,6 +448,21 @@ impl host::Services for MacOSLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`MacosHost::displays`]), on the AppKit main thread.
+impl host::Displays<MacOSLoop> for MacOSLoop {
+    fn snapshot(owner: &MacOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        owner.displays.snapshot(mtm)
     }
 }
 

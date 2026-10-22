@@ -18,9 +18,11 @@
 //!   modal loop asks for frames, both pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
-//!   loop that keeps a feature's object (a clipboard, a drag-and-drop
-//!   transport) holds it in a field typed by a hook declared beside it, which
-//!   its host trait makes, and answers that object's position itself.
+//!   feature's state or object the loop keeps (the displays, a clipboard, a
+//!   drag-and-drop transport) it holds in a field typed by a hook declared
+//!   beside it, which its host trait makes, and it answers that position
+//!   itself; an observation a feature starts for the loop it keeps as a
+//!   `watch::Watch`.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -60,6 +62,14 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
+pub(crate) mod watch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 #[cfg(windows)]

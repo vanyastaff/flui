@@ -55,7 +55,7 @@ pub(crate) struct DisplaySource {
     target_arch = "wasm32",
     test
 ))]
-impl super::system_notice::StaleOnWake for DisplaySource {
+impl crate::shared::system_notice::StaleOnWake for DisplaySource {
     fn mark_stale(&self) {
         self.invalidate();
     }

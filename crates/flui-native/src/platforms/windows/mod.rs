@@ -13,7 +13,6 @@
 
 mod appearance;
 mod direct_manipulation;
-pub(crate) mod display;
 pub(crate) mod events;
 pub(crate) mod host_events;
 pub(crate) mod platform;
@@ -28,7 +27,6 @@ mod window_visibility;
 
 // The types the Windows host's table names: public where they are defined (a
 // table names only public types), and nameable only inside the crate.
-pub(crate) use display::WindowsDisplays;
 pub(crate) use host_events::HostEvents;
 pub(crate) use preferences::PreferenceSource;
 // The hooks the Windows host registers on FLUI's window class.

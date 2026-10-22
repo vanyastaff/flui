@@ -51,9 +51,8 @@
 // uses).
 #![expect(unsafe_code)]
 
-mod display;
 mod events;
-mod os_version;
+pub(crate) mod os_version;
 mod positions;
 mod preferences;
 mod status_bar;
@@ -62,7 +61,6 @@ mod window;
 pub use crate::owner::apple::ios::{
     IOSExecutor, IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId,
 };
-pub(crate) use display::{IosDisplays, ScreenObserver};
 pub(crate) use preferences::IOSPreferences;
 pub(crate) use status_bar::IOSSystemChrome;
 pub use window::IOSWindow;
