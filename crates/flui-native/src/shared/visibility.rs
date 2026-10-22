@@ -19,8 +19,8 @@
 
 /// `WM_SIZE` `wParam` values (`winuser.h`). Defined here — not imported from
 /// the `windows` crate — so the rules over them stay compilable and testable
-/// on every host; `platforms/windows/util.rs` re-exports these to keep the
-/// backend on the same single source of truth.
+/// on every host; the Win32 window procedure reads `WM_SIZE` through these,
+/// so the backend keeps the same single source of truth.
 pub const SIZE_RESTORED: u32 = 0;
 /// See [`SIZE_RESTORED`].
 pub const SIZE_MINIMIZED: u32 = 1;

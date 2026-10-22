@@ -38,9 +38,9 @@ use parking_lot::Mutex;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
-use super::native_owner::NativeOwner;
 use super::os_version;
 use crate::error::PlatformError;
+use crate::owner::apple::ios::NativeOwner;
 use crate::owner::signal::OwnerSignal;
 use crate::shared::apple_display_identity::{SameObject, ScreenLedger};
 use crate::shared::display_link_rate::{FrameRatePreference, ScreenPeriods, frame_rate_preference};
@@ -86,7 +86,7 @@ impl std::fmt::Debug for IosDisplays {
 }
 
 impl IosDisplays {
-    pub(super) fn new(marker: MainThreadMarker) -> Self {
+    pub(crate) fn new(marker: MainThreadMarker) -> Self {
         Self {
             source: DisplaySource::new(),
             version: os_version::read(),
@@ -221,14 +221,14 @@ fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i32> {
 /// connecting or disconnecting (a scene can be shown on another screen). The
 /// handler only marks the snapshot stale and wakes the owner; the owner
 /// samples on its own turn.
-pub(super) struct ScreenObserver {
+pub(crate) struct ScreenObserver {
     center: Retained<NSNotificationCenter>,
     tokens: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
     active: Arc<AtomicBool>,
 }
 
 impl ScreenObserver {
-    pub(super) fn new(displays: &Arc<IosDisplays>, signal: &Arc<OwnerSignal>) -> Self {
+    pub(crate) fn new(displays: &Arc<IosDisplays>, signal: &Arc<OwnerSignal>) -> Self {
         let active = Arc::new(AtomicBool::new(true));
         let callback = {
             let active = Arc::clone(&active);

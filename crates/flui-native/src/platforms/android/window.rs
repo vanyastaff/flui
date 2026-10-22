@@ -21,8 +21,9 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use super::AndroidLoop;
 use crate::host;
+use crate::owner::android::AndroidLoop;
+use crate::owner::android::java_view::JavaView;
 use crate::{
     owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::slot::OwnerSlot,
     shared::input_availability::AndroidInputApis, shared::os_version::android::AndroidApi,
@@ -57,7 +58,7 @@ pub struct AndroidWindow {
     haptics: Arc<super::haptics::AndroidHaptics>,
     /// `FluiView`: the input method's editor, the drop target and the drag
     /// source (ADR-0247).
-    java_view: Arc<super::java_view::JavaView>,
+    java_view: Arc<JavaView>,
     /// The window's text input, on the owner thread only.
     text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
     drag_source: Arc<super::drag::AndroidDragSource>,
@@ -89,7 +90,7 @@ impl AndroidWindow {
         app: AndroidApp,
         activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::owner::signal::OwnerSignal>,
-        java_view: Arc<super::java_view::JavaView>,
+        java_view: Arc<JavaView>,
         displays: Arc<super::display::AndroidDisplays>,
         api: AndroidApi,
     ) -> Self {
@@ -400,10 +401,10 @@ fn native_scale(app: &AndroidApp) -> f64 {
 /// window has input focus. None implies another: a dialog takes focus from a
 /// running, visible Activity. All three are false until their first callback.
 #[derive(Debug, Default)]
-pub(super) struct ActivityFlags {
-    pub(super) visible: AtomicBool,
-    pub(super) resumed: AtomicBool,
-    pub(super) focused: AtomicBool,
+pub(crate) struct ActivityFlags {
+    pub(crate) visible: AtomicBool,
+    pub(crate) resumed: AtomicBool,
+    pub(crate) focused: AtomicBool,
 }
 
 /// The activity surface as the system reports it now. The activity fills its
@@ -719,7 +720,7 @@ impl PlatformWindow for AndroidWindow {
         // exactly when no ANativeWindow is live, and the `ok_or` below maps
         // that straight to `Unavailable` — no separate flag needed. The span
         // where it is `None` runs from `MainEvent::TerminateWindow` to the
-        // next `MainEvent::InitWindow` (`platforms/android/mod.rs`'s event
+        // next `MainEvent::InitWindow` (`owner/android/looper.rs`'s event
         // loop, module doc's "Surface Lifecycle" section), and that span is
         // open at both ends *inside* those callbacks: the field is still
         // `Some` while the `TerminateWindow` callback runs (the applier clears
@@ -753,7 +754,7 @@ impl PlatformWindow for AndroidWindow {
         // borrow of `self` and does not encode that bound: `AndroidLoop`
         // keeps holding its `AndroidWindow` across a pause, and the only
         // writes to that field are `Window::open` (this file), which fills it,
-        // and `AndroidLoop::run`'s exit path (`platforms/android/mod.rs`),
+        // and `AndroidLoop::run`'s exit path (`owner/android/looper.rs`),
         // which takes it exactly once, after the last dispatch, so for every
         // handle this method ever returns, `self` and the borrow outlive the
         // pointer.

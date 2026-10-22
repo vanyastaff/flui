@@ -4,10 +4,11 @@
 use android_activity::AndroidApp;
 
 use crate::host::{Absent, Host, position};
+use crate::owner::android::AndroidLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidLoop, AndroidSystemChrome,
-    AndroidTextInput, AndroidTransfer, AndroidWindow, MockClipboard,
+    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput,
+    AndroidTransfer, AndroidWindow, MockClipboard,
 };
 
 /// The Android host's table.

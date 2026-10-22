@@ -42,8 +42,8 @@ use flui_platform::{
 
 use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
-use super::native_owner::NativeOwner;
 use super::status_bar::FluiViewController;
+use crate::owner::apple::ios::NativeOwner;
 use crate::owner::handlers::WindowCallbacks;
 use crate::shared::apple_display_identity::change_screen;
 use crate::shared::display_link_rate::{
@@ -667,7 +667,7 @@ struct IOSLifecycle {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum LifecycleObservation {
+pub(crate) enum LifecycleObservation {
     Active,
     Inactive,
     Background,
@@ -751,7 +751,7 @@ pub struct IOSWindow {
 
 impl IOSWindow {
     /// Allocate a stable view; a scene connection supplies its native container.
-    pub(super) fn new(
+    pub(crate) fn new(
         mtm: MainThreadMarker,
         id: WindowId,
         signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
@@ -815,7 +815,7 @@ impl IOSWindow {
         }
     }
 
-    pub(super) fn attach(&self, scene: &UIWindowScene, token: u64, marker: MainThreadMarker) {
+    pub(crate) fn attach(&self, scene: &UIWindowScene, token: u64, marker: MainThreadMarker) {
         let native = self.native.get(marker);
         self.detach_native(marker);
         native
@@ -847,7 +847,7 @@ impl IOSWindow {
         native.view.set_display_link_paused(true);
     }
 
-    pub(super) fn publish(&self, token: u64, marker: MainThreadMarker) {
+    pub(crate) fn publish(&self, token: u64, marker: MainThreadMarker) {
         let window = self
             .native
             .get(marker)
@@ -873,11 +873,11 @@ impl IOSWindow {
         }
     }
 
-    pub(super) fn resource_generation(&self) -> u64 {
+    pub(crate) fn resource_generation(&self) -> u64 {
         self.lifecycle.lock().generation
     }
 
-    pub(super) fn attachment_matches(&self, token: u64, marker: MainThreadMarker) -> bool {
+    pub(crate) fn attachment_matches(&self, token: u64, marker: MainThreadMarker) -> bool {
         !self.closed.load(Ordering::SeqCst)
             && self
                 .native
@@ -915,7 +915,7 @@ impl IOSWindow {
 
     /// Pause or resume the per-frame tick (delegates to the content view's
     /// `CADisplayLink`). Driven by the app's background/foreground edges.
-    pub(super) fn set_frame_tick_paused(&self, paused: bool) {
+    pub(crate) fn set_frame_tick_paused(&self, paused: bool) {
         if let Some(marker) = MainThreadMarker::new() {
             let native = self.native.get(marker);
             let published = native
@@ -928,7 +928,7 @@ impl IOSWindow {
     }
 
     /// Serialize native observations independently of the input/frame FIFO.
-    pub(super) fn observe_lifecycle(&self, observation: LifecycleObservation) {
+    pub(crate) fn observe_lifecycle(&self, observation: LifecycleObservation) {
         use LifecycleObservation::{Background, Detached, Foreground};
         if self.closed.load(Ordering::SeqCst) {
             return;
@@ -1064,7 +1064,7 @@ impl IOSWindow {
 
     /// Fence the physical link before a queued ownership retirement can run.
     /// A callback may pump UIKit or the remaining lifecycle queue in between.
-    pub(super) fn begin_retirement(&self) {
+    pub(crate) fn begin_retirement(&self) {
         let marker = MainThreadMarker::new().expect("BUG: scene retirement runs on main");
         self.native
             .get(marker)
@@ -1079,12 +1079,12 @@ impl IOSWindow {
         self.set_frame_tick_paused(true);
     }
 
-    pub(super) fn disconnect(&self, marker: MainThreadMarker) {
+    pub(crate) fn disconnect(&self, marker: MainThreadMarker) {
         self.observe_lifecycle(LifecycleObservation::Detached);
         self.detach_native(marker);
     }
 
-    pub(super) fn close_inner(&self) {
+    pub(crate) fn close_inner(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -1130,7 +1130,7 @@ impl crate::host_window::HostWindow for IOSWindow {
 
 impl PlatformWindow for IOSWindow {
     fn close(&self) {
-        super::platform::request_close(self.id);
+        crate::owner::apple::ios::request_close(self.id);
     }
 
     fn id(&self) -> WindowId {

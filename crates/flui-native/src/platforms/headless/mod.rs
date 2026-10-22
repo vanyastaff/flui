@@ -11,10 +11,13 @@ pub use drag::HeadlessDragAndDrop;
 pub(crate) use display::HeadlessDisplays;
 pub use display::{DisplayChange, DisplayChangeError, DisplaySpec};
 pub(crate) use drag::DragDouble;
-pub(crate) use platform::HeadlessLoop;
 pub use platform::{
-    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessDisplayControls, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPreferences, MockWindow,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDisplayControls,
+    HeadlessHostEvents, HeadlessInputDevices, HeadlessPreferences, MockWindow,
 };
+pub(crate) use platform::{TextStoreHostFactory, create_mock_window};
 pub use window_policy::HeadlessWindowPolicy;
+
+pub use crate::owner::headless::{
+    HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
+};

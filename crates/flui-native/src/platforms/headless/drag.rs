@@ -28,7 +28,7 @@ use flui_platform::drag::{
 use flui_platform::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
 use parking_lot::Mutex;
 
-use super::platform::HeadlessState;
+use crate::owner::headless::HeadlessState;
 use crate::owner::slot::OwnerSlot;
 
 /// One OS drag session in flight.
@@ -81,7 +81,7 @@ impl DragDouble {
         }
     }
 
-    pub(super) fn attach(&self, platform: Weak<Mutex<HeadlessState>>) {
+    pub(crate) fn attach(&self, platform: Weak<Mutex<HeadlessState>>) {
         *self.windows.lock() = platform;
     }
 

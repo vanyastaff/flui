@@ -19,17 +19,14 @@ use std::time::Duration;
 
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
-use super::{
-    owner_lane::{
-        exec_async_guarded, owner_queue, report_contained_panic,
-        run_cleanup_guarded as cleanup_step,
-    },
-    window::MacOSWindow,
+use super::owner_lane::{
+    exec_async_guarded, owner_queue, report_contained_panic, run_cleanup_guarded as cleanup_step,
 };
 use crate::{
     error::PlatformError,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
+    platforms::macos::MacOSWindow,
     shared::terminate_gate::ANNOUNCEMENT_LIFETIME,
     shared::terminate_gate::DEFERRAL_LIMIT,
     shared::terminate_gate::TerminateGate,
@@ -67,8 +64,8 @@ struct State {
 }
 
 /// Contains only thread-safe Rust state. AppKit objects never cross the queue.
-pub(super) struct LoopControl {
-    pub(super) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
+pub(crate) struct LoopControl {
+    pub(crate) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Mutex<State>,
     windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -120,7 +117,7 @@ impl LoopControl {
     /// terminate request that follows carries the answer out. If none follows,
     /// the session end was called off, which AppKit does not announce, and the
     /// application is told so.
-    pub(super) fn session_end_announced(self: &Arc<Self>) {
+    pub(crate) fn session_end_announced(self: &Arc<Self>) {
         let blocked = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
         let epoch = self.terminate_gate.lock().announced(blocked);
         if let Some(epoch) = epoch {
@@ -224,7 +221,7 @@ impl LoopControl {
         .or_contain(SessionEndAnswer::Proceed, "the session-end hook")
     }
 
-    pub(super) fn accepts_windows(&self) -> bool {
+    pub(crate) fn accepts_windows(&self) -> bool {
         let state = self.state.lock();
         !state.explicit_quit
             && !matches!(state.phase, Phase::Stopping | Phase::Stopped)
@@ -333,7 +330,7 @@ impl LoopControl {
     }
 
     /// Always deferred: reentrant requests cannot observe an absent leased hook.
-    pub(super) fn request(self: &Arc<Self>, explicit_quit: bool) {
+    pub(crate) fn request(self: &Arc<Self>, explicit_quit: bool) {
         if explicit_quit {
             self.owner_signal.fence();
         }

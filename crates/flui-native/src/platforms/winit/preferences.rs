@@ -34,13 +34,13 @@ struct Observation {
     appearance: WindowAppearance,
 }
 
-pub(super) struct PreferenceSource {
+pub(crate) struct PreferenceSource {
     observation: Arc<Mutex<Observation>>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl PreferenceSource {
-    pub(super) fn new(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
+    pub(crate) fn new(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
         // The environment does not change under a running process.
         let accepted =
             match preferred_locales::from_posix_environment(|name| std::env::var(name).ok()) {
@@ -70,7 +70,7 @@ impl PreferenceSource {
     }
 
     /// The accepted `color-scheme`; light until the portal says otherwise.
-    pub(super) fn appearance(&self) -> WindowAppearance {
+    pub(crate) fn appearance(&self) -> WindowAppearance {
         self.observation.lock().appearance
     }
 }

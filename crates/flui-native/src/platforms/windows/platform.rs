@@ -1,74 +1,50 @@
-//! Windows platform implementation
+//! A window's native context and the window's part of FLUI's window
+//! procedure: the context each window keeps in its `GWLP_USERDATA` slot, the
+//! gates that reach it on the window's owner thread, and [`WindowProc`], the
+//! hook that handles the messages of the window, its input, text, drag and
+//! lifecycle.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc,
-    sync::{Arc, Weak},
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Point, Size};
 use parking_lot::Mutex;
-use windows::{
-    Win32::{
-        Foundation::{
-            ERROR_CANCELLED, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WAIT_OBJECT_0,
-            WAIT_TIMEOUT, WPARAM,
-        },
-        Graphics::Gdi::{BeginPaint, ClientToScreen, EndPaint, HBRUSH, PAINTSTRUCT},
-        System::{
-            LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
-            Threading::GetCurrentThreadId,
-        },
-        UI::{
-            HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
-            Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
-            WindowsAndMessaging::{
-                CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_USERDATA, GetClassNameW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON,
-                HTCLIENT, HWND_MESSAGE, IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible,
-                MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
-                PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW,
-                SC_KEYMENU, SW_SHOWNORMAL, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
-                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
-                WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
-            },
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Graphics::Gdi::{BeginPaint, ClientToScreen, EndPaint, PAINTSTRUCT},
+    System::Threading::GetCurrentThreadId,
+    UI::{
+        Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+        WindowsAndMessaging::{
+            DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetClassNameW, GetWindowLongPtrW,
+            GetWindowThreadProcessId, HTCLIENT, ISMEX_NOSEND, InSendMessageEx, MINMAXINFO,
+            PostMessageW, SC_KEYMENU, SetWindowLongPtrW, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR,
+            WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
+            WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+            WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+            WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
+            WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
         },
     },
-    core::{PCWSTR, w},
 };
 
 use super::{
     display::WindowsDisplays,
-    modal_loop::MODAL_DEADLINE_TIMER,
+    events::{get_x_lparam, get_y_lparam},
     text_services::TextServices,
-    util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::{NativeMode, WindowsWindow},
 };
+use crate::owner::call_point::{Field, call};
+use crate::owner::windows::{
+    WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
+};
 use crate::{
-    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
-    owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers,
-    owner::handlers::WindowCallbacks, platform::Platform, platform::PlatformExecutor,
-    platform::PlatformReadyCallback, shared::hwnd_affinity::ContextLedger,
-    shared::hwnd_affinity::UserDataRefusal, shared::window_state::WindowStateCell,
+    config::WindowConfiguration, owner::handlers::PlatformHandlers,
+    owner::handlers::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
+    shared::window_state::WindowStateCell,
 };
 use flui_platform::{WindowAppearance, WindowEvent, WindowId};
-
-/// Ensures window class is registered exactly once (sound replacement for
-/// `static mut bool`).
-static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
-
-#[path = "platform/wake_deadline.rs"]
-mod wake_deadline;
-use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
-use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
-pub(super) use wake_deadline::{FrameCount, ModalDelivery};
 
 #[path = "platform/pointer_messages.rs"]
 mod pointer_messages;
@@ -87,58 +63,6 @@ mod preference_retry_tests;
 #[cfg(test)]
 #[path = "platform/display_message_tests.rs"]
 mod display_message_tests;
-
-#[cfg(test)]
-#[path = "platform/modal_frame_tests.rs"]
-mod modal_frame_tests;
-
-/// Identity of one native window's context, minted once per
-/// [`WindowsWindow::new`] and held by both the context and every wrapper
-/// clone. Unlike the context's address it is never reused, so a wrapper can
-/// tell its own window from one the OS built behind a recycled handle.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct WindowIdentity(std::num::NonZeroU64);
-
-impl WindowIdentity {
-    /// The process-wide identity source.
-    pub(super) fn source() -> &'static std::sync::atomic::AtomicU64 {
-        // A monotonic id source, not shared state: nothing reads it back.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        &NEXT
-    }
-
-    /// The admission boundary `WindowsWindow::new` runs: reserve an
-    /// identity from `source`, then run `acquire` for the native window it
-    /// will own. Exhaustion refuses before `acquire` runs, so a refusal
-    /// leaves nothing to release.
-    pub(super) fn admit<R>(
-        source: &std::sync::atomic::AtomicU64,
-        acquire: impl FnOnce() -> R,
-    ) -> (Self, R) {
-        let identity = Self::mint_from(source);
-        (identity, acquire())
-    }
-
-    fn mint_from(next: &std::sync::atomic::AtomicU64) -> Self {
-        use std::sync::atomic::Ordering;
-
-        // Mint the final nonzero identity once, then leave the source at zero.
-        // Refusal must not advance it: callers may catch a failed open and retry.
-        let raw = next
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |raw| {
-                (raw != 0).then(|| raw.checked_add(1).unwrap_or(0))
-            })
-            .expect("BUG: the window identity counter is exhausted");
-        Self(std::num::NonZeroU64::new(raw).expect("BUG: an admitted window identity is nonzero"))
-    }
-
-    /// The identity as a posted message's two parameters, its low and high 32
-    /// bits, whole on a 32-bit target too.
-    pub(super) fn halves(self) -> (usize, isize) {
-        let raw = self.0.get();
-        ((raw & 0xFFFF_FFFF) as usize, (raw >> 32) as isize)
-    }
-}
 
 /// One window as an object that outlives its borrow of the window names it:
 /// the handle and the identity of the context created with it. The OS
@@ -177,115 +101,9 @@ impl WindowRef {
     }
 }
 
-#[cfg(test)]
-impl WindowsLoop {
-    pub(crate) fn window_identity_exhaustion_permanently_refuses_retries() {
-        use std::{
-            cell::Cell,
-            sync::atomic::{AtomicU64, Ordering},
-        };
-
-        // Exercise the actual allocator with local sources; never exhaust the
-        // process-wide source used by other native window tests.
-        for seed in [0, u64::MAX - 1] {
-            let next = AtomicU64::new(seed);
-            let acquisitions = Cell::new(0);
-            // The admission `WindowsWindow::new` runs, with an acquisition
-            // that records native creation instead of performing it.
-            let admit =
-                || WindowIdentity::admit(&next, || acquisitions.set(acquisitions.get() + 1)).0;
-            if seed != 0 {
-                let penultimate = admit();
-                let final_identity = admit();
-                assert_eq!(penultimate.0.get(), u64::MAX - 1);
-                assert_eq!(final_identity.0.get(), u64::MAX);
-                assert_ne!(penultimate, final_identity);
-            }
-            for attempt in 0..3 {
-                assert!(
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(admit)).is_err(),
-                    "seed {seed}: exhausted allocation succeeded on retry {attempt}"
-                );
-            }
-            assert_eq!(
-                next.load(Ordering::Relaxed),
-                0,
-                "seed {seed}: refusal advanced the exhausted source"
-            );
-            assert_eq!(
-                acquisitions.get(),
-                if seed == 0 { 0 } else { 2 },
-                "seed {seed}: exhausted admission acquired native resources"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-impl WindowsLoop {
-    #[expect(unsafe_code, reason = "COM apartment and message-only window queries")]
-    pub(crate) fn platform_identity_exhaustion_acquires_nothing() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use windows::Win32::{
-            System::Com::{APTTYPE, APTTYPEQUALIFIER, CoGetApartmentType},
-            UI::WindowsAndMessaging::FindWindowExW,
-        };
-
-        // This thread's COM apartment, or the query's refusal when none.
-        let apartment = || {
-            let (mut kind, mut qualifier) = (APTTYPE::default(), APTTYPEQUALIFIER::default());
-            // SAFETY: both out-pointers are live, writable locals.
-            unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) }
-                .map(|()| (kind, qualifier))
-                .map_err(|error| error.code())
-        };
-        // The platform message-only windows that exist in this process.
-        let message_windows = || {
-            let mut count = 0;
-            let mut after = None;
-            // SAFETY: enumerates message-only windows by a static class name;
-            // every handle is only passed back as the next search start.
-            while let Ok(hwnd) = unsafe {
-                FindWindowExW(Some(HWND_MESSAGE), after, WINDOW_CLASS_NAME, PCWSTR::null())
-            } {
-                count += 1;
-                after = Some(hwnd);
-            }
-            count
-        };
-
-        let (apartment_before, windows_before) = (apartment(), message_windows());
-        let source = AtomicU64::new(0);
-        for attempt in 0..3 {
-            let refused = std::panic::catch_unwind(|| {
-                Self::admit_with_config(WindowConfiguration::default(), &source)
-            });
-            assert!(
-                refused.is_err(),
-                "exhausted platform admission succeeded on retry {attempt}"
-            );
-        }
-        assert_eq!(
-            source.load(Ordering::Relaxed),
-            0,
-            "refusal advanced the exhausted source"
-        );
-        assert_eq!(
-            apartment(),
-            apartment_before,
-            "refused admission initialized COM"
-        );
-        assert_eq!(
-            message_windows(),
-            windows_before,
-            "refused admission created a message window"
-        );
-    }
-}
-
 /// The platform's tracked top-level windows, keyed by HWND. The owner
 /// message-only windows are never in it.
-pub(super) type WindowMap = Mutex<HashMap<isize, Arc<WindowsWindow>>>;
+pub(crate) type WindowMap = Mutex<HashMap<isize, Arc<WindowsWindow>>>;
 
 /// Context data stored per window for event dispatch.
 ///
@@ -295,14 +113,14 @@ pub(super) type WindowMap = Mutex<HashMap<isize, Arc<WindowsWindow>>>;
 /// a registration that cannot reach this context from the calling thread is
 /// refused, so a callback never lands where a foreign thread could run or
 /// drop it.
-pub(super) struct WindowContext {
+pub(crate) struct WindowContext {
     /// Window ID for event dispatch
     pub window_id: WindowId,
     /// Which native window this context belongs to; see [`WindowIdentity`].
     pub identity: WindowIdentity,
     /// Tracking and cache access do not keep wrappers or their state alive.
     pub windows: std::sync::Weak<WindowMap>,
-    pub window_state: std::sync::Weak<Mutex<super::window::WindowRecord>>,
+    pub(super) window_state: std::sync::Weak<Mutex<super::window::WindowRecord>>,
     /// The published window state, shared with the wrapper; refreshed by
     /// [`Self::publish_window_state`].
     pub snapshot: Arc<WindowStateCell>,
@@ -312,7 +130,7 @@ pub(super) struct WindowContext {
     pub handlers: Rc<RefCell<PlatformHandlers>>,
     /// Asks the owner to consult the exit policy once this window's
     /// `WM_DESTROY` leaves the platform tracking no window.
-    pub exit_policy: super::owner_control::ExitPolicyRequest,
+    pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The platform's monitors: a DPI change invalidates their snapshot.
     pub displays: Arc<WindowsDisplays>,
     /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
@@ -330,12 +148,12 @@ pub(super) struct WindowContext {
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
-    pub message_clock: super::events::MessageClock,
+    pub(super) message_clock: super::events::MessageClock,
     pub pointer_registry: RefCell<crate::shared::pointer_assembly::ContactRegistry>,
     /// The precision touchpad's DirectManipulation viewport; `None` when it
     /// did not initialise (the window then has no precise scrolling or
     /// trackpad gestures) or after it failed.
-    pub touchpad: super::direct_manipulation::TouchpadSlot,
+    pub(super) touchpad: super::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -380,7 +198,7 @@ pub(super) struct WindowContext {
     /// What is still owed of the window's first show. A window opens hidden and
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
-    pub first_show: std::cell::Cell<super::window_frame::FirstShow>,
+    pub(super) first_show: std::cell::Cell<super::window_frame::FirstShow>,
     /// The window's visibility as the runtime sees it (hidden-surface
     /// gating): the surface, which `WM_SIZE` (minimize/restore) and
     /// `WM_SHOWWINDOW` (hide/show) report through the pure rules in
@@ -393,9 +211,9 @@ pub(super) struct WindowContext {
     /// creation-time edge ever fires). A constant seed would desync the
     /// edge filter for one of the two and swallow that window's first real
     /// transition.
-    pub visibility: super::window_visibility::Visibility,
+    pub(super) visibility: super::window_visibility::Visibility,
     /// The window's subscription to cloak changes.
-    pub cloak_watch: super::window_visibility::CloakWatch,
+    pub(super) cloak_watch: super::window_visibility::CloakWatch,
     /// Set between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE`: a live resize,
     /// whose `WM_SIZE` renders at once.
     pub in_size_move: std::cell::Cell<bool>,
@@ -403,7 +221,7 @@ pub(super) struct WindowContext {
     /// callback delivered.
     pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
     /// Delivers wake deadlines while a modal loop runs for the window.
-    pub modal_pacing: super::modal_loop::ModalPacing,
+    pub modal_pacing: crate::owner::windows::modal_loop::ModalPacing,
     /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
     /// held until its low half arrives in the next message (Windows splits
     /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
@@ -419,7 +237,7 @@ pub(super) struct WindowContext {
     /// The window's registered OLE drop target; `None` when registration
     /// failed (the window then takes no drags) or after `WM_DESTROY`
     /// revoked it.
-    pub drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
+    pub(super) drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -436,7 +254,7 @@ pub(super) struct WindowContext {
 impl WindowContext {
     /// Runs this window's frame callback; its callbacks count it on the
     /// platform only if one is registered to run.
-    pub(super) fn request_frame(&self) {
+    pub(crate) fn request_frame(&self) {
         self.callbacks.dispatch_request_frame();
     }
 
@@ -654,7 +472,7 @@ impl Drop for ContextGuard {
 /// the whole closure; post-retirement it merely describes a window that is
 /// already gone, and the remaining Win32 calls against the dead `hwnd`
 /// fail cleanly instead of dangling.
-pub(super) fn with_window_context<R>(
+pub(crate) fn with_window_context<R>(
     hwnd: HWND,
     op: &'static str,
     f: impl FnOnce(&WindowContext) -> R,
@@ -666,7 +484,7 @@ pub(super) fn with_window_context<R>(
 /// dropped here, on the calling thread, untouched — which is what lets a
 /// callback registration hand its callback back to the thread that offered
 /// it instead of parking it where the owner would later run or free it.
-pub(super) fn with_window_context_checked<R>(
+pub(crate) fn with_window_context_checked<R>(
     hwnd: HWND,
     op: &'static str,
     f: impl FnOnce(&WindowContext) -> R,
@@ -753,346 +571,30 @@ pub(super) fn teardown_route(
     )
 }
 
-/// The Windows host's loop: the owner thread's message-only window, the
-/// windows it tracks and the state every position of its table reads.
-/// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
-pub struct WindowsLoop {
-    pub(super) owner_control: super::owner_control::OwnerControl,
-    /// OLE drag and drop: the platform's one data-transfer source.
-    pub(super) drag: Arc<super::drag::OleTransfer>,
-    /// Message-only window for platform messages
-    message_window: HWND,
+/// The window's hook on FLUI's window class: it answers every message of the
+/// class's windows — the window's own, and its input, text, drag and
+/// lifecycle messages — passing what it does not handle to `DefWindowProcW`
+/// itself.
+pub(crate) struct WindowProc;
 
-    /// All created windows (keyed by HWND)
-    pub(super) windows: Arc<WindowMap>,
-
-    // The platform-level handlers (callbacks from platform to framework)
-    // are not a field: they live in the owner control context, reachable
-    // only on the owner thread through `owner_control.shares`.
-    /// Background executor for async tasks
-    background_executor: Arc<BackgroundExecutor>,
-
-    /// Window configuration (shared across all windows)
-    pub(super) config: WindowConfiguration,
-
-    /// The monitors this platform last sampled and the registry of their ids.
-    pub(super) displays: Arc<WindowsDisplays>,
-
-    /// Records the owner thread so the thread-affine Win32 operations below
-    /// can `debug_assert` their caller (ADR-0039). Bound at construction —
-    /// the message-only window's queue belongs to the constructing thread —
-    /// and re-asserted by `run`. Pre-run window creation on that same
-    /// thread (the Win32 examples) stays legal.
-    pub(super) affinity: flui_foundation::OwnerAffinity,
-
-    /// The owner thread's COM apartment. Declared last, so it is released
-    /// after everything above; each window's text services hold their own
-    /// clone, so COM outlives the platform while any of them is alive.
-    pub(super) apartment: super::com_apartment::ApartmentHold,
-}
-
-// SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
-// only an `Arc`-shared signal and a locked address (its owner-thread state,
-// callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
-// reached only through the owner-thread gate `OwnerControl::shares`), the
-// executors are `Arc`-shared and internally synchronized, `displays` is a
-// registry and a snapshot each behind a lock, and `config` is plain data. The
-// only non-`Sync` member is `message_window: HWND`, a bare address that is
-// never dereferenced here.
-//
-// NOT claimed — an earlier version of this comment claimed both, wrongly: that
-// an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
-// belongs to the creating thread, and `DestroyWindow` must run there), and that
-// the struct is itself just a handle. Sending the struct is sound because the
-// address alone aliases nothing; any Win32 call made through it still owes the
-// thread-affinity obligation. The soundness-relevant slice of that obligation
-// — dereferencing per-window `GWLP_USERDATA` contexts, and `DestroyWindow` —
-// is discharged by the `with_window_context`/`teardown_route` gates above
-// (see `WindowsWindow`'s `Send`/`Sync` docs); the remaining affine calls here
-// (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
-// rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
-// — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate, and `drag` keeps its COM objects in an owner slot.
-unsafe impl Send for WindowsLoop {}
-// SAFETY: as for `Send` — `&WindowsLoop` grants no more than shared access
-// to already-synchronized members plus a never-dereferenced address.
-unsafe impl Sync for WindowsLoop {}
-
-impl std::fmt::Debug for WindowsLoop {
-    // Hand-written: the remaining fields are raw platform handles and callback
-    // payloads with no useful Debug form.
-    //
-    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
-    // BLOCKS rather than panicking, so formatting this value while the same
-    // thread already holds `windows` would deadlock silently — and a Debug
-    // impl gets called from assertion messages and `tracing` fields, which is
-    // exactly where a lock is likely to be held. Same pattern
-    // `parking_lot::Mutex<T>: Debug` itself uses.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("WindowsLoop");
-        match self.windows.try_lock() {
-            Some(windows) => out.field("windows", &windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
-        };
-        out.finish_non_exhaustive()
-    }
-}
-
-impl WindowsLoop {
-    /// A loop with the default window configuration.
-    pub(crate) fn new() -> Result<Self, PlatformError> {
-        Self::with_config(WindowConfiguration::default())
-    }
-
-    /// A loop whose windows follow `config` (hotkeys, debouncing, fullscreen
-    /// behavior).
-    pub(crate) fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Self::admit_with_config(config, WindowIdentity::source())
-    }
-
-    /// [`Self::with_config`] with the identity drawn from `source`. The
-    /// owner control's identity is reserved first: exhaustion refuses before
-    /// COM is initialized or any HWND exists, so a refusal (and every caught
-    /// retry) leaves nothing to release.
-    fn admit_with_config(
-        config: WindowConfiguration,
-        source: &std::sync::atomic::AtomicU64,
-    ) -> Result<Self, PlatformError> {
-        let owner_identity = WindowIdentity::mint_from(source);
-
-        // Enter this thread's STA for drag-and-drop, clipboard and TSF. The
-        // apartment is a value: an early return below releases it, and once
-        // built it lives until the platform and every window's text services
-        // are gone (see `com_apartment`). This thread is also the one the
-        // platform's `affinity` binds to below.
-        let apartment =
-            super::com_apartment::ComApartment::enter().map_err(|hr| PlatformError::Init {
-                message: format!("Failed to initialize COM: {hr:?}"),
-            })?;
-
-        // SAFETY: `SetProcessDpiAwarenessContext` takes a constant by value,
-        // no pointer arguments; failure (already set, or an OS predating
-        // per-monitor-v2 awareness) is expected and non-fatal, hence the
-        // discarded result.
-        //
-        // Set DPI awareness to per-monitor v2 (best quality)
-        // Ignore errors - this can fail if already set or on older Windows
-        unsafe {
-            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-            // This native process setting is idempotent for the same value.
-            // A host that already fixed it to false keeps the legacy mouse route.
-            if let Err(error) = windows::Win32::UI::Input::Pointer::EnableMouseInPointer(true) {
-                tracing::debug!(%error, "mouse pointer messages unavailable; retaining mouse messages");
-            }
-        }
-
-        // SAFETY: `register_window_class`'s own `# Safety` contract (below)
-        // is discharged by `REGISTER_WINDOW_CLASS: Once` making the call
-        // race-free and idempotent regardless of caller thread.
-        //
-        // Register window class
-        unsafe {
-            Self::register_window_class()?;
-        }
-
-        // Build owner resources first so any later native creation failure
-        // retires its preference subscriptions and receiver through the guard.
-        let windows = Arc::new(Mutex::new(HashMap::new()));
-        let drag = super::drag::OleTransfer::new();
-        let displays = Arc::new(WindowsDisplays::new());
-        let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
-        notices.mark_stale_on_wake(&displays);
-        let owner_control = super::owner_control::OwnerControl::new(
-            owner_identity,
-            Arc::downgrade(&windows),
-            Arc::clone(&drag),
-            Arc::clone(&displays),
-            notices,
-        )?;
-
-        // SAFETY: `GetModuleHandleW(None)` queries the current process
-        // image, no pointer arguments. `CreateWindowExW` here creates the
-        // message-only window with `HWND_MESSAGE` as parent and constant
-        // Win32 arguments (no caller-supplied buffers); its class was just
-        // registered above on this same thread, satisfying the ordering
-        // Win32 requires (register-before-create).
-        //
-        // Create message-only window for platform messages
-        let message_window = unsafe {
-            let hinstance = GetModuleHandleW(None).map_err(|e| PlatformError::Init {
-                message: format!("Failed to get module handle: {e:?}"),
-            })?;
-
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                WINDOW_CLASS_NAME,
-                w!("Flui Platform Message Window"),
-                WINDOW_STYLE(0),
-                0,
-                0,
-                0,
-                0,
-                Some(HWND_MESSAGE), // Message-only window
-                None,
-                Some(hinstance.into()),
-                None,
-            )
-            .map_err(|e| PlatformError::Init {
-                message: format!("Failed to create message window: {e:?}"),
-            })?
-        };
-
-        // Create executors
-        let background_executor = Arc::new(BackgroundExecutor::new());
-
-        tracing::info!("Windows platform initialized with Tokio executors");
-
-        let platform = Self {
-            owner_control,
-            drag,
-            message_window,
-            windows,
-            background_executor,
-            config,
-            displays,
-            affinity: flui_foundation::OwnerAffinity::new(),
-            apartment: super::com_apartment::ApartmentHold::new(apartment),
-        };
-        // The message-only window above was just created on THIS thread, so
-        // its message queue already belongs here — the owner is decided at
-        // construction, not at `run`. A later `run` on another thread trips
-        // the foreign re-bind assertion instead of silently accepting a
-        // thread that cannot service the HWND.
-        platform.affinity.bind_current();
-        Ok(platform)
-    }
-
-    /// Register the window class for all FLUI windows (idempotent via `Once`).
-    ///
-    /// # Safety
-    ///
-    /// `Self::window_proc` is registered as the class's `WNDPROC` — its
-    /// `extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT` signature
-    /// must exactly match what Win32 calls through that slot, or every
-    /// dispatch to a window of this class is an ABI-mismatched call. The
-    /// caller must not register a different, incompatible callback under
-    /// the same `WINDOW_CLASS_NAME` afterward — `REGISTER_WINDOW_CLASS: Once`
-    /// enforces that this body runs at most once per process, so subsequent
-    /// calls are no-ops rather than a re-registration race.
-    unsafe fn register_window_class() -> Result<(), PlatformError> {
-        // SAFETY: per the `# Safety` contract above, `Self::window_proc`'s
-        // signature matches `WNDPROC`. `GetModuleHandleW(None)` takes no
-        // pointer arguments. `wc.lpszClassName`/`wc.hCursor` reference
-        // process-lifetime statics (`WINDOW_CLASS_NAME`, the loaded cursor
-        // resource); `&raw const wc` gives `RegisterClassW` a valid pointer
-        // to the fully-initialized, stack-local `WNDCLASSW`. `call_once`
-        // guarantees this body executes at most once, so there is no
-        // concurrent registration to race.
-        unsafe {
-            let mut result: Result<(), PlatformError> = Ok(());
-
-            REGISTER_WINDOW_CLASS.call_once(|| {
-                let reg = (|| -> Result<(), PlatformError> {
-                    let hinstance = GetModuleHandleW(None).map_err(|e| PlatformError::Init {
-                        message: format!("Failed to get module handle: {e}"),
-                    })?;
-
-                    let wc = WNDCLASSW {
-                        // No `CS_HREDRAW`/`CS_VREDRAW`: a flip-model surface is
-                        // presented whole, and `WM_SIZE` asks for the frame itself.
-                        style: CS_OWNDC,
-                        lpfnWndProc: Some(Self::window_proc),
-                        cbClsExtra: 0,
-                        cbWndExtra: 0,
-                        hInstance: hinstance.into(),
-                        hIcon: HICON::default(),
-                        hCursor: load_cursor_style(IDC_ARROW).map_err(|e| PlatformError::Init {
-                            message: format!("Failed to load the default cursor: {e}"),
-                        })?,
-                        hbrBackground: HBRUSH(std::ptr::null_mut()),
-                        lpszMenuName: PCWSTR::null(),
-                        lpszClassName: WINDOW_CLASS_NAME,
-                    };
-
-                    let atom = RegisterClassW(&raw const wc);
-                    if atom == 0 {
-                        return Err(PlatformError::Init {
-                            message: format!(
-                                "Failed to register the window class: {}",
-                                windows::core::Error::from_thread()
-                            ),
-                        });
-                    }
-
-                    tracing::info!("Registered Windows window class");
-                    Ok(())
-                })();
-
-                if let Err(e) = reg {
-                    result = Err(e);
-                }
-            });
-
-            result
-        }
-    }
-
-    /// Main window procedure for all FLUI windows: a panic boundary around
-    /// [`Self::window_proc_body`], which holds the actual message handling.
-    ///
-    /// The body dispatches framework-supplied callbacks (`ctx.callbacks.*`,
-    /// `ctx.dispatch_event`) that can panic. A panic must not unwind across
-    /// this `extern "system"` frame: unwinding across a non-unwind ABI
-    /// boundary is a guaranteed process abort since Rust 1.81, and was
-    /// undefined behavior before that (Rust Reference, *Panic* chapter,
-    /// "unwinding across FFI boundaries") — and that language-imposed abort
-    /// reports nothing through this framework's diagnostics. So the panic
-    /// is caught here, its payload logged via `tracing`, and the process
-    /// terminated deliberately — the same outcome, made deterministic and
-    /// observable on every toolchain. Deliberately NOT
-    /// swallowed-and-continued (`DefWindowProcW` as a fallback answer): a
-    /// panic mid-`WM_DESTROY` or mid-dispatch leaves framework state torn,
-    /// and pumping further messages over torn state converts one crash into
-    /// arbitrary later misbehavior — per `docs/PANIC-POLICY.md`, a panic is
-    /// a bug report, never control flow.
-    ///
-    /// # Safety
-    ///
-    /// Called by Win32 as a `WNDPROC` for windows of `WINDOW_CLASS_NAME`,
-    /// registered as this exact function in `register_window_class`; that
-    /// provenance is exactly what [`Self::window_proc_body`]'s own `# Safety`
-    /// contract requires, so forwarding the arguments verbatim discharges it.
-    unsafe extern "system" fn window_proc(
+impl WindowMessages for WindowProc {
+    unsafe fn message(
+        &self,
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> LRESULT {
-        // `AssertUnwindSafe` is sound here: on `Err` the process aborts
-        // before any code can observe whatever state the unwind tore.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: arguments forwarded verbatim from Win32's dispatch of
-            // this registered `WNDPROC` — see `# Safety` above.
-            unsafe { Self::window_proc_body(hwnd, msg, wparam, lparam) }
-        }));
-        match outcome {
-            Ok(result) => result,
-            Err(payload) => {
-                tracing::error!(
-                    msg,
-                    hwnd = ?hwnd,
-                    panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
-                    "panic in a window-procedure callback; aborting — it must not \
-                     unwind across the extern \"system\" boundary, and the framework \
-                     state behind this message may be torn"
-                );
-                std::process::abort();
-            }
-        }
+    ) -> Option<LRESULT> {
+        // SAFETY: the arguments as Win32 delivered them to the class's
+        // procedure, which is `window_proc_body`'s contract too.
+        Some(unsafe { Self::window_proc_body(hwnd, msg, wparam, lparam) })
     }
+}
 
-    /// The message handling behind [`Self::window_proc`]. Every dispatch of
-    /// user callbacks stays inside that caller's panic boundary.
+impl WindowProc {
+    /// The message handling behind FLUI's window procedure
+    /// ([`WindowMessages::message`]). Every dispatch of user callbacks stays
+    /// inside that procedure's panic boundary.
     ///
     /// # Safety
     ///
@@ -1408,7 +910,9 @@ impl WindowsLoop {
                 }
 
                 WM_SIZE => {
-                    use super::util::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
+                    use crate::shared::visibility::{
+                        SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+                    };
 
                     // WM_SIZE dimensions are unsigned16, unlike signed
                     // mouse and WM_MOVE coordinates packed in the same shape.
@@ -2135,760 +1639,6 @@ impl WindowsLoop {
             }
         }
     }
-
-    /// Run the Windows message loop (internal implementation)
-    fn run_message_loop(&self) -> Result<(), PlatformError> {
-        tracing::info!("Starting Windows message loop");
-
-        let mut armed: Option<DeadlineArm> = None;
-        let mut delivered: Option<DeadlineDelivery> = None;
-        // Shared with every window this platform opens; without an owner
-        // there are no windows, so the count never moves.
-        let shares = self.owner_control.shares("run message loop").ok();
-        let frames = shares.as_ref().map(|shares| Rc::clone(&shares.frames));
-        let preferences = shares.map(|shares| shares.preferences);
-        let fallback = Arc::clone(&self.owner_control.wake);
-        let wait_handles = [fallback.handle()];
-        let frame_count = || frames.as_ref().map_or(0, |frames| frames.get());
-
-        // SAFETY: `msg` is a stack-local, default-initialized `MSG` that
-        // outlives every call here. `&raw mut msg` is the only pointer
-        // `PeekMessageW` writes through, and `TranslateMessage`/
-        // `DispatchMessageW` read `&raw const msg` only after the peek
-        // reported a filled message. No pointer into `msg` is held across a
-        // call, so the re-entrancy below cannot alias it.
-        // `wait_handles` and its strong OwnedHandle owner outlive every native
-        // wait, including reentrant shutdown; no handle closes while waiting.
-        // The loop runs on the thread that created this
-        // platform's windows, so every peek, wait and dispatch addresses that
-        // thread's queue, and `DispatchMessageW` (like `PeekMessageW`, which
-        // delivers sent messages) re-enters `window_proc`
-        // on it. The deadline hook is safe code, called with no borrow of
-        // `msg` and no platform lock held, so it may re-enter the platform
-        // (close windows, replace itself, request quit) without violating
-        // either invariant.
-        unsafe {
-            let mut msg = MSG::default();
-
-            loop {
-                if let Some(source) = &preferences {
-                    source.retry_if_due();
-                }
-                // An admitted due wake is delivery debt. Actuate it before
-                // querying user code, which may abandon a late deadline.
-                if armed
-                    .as_ref()
-                    .is_some_and(|arm| arm.deadline <= web_time::Instant::now())
-                {
-                    let arm = armed.take().expect("BUG: a due deadline is armed");
-                    if self
-                        .deadline_hook()
-                        .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
-                    {
-                        let before = frame_count();
-                        Self::redraw_deadline_windows(&self.windows);
-                        delivered = Some(DeadlineDelivery {
-                            arm,
-                            frames: before,
-                        });
-                    }
-                }
-
-                // Drain native input/paint/quit before another idle query.
-                // Peek also services sent messages, so never follow a timed
-                // wake with an unconditional GetMessage that might re-park.
-                if PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                    if msg.message == WM_QUIT {
-                        break;
-                    }
-                    let _ = TranslateMessage(&raw const msg);
-                    DispatchMessageW(&raw const msg);
-                    continue;
-                }
-
-                // A replaced hook's final captures may themselves replace
-                // registration or quit: the query retires its clone before
-                // the answer is validated below.
-                let next = self.query_wake_deadline();
-                armed = match next {
-                    Some((deadline, identity))
-                        if self.deadline_hook().is_some_and(|hook| {
-                            Weak::ptr_eq(&identity, &Arc::downgrade(&hook))
-                        }) =>
-                    {
-                        match deadline {
-                            Some(deadline)
-                                if delivered.as_ref().is_none_or(|last| {
-                                    last.admits(deadline, &identity, frame_count())
-                                }) =>
-                            {
-                                Some(DeadlineArm {
-                                    deadline,
-                                    hook: identity,
-                                })
-                            }
-                            Some(_) => None,
-                            None => {
-                                delivered = None;
-                                None
-                            }
-                        }
-                    }
-                    _ => {
-                        delivered = None;
-                        None
-                    }
-                };
-
-                let next_deadline = armed
-                    .as_ref()
-                    .map(|arm| arm.deadline)
-                    .into_iter()
-                    .chain(
-                        preferences
-                            .as_ref()
-                            .and_then(|source| source.retry_deadline()),
-                    )
-                    .min();
-                let timeout = next_deadline.map_or(u32::MAX, |deadline| {
-                    let remaining = deadline.saturating_duration_since(web_time::Instant::now());
-                    // Round upwards so a submillisecond deadline cannot spin;
-                    // reserve Win32's INFINITE value for an actual idle wait.
-                    let milliseconds = remaining.as_nanos().saturating_add(999_999) / 1_000_000;
-                    u32::try_from(milliseconds.min(u128::from(u32::MAX - 1)))
-                        .expect("BUG: a bounded native timeout fits u32")
-                });
-                let outcome = MsgWaitForMultipleObjectsEx(
-                    Some(&wait_handles),
-                    timeout,
-                    QS_ALLINPUT,
-                    MWMO_INPUTAVAILABLE,
-                );
-                if outcome == WAIT_FAILED {
-                    return Err(PlatformError::EventLoop {
-                        message: windows::core::Error::from_thread().to_string(),
-                    });
-                }
-                if outcome == WAIT_OBJECT_0 {
-                    self.owner_control.drive_fallback();
-                } else if outcome != WAIT_TIMEOUT && outcome.0 != WAIT_OBJECT_0.0 + 1 {
-                    return Err(PlatformError::EventLoop {
-                        message: format!("unexpected Win32 message wait result: {}", outcome.0),
-                    });
-                }
-            }
-
-            tracing::info!("Message loop exited with code: {}", msg.wParam.0);
-        }
-        Ok(())
-    }
-
-    fn deadline_hook(&self) -> Option<Arc<WakeDeadlineHook>> {
-        if !self.owner_control.signal.accepting() {
-            return None;
-        }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        shares.handlers.borrow().wake_deadline.clone()
-    }
-
-    /// Ask the wake-deadline hook through the call point: its answer, and
-    /// the identity of the hook that gave it, so an answer is never credited
-    /// to a replacement. `None` when no hook is installed or the platform no
-    /// longer accepts work. Its panic unwinds out of the loop.
-    fn query_wake_deadline(&self) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
-        if !self.owner_control.signal.accepting() {
-            return None;
-        }
-        let shares = self.owner_control.shares("query wake deadline").ok()?;
-        Self::ask_wake_deadline(&shares.handlers)
-    }
-
-    /// [`Self::query_wake_deadline`] over a handler set.
-    fn ask_wake_deadline(
-        handlers: &RefCell<PlatformHandlers>,
-    ) -> Option<(Option<web_time::Instant>, Weak<WakeDeadlineHook>)> {
-        call(
-            &SharedField::new(handlers, |handlers| &mut handlers.wake_deadline),
-            |hook| Some((hook(), Arc::downgrade(hook))),
-        )
-        .or_resume(None)
-    }
-
-    /// Ask every window of `windows` for the frame a delivered wake deadline
-    /// is due: the main loop's delivery, and the modal drag loop's.
-    pub(super) fn redraw_deadline_windows(windows: &WindowMap) {
-        // Traverse a bounded identity snapshot without a per-frame Vec.
-        // A minimized window's frame request runs user code, which may open
-        // or close windows; each owning Arc is cloned under the registry
-        // lock and used only after releasing it.
-        let limit = windows
-            .lock()
-            .values()
-            .map(|window| window.identity.0.get())
-            .max()
-            .unwrap_or(0);
-        let mut after = 0;
-        loop {
-            let next = windows
-                .lock()
-                .values()
-                .filter(|window| {
-                    let identity = window.identity.0.get();
-                    identity > after && identity <= limit
-                })
-                .min_by_key(|window| window.identity.0.get())
-                .cloned();
-            let Some(window) = next else {
-                break;
-            };
-            after = window.identity.0.get();
-            let _ = with_window_context_checked(window.hwnd(), "deadline redraw", |context| {
-                if context.identity != window.identity {
-                    return;
-                }
-                // SAFETY: a query of the live HWND this context belongs to,
-                // on its creating thread.
-                let shown = unsafe { IsWindowVisible(window.hwnd()) }.as_bool();
-                if context.mode.get().is_minimized() || !shown {
-                    // WM_PAINT skips a minimized window's frame request,
-                    // Windows rarely paints one at all, and never paints a
-                    // hidden one, so an invalidation would strand the
-                    // delivered deadline until unrelated input. Request the
-                    // frame directly instead: its frame services timers and
-                    // gestures for a window nothing can see.
-                    context.request_frame();
-                } else {
-                    flui_platform::PlatformWindow::request_redraw(window.as_ref());
-                }
-            });
-        }
-    }
-
-    /// What the main loop would deliver, while `DoDragDrop`'s modal loop
-    /// stands in for it and dispatches neither deadlines nor paints: a due
-    /// wake deadline is delivered as the main loop delivers it, once per
-    /// frame generation, and every window with an invalid region is painted
-    /// (`UpdateWindow` sends its `WM_PAINT` directly), so every runtime on
-    /// the thread keeps getting frames. Returns how many milliseconds to wait
-    /// before the next request. The hook is user code, run with no borrow
-    /// held and in the main loop's custody.
-    pub(super) fn deliver_modal_frames(
-        handlers: &RefCell<PlatformHandlers>,
-        windows: &Weak<WindowMap>,
-        frames: &FrameCount,
-        delivered: &ModalDelivery,
-    ) -> u32 {
-        // A replaced hook's final captures may replace the registration
-        // again: the query retires its clone before the answer is checked
-        // against it.
-        let queried = Self::ask_wake_deadline(handlers);
-        // The answer of a hook that is no longer installed is not its
-        // replacement's: as in the main loop, the delivery record is keyed by
-        // the hook as well as the instant.
-        let current = queried.and_then(|(deadline, identity)| {
-            let installed = handlers
-                .borrow()
-                .wake_deadline
-                .as_ref()
-                .is_some_and(|hook| Weak::ptr_eq(&identity, &Arc::downgrade(hook)));
-            installed.then_some((deadline?, identity))
-        });
-        let now = web_time::Instant::now();
-        let deadline = current.as_ref().map(|(deadline, _)| *deadline);
-        match current {
-            Some((deadline, identity))
-                if deadline <= now && delivered.admits(deadline, &identity, frames.get()) =>
-            {
-                if let Some(windows) = windows.upgrade() {
-                    delivered.record(deadline, identity, frames.get());
-                    Self::redraw_deadline_windows(&windows);
-                }
-            }
-            Some(_) => {}
-            None => delivered.clear(),
-        }
-        // A snapshot: a paint runs user code, which may open or close windows.
-        let painted: Vec<HWND> = windows
-            .upgrade()
-            .map(|windows| {
-                windows
-                    .lock()
-                    .values()
-                    .map(|window| window.hwnd())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for hwnd in painted {
-            // SAFETY: a window this thread created; a handle closed by an
-            // earlier paint fails the call harmlessly. Nothing is borrowed.
-            let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
-        }
-        crate::shared::ole_drag_drop::modal_frame_wait_ms(deadline, now)
-    }
-
-    /// Installs a platform-level handler into the owner-thread handler set.
-    ///
-    /// Off the owner thread, or once the platform has shut down, the
-    /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced handler is retired through the call point
-    /// after the `RefCell` borrow ends, since its destructor may re-enter the
-    /// platform, in a boundary of its own: a capture that panics in `Drop`
-    /// must not unwind into the host.
-    pub(super) fn register_handler<H>(
-        &self,
-        op: &'static str,
-        callback: H,
-        project: fn(&mut PlatformHandlers) -> &mut Option<H>,
-    ) {
-        match self.owner_control.shares(op) {
-            Ok(shares) => install(&Field::new(&*shares.handlers, project), callback),
-            Err(UserDataRefusal::ForeignThread) => {
-                tracing::error!(
-                    op,
-                    "platform callback registration refused: platform callbacks are registered \
-                     on the owner thread; the callback was dropped on the calling thread"
-                );
-                drop(callback);
-            }
-            Err(reason) => {
-                tracing::debug!(
-                    op,
-                    ?reason,
-                    "platform callback registration refused: the platform has shut down"
-                );
-                drop(callback);
-            }
-        }
-    }
-}
-
-impl host::Loop for WindowsLoop {
-    fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
-        on_ready: PlatformReadyCallback,
-    ) -> Result<(), PlatformError> {
-        tracing::info!("Running Windows platform");
-
-        // Idempotent from the constructing thread; a `run` migrated to a
-        // different thread is a bug the re-bind assertion surfaces (the
-        // message-only window's queue is bound to the constructing thread).
-        self.affinity.bind_current();
-
-        struct RunGuard(Arc<WindowsLoop>);
-        impl Drop for RunGuard {
-            fn drop(&mut self) {
-                // Hold the handler set while the owner context still exists,
-                // close (which frees that context on this thread), and only
-                // then run the quit callback: it still observes a closed
-                // platform. It runs once, and its panic is contained: this
-                // is a destructor, possibly of an unwind already under way.
-                let handlers = self
-                    .0
-                    .owner_control
-                    .shares("run teardown")
-                    .ok()
-                    .map(|shares| Rc::clone(&shares.handlers));
-                self.0.owner_control.close();
-                if let Some(handlers) = handlers {
-                    call(
-                        &Once(Field::new(&*handlers, |handlers| &mut handlers.quit)),
-                        |quit| quit(),
-                    )
-                    .or_contain((), "the quit callback");
-                    // The last handle to the handler set when the owner context
-                    // is gone: its handlers' destructors are user code, dropped
-                    // contained, or kept while an unwind is under way.
-                    retire(handlers);
-                }
-            }
-        }
-        let _guard = RunGuard(Arc::clone(&self));
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(super::owner_control::WindowsOwnerHooks::new(
-            Arc::clone(&platform),
-            &self.owner_control,
-        ));
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
-        self.owner_control
-            .signal
-            .start()
-            .map_err(|error| PlatformError::EventLoop {
-                message: error.to_string(),
-            })?;
-        self.run_message_loop()
-    }
-
-    fn quit(&self) {
-        self.owner_control.close_signal();
-        // PostQuitMessage posts to the CALLING thread's message queue — off
-        // the owner thread it silently quits nothing (ADR-0039).
-        self.affinity.debug_assert_owner("WindowsLoop::quit");
-        tracing::info!("Quitting Windows platform");
-        // SAFETY: `PostQuitMessage` takes a plain `i32` exit code, no
-        // pointer arguments; the `debug_assert_owner` above documents (in
-        // debug builds) that this runs on the thread whose queue it posts
-        // to — posting from elsewhere is a logic bug (silently posts to the
-        // wrong queue), not memory-unsafety.
-        unsafe {
-            PostQuitMessage(0);
-        }
-    }
-
-    fn set_wake_deadline_hook(&self, hook: Box<WakeDeadlineHook>) {
-        if !self.owner_control.signal.accepting() {
-            drop(hook);
-            return;
-        }
-        let hook: Arc<WakeDeadlineHook> = Arc::from(hook);
-        self.register_handler("set_wake_deadline_hook", hook, |handlers| {
-            &mut handlers.wake_deadline
-        });
-        // Re-query after replacement even when the old query re-entered this
-        // setter. The existing owner signal coalesces these notifications.
-        if self.owner_control.signal.accepting()
-            && let Err(error) = self.owner_control.signal.wake()
-        {
-            tracing::warn!(%error, "failed to wake Win32 after deadline hook registration");
-        }
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
-    }
-
-    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
-        self.register_handler("set_exit_policy_hook", hook, |handlers| {
-            &mut handlers.exit_policy
-        });
-    }
-
-    fn request_exit_policy_reevaluation(&self) {
-        self.owner_control.exit_policy_request().post();
-    }
-}
-
-impl host::Services for WindowsLoop {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
-    }
-
-    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
-        // SAFETY: `buffer` is a stack-local `[u16; MAX_PATH]`; `&mut buffer`
-        // gives `GetModuleFileNameW` a valid, correctly-sized out-parameter,
-        // and only the first `len` code units it reports writing are read
-        // below — a `len == 0` failure returns before any read.
-        unsafe {
-            let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
-            let len = GetModuleFileNameW(None, &mut buffer);
-            if len == 0 {
-                return Err(PlatformError::AppPath {
-                    message: windows::core::Error::from_thread().to_string(),
-                });
-            }
-            Ok(std::path::PathBuf::from(String::from_utf16_lossy(
-                &buffer[..len as usize],
-            )))
-        }
-    }
-
-    fn open_url(&self, url: &str) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: `wide_url` is explicitly NUL-terminated
-        // (`.chain(std::iter::once(0))`), matching what `PCWSTR` requires,
-        // and stays alive for the duration of this call (it is not dropped
-        // or reallocated between `.as_ptr()` and the call).
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_url.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    fn reveal_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        // Use "explorer /select,<path>" to reveal in Explorer
-        let path_str = path.to_string_lossy();
-        let arg = format!("/select,{path_str}");
-        let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
-        let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
-        // SAFETY: see `open_url` above — both `wide_arg` and `explorer` are
-        // explicitly NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(explorer.as_ptr()),
-                PCWSTR(wide_arg.as_ptr()),
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    fn open_path(&self, path: &std::path::Path) {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let wide_path: Vec<u16> = path
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        // SAFETY: see `open_url` above — `wide_path` is explicitly
-        // NUL-terminated and kept alive across the call.
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(wide_path.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    fn prompt_for_paths(
-        &self,
-        options: crate::platform::PathPromptOptions,
-    ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
-        let executor = self.background_executor.clone();
-        executor.spawn(async move {
-            // COM file dialogs must run on an STA thread. The closure keeps
-            // the raw `windows::core::Result` so the COM `?`s inside stay
-            // untouched; the typed mapping happens once, at the join below.
-            let result = std::thread::spawn(
-                move || -> windows::core::Result<Option<Vec<std::path::PathBuf>>> {
-                    // SAFETY: this whole body runs on the freshly `std::thread::spawn`ed
-                    // thread, which owns no other window state — `CoInitializeEx`
-                    // makes it an STA for the `IFileOpenDialog` COM object, as
-                    // that interface requires. Every `windows-rs` COM call
-                    // (`CoCreateInstance`, `dialog.Show`/`SetOptions`, `results.*`,
-                    // `item.GetDisplayName`) is a checked, typed FFI wrapper with
-                    // no raw pointer of ours to validate. `CoTaskMemFree` below
-                    // frees the `PWSTR` `name` owns from COM — it is only used
-                    // (via `name.to_string()`, which copies the string out) before
-                    // this free, and each loop iteration gets its own `name` from
-                    // `GetDisplayName`, so there is no double-free or use-after-free
-                    // across iterations.
-                    unsafe {
-                        use windows::Win32::{
-                            System::Com::{
-                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
-                                CoInitializeEx, CoTaskMemFree,
-                            },
-                            UI::Shell::{
-                                FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
-                                FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
-                                SIGDN_FILESYSPATH,
-                            },
-                        };
-
-                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-                        let dialog: IFileOpenDialog =
-                            CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
-
-                        let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
-                        if options.multiple {
-                            flags |= FOS_ALLOWMULTISELECT;
-                        }
-                        if options.directories {
-                            flags |= FOS_PICKFOLDERS;
-                        }
-                        dialog.SetOptions(flags)?;
-
-                        match dialog.Show(None) {
-                            Ok(()) => {}
-                            Err(e)
-                                if e.code()
-                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                            {
-                                return Ok(None);
-                            }
-                            Err(e) => return Err(e),
-                        }
-
-                        let results = dialog.GetResults()?;
-                        let count = results.GetCount()?;
-                        let mut paths = Vec::with_capacity(count as usize);
-                        for i in 0..count {
-                            let item = results.GetItemAt(i)?;
-                            let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-                            let path_str = name.to_string()?;
-                            paths.push(std::path::PathBuf::from(path_str));
-                            CoTaskMemFree(Some(name.as_ptr() as *const _));
-                        }
-                        Ok(Some(paths))
-                    }
-                },
-            )
-            .join()
-            .map_err(|_| PlatformError::Dialog {
-                message: "File dialog thread panicked".to_string(),
-            })?
-            .map_err(|error| PlatformError::Dialog {
-                message: error.to_string(),
-            })?;
-            Ok(result)
-        })
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        directory: &std::path::Path,
-        suggested_name: Option<&str>,
-    ) -> crate::task::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
-        let dir = directory.to_path_buf();
-        let name = suggested_name.map(std::string::ToString::to_string);
-        let executor = self.background_executor.clone();
-        executor.spawn(async move {
-            // Same raw-`windows::core::Result` closure + single typed
-            // mapping shape as `prompt_for_paths` above.
-            let result = std::thread::spawn(
-                move || -> windows::core::Result<Option<std::path::PathBuf>> {
-                    // SAFETY: see `prompt_for_paths` above — same
-                    // dedicated-STA-thread, checked-COM-wrapper reasoning.
-                    // `dir_wide` is explicitly NUL-terminated and outlives the
-                    // `SHCreateItemFromParsingName` call that borrows its
-                    // pointer; the single `CoTaskMemFree` below frees the one
-                    // `name` this function's single `IFileSaveDialog::GetResult`
-                    // path produces, after `name.to_string()` has already copied
-                    // the string out.
-                    unsafe {
-                        use windows::Win32::{
-                            System::Com::{
-                                CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance,
-                                CoInitializeEx, CoTaskMemFree,
-                            },
-                            UI::Shell::{
-                                FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-                                FileSaveDialog, IFileSaveDialog, IShellItem,
-                                SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
-                            },
-                        };
-
-                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-                        let dialog: IFileSaveDialog =
-                            CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
-
-                        dialog.SetOptions(
-                            FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
-                        )?;
-
-                        // Set initial directory
-                        let dir_wide: Vec<u16> = dir
-                            .to_string_lossy()
-                            .encode_utf16()
-                            .chain(std::iter::once(0))
-                            .collect();
-                        if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
-                            PCWSTR(dir_wide.as_ptr()),
-                            None,
-                        ) {
-                            let _ = dialog.SetFolder(&folder);
-                        }
-
-                        // Set suggested file name
-                        if let Some(ref name) = name {
-                            let name_hstring = windows::core::HSTRING::from(name.as_str());
-                            let _ = dialog.SetFileName(&name_hstring);
-                        }
-
-                        match dialog.Show(None) {
-                            Ok(()) => {}
-                            Err(e)
-                                if e.code()
-                                    == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
-                            {
-                                return Ok(None);
-                            }
-                            Err(e) => return Err(e),
-                        }
-
-                        let result = dialog.GetResult()?;
-                        let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
-                        let path_str = name.to_string()?;
-                        let path = std::path::PathBuf::from(path_str);
-                        CoTaskMemFree(Some(name.as_ptr() as *const _));
-                        Ok(Some(path))
-                    }
-                },
-            )
-            .join()
-            .map_err(|_| PlatformError::Dialog {
-                message: "File dialog thread panicked".to_string(),
-            })?
-            .map_err(|error| PlatformError::Dialog {
-                message: error.to_string(),
-            })?;
-            Ok(result)
-        })
-    }
-
-    fn compositor_name(&self) -> &'static str {
-        // Nothing reads it; the name leaves `Platform` with the other services.
-        ""
-    }
-}
-
-impl host::Input<WindowsLoop> for WindowsLoop {
-    fn keyboard_layout(_: &WindowsLoop) -> String {
-        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
-        // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
-        // sized to `KL_NAMELENGTH`, the exact size this API requires;
-        // `&mut buffer` gives it a valid, correctly-sized out-parameter, and
-        // it is only read (`is_ok()` branch) after the call reports success.
-        unsafe {
-            let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
-            if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
-                String::from_utf16_lossy(
-                    &buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())],
-                )
-            } else {
-                String::new()
-            }
-        }
-    }
-
-    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
-        });
-    }
-}
-
-impl Drop for WindowsLoop {
-    fn drop(&mut self) {
-        tracing::debug!("Dropping WindowsLoop");
-
-        // Destroy message window
-        //
-        // SAFETY: `DestroyWindow` takes `self.message_window` by value; the
-        // `is_invalid()` guard skips the call for a handle that was never
-        // successfully created. This window carries no `GWLP_USERDATA`
-        // context (it is message-only and never routed through
-        // `WindowsWindow::new`), so there is no allocation to reclaim here.
-        if !self.message_window.is_invalid() {
-            unsafe {
-                if let Err(error) = DestroyWindow(self.message_window) {
-                    tracing::warn!(
-                        hwnd = ?self.message_window,
-                        ?error,
-                        "DestroyWindow failed for the message-only window"
-                    );
-                }
-            }
-        }
-
-        // COM is left by the `apartment` field, after this body, or later by
-        // the last window's text services if any still live.
-    }
 }
 
 /// While it lives, the window context does not sample and publish its state;
@@ -2900,4 +1650,10 @@ impl Drop for PublishHold<'_> {
     fn drop(&mut self) {
         self.0.set(self.0.get().saturating_sub(1));
     }
+}
+
+/// Get high word from u32
+#[inline]
+fn hiword(value: u32) -> u16 {
+    ((value >> 16) & 0xFFFF) as u16
 }

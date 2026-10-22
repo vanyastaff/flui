@@ -47,11 +47,12 @@ use jni::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::owner::signal::OwnerSignal;
-use crate::shared::android_display::{RawDisplay, max_refresh_hz, requested_frame_rate};
-use crate::shared::android_ndk::{
+use crate::owner::android::AndroidLoop;
+use crate::owner::android::ndk::{
     AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
 };
+use crate::owner::signal::OwnerSignal;
+use crate::shared::android_display::{RawDisplay, max_refresh_hz, requested_frame_rate};
 use crate::shared::display_source::DisplaySource;
 use crate::shared::os_version::android::{AndroidApi, ContextDisplay};
 use flui_platform::PreferenceQueryError;
@@ -179,7 +180,7 @@ impl std::fmt::Debug for AndroidDisplays {
 }
 
 impl AndroidDisplays {
-    pub(super) fn new(
+    pub(crate) fn new(
         api: AndroidApi,
         library: Arc<dyn SymbolSource>,
         owner: Weak<OwnerSignal>,
@@ -202,7 +203,7 @@ impl AndroidDisplays {
 
     /// The display state may have changed (configuration change, resume): read
     /// it again at the next owner turn, which this asks for.
-    pub(super) fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         self.invalidator.raise();
     }
 
@@ -309,7 +310,7 @@ impl AndroidDisplays {
     /// later. Call on the thread whose looper runs the app (the callback is
     /// delivered there).
     #[expect(unsafe_code, reason = "registers a choreographer callback")]
-    pub(super) fn watch_refresh_rate(&self) {
+    pub(crate) fn watch_refresh_rate(&self) {
         let mut watch = self.watch.lock();
         if watch.is_some() {
             return;
@@ -351,14 +352,14 @@ impl AndroidDisplays {
 
     /// Take the refresh-rate callback down. Call on the thread that registered
     /// it, before the platform goes away.
-    pub(super) fn stop_watching(&self) {
+    pub(crate) fn stop_watching(&self) {
         let registration = self.watch.lock().take();
         drop(registration);
     }
 }
 
-impl crate::host::Displays<super::AndroidLoop> for AndroidDisplays {
-    fn snapshot(owner: &super::AndroidLoop) -> Result<DisplaySnapshot, PlatformError> {
+impl crate::host::Displays<AndroidLoop> for AndroidDisplays {
+    fn snapshot(owner: &AndroidLoop) -> Result<DisplaySnapshot, PlatformError> {
         let snapshot = owner.displays.snapshot(&owner.app)?;
         if owner.displays.take_max_rate_change() {
             // A `High` hint skipped while the display's highest rate was

@@ -43,12 +43,12 @@ impl std::fmt::Debug for PreferenceSource {
 
 /// The notifications that invalidate a [`PreferenceSource`]. Owned on the main
 /// thread beside the source and removed when dropped.
-pub(in crate::platforms) struct PreferenceObservers {
+pub(crate) struct PreferenceObservers {
     _observations: [Observation; 3],
 }
 
 impl PreferenceSource {
-    pub(in crate::platforms) fn new(signal: &Arc<OwnerSignal>) -> (Arc<Self>, PreferenceObservers) {
+    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> (Arc<Self>, PreferenceObservers) {
         let source = Arc::new(Self {
             signal: Arc::downgrade(signal),
             admission: ReadAdmission::default(),
@@ -122,7 +122,7 @@ impl Drop for RetryWake<'_> {
         };
         let signal = self.source.signal.clone();
         let delay = deadline.saturating_duration_since(web_time::Instant::now());
-        super::owner_lane::owner_queue().exec_after(delay, move || {
+        crate::owner::apple::macos::owner_queue().exec_after(delay, move || {
             if let Some(signal) = signal.upgrade() {
                 let _ = signal.wake();
             }

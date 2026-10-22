@@ -35,7 +35,8 @@ use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
-use super::drag::AndroidTransfer;
+use crate::platforms::android::AndroidTransfer;
+use crate::platforms::android::preferences::with_activity;
 
 /// The view's classes, compiled from `android/java` (see the module doc).
 const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
@@ -44,7 +45,7 @@ const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 
 /// What the view reported, for the owner to deliver.
-pub(super) enum ViewEvent {
+pub(crate) enum ViewEvent {
     /// The view's installation finished, whether or not it worked.
     Installed,
     /// One input method edit of the focused field.
@@ -140,12 +141,12 @@ impl JavaView {
     }
 
     /// The platform's drag-and-drop transport.
-    pub(super) fn transfer(&self) -> &Arc<AndroidTransfer> {
+    pub(crate) fn transfer(&self) -> &Arc<AndroidTransfer> {
         &self.transfer
     }
 
     /// Whether the view is in the window.
-    pub(super) fn is_ready(&self) -> bool {
+    pub(crate) fn is_ready(&self) -> bool {
         matches!(self.state.lock().install, Install::Ready(_))
     }
 
@@ -153,7 +154,7 @@ impl JavaView {
         self.composing.load(Ordering::Acquire)
     }
 
-    pub(super) fn set_composing(&self, composing: bool) {
+    pub(crate) fn set_composing(&self, composing: bool) {
         self.composing.store(composing, Ordering::Release);
     }
 
@@ -163,7 +164,7 @@ impl JavaView {
         }
     }
 
-    pub(super) fn scale(&self) -> f64 {
+    pub(crate) fn scale(&self) -> f64 {
         f64::from_bits(self.scale.load(Ordering::Relaxed))
     }
 
@@ -173,25 +174,25 @@ impl JavaView {
     }
 
     /// Queue `event` for the owner and wake it.
-    pub(super) fn push_event(&self, event: ViewEvent) {
+    pub(crate) fn push_event(&self, event: ViewEvent) {
         self.state.lock().events.push_back(event);
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();
         }
     }
 
-    pub(super) fn push_drag(&self, event: DragDropEvent) {
+    pub(crate) fn push_drag(&self, event: DragDropEvent) {
         self.push_event(ViewEvent::Drag(event));
     }
 
     /// The view now holds `snapshot`: later reports are diffed against it.
-    pub(super) fn install_mirror(&self, snapshot: &Snapshot) {
+    pub(crate) fn install_mirror(&self, snapshot: &Snapshot) {
         self.state.lock().mirror.install(snapshot);
     }
 
     /// Run `call` with the view on the Java main thread, if it is installed
     /// by then. Owner calls never wait for it.
-    pub(super) fn post(
+    pub(crate) fn post(
         self: &Arc<Self>,
         call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<()> + Send + 'static,
     ) {
@@ -202,7 +203,7 @@ impl JavaView {
     /// runs on the Java main thread when the view is not installed, the call
     /// fails or panics, or it answers `false`, so an obligation the call
     /// carried is still discharged.
-    pub(super) fn post_or(
+    pub(crate) fn post_or(
         self: &Arc<Self>,
         call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<bool> + Send + 'static,
         failed: impl FnOnce(&Self) + Send + 'static,
@@ -227,7 +228,7 @@ impl JavaView {
     }
 
     /// The installed view, cloned out of the lock so no JNI call runs under it.
-    pub(super) fn view(&self) -> Option<Arc<Global<JObject<'static>>>> {
+    pub(crate) fn view(&self) -> Option<Arc<Global<JObject<'static>>>> {
         match &self.state.lock().install {
             Install::Ready(view) => Some(Arc::clone(view)),
             _ => None,
@@ -236,7 +237,7 @@ impl JavaView {
 
     /// Run `f` attached to the VM, clearing any exception it leaves.
     #[expect(unsafe_code, reason = "AndroidApp lends the live VM pointer to JNI")]
-    pub(super) fn attached<T>(
+    pub(crate) fn attached<T>(
         &self,
         f: impl FnOnce(&mut Env<'_>) -> jni::errors::Result<T>,
     ) -> jni::errors::Result<T> {
@@ -258,7 +259,7 @@ impl JavaView {
     fn install(self: Arc<Self>) {
         let in_memory = self.api.since::<InMemoryDex>();
         let handle = Box::into_raw(Box::new(Arc::downgrade(&self)));
-        let installed = super::preferences::with_activity(&self.app, |env, activity| {
+        let installed = with_activity(&self.app, |env, activity| {
             install_view(env, activity, handle as jlong, in_memory).map_err(|error| {
                 tracing::warn!(target: "flui_native::android", %error, "FluiView was not installed");
                 jni::errors::Error::JniCall(jni::errors::JniError::Unknown)
@@ -656,7 +657,7 @@ extern "system" fn native_drop<'local>(
                 local,
                 &clip,
             )
-            .map_or(0, super::drag::java_key)
+            .map_or(0, crate::platforms::android::drag::java_key)
     })
 }
 

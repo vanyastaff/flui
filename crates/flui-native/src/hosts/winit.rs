@@ -2,11 +2,12 @@
 //! macOS and Linux.
 
 use crate::host::{Absent, Host, position};
+use crate::owner::winit::WinitLoop;
 use crate::platform::HostPlatform;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::platforms::linux::UnixAccessibility;
 use crate::platforms::winit::{
-    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitLoop, WinitTextInput, WinitWindow,
+    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitTextInput, WinitWindow,
 };
 use crate::storage::UserDataDirs;
 

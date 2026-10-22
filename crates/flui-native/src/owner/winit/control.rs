@@ -55,7 +55,7 @@ impl std::fmt::Debug for ControlCommand {
 /// at send time) — a distinct, narrower concern from the claim-slot reply
 /// protocol, which governs what happens after a request is admitted.
 #[derive(Debug)]
-pub(super) enum ControlSendError {
+pub(crate) enum ControlSendError {
     Full {
         capacity: usize,
         rejected: Box<WindowOptions>,
@@ -66,7 +66,7 @@ pub(super) enum ControlSendError {
 }
 
 #[derive(Clone)]
-pub(super) struct ControlSender {
+pub(crate) struct ControlSender {
     commands: Sender<ControlCommand>,
     wake_owner: WakeOwner,
     wake_pending: Arc<AtomicBool>,
@@ -153,7 +153,7 @@ pub(super) fn control_lane(wake_owner: WakeOwner) -> (ControlSender, ControlRece
 }
 
 impl ControlSender {
-    pub(super) fn request_open_window(
+    pub(crate) fn request_open_window(
         &self,
         options: WindowOptions,
     ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
@@ -275,7 +275,7 @@ impl ControlSender {
     /// embedder's signal that everything is over. The owner drains closes
     /// posted BEFORE a quit ahead of the exit itself, so this is only ever
     /// a close issued after the loop is already gone.
-    pub(super) fn request_close_window(&self, window_id: WindowId) {
+    pub(crate) fn request_close_window(&self, window_id: WindowId) {
         let should_wake = {
             let admission = self.admission.lock();
             if !*admission {

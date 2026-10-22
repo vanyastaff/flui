@@ -170,11 +170,6 @@ class = "spec-task"
 count = 4
 
 [[allow]]
-path = "crates/flui-native/src/platforms/headless/platform.rs"
-class = "spec-task"
-count = 3
-
-[[allow]]
 path = "crates/flui-rendering/src/lib.rs"
 class = "wave"
 count = 1

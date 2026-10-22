@@ -49,8 +49,8 @@ use crate::shared::html_drag_drop::{
 use flui_platform::PlatformInput;
 
 use super::events::{answer, pointer_position};
-use super::platform::WebLoop;
 use super::registration::Registration;
+use crate::owner::web::WebLoop;
 
 /// One announced representation, before and after the drop.
 enum Held {

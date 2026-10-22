@@ -2,16 +2,16 @@
 
 use super::*;
 use crate::WindowsPlatform;
+use crate::{PlatformError, platform::Platform};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use windows::Win32::UI::WindowsAndMessaging::WM_QUIT;
 
 #[test]
 fn native_setting_message_replaces_the_cached_observation() {
     let platform = WindowsPlatform::new().expect("native platform");
     let gate = platform.owner().owner_control.gate();
-    let source = gate
-        .shares("notification fixture")
-        .expect("owner")
-        .preferences;
+    let shares = gate.shares("notification fixture").expect("owner");
+    let (source, receiver) = (shares.preferences, shares.broadcast_receiver);
     let actual = source.sample().expect("OS observation");
     let expected = actual.text_scale().expect("Windows scale");
     let stale = actual
@@ -54,7 +54,12 @@ fn native_setting_message_replaces_the_cached_observation() {
                 .expect("watchdog handle");
             // Hook registration saw a clean source. Only the receiver message can
             // invalidate the distinguishing cache and arrange an owner callback.
-            source.send_setting_change_for_test();
+            crate::owner::windows::broadcast::send_for_test(
+                receiver,
+                windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
+                0,
+                0,
+            );
             Ok(())
         }))
         .expect("notification loop");

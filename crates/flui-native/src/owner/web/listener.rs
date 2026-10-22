@@ -6,21 +6,21 @@ use web_sys::{Event, EventTarget};
 
 /// Log a failed browser call; a tracing subscriber is application code, so a
 /// panic in it is contained.
-pub(super) fn warn_failure(what: &str, error: &JsValue) {
+pub(crate) fn warn_failure(what: &str, error: &JsValue) {
     crate::owner::panic_boundary::contain_owner_callback(|| {
         tracing::warn!(?error, "{what}");
     });
 }
 
 /// One registered `addEventListener`, removed when dropped.
-pub(super) struct Listener {
+pub(crate) struct Listener {
     target: EventTarget,
     event: &'static str,
     callback: Option<Closure<dyn FnMut(Event)>>,
 }
 
 impl Listener {
-    pub(super) fn add(
+    pub(crate) fn add(
         target: &EventTarget,
         event: &'static str,
         handler: impl FnMut(Event) + 'static,

@@ -691,7 +691,7 @@ impl WindowCallbacks {
     /// "callbacks\(\)\.clear\(\)|callbacks\.clear\(\)"
     /// crates/flui-native/src` finds every call site that reaches this
     /// method at window close: winit's `complete_window_close`
-    /// (`platforms/winit/platform.rs`, the primary in-loop path) and its
+    /// (`owner/winit.rs`, the primary in-loop path) and its
     /// `WinitApp::release_open_window_callbacks` (same file, the quit route
     /// `complete_window_close` never runs for — every window still tracked
     /// when `event_loop.run_app` returns), `WinitWindow::drop`
@@ -701,7 +701,7 @@ impl WindowCallbacks {
     /// `WM_DESTROY` arm (`platforms/windows/platform.rs`), AppKit's
     /// `handle_close` (`platforms/macos/window.rs`, reached from the
     /// `windowWillClose:` delegate), and the Android backend's loop exit
-    /// (`platforms/android/mod.rs`, `AndroidLoop::run` after its `loop`,
+    /// (`owner/android/looper.rs`, `AndroidLoop::run` after its `loop`,
     /// reached by `Destroy`, `quit()` and a failed bootstrap; a panic out of
     /// `run` skips it, by decision) — so that destruction order is pinned
     /// deterministically instead of left to struct field order.
@@ -2206,12 +2206,12 @@ mod tests {
             #[cfg(target_os = "windows")]
             (
                 "window identity exhaustion",
-                crate::platforms::windows::WindowsLoop::window_identity_exhaustion_permanently_refuses_retries,
+                crate::owner::windows::WindowsLoop::window_identity_exhaustion_permanently_refuses_retries,
             ),
             #[cfg(target_os = "windows")]
             (
                 "platform identity exhaustion",
-                crate::platforms::windows::WindowsLoop::platform_identity_exhaustion_acquires_nothing,
+                crate::owner::windows::WindowsLoop::platform_identity_exhaustion_acquires_nothing,
             ),
             (
                 "clear multiple panicking captures",

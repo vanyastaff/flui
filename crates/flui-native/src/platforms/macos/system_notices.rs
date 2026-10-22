@@ -23,7 +23,8 @@ use objc2_foundation::{NSDistributedNotificationCenter, NSNotificationCenter, NS
 
 use flui_platform::SystemNotice;
 
-use super::{loop_control::LoopControl, observation::Observation};
+use super::observation::Observation;
+use crate::owner::apple::macos::LoopControl;
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::{
     dispatch_memory_pressure::{SUBSCRIBED, level_of},
@@ -117,7 +118,7 @@ impl Drop for DeliveryWhileInactive {
 }
 
 /// The platform's live sources of system notices.
-pub(super) struct SystemNoticeSources {
+pub(crate) struct SystemNoticeSources {
     _observations: Vec<Observation>,
     _memory_pressure: MemoryPressureSource,
     _delivery: DeliveryWhileInactive,
@@ -126,7 +127,7 @@ pub(super) struct SystemNoticeSources {
 impl SystemNoticeSources {
     /// Start every source. `notices` receives sleep, wake, lock and memory
     /// notices; `control` is told a session end is announced.
-    pub(super) fn new(notices: &Arc<SystemNotices>, control: &Arc<LoopControl>) -> Self {
+    pub(crate) fn new(notices: &Arc<SystemNotices>, control: &Arc<LoopControl>) -> Self {
         let workspace = NSWorkspace::sharedWorkspace().notificationCenter();
         let distributed = NSDistributedNotificationCenter::defaultCenter();
         let delivery = DeliveryWhileInactive::ask_for(&distributed);

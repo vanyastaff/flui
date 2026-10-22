@@ -20,7 +20,7 @@ use objc2_ui_kit::{UIRectEdge, UIStatusBarStyle, UIViewController};
 
 use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
-use super::native_owner::NativeOwner;
+use crate::owner::apple::ios::NativeOwner;
 
 /// No style delivered yet: UIKit's own default stands.
 const UNSET: u8 = 0;

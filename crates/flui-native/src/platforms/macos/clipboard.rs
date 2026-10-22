@@ -19,8 +19,9 @@
 //! exchanged across threads. Cross-thread calls block on the lane until the
 //! operation completes.
 //!
-//! The lane machinery itself lives in the shared [`super::owner_lane`]
-//! module — this file only decides what runs on the lane.
+//! The lane machinery itself lives in the shared
+//! `owner::apple::macos::owner_lane` module — this file only decides what
+//! runs on the lane.
 
 use std::sync::Arc;
 
@@ -29,6 +30,8 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
 
 use flui_platform::Clipboard;
+
+use crate::owner::apple::MacOSLoop;
 
 /// macOS NSPasteboard-based clipboard implementation
 ///
@@ -93,7 +96,7 @@ impl MacOSClipboard {
         tracing::debug!("Created macOS clipboard (NSPasteboard)");
         Self {
             pasteboard: None,
-            owner: super::owner_lane::owner_queue(),
+            owner: crate::owner::apple::macos::owner_queue(),
             owner_is_main: true,
         }
     }
@@ -128,7 +131,7 @@ impl MacOSClipboard {
         // direct in-lane path, the `isMainThread` shortcut for main-lane
         // instances, and the catch_unwind-shielded `exec_sync` for everything
         // else) is the shared `owner_lane` machinery's job.
-        super::owner_lane::exec_on_owner(self.owner, self.owner_is_main, || {
+        crate::owner::apple::macos::exec_on_owner(self.owner, self.owner_is_main, || {
             objc2::rc::autoreleasepool(|_pool| f(&resolve(name)))
         })
     }
@@ -140,8 +143,8 @@ impl Default for MacOSClipboard {
     }
 }
 
-impl crate::host::Clipboard<super::MacOSLoop> for MacOSClipboard {
-    fn clipboard(_: &super::MacOSLoop) -> Arc<dyn Clipboard> {
+impl crate::host::Clipboard<MacOSLoop> for MacOSClipboard {
+    fn clipboard(_: &MacOSLoop) -> Arc<dyn Clipboard> {
         Arc::new(MacOSClipboard::new())
     }
 }
@@ -197,8 +200,8 @@ impl Clipboard for MacOSClipboard {
 
 #[cfg(test)]
 mod tests {
-    use super::super::owner_lane::test_owner_queue;
     use super::*;
+    use crate::owner::apple::macos::test_owner_queue;
 
     /// Unique board name per test name and per test process.
     fn test_board(name: &str) -> String {

@@ -2,9 +2,7 @@
 //!
 //! The table names the types the host's windows and loop hand out
 //! ([`WinitWindow`], [`ArboardClipboard`], …), but every answer is read from
-//! the loop's state: its one lock, its run state, its owner signal. The impls
-//! sit here, a child of `platform`, where that state is reachable without
-//! being visible to the rest of the backend.
+//! the loop's state: its one lock, its run state, its owner signal.
 
 use std::{cell::Cell, sync::Arc, thread};
 
@@ -14,18 +12,16 @@ use flui_platform::{
 };
 
 #[cfg(windows)]
-use super::PreferenceObservation;
-use super::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
+use crate::owner::winit::PreferenceObservation;
+use crate::owner::winit::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
 use crate::{
     error::PlatformError,
     host,
     host_window::HostWindow,
     owner::OpenWindowError,
     owner::call_point::install,
-    platforms::winit::{
-        ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
-        control::ControlSendError,
-    },
+    owner::winit::control::ControlSendError,
+    platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow},
 };
 use flui_foundation::{ClaimOutcome, geometry::Size};
 
@@ -41,7 +37,7 @@ impl host::Window<WinitLoop> for WinitWindow {
         // published for exactly this nested call. Create the window
         // directly instead of enqueuing — the lane's `user_event` consumer
         // cannot run until this call returns, and would
-        // deadlock forever otherwise (see the module-level doc).
+        // deadlock forever otherwise (see `owner/winit.rs`'s module doc).
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             tracing::debug!("Creating window on event-loop thread (same-thread fast path)");
             // SAFETY: `event_loop_ptr` is non-null only while

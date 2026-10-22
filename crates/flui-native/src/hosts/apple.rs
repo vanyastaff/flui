@@ -5,17 +5,20 @@
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
+#[cfg(target_os = "ios")]
+use crate::owner::apple::IOSLoop;
+#[cfg(target_os = "macos")]
+use crate::owner::apple::MacOSLoop;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
 use crate::platforms::ios::{
-    IOSClipboard, IOSHaptics, IOSLoop, IOSPreferences, IOSSystemChrome, IOSWindow, IosDisplays,
+    IOSClipboard, IOSHaptics, IOSPreferences, IOSSystemChrome, IOSWindow, IosDisplays,
 };
 #[cfg(all(target_os = "macos", feature = "a11y"))]
 use crate::platforms::macos::MacosAccessibility;
 #[cfg(target_os = "macos")]
 use crate::platforms::macos::{
-    MacHaptics, MacOSClipboard, MacOSLoop, MacOSTextInput, MacOSWindow, MacosDisplays,
-    PreferenceSource,
+    MacHaptics, MacOSClipboard, MacOSTextInput, MacOSWindow, MacosDisplays, PreferenceSource,
 };
 use crate::storage::UserDataDirs;
 

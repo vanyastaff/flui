@@ -151,7 +151,7 @@ kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-native/src/shared/android_ndk.rs"
+path = "crates/flui-native/src/owner/android/ndk.rs"
 kind = "double"
 names = ["FakeSymbols"]
 

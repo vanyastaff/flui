@@ -28,8 +28,8 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use super::os_version::Gate;
-use super::os_version::android::AndroidApi;
+use crate::shared::os_version::Gate;
+use crate::shared::os_version::android::AndroidApi;
 
 /// The size of the buffer `__system_property_get` fills (`PROP_VALUE_MAX`).
 const PROPERTY_VALUE_MAX: usize = 92;
@@ -49,7 +49,7 @@ pub(crate) trait SymbolSource: Send + Sync {
 }
 
 /// The reading of the level; the type and its gates are in
-/// [`os_version::android`](super::os_version::android).
+/// [`os_version::android`](crate::shared::os_version::android).
 impl AndroidApi {
     /// Read the level of the running system through `source`: the NDK function
     /// when the system exports it, otherwise the system property. `None` when

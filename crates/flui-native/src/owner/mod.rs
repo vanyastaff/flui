@@ -10,7 +10,13 @@
 //! - [`call_point`]: the one point where the platform calls an application or
 //!   window handler, with no lock or borrow held;
 //! - [`handlers`]: the application's handler set and a window's callbacks,
-//!   called through it.
+//!   called through it;
+//! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
+//!   platform's loop, its wakes and what it owns of the thread, each on the
+//!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
+//!   decision around one native poll. A loop that serves several features
+//!   through one operating-system object dispatches through hooks declared
+//!   beside it, which the host registers.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -36,11 +42,27 @@
 //! host in this crate can hand `on_ready` the capability it needs; `Platform`
 //! is sealed to say so in its type (ADR-0151 §5).
 
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
+pub(crate) mod headless;
 pub(crate) mod panic_boundary;
+#[cfg(any(test, target_os = "android"))]
+pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web;
+#[cfg(windows)]
+pub(crate) mod windows;
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+pub(crate) mod winit;
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -744,7 +766,7 @@ impl fmt::Debug for PendingWindow {
 impl PendingWindow {
     // Only the winit backend's deferred owner-lane path ever constructs a
     // `PendingWindow` (`WinitOwnerHooks::open_owner_window` and
-    // `WinitProxyTransport::open_window`, `platforms/winit/platform.rs`) —
+    // `WinitProxyTransport::open_window`, `owner/winit.rs`) —
     // every lane-less backend (`DirectOwnerHooks`) always resolves `Ready`.
     // Building this crate without the `winit-backend` feature (e.g. the
     // headless-only default) makes this constructor genuinely unused.

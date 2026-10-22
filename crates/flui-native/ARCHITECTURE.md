@@ -54,6 +54,48 @@ trait depends on `flui-platform` instead.
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
   crate root only.
+- **Each platform's loop is a module of `owner/` (ADR-0151 §10).**
+  `owner::windows` is the Win32 message loop and its wake deadlines, the
+  owner's message-only window (`control`), the thread's COM apartment, FLUI's
+  window class with its raw window procedure, and the hidden top-level window
+  that hears the system's broadcasts (`broadcast`); `owner::apple` is
+  `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
+  `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
+  the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
+  `owner::web` the `requestAnimationFrame` loop; `owner::winit` winit's
+  `ApplicationHandler`; `owner::headless` the test double's owner turns. The
+  hosts' tables name these loops. A multiplexer of the operating system that
+  serves several features dispatches through a hook declared beside it, which
+  each feature's file implements and the host's table names: on Windows the
+  table implements `owner::windows::WindowsHost`, whose `WINDOW_HOOKS` and
+  `broadcast_subscribers` list, in order, what the owner dispatches to.
+  - FLUI's window class has `window_proc::<H>` as its procedure, so the hook
+    set is a type: the procedure holds the panic boundary and offers each
+    message to `H::WINDOW_HOOKS` in order — the first `Some` ends the
+    dispatch, `None` passes it on, and a message no hook answers goes to
+    `DefWindowProcW`. A created window announces itself to the same hooks
+    through the owner's state (`OwnerShares::window_hooks`). Windows holds the
+    class once per process, so the class registration records its host and a
+    loop for another host is refused with `PlatformError::Init`. Today the
+    hooks are the window's procedure (`platforms::windows::WindowProc`, which
+    still answers every message, its default included) and the precision
+    touchpad, whose `created` gives each new window its DirectManipulation
+    viewport. Tests: `a_window_message_reaches_the_hooks_in_order`,
+    `a_second_host_is_refused_the_window_class`.
+  - The owner control owns the broadcast receiver and builds it from the
+    subscribers the host names over its objects (`OwnerObjects`): the
+    preference source's `PreferenceBroadcasts` (setting and display changes;
+    the displays share the source's admission until the display feature takes
+    its own state), then the lifecycle's `HostEvents`. The receiver tells them
+    a message in order until one answers; a subscriber's panic is contained,
+    and the message is answered what a subscriber gives for that case
+    (`answer_after_panic`: the lifecycle grants a session-end query), 0
+    otherwise. winit on Windows builds a receiver of its own for its
+    preference source. Test: `broadcast_subscribers_hear_a_message_in_order`.
+
+  Until each feature takes its own state, a loop still holds the state the
+  table's positions read (windows, displays, preferences, drag, notices) and
+  calls that feature's code by name.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -139,7 +181,7 @@ trait depends on `flui-platform` instead.
   (`linux::host_notices::logind`) and a kernel-pressure thread
   (`linux::host_notices::pressure`). Each posts a `HostEvent` to one `Inbox`
   and wakes the owner, which drains it in its next turn
-  (`platform/linux_notices.rs`). logind's sleep and shutdown carry a
+  (`platforms/winit/linux_notices.rs`). logind's sleep and shutdown carry a
   completion: the delay inhibitor is held until the owner has delivered the
   event (a panic in a subscriber drops the completion too) and is released
   after at most four seconds, inside logind's own `InhibitDelayMaxSec`.
@@ -688,7 +730,7 @@ native reads and subsequent native window creation. Its independent `UISettings`
 reader compares the public motion observation with the current Windows animation
 setting; merely returning a present value cannot satisfy the assertion.
 
-UI languages use `GetUserPreferredUILanguages`, sharing this source's receiver,
+UI languages use `GetUserPreferredUILanguages`, sharing this source's broadcasts,
 cache and retry lifetime (ADR-0173). The private
 `preferred_language_buffer_contract` injects capacity races and malformed UTF-16
 lists that cannot be produced deterministically through the public OS API. It
@@ -1242,7 +1284,7 @@ converts the whole `winit::event::KeyEvent` (code, logical key, location,
 down/up state, `repeat`, and modifiers) through
 `ui_events_winit::keyboard::from_winit_keyboard_event` (crates.io
 `ui-events-winit`, the same bridge Masonry and Xilem use) instead of
-hand-assembling any `KeyboardEvent` field itself; `platform.rs`'s
+hand-assembling any `KeyboardEvent` field itself; `owner/winit.rs`'s
 `ModifiersChanged` handler stores winit's raw `ModifiersState` rather than a
 pre-converted `keyboard_types::Modifiers`, and each read site (pointer paths
 and the keyboard path alike) converts through the crate's
@@ -1372,7 +1414,7 @@ built from a dead window for the rest of the process's life. The parameter is a
 `bool`, not an enum: a third state of the *surface* belongs in its own callback,
 per ADR-0035's split of this family by signal rather than by arity. Android and the Web
 emit it. Android's `Pause` and `TerminateWindow` send `false`, `Resume` and `InitWindow`
-send `true` — `platforms/android/mod.rs`'s module doc carries why that pair, and not
+send `true` — `owner/android/looper.rs`'s module doc carries why that pair, and not
 `Pause` alone, is the correct mapping. The Web sends `false` on `webglcontextlost` and
 `true` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
 whatever was built on it must be rebuilt once the browser gives one back. The loss is
@@ -2044,7 +2086,7 @@ function, never by reading a browser version.
 
 **Choice:** `platforms/web/display.rs` owns the snapshot. The period comes from the
 timestamps `requestAnimationFrame` hands the platform's existing frame loop
-(`platform.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the trimmed
+(`owner/web.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the trimmed
 mean (without the fastest and slowest tenth) of the last 30 intervals, with
 intervals longer than three times the window's lower quartile left out (a background
 tab, a debugger pause, throttled frames: a window that is mostly throttled has a slow
@@ -2931,7 +2973,7 @@ touch, and a whole `flui-app` with two runtimes.
 
 ### Android's Java side is `FluiView`, loaded from the native library
 
-`platforms::android::java_view` loads `FluiView`'s dex (`android/classes.dex`, compiled from
+`owner::android::java_view` loads `FluiView`'s dex (`android/classes.dex`, compiled from
 `android/java` and checked against it by `cargo xtask android-dex`) on the Java main thread at
 platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
 through `DexClassLoader` below, either parented to the Activity's loader. The view's native
@@ -3033,7 +3075,7 @@ the next wake deadline or 500 ms preference sample while resumed, and while
 paused until a deadline still ahead or a wake. A deadline already behind while
 paused waits for a frame, so it does not cut the wait to zero.
 
-`shared/android_ndk.rs` reads the API level once, when the platform is
+`owner/android/ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
 looked up by name, then `__system_property_get("ro.build.version.sdk")`. The
 function is exported by `libc.so` only from API 29 and is an inline function in the
@@ -3103,7 +3145,7 @@ before the style is replaced, and the style saved to return to has no `WS_MAXIMI
 fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.
 
-**System events** arrive on the hidden top-level receiver (`preferences/receiver.rs`), which a
+**System events** arrive on the hidden top-level receiver (`owner/windows/broadcast.rs`), which a
 message-only window could not be: `WM_QUERYENDSESSION` and `WM_ENDSESSION`, `WM_POWERBROADCAST`,
 `WM_WTSSESSION_CHANGE`, and a posted message from a pool thread waiting on the low-memory event
 (`platforms::windows::host_events`; rules in `shared::windows_host_messages` and

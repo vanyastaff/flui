@@ -71,7 +71,7 @@ mod tests {
     };
     use super::apple::AppleVersion;
     use super::{Gate, since};
-    use crate::shared::android_ndk::{
+    use crate::owner::android::ndk::{
         ChoreographerInstance, RegisterRefreshRate, SetFrameRate, UnregisterRefreshRate,
     };
     use crate::shared::display_link_rate::FrameRateRangeProperty;

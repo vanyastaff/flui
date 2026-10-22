@@ -51,8 +51,8 @@ fn window_ref(hwnd: HWND) -> super::super::platform::WindowRef {
 
 /// An entry into this thread's STA (nested in the platform's) for services
 /// activated directly.
-fn apartment() -> Rc<super::super::com_apartment::ComApartment> {
-    super::super::com_apartment::ComApartment::enter().expect("COM apartment")
+fn apartment() -> Rc<crate::owner::windows::com_apartment::ComApartment> {
+    crate::owner::windows::com_apartment::ComApartment::enter().expect("COM apartment")
 }
 
 fn erased(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
@@ -1272,8 +1272,8 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         CoUninitialize,
     };
 
-    use super::super::com_apartment::thread_in_apartment;
     use super::SHUTDOWN_IN_APARTMENT;
+    use crate::owner::windows::com_apartment::thread_in_apartment;
 
     struct HeldMta {
         release: mpsc::Sender<()>,

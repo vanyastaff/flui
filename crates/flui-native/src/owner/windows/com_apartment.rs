@@ -4,7 +4,7 @@
 //! plus the OLE state `RegisterDragDrop` and `DoDragDrop` need) whose `Drop`
 //! is the matching `OleUninitialize`. Everything that uses COM objects past the platform's own
 //! lifetime holds a clone of it — the platform, and each window's
-//! [`TextServices`](super::text_services) — so the apartment ends only after
+//! [`TextServices`](crate::platforms::windows::TextServices) — so the apartment ends only after
 //! its last user has released its interfaces, in whatever order the platform
 //! and its windows are dropped. `!Send`: the apartment belongs to the thread
 //! that entered it, and the `Rc` count is touched there only.
@@ -22,7 +22,7 @@ use std::thread::ThreadId;
 use windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
 
 /// One entry into the calling thread's single-threaded apartment.
-pub(super) struct ComApartment {
+pub(crate) struct ComApartment {
     /// `!Send` and `!Sync`: the apartment is thread-affine.
     _thread_affine: PhantomData<*const ()>,
 }
@@ -35,7 +35,7 @@ impl ComApartment {
     /// The `HRESULT` `OleInitialize` failed with (for instance
     /// `RPC_E_CHANGED_MODE` on a thread already in the multithreaded
     /// apartment); nothing is left to release then.
-    pub(super) fn enter() -> windows_core::Result<Rc<Self>> {
+    pub(crate) fn enter() -> windows_core::Result<Rc<Self>> {
         // SAFETY: no pointer arguments (`None` is the reserved parameter);
         // the result is checked, and only a success is balanced by `Drop`.
         unsafe { OleInitialize(None) }?;
@@ -56,7 +56,7 @@ impl Drop for ComApartment {
 /// Whether the calling thread is inside an STA now: what TSF's teardown
 /// requires. An implicit process MTA does not keep this thread's STA alive.
 #[cfg(test)]
-pub(super) fn thread_in_apartment() -> bool {
+pub(crate) fn thread_in_apartment() -> bool {
     use windows::Win32::System::Com::{
         APTTYPE, APTTYPE_MAINSTA, APTTYPE_STA, APTTYPEQUALIFIER, CoGetApartmentType,
     };
@@ -70,7 +70,7 @@ pub(super) fn thread_in_apartment() -> bool {
 /// The platform's clone of its [`ComApartment`], usable from the `Send`
 /// platform: the clone is reached, and released, on the apartment's thread
 /// only.
-pub(super) struct ApartmentHold {
+pub(crate) struct ApartmentHold {
     apartment: ManuallyDrop<Rc<ComApartment>>,
     thread: ThreadId,
 }
@@ -86,7 +86,7 @@ unsafe impl Sync for ApartmentHold {}
 
 impl ApartmentHold {
     /// Hold `apartment`, created on the calling thread.
-    pub(super) fn new(apartment: Rc<ComApartment>) -> Self {
+    pub(crate) fn new(apartment: Rc<ComApartment>) -> Self {
         Self {
             apartment: ManuallyDrop::new(apartment),
             thread: std::thread::current().id(),
@@ -94,7 +94,7 @@ impl ApartmentHold {
     }
 
     /// A clone for a COM user on the apartment's thread; `None` elsewhere.
-    pub(super) fn share(&self) -> Option<Rc<ComApartment>> {
+    pub(crate) fn share(&self) -> Option<Rc<ComApartment>> {
         (std::thread::current().id() == self.thread).then(|| Rc::clone(&self.apartment))
     }
 }

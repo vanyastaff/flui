@@ -64,9 +64,9 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, JsValue};
 
 use super::features::BrowserFeatures;
-use super::platform::WebLoop;
 use crate::error::PlatformError;
 use crate::host;
+use crate::owner::web::WebLoop;
 use crate::shared::display_source::DisplaySource;
 use crate::shared::refresh_estimate::RefreshEstimator;
 use crate::shared::screen_identity::RetainedScreens;
@@ -106,7 +106,7 @@ impl host::Displays<WebLoop> for WebDisplays {
 }
 
 impl WebDisplays {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             source: DisplaySource::new(),
             features: BrowserFeatures::detect(),
@@ -139,7 +139,7 @@ impl WebDisplays {
     /// Feed one animation-frame timestamp (milliseconds). `true` when the
     /// published period changed, so the snapshot must be taken again and the
     /// owner woken.
-    pub(super) fn frame(&self, timestamp_ms: f64) -> bool {
+    pub(crate) fn frame(&self, timestamp_ms: f64) -> bool {
         let mut state = self.state.lock();
         if state.estimator.frame(timestamp_ms).is_none() {
             return false;

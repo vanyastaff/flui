@@ -44,7 +44,7 @@ impl std::fmt::Debug for IOSPreferences {
 }
 
 impl IOSPreferences {
-    pub(super) fn new(signal: &Arc<OwnerSignal>, _marker: MainThreadMarker) -> Self {
+    pub(crate) fn new(signal: &Arc<OwnerSignal>, _marker: MainThreadMarker) -> Self {
         let center = NSNotificationCenter::defaultCenter();
         let active = Arc::new(AtomicBool::new(true));
         let callback_active = Arc::clone(&active);
@@ -136,7 +136,7 @@ impl IOSPreferences {
         })
     }
 
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         self.active.store(false, Ordering::Release);
         let observers = std::mem::take(&mut *self.observers.borrow_mut());
         for observer in observers {

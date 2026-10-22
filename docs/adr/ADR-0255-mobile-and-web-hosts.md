@@ -313,7 +313,7 @@ text-input paths its platform requires.
     (decision 8). Flutter's scene delegate forwards the same four
     ([flutter/flutter@6597889f57
     engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm#L32-L101));
-    FLUI's has none of them (`crates/flui-native/src/platforms/ios/platform.rs:1192-1219`).
+    FLUI's has none of them (`crates/flui-native/src/owner/apple/ios.rs`).
 
 14. **Keyboard, back and the plist.**
     - The keyboard's frame arrives through the keyboard notifications, which work at the iOS 13
@@ -403,7 +403,7 @@ text-input paths its platform requires.
   | `crates/flui-cli/templates/platforms/android/AndroidManifest.xml` | Becomes the generated manifest of decision 6 |
   | `crates/flui-cli/src/build/android_package.rs` | Adds `classes.dex` as a zip entry; `targetSdk` from `platform-support.toml`; stops describing the path as `hasCode="false"` |
   | `crates/flui-cli/templates/platforms/android/build.gradle.kts` | Host sources through a generated directory or `sourceSets`; keep rules; the `proguard-rules.pro` it names but the template set lacks |
-  | `crates/flui-native/src/platforms/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
+  | `crates/flui-native/src/owner/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
   | `crates/flui-native/android/java/` | `FluiActivity`, the host queue, the accessibility delegate, back registration, the inset and IME-animation listeners |
   | `crates/flui-native/src/platforms/android/safe_area.rs` | Event-driven, and includes the IME inset |
   | `crates/flui-native/src/platforms/android/` | A `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |

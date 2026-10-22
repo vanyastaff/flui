@@ -58,7 +58,8 @@ const FOLLOW_UP: Duration = Duration::from_millis(8);
 /// The AppKit landing place for the platform's wake deadline.
 ///
 /// Held as `Arc` by [`super::MacOSLoop`] and as `Weak` by each
-/// [`super::MacOSWindow`], which arms it from `request_redraw`.
+/// [`MacOSWindow`](crate::platforms::macos::MacOSWindow), which arms it from
+/// `request_redraw`.
 pub(crate) struct WakePump {
     /// Consulted through [`Self::consult`], which clones the hook out of the
     /// lock and calls it with the lock released — the discipline

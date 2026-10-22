@@ -11,7 +11,9 @@
 //!
 //! - Without arguments (the `cargo xtask checks` step) both digests are
 //!   checked, which needs no JDK: a source edited without regenerating the
-//!   dex, or a dex replaced by hand, fails.
+//!   dex, or a dex replaced by hand, fails. So does a backend whose one
+//!   `include_bytes!` (in `src/owner/android/java_view.rs`) no longer names
+//!   the checked-in dex.
 //! - `--rebuild` also compiles the sources with `javac` and `d8` and requires
 //!   the checked-in bytes. It needs a JDK and the Android SDK's build tools
 //!   (`ANDROID_HOME`); `javac` output can differ between JDK releases, so a
@@ -33,6 +35,9 @@ const SOURCES: &str = "crates/flui-native/android/java";
 const DEX: &str = "crates/flui-native/android/classes.dex";
 /// Its record.
 const RECORD: &str = "crates/flui-native/android/classes.dex.toml";
+/// The backend file that `include_bytes!`s the dex: the Android owner thread's
+/// Java view.
+const EMBEDDER: &str = "crates/flui-native/src/owner/android/java_view.rs";
 /// The oldest API level the dex runs on: FLUI's `minSdk`.
 const MIN_API: u32 = 23;
 /// The Java language level: what `d8` accepts for that API level without desugaring.
@@ -134,6 +139,46 @@ fn sources_digest(files: &[(String, Vec<u8>)]) -> String {
     hex(&hasher.finalize())
 }
 
+/// The repository-relative path the one `include_bytes!` in `source`, the text
+/// of the repository-relative `file`, names; `None` when `source` has none or
+/// more than one, or its path climbs out of the repository.
+fn embedded_path(file: &str, source: &str) -> Option<String> {
+    const OPEN: &str = "include_bytes!(\"";
+    let mut includes = source.match_indices(OPEN);
+    let (start, _) = includes.next()?;
+    if includes.next().is_some() {
+        return None;
+    }
+    let rest = &source[start + OPEN.len()..];
+    let literal = &rest[..rest.find('"')?];
+    let mut parts: Vec<&str> = file.split('/').collect();
+    parts.pop();
+    for part in literal.split('/') {
+        match part {
+            ".." => {
+                parts.pop()?;
+            }
+            "" | "." => {}
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Why `source`, the text of the backend file `embedder`, does not ship the
+/// checked-in dex: its one `include_bytes!` names another file, or it has
+/// none or more than one. `None` when it embeds [`DEX`].
+fn embedding_failure(embedder: &str, source: &str) -> Option<String> {
+    let embedded = embedded_path(embedder, source);
+    (embedded.as_deref() != Some(DEX)).then(|| match embedded {
+        Some(other) => format!(
+            "{embedder} embeds {other}, not {DEX}; the backend would ship another dex than the \
+             one checked here"
+        ),
+        None => format!("{embedder} does not embed {DEX} with one `include_bytes!`"),
+    })
+}
+
 fn read_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     java_files(&root.join(SOURCES))?
         .into_iter()
@@ -175,7 +220,9 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
         &std::fs::read_to_string(root.join(RECORD)).with_context(|| format!("reading {RECORD}"))?,
     )?;
     let dex = std::fs::read(root.join(DEX)).with_context(|| format!("reading {DEX}"))?;
-    let mut failures = Vec::new();
+    let embedder = std::fs::read_to_string(root.join(EMBEDDER))
+        .with_context(|| format!("reading {EMBEDDER}"))?;
+    let mut failures: Vec<String> = embedding_failure(EMBEDDER, &embedder).into_iter().collect();
     if record.sources != digest {
         failures.push(format!(
             "the Java sources under {SOURCES} changed since the dex was built; \
@@ -393,6 +440,56 @@ mod tests {
         assert_ne!(digest, sources_digest(&split));
     }
 
+    fn the_embedded_path_resolves_against_the_embedding_file() {
+        let include = r#"const DEX: &[u8] = include_bytes!("../../../android/classes.dex");"#;
+        assert_eq!(
+            embedded_path(EMBEDDER, include).as_deref(),
+            Some(DEX),
+            "the path, relative to the embedding file"
+        );
+        assert_eq!(
+            embedded_path("crates/flui-native/src/owner/android.rs", include).as_deref(),
+            Some("crates/android/classes.dex"),
+            "a file one directory up names another file"
+        );
+        assert_eq!(embedded_path(EMBEDDER, "const DEX: &[u8] = &[];"), None);
+        assert_eq!(
+            embedded_path(EMBEDDER, &format!("{include}\n{include}")),
+            None,
+            "two embeddings"
+        );
+        assert_eq!(
+            embedded_path("a.rs", r#"include_bytes!("../../x.dex")"#),
+            None,
+            "a path that climbs out of the repository"
+        );
+    }
+
+    fn a_backend_that_embeds_another_dex_fails() {
+        let embedding = |path: &str| format!("const DEX: &[u8] = include_bytes!(\"{path}\");");
+        assert_eq!(
+            embedding_failure(EMBEDDER, &embedding("../../../android/classes.dex")),
+            None,
+            "the checked-in dex"
+        );
+        let other = embedding_failure(EMBEDDER, &embedding("../../../android/stale/classes.dex"))
+            .expect("another dex fails");
+        assert!(
+            other.contains("crates/flui-native/android/stale/classes.dex"),
+            "the failure names what the backend embeds: {other}"
+        );
+        assert!(
+            embedding_failure(EMBEDDER, "const DEX: &[u8] = &[];").is_some(),
+            "no embedding fails"
+        );
+        let real = std::fs::read_to_string(repo_root().join(EMBEDDER)).expect("the embedder");
+        assert_eq!(
+            embedding_failure(EMBEDDER, &real),
+            None,
+            "the backend embeds the checked-in dex"
+        );
+    }
+
     fn the_checked_in_dex_matches_its_sources() {
         let args = AndroidDexArgs {
             write: false,
@@ -410,6 +507,14 @@ mod tests {
                 (
                     "the_source_digest_covers_paths_and_bytes",
                     the_source_digest_covers_paths_and_bytes as fn(),
+                ),
+                (
+                    "the_embedded_path_resolves_against_the_embedding_file",
+                    the_embedded_path_resolves_against_the_embedding_file as fn(),
+                ),
+                (
+                    "a_backend_that_embeds_another_dex_fails",
+                    a_backend_that_embeds_another_dex_fails as fn(),
                 ),
                 (
                     "the_checked_in_dex_matches_its_sources",

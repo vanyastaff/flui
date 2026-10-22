@@ -35,9 +35,7 @@ impl DeadlineDelivery {
 /// window across its frame requests: the main loop's rule, held apart from
 /// the main loop's own record, which is suspended under the modal loop.
 #[derive(Default)]
-pub(in crate::platforms::windows) struct ModalDelivery(
-    std::cell::RefCell<Option<DeadlineDelivery>>,
-);
+pub(crate) struct ModalDelivery(std::cell::RefCell<Option<DeadlineDelivery>>);
 
 impl ModalDelivery {
     /// Whether `deadline` from `hook` is due for delivery after the last one.
@@ -67,7 +65,7 @@ impl ModalDelivery {
     }
 
     /// No deadline is asked for: the next one is new whatever it is.
-    pub(in crate::platforms::windows) fn clear(&self) {
+    pub(crate) fn clear(&self) {
         *self.0.borrow_mut() = None;
     }
 }
@@ -79,7 +77,7 @@ impl ModalDelivery {
 /// frame request no callback answered (a window with nothing registered,
 /// or one already cleared) leaves it unchanged.
 #[derive(Default)]
-pub(in crate::platforms::windows) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
+pub(crate) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
 
 impl FrameCount {
     pub(super) fn get(&self) -> u64 {
@@ -87,7 +85,7 @@ impl FrameCount {
     }
 
     /// The counter a window's callbacks increment.
-    pub(in crate::platforms::windows) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+    pub(crate) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
         Arc::clone(&self.0)
     }
 }

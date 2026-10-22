@@ -35,7 +35,7 @@ use objc2::runtime::AnyClass;
 
 /// The production owner lane: the dispatch queue bound to the AppKit main
 /// thread. Calls from other threads are dispatched here synchronously.
-pub(super) fn owner_queue() -> &'static dispatch::Queue {
+pub(crate) fn owner_queue() -> &'static dispatch::Queue {
     static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
     Q.get_or_init(dispatch::Queue::main)
 }
@@ -46,7 +46,7 @@ pub(super) fn owner_queue() -> &'static dispatch::Queue {
 /// traffic exactly as the main lane does for production. Every test instance
 /// routes through this same lane so test traffic never straddles lanes.
 #[cfg(test)]
-pub(super) fn test_owner_queue() -> &'static dispatch::Queue {
+pub(crate) fn test_owner_queue() -> &'static dispatch::Queue {
     static Q: std::sync::OnceLock<dispatch::Queue> = std::sync::OnceLock::new();
     Q.get_or_init(|| {
         dispatch::Queue::create("flui.owner-lane.test", dispatch::QueueAttribute::Serial)
@@ -119,7 +119,7 @@ impl Drop for OnOwnerQueueGuard {
 /// thread — `exec_on_owner`'s inline arm, which deliberately covers a main
 /// thread that never entered the lane. It is not a claim that a guard was
 /// installed; `on_owner_queue` is that, and is strictly narrower.
-pub(super) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bool) -> bool {
+pub(crate) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bool) -> bool {
     on_owner_queue(owner)
         || (owner_is_main && {
             // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
@@ -141,7 +141,7 @@ pub(super) fn on_owner_thread(owner: &'static dispatch::Queue, owner_is_main: bo
 /// `f`'s result travels back across the thread boundary, so it must be `Send`;
 /// callers must never capture a raw Objective-C `id` into `f` for exactly that
 /// reason.
-pub(super) fn exec_on_owner<R: Send>(
+pub(crate) fn exec_on_owner<R: Send>(
     owner: &'static dispatch::Queue,
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
@@ -182,7 +182,7 @@ pub(super) fn exec_on_owner<R: Send>(
 /// trampoline is `extern "C"` with no panic catch, the same hazard
 /// `exec_on_owner`'s shield exists for); a caught panic is logged here —
 /// fire-and-forget has no caller frame to resume to.
-pub(super) fn exec_async_guarded(
+pub(crate) fn exec_async_guarded(
     owner: &'static dispatch::Queue,
     f: impl FnOnce() + Send + 'static,
 ) {
@@ -217,7 +217,7 @@ pub(super) fn exec_async_guarded(
 /// group so remaining windows and the quit notification still get their turn.
 /// Forget only panic payloads: dropping an arbitrary payload can itself panic
 /// while bootstrap is already unwinding. This exceptional leak prevents abort.
-pub(super) fn run_cleanup_guarded(body: impl FnOnce()) {
+pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         report_contained_panic(payload);
     }

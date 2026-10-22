@@ -47,8 +47,6 @@ pub mod android_keys;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_lifecycle;
 #[cfg(any(target_os = "android", test))]
-pub(crate) mod android_ndk;
-#[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;

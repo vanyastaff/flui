@@ -34,14 +34,14 @@ impl std::fmt::Debug for WinitDisplaySource {
 }
 
 impl WinitDisplaySource {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             native: Arc::new(MacosDisplays::new()),
         })
     }
 
     /// The native source, which the screen observer invalidates.
-    pub(super) fn native(&self) -> &Arc<MacosDisplays> {
+    pub(crate) fn native(&self) -> &Arc<MacosDisplays> {
         &self.native
     }
 
@@ -50,7 +50,7 @@ impl WinitDisplaySource {
     /// # Errors
     /// [`PlatformError::Displays`] off the main thread, where `NSScreen` is not
     /// read, or when the snapshot revision space is used up.
-    pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
             message: "the screens are read on the main thread".into(),
         })?;

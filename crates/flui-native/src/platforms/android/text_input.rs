@@ -38,7 +38,7 @@ use crate::shared::android_ime::{
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
 
-use super::java_view::JavaView;
+use crate::owner::android::java_view::JavaView;
 
 /// A host request made while the host was already inside a call into a
 /// store: applied, in order, when that call returns.
@@ -214,7 +214,7 @@ impl AndroidTextInput {
 
     /// One input method edit the view reported: replayed into the focused
     /// store in order, or dropped when it was made on an older snapshot.
-    pub(super) fn apply(&self, edit: ImeEdit) {
+    pub(crate) fn apply(&self, edit: ImeEdit) {
         let Some(store) = self.focused() else {
             return;
         };
@@ -348,7 +348,7 @@ impl AndroidTextInput {
     /// Keyboard's Done does); the field would otherwise take the action's
     /// Enter for the input method's own and ignore it. The commit is queued
     /// like an edit, so the key that follows lands after it.
-    pub(super) fn editor_action(&self) {
+    pub(crate) fn editor_action(&self) {
         let Some(store) = self.focused() else {
             return;
         };
@@ -382,7 +382,7 @@ impl AndroidTextInput {
     }
 
     /// `requestCursorUpdates(mode)`.
-    pub(super) fn cursor_updates(&self, mode: i32) {
+    pub(crate) fn cursor_updates(&self, mode: i32) {
         self.cursor_mode.set(mode & CURSOR_UPDATE_MONITOR);
         if mode & CURSOR_UPDATE_IMMEDIATE != 0 {
             self.push_cursor();
@@ -429,7 +429,7 @@ impl AndroidTextInput {
 
     /// The focused field's bounds, for a stylus press that may start
     /// handwriting; `None` when no field is focused or laid out.
-    pub(super) fn field_bounds(&self) -> Option<Bounds<f64>> {
+    pub(crate) fn field_bounds(&self) -> Option<Bounds<f64>> {
         let store = self.focused()?;
         let found: Rc<Cell<Option<Bounds<f64>>>> = Rc::default();
         let out = Rc::clone(&found);
@@ -440,7 +440,7 @@ impl AndroidTextInput {
     }
 
     /// Hand the stylus stroke that just began to the input method.
-    pub(super) fn start_handwriting(&self, _handwriting: Since<StylusHandwriting>) {
+    pub(crate) fn start_handwriting(&self, _handwriting: Since<StylusHandwriting>) {
         self.view.post(|env, view| {
             let started = env
                 .call_method(view, jni_str!("startHandwriting"), jni_sig!("()Z"), &[])?

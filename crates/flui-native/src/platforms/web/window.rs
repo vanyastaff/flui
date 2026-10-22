@@ -13,7 +13,7 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     host, host_window::HostWindow, owner::OpenWindowError, owner::handlers::WindowCallbacks,
-    owner::signal::OwnerSignal, shared::window_state::WindowStateCell,
+    owner::signal::OwnerSignal, owner::web::WebLoop, shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
@@ -23,7 +23,6 @@ use flui_platform::{
 
 use super::{
     display::WebDisplays,
-    platform::WebLoop,
     registration::{CanvasClaim, Registration, effective_focus},
 };
 

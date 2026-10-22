@@ -9,9 +9,32 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{GetWindowPlacement, WINDOWPLACEMENT},
 };
 
-use super::util::{USER_DEFAULT_SCREEN_DPI, logical_to_device};
 use super::window_frame::to_screen;
 use flui_platform::WindowOptions;
+
+/// DPI constants
+pub(super) const USER_DEFAULT_SCREEN_DPI: u32 = 96;
+
+/// Convert logical pixels to device pixels
+#[inline]
+pub(super) fn logical_to_device(logical: f64, scale_factor: f64) -> i32 {
+    (logical * scale_factor).round() as i32
+}
+
+/// The largest device coordinate or extent a window command may name. It
+/// leaves room below `i32::MAX` for the frame `AdjustWindowRectExForDpi` adds
+/// and for an origin plus a size.
+pub(super) const DEVICE_COORDINATE_LIMIT: i32 = 0x3FFF_0000;
+
+/// Convert logical pixels to device pixels, or `None` when the result is not
+/// a finite device value within [`DEVICE_COORDINATE_LIMIT`]: geometry Win32
+/// would otherwise receive saturated.
+#[inline]
+pub(super) fn checked_logical_to_device(logical: f64, scale_factor: f64) -> Option<i32> {
+    let device = (logical * scale_factor).round();
+    let limit = f64::from(DEVICE_COORDINATE_LIMIT);
+    (device.is_finite() && (-limit..=limit).contains(&device)).then_some(device as i32)
+}
 
 /// The window's placement: its show state and the rectangles it returns to.
 pub(super) fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
@@ -178,7 +201,7 @@ pub(super) fn outer_size(
 /// `extent` at a scale `ratio` times the one it was measured at, or `None`
 /// when that is not a device value a window command may name.
 fn rescaled(extent: i32, ratio: f64) -> Option<i32> {
-    super::util::checked_logical_to_device(f64::from(extent), ratio)
+    checked_logical_to_device(f64::from(extent), ratio)
 }
 
 impl super::platform::WindowContext {

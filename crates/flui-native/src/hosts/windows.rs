@@ -1,15 +1,20 @@
 //! The Windows host: Win32 windows, OLE drag and drop, TSF text input and the
 //! Win32 message loop.
 
+use std::rc::Rc;
+
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
+use crate::owner::windows::broadcast::Subscriber;
+use crate::owner::windows::control::OwnerObjects;
+use crate::owner::windows::{WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
-    HostEvents, OleTransfer, PreferenceSource, TextServices, WindowsClipboard, WindowsDisplays,
-    WindowsHaptics, WindowsLoop, WindowsWindow,
+    HostEvents, OleTransfer, PreferenceSource, TextServices, Touchpad, WindowProc,
+    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
 
@@ -38,6 +43,21 @@ impl Host for Windows {
     type Storage = UserDataDirs;
 }
 
+impl WindowsHost for Windows {
+    /// The window's procedure, then the precision touchpad, which only learns
+    /// of each window created.
+    const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
+
+    /// The preferences (setting and display changes), then the lifecycle
+    /// (session, power, lock and memory).
+    fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
+        vec![
+            Rc::new(owner.preferences.broadcasts()),
+            Rc::clone(owner.lifecycle) as Rc<dyn Subscriber>,
+        ]
+    }
+}
+
 /// The native Windows platform: Win32 windows and message loop, OLE drag and
 /// drop, TSF text input and the system's clipboard, displays and preferences.
 pub type WindowsPlatform = HostPlatform<Windows>;
@@ -45,7 +65,7 @@ pub type WindowsPlatform = HostPlatform<Windows>;
 impl HostPlatform<Windows> {
     /// Create a new Windows platform instance with default configuration
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WindowsLoop::new()?))
+        Self::with_config(WindowConfiguration::default())
     }
 
     /// Create a new Windows platform instance with custom configuration
@@ -72,6 +92,8 @@ impl HostPlatform<Windows> {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WindowsLoop::with_config(config)?))
+        Ok(Self::from_loop(WindowsLoop::with_config::<Windows>(
+            config,
+        )?))
     }
 }

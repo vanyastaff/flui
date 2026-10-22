@@ -1,14 +1,12 @@
 //! Tests that drive a REAL winit `EventLoop`.
 //!
-//! Split out of `platform.rs`'s inline test module: this is one cohesive
-//! family — every test here runs `event_loop.run_app` on an ordinary test
-//! thread via [`build_test_event_loop`] — and together with its helpers it
-//! outgrew the budget of a 3.9k-line file (issue #923). Nothing else in the
-//! crate uses these helpers, which is why all four moved rather than being
-//! left behind as a shared prelude.
+//! One cohesive family — every test here runs `event_loop.run_app` on an
+//! ordinary test thread via [`build_test_event_loop`] — which together with
+//! its helpers would outgrow the loop file's budget (issue #923). Nothing else
+//! in the crate uses these helpers.
 //!
-//! Declared with `#[path]` from `platform.rs` as a sibling of its `tests`
-//! module, so these tests read as `platform::real_loop_tests::*`.
+//! Declared from `owner/winit.rs` as a sibling of its `tests` module, so these
+//! tests read as `owner::winit::real_loop_tests::*`.
 
 use std::{
     collections::HashSet,
@@ -34,8 +32,7 @@ use winit::{
 
 use super::{SelfCloseRoute, WinitApp, WinitLoop, WinitRunState};
 use crate::{
-    WinitPlatform, host_window::HostWindow, platform::Platform,
-    platforms::winit::control::control_lane,
+    WinitPlatform, host_window::HostWindow, owner::winit::control::control_lane, platform::Platform,
 };
 use flui_platform::{WindowEvent, WindowId, WindowOptions};
 
@@ -262,7 +259,16 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                     .preference_source
                     .as_ref()
                     .expect("live native source");
-                source.send_setting_change_for_test();
+                let receiver = self
+                    .inner
+                    .preference_broadcasts
+                    .as_ref()
+                    .expect("live broadcast receiver");
+                receiver.send_with_for_test(
+                    windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
+                    0,
+                    0,
+                );
                 assert!(
                     source.pending(),
                     "actual receiver invalidates the native sample"
@@ -362,6 +368,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         platform,
         owner_platform: host.clone(),
         preference_source: None,
+        #[cfg(windows)]
+        preference_broadcasts: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
         #[cfg(target_os = "macos")]
@@ -670,6 +678,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         platform,
         owner_platform: host.clone(),
         preference_source: None,
+        #[cfg(windows)]
+        preference_broadcasts: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
         #[cfg(target_os = "macos")]
@@ -896,6 +906,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         owner_platform: host,
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
+        #[cfg(windows)]
+        preference_broadcasts: None,
         #[cfg(target_os = "macos")]
         preference_observers: None,
         #[cfg(target_os = "linux")]
@@ -1205,6 +1217,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             owner_platform: host,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(windows)]
+            preference_broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]

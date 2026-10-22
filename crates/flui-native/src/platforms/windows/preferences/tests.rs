@@ -1,6 +1,7 @@
 //! Private native getter failure injection; public native tests remain in tests/.
 
 use super::*;
+use crate::owner::windows::broadcast::Receiver;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn values(scale: f64) -> SystemPreferences {
@@ -182,7 +183,7 @@ fn unrelated_wakes_do_not_repeat_failed_native_reads() {
 
 /// A receiver wired to a host, with the notices it delivers collected.
 fn hosted_receiver() -> (
-    receiver::Receiver,
+    Receiver,
     Rc<crate::platforms::windows::host_events::HostEvents>,
     Arc<std::sync::Mutex<Vec<flui_platform::SystemNotice>>>,
 ) {
@@ -204,7 +205,11 @@ fn hosted_receiver() -> (
         signal: Weak::new(),
         displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
     });
-    let receiver = receiver::Receiver::new(invalidation, Some(Rc::clone(&host))).expect("receiver");
+    let receiver = Receiver::new([
+        Rc::new(PreferenceBroadcasts(invalidation)) as Rc<dyn Subscriber>,
+        Rc::clone(&host) as Rc<dyn Subscriber>,
+    ])
+    .expect("receiver");
     (receiver, host, heard)
 }
 
@@ -287,7 +292,10 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
         signal: Arc::downgrade(&signal),
         displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
     });
-    let receiver = receiver::Receiver::new(Arc::clone(&invalidation), None).expect("receiver");
+    let receiver = Receiver::new([
+        Rc::new(PreferenceBroadcasts(Arc::clone(&invalidation))) as Rc<dyn Subscriber>
+    ])
+    .expect("receiver");
     let hwnd = receiver.hwnd_for_test();
     let (class, instance) = receiver.class_for_test();
     // `PreferenceSource` closes admission before its receiver retires.
@@ -344,7 +352,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
 fn a_delegate_that_outlives_its_source_is_inert() {
     let (signal, wakes) = counting_signal();
     let displays = Arc::new(crate::platforms::windows::display::WindowsDisplays::new());
-    let source = PreferenceSource::with_host(&signal, &displays, None).expect("native source");
+    let source = PreferenceSource::new(&signal, &displays).expect("native source");
     // What each WinRT delegate captures.
     let kept = Arc::clone(&source.invalidation);
     drop(source);
@@ -359,9 +367,11 @@ fn a_delegate_that_outlives_its_source_is_inert() {
         "the old delegate wakes nobody"
     );
 
-    let successor = PreferenceSource::with_host(&signal, &displays, None).expect("successor");
+    let successor = PreferenceSource::new(&signal, &displays).expect("successor");
+    let receiver =
+        Receiver::new([Rc::new(successor.broadcasts()) as Rc<dyn Subscriber>]).expect("receiver");
     let woken = wakes.load(Ordering::SeqCst);
-    successor.send_setting_change_for_test();
+    receiver.send_with_for_test(WM_SETTINGCHANGE, 0, 0);
     assert!(successor.pending());
     assert!(
         wakes.load(Ordering::SeqCst) > woken,

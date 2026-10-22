@@ -12,7 +12,8 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::platform::{FrameCount, ModalDelivery, WindowIdentity, WindowMap};
+use super::{FrameCount, ModalDelivery, WindowIdentity};
+use crate::platforms::windows::platform::WindowMap;
 use crate::{
     PlatformError, WakeRegistrationError,
     owner::DirectOwnerHooks,
@@ -64,7 +65,7 @@ static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 /// The platform's owner-thread state, boxed into the owner window's
 /// `GWLP_USERDATA` slot. `!Send`: it is created, used and freed on the owner
 /// thread only.
-pub(super) struct OwnerControlContext {
+pub(crate) struct OwnerControlContext {
     /// Which platform's owner window this context belongs to, so a gate
     /// holding a recycled handle cannot reach another platform's state.
     identity: WindowIdentity,
@@ -72,12 +73,27 @@ pub(super) struct OwnerControlContext {
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
-    preferences: Rc<super::preferences::PreferenceSource>,
-    /// The system events the preferences receiver forwards.
-    host: Rc<super::host_events::HostEvents>,
+    preferences: Rc<crate::platforms::windows::preferences::PreferenceSource>,
+    /// The hidden top-level window that hears the system's broadcasts and
+    /// tells the host's subscribers. Declared after the preference source,
+    /// which closes its admission as it drops, so a message the receiver still
+    /// hears while it is destroyed wakes nobody.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "held for its lifetime: the receiver window lives as long as the owner's state"
+        )
+    )]
+    broadcasts: super::broadcast::Receiver,
+    /// The system events the broadcast receiver tells the lifecycle.
+    host: Rc<crate::platforms::windows::host_events::HostEvents>,
+    /// The hooks of the host's window class, which each window it opens tells
+    /// of its creation.
+    window_hooks: super::WindowHooks,
     /// Where system notices go; see [`SystemNotices`].
     notices: Arc<SystemNotices>,
-    displays: Arc<super::display::WindowsDisplays>,
+    displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -85,7 +101,7 @@ pub(super) struct OwnerControlContext {
     /// [`ExitPolicyRequest`].
     exit_policy_pending: Arc<AtomicBool>,
     /// OLE drag and drop, whose sessions run from this window.
-    drag: Arc<super::drag::OleTransfer>,
+    drag: Arc<crate::platforms::windows::drag::OleTransfer>,
     /// The last wake deadline the modal drag loop delivered, with the frame
     /// count it was delivered at (see `WindowsLoop::deliver_modal_frames`).
     modal_delivery: Rc<ModalDelivery>,
@@ -94,25 +110,31 @@ pub(super) struct OwnerControlContext {
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
 /// clones instead of a borrow means no reference into the context survives
 /// user code, which may tear the owner window down.
-pub(super) struct OwnerShares {
+pub(crate) struct OwnerShares {
     /// The platform-level handlers (`on_quit`, `on_window_event`, ...),
     /// shared with every window context this platform opens.
-    pub(super) handlers: Rc<RefCell<PlatformHandlers>>,
+    pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
     /// Where the owner-turn callback waits between turns.
-    pub(super) turn: Rc<OwnerTurnSlot>,
+    pub(crate) turn: Rc<OwnerTurnSlot>,
     /// Frame callbacks dispatched by every window this platform opens.
-    pub(super) frames: Rc<FrameCount>,
-    pub(super) preferences: Rc<super::preferences::PreferenceSource>,
+    pub(crate) frames: Rc<FrameCount>,
+    pub(crate) preferences: Rc<crate::platforms::windows::preferences::PreferenceSource>,
     /// The system events the receiver forwards to the owner.
-    pub(super) host: Rc<super::host_events::HostEvents>,
+    pub(crate) host: Rc<crate::platforms::windows::host_events::HostEvents>,
+    /// The hooks of the host's window class; a window tells them of its
+    /// creation.
+    pub(crate) window_hooks: super::WindowHooks,
+    /// The broadcast receiver's window, which a test sends messages to.
+    #[cfg(test)]
+    pub(crate) broadcast_receiver: HWND,
     /// Where the platform hands system notices to the host.
-    pub(super) notices: Arc<SystemNotices>,
+    pub(crate) notices: Arc<SystemNotices>,
     /// The platform's monitors; a window invalidates them on a DPI change and
     /// names its display through them.
-    pub(super) displays: Arc<super::display::WindowsDisplays>,
+    pub(crate) displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
-    pub(super) exit_policy: ExitPolicyRequest,
+    pub(crate) exit_policy: ExitPolicyRequest,
 }
 
 /// A coalesced request, postable from any thread, that the owner consult the
@@ -122,13 +144,13 @@ pub(super) struct OwnerShares {
 /// quits. Requests made while one is already queued cost nothing; once the
 /// owner window is closed they are refused, like a wake.
 #[derive(Clone)]
-pub(super) struct ExitPolicyRequest {
+pub(crate) struct ExitPolicyRequest {
     address: Arc<Mutex<Option<isize>>>,
     pending: Arc<AtomicBool>,
 }
 
 impl ExitPolicyRequest {
-    pub(super) fn post(&self) {
+    pub(crate) fn post(&self) {
         if self.pending.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -154,26 +176,37 @@ impl ExitPolicyRequest {
 /// `Send + Sync`: it carries only the address, so the owner hooks can hold
 /// one; reaching the context through it still requires the owner thread.
 #[derive(Clone)]
-pub(super) struct OwnerGate {
+pub(crate) struct OwnerGate {
     address: Arc<Mutex<Option<isize>>>,
     identity: WindowIdentity,
     exit_policy_pending: Arc<AtomicBool>,
 }
 
-pub(super) struct OwnerControl {
-    pub(super) signal: Arc<OwnerSignal>,
-    pub(super) wake: Arc<wake::OwnerWake>,
+/// The owner's objects a host makes its broadcast subscribers from
+/// ([`WindowsHost::broadcast_subscribers`](super::WindowsHost::broadcast_subscribers)).
+/// The owner holds the features' state until each feature takes its own.
+pub(crate) struct OwnerObjects<'a> {
+    /// The system preference source.
+    pub(crate) preferences: &'a Rc<crate::platforms::windows::preferences::PreferenceSource>,
+    /// The session, power, lock and memory events of the lifecycle.
+    pub(crate) lifecycle: &'a Rc<crate::platforms::windows::host_events::HostEvents>,
+}
+
+pub(crate) struct OwnerControl {
+    pub(crate) signal: Arc<OwnerSignal>,
+    pub(crate) wake: Arc<wake::OwnerWake>,
     gate: OwnerGate,
 }
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
-    /// `WindowsLoop::with_config`).
-    pub(super) fn new(
+    /// `WindowsLoop::with_config`), with the broadcast subscribers and window
+    /// hooks `H` names.
+    pub(crate) fn new<H: super::WindowsHost>(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
-        drag: Arc<super::drag::OleTransfer>,
-        displays: Arc<super::display::WindowsDisplays>,
+        drag: Arc<crate::platforms::windows::drag::OleTransfer>,
+        displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
         notices: Arc<SystemNotices>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
@@ -217,22 +250,30 @@ impl OwnerControl {
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
-        let host = Rc::new(super::host_events::HostEvents::new(
+        let host = Rc::new(crate::platforms::windows::host_events::HostEvents::new(
             Rc::clone(&handlers),
             Arc::clone(&notices),
         ));
+        let preferences = Rc::new(
+            crate::platforms::windows::preferences::PreferenceSource::new(&signal, &displays)?,
+        );
+        let broadcasts = super::broadcast::Receiver::new(H::broadcast_subscribers(&OwnerObjects {
+            preferences: &preferences,
+            lifecycle: &host,
+        }))
+        .map_err(|error| PlatformError::Init {
+            message: format!("the broadcast receiver: {error}"),
+        })?;
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
             handlers,
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
-            preferences: Rc::new(super::preferences::PreferenceSource::with_host(
-                &signal,
-                &displays,
-                Some(Rc::clone(&host)),
-            )?),
+            preferences,
+            broadcasts,
             host,
+            window_hooks: H::WINDOW_HOOKS,
             notices,
             displays,
             windows,
@@ -283,16 +324,16 @@ impl OwnerControl {
     }
 
     /// See [`OwnerGate::shares`].
-    pub(super) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
+    pub(crate) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
         self.gate.shares(op)
     }
 
     /// A gate the owner hooks can hold.
-    pub(super) fn gate(&self) -> OwnerGate {
+    pub(crate) fn gate(&self) -> OwnerGate {
         self.gate.clone()
     }
 
-    pub(super) fn drive_fallback(&self) {
+    pub(crate) fn drive_fallback(&self) {
         contain_owner_callback(|| {
             if let Ok(shares) = self.shares("fallback owner wake")
                 && self.signal.drive_in(shares.turn.as_ref())
@@ -303,7 +344,7 @@ impl OwnerControl {
     }
 
     /// See [`ExitPolicyRequest`].
-    pub(super) fn exit_policy_request(&self) -> ExitPolicyRequest {
+    pub(crate) fn exit_policy_request(&self) -> ExitPolicyRequest {
         self.gate.exit_policy_request()
     }
 
@@ -313,14 +354,14 @@ impl OwnerControl {
     /// dropped off the owner instead, [`Self::close`] keeps the native window
     /// and the context, callback included, is leaked rather than freed on
     /// the wrong thread.
-    pub(super) fn close_signal(&self) {
+    pub(crate) fn close_signal(&self) {
         self.signal.close();
         if let Ok(shares) = self.shares("close owner turns") {
             shares.turn.clear();
         }
     }
 
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         self.close_signal();
         let address = self.gate.address.lock().take();
         if let Some(address) = address {
@@ -350,7 +391,7 @@ impl OwnerGate {
     /// the owner, [`UserDataRefusal::WindowGone`] or
     /// [`UserDataRefusal::EmptySlot`] once the platform has shut down,
     /// including when its handle now names another platform's owner window.
-    pub(super) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
+    pub(crate) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
         let raw = *self.address.lock();
         let Some(raw) = raw else {
             tracing::debug!(op, "refusing owner state: the owner window is closed");
@@ -389,6 +430,9 @@ impl OwnerGate {
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
                     host: Rc::clone(&context.host),
+                    window_hooks: context.window_hooks,
+                    #[cfg(test)]
+                    broadcast_receiver: context.broadcasts.hwnd_for_test(),
                     notices: Arc::clone(&context.notices),
                     displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),
@@ -406,14 +450,14 @@ impl OwnerGate {
 /// [`DirectOwnerHooks`] provides them, with the owner-turn callback
 /// registered into the owner context's [`OwnerTurnSlot`] instead of the
 /// signal's shared slot.
-pub(super) struct WindowsOwnerHooks {
+pub(crate) struct WindowsOwnerHooks {
     direct: DirectOwnerHooks,
     signal: Arc<OwnerSignal>,
     gate: OwnerGate,
 }
 
 impl WindowsOwnerHooks {
-    pub(super) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
+    pub(crate) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
         Self {
             direct: DirectOwnerHooks::with_signal(platform, Arc::clone(&control.signal)),
             signal: Arc::clone(&control.signal),
@@ -553,13 +597,14 @@ unsafe extern "system" fn procedure(
                     quit_owner_loop(&signal, &turn);
                 }
                 return;
-            } else if message == super::drag::START_DRAG && !pointer.is_null() {
+            } else if message == crate::platforms::windows::drag::START_DRAG && !pointer.is_null() {
                 // Cloned out first: the modal loop runs user code that may
                 // tear this window down.
                 let drag = Arc::clone(&(*pointer).drag);
                 drag.run_pending(hwnd);
                 return;
-            } else if message == super::drag::MODAL_FRAME && !pointer.is_null() {
+            } else if message == crate::platforms::windows::drag::MODAL_FRAME && !pointer.is_null()
+            {
                 let context = &*pointer;
                 if !context.drag.is_running() || !context.signal.accepting() {
                     return;
@@ -568,7 +613,7 @@ unsafe extern "system" fn procedure(
                 let frames = Rc::clone(&context.frames);
                 let delivered = Rc::clone(&context.modal_delivery);
                 let windows = context.windows.clone();
-                let wait = super::platform::WindowsLoop::deliver_modal_frames(
+                let wait = super::WindowsLoop::deliver_modal_frames(
                     &handlers, &windows, &frames, &delivered,
                 );
                 result = LRESULT(wait as isize);

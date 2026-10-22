@@ -152,11 +152,11 @@
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, `platforms::android::memory`) carries its own
-// module-level `#![allow(unsafe_code)]` where it is declared, and the two
+// `platforms::winit`, `platforms::android::memory`, and the loops
+// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`) carries its
+// own module-level `#![expect(unsafe_code)]` where it is declared, and the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
-// `platforms::windows` (every file: `window.rs`, `platform.rs`, `clipboard.rs`,
-// `display.rs`, `events.rs`, `util.rs`) is fully SAFETY-documented — every
+// `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
 // a `# Safety` rustdoc section) stating the invariant that makes it sound.
 // `platforms::macos`/`android`/`web` are NOT yet at that bar; see the
@@ -182,8 +182,6 @@ mod hosts;
 mod owner;
 mod platform;
 pub mod platforms;
-#[cfg(any(test, target_os = "android"))]
-mod redraw_poll;
 pub mod shared;
 pub mod storage;
 #[cfg(test)]

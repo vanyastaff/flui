@@ -105,7 +105,7 @@ pub struct HeadlessDisplays {
 }
 
 impl HeadlessDisplays {
-    pub(super) fn new(specs: Vec<DisplaySpec>) -> Self {
+    pub(crate) fn new(specs: Vec<DisplaySpec>) -> Self {
         let registry = DisplayRegistry::new();
         let mut next_x = 0;
         let displays = specs

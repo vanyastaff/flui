@@ -14,10 +14,10 @@ use flui_platform::SystemPreferences;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{Event, EventTarget, MediaQueryList, Window};
 
-use super::platform::WebLoop;
 use crate::{
     PlatformError, host,
     owner::signal::OwnerSignal,
+    owner::web::WebLoop,
     shared::{
         browser_preferences::{MediaFeature, MediaMatches},
         preferred_locales,
@@ -91,7 +91,7 @@ pub struct WebPreferences {
 }
 
 impl WebPreferences {
-    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let window = web_sys::window().ok_or_else(|| PlatformError::Preferences {
             message: "browser preference observation requires a Window".into(),
         })?;

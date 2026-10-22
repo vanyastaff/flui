@@ -87,8 +87,10 @@ impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
     }
 }
 
-impl crate::host::Displays<super::platform::WindowsLoop> for WindowsDisplays {
-    fn snapshot(owner: &super::platform::WindowsLoop) -> Result<DisplaySnapshot, PlatformError> {
+impl crate::host::Displays<crate::owner::windows::WindowsLoop> for WindowsDisplays {
+    fn snapshot(
+        owner: &crate::owner::windows::WindowsLoop,
+    ) -> Result<DisplaySnapshot, PlatformError> {
         owner.displays.snapshot()
     }
 }

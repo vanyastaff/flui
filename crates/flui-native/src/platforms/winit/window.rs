@@ -1,7 +1,7 @@
 //! The winit backend's [`PlatformWindow`]: a thin wrapper over
 //! `Arc<winit::window::Window>` carrying the platform-minted [`WindowId`],
 //! the per-window callback table, and the route its programmatic `close()`
-//! takes back to the event-loop owner (`ControlSender`, backend-private —
+//! takes back to the event-loop owner (`ControlSender`, crate-private —
 //! which is why this type lives here, in the backend, and not beside the
 //! trait it implements).
 
@@ -24,10 +24,10 @@ use winit::{
 
 #[cfg(target_os = "linux")]
 use super::super::linux::x11_window_probe::X11WindowProbe;
-use super::control::ControlSender;
 use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell};
 use crate::host_window::HostWindow;
+use crate::owner::winit::control::ControlSender;
 use crate::shared::window_state::{WindowStateCell, mode_of};
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
@@ -135,7 +135,7 @@ pub struct WinitWindow {
 /// What the window system lets a program do to `window`: a Wayland surface
 /// gets none of the placement, hiding and focus commands, every other shell
 /// gets them all.
-pub(super) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
+pub(crate) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
     match window.display_handle().map(|display| display.as_raw()) {
         Ok(raw_window_handle::RawDisplayHandle::Wayland(_)) => WindowShell::Wayland,
         _ => WindowShell::Desktop,
@@ -197,7 +197,7 @@ impl WinitWindow {
     /// `plan` is what the window was created from, so its snapshot starts from
     /// the mode it opened in and, if it opened maximized, the rectangle it
     /// returns to.
-    pub(super) fn new(
+    pub(crate) fn new(
         id: WindowId,
         window: Arc<Window>,
         close_lane: ControlSender,
@@ -274,7 +274,7 @@ impl WinitWindow {
     /// `probe` makes. Does nothing, and makes none, for a window that is not
     /// an X11 window.
     #[cfg(target_os = "linux")]
-    pub(super) fn attach_x11_probe(&self, probe: impl FnOnce() -> Option<Arc<X11WindowProbe>>) {
+    pub(crate) fn attach_x11_probe(&self, probe: impl FnOnce() -> Option<Arc<X11WindowProbe>>) {
         use raw_window_handle::RawWindowHandle;
 
         let id = match self.window.window_handle().map(|handle| handle.as_raw()) {
@@ -305,7 +305,7 @@ impl WinitWindow {
 
     /// Map a window created hidden to open in a mode, now that the mode is set
     /// where the window manager reads it. A no-op for every other window.
-    pub(super) fn finish_setup(&self) {
+    pub(crate) fn finish_setup(&self) {
         if !self.map_after_setup {
             return;
         }
@@ -319,7 +319,7 @@ impl WinitWindow {
 
     /// The X11 id of this window, when a probe is attached.
     #[cfg(target_os = "linux")]
-    pub(super) fn x11_id(&self) -> Option<u32> {
+    pub(crate) fn x11_id(&self) -> Option<u32> {
         self.x11.get().map(|(_, id)| *id)
     }
 
@@ -340,7 +340,7 @@ impl WinitWindow {
     }
 
     /// The cell a wake from sleep marks stale.
-    pub(super) fn state_cell(&self) -> &Arc<WindowStateCell> {
+    pub(crate) fn state_cell(&self) -> &Arc<WindowStateCell> {
         &self.window_state
     }
 
@@ -356,7 +356,7 @@ impl WinitWindow {
     /// Whether [`PlatformWindow::display_id`] answers differently from the last
     /// time this was asked, remembering the answer. The window event handler
     /// uses it to raise `on_display_changed` only on a real move.
-    pub(super) fn take_display_change(&self) -> bool {
+    pub(crate) fn take_display_change(&self) -> bool {
         let current = PlatformWindow::display_id(self);
         let mut reported = self.reported_display.lock();
         let changed = *reported != current;
@@ -367,7 +367,7 @@ impl WinitWindow {
     /// Record the portal's `color-scheme`; `true` when it changed what
     /// [`PlatformWindow::appearance`] reports.
     #[cfg(target_os = "linux")]
-    pub(super) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
+    pub(crate) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
         let dark = flui_platform::Brightness::from(appearance).is_dark();
         let previous = self
             .portal_dark
@@ -375,7 +375,7 @@ impl WinitWindow {
         previous != dark && self.window.theme().is_none()
     }
 
-    pub(super) fn mark_closed(&self) {
+    pub(crate) fn mark_closed(&self) {
         self.closed
             .store(true, std::sync::atomic::Ordering::Release);
     }
@@ -402,13 +402,13 @@ impl WinitWindow {
 
     /// Record winit's `Occluded`. Kept apart from whether the window is shown,
     /// so an occlusion event that arrives after a hide cannot show it.
-    pub(super) fn set_occluded(&self, occluded: bool) {
+    pub(crate) fn set_occluded(&self, occluded: bool) {
         self.occluded.store(occluded, Ordering::Release);
     }
 
     /// The window may differ from its last snapshot: read it again, and raise
     /// `on_state_changed` when the revision grew.
-    pub(super) fn refresh_state(&self) {
+    pub(crate) fn refresh_state(&self) {
         self.window_state.invalidate();
         let _ = PlatformWindow::state(self);
     }
@@ -475,7 +475,7 @@ impl WinitWindow {
     /// an `Occluded` can repeat what is already known or arrive late. The
     /// answer is read under the report's lock, so two reporters cannot leave an
     /// older one last, and the lock is released before the dispatch.
-    pub(super) fn report_visibility(&self) {
+    pub(crate) fn report_visibility(&self) {
         let (previous, visible) = {
             let mut reported = self.reported_visible.lock();
             let visible = PlatformWindow::is_visible(self);

@@ -13,9 +13,9 @@ use std::rc::Rc;
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use wasm_bindgen::JsValue;
 
-use super::listener::{Listener, warn_failure};
-use super::platform::WebLoop;
 use crate::host;
+use crate::owner::web::WebLoop;
+use crate::owner::web::listener::{Listener, warn_failure};
 
 /// The listeners on the page itself; removed when dropped.
 pub struct PageObservers {
@@ -31,7 +31,7 @@ impl PageObservers {
     /// hidden, and with [`SessionEndPhase::Cancelled`] when a page the browser
     /// kept in the back/forward cache is shown again. The first can repeat
     /// across such a round trip, so `on_phase` must be safe to repeat.
-    pub(super) fn start(on_phase: impl Fn(SessionEndPhase) + 'static) -> Self {
+    pub(crate) fn start(on_phase: impl Fn(SessionEndPhase) + 'static) -> Self {
         let active = Rc::new(Cell::new(true));
         let on_phase = Rc::new(on_phase);
         let Some(window) = web_sys::window() else {

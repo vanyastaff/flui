@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 
 /// What the window system lets a program do to a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WindowShell {
+pub(crate) enum WindowShell {
     /// X11, Win32 or AppKit: windows are placed, hidden, shown and focused by
     /// the program, and their position and minimization can be read.
     Desktop,
@@ -62,7 +62,7 @@ impl WindowShell {
 /// The display a window is placed on: where its origin is in the global
 /// device-pixel space, and how many device pixels make a logical one.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct PlacementDisplay {
+pub(crate) struct PlacementDisplay {
     pub origin: Point<i32>,
     pub scale_factor: f64,
 }
@@ -95,7 +95,7 @@ impl PlacementDisplay {
     /// `WindowPlacement` measures a remembered offset from: a window on a
     /// display with a panel along its top reopens below the panel, not under
     /// it.
-    pub(super) fn choose(snapshot: Option<&DisplaySnapshot>, wanted: Option<DisplayId>) -> Self {
+    pub(crate) fn choose(snapshot: Option<&DisplaySnapshot>, wanted: Option<DisplayId>) -> Self {
         let named = snapshot
             .zip(wanted)
             .and_then(|(snapshot, id)| snapshot.get(id));
@@ -116,7 +116,7 @@ impl PlacementDisplay {
 
 /// What winit is asked for when a window is created.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct OpenPlan {
+pub(crate) struct OpenPlan {
     /// The outer top-left corner in global device pixels; `None` lets the
     /// window manager place the window.
     pub position: Option<Point<i32>>,
@@ -147,7 +147,7 @@ pub(super) struct OpenPlan {
 impl OpenPlan {
     /// Whether the window is created unmapped, to be mapped by the host: after
     /// its first frame, or once its opening mode is set.
-    pub(super) const fn created_unmapped(&self) -> bool {
+    pub(crate) const fn created_unmapped(&self) -> bool {
         self.hidden_until_first_frame || self.map_after_setup
     }
 
@@ -168,7 +168,7 @@ impl OpenPlan {
     /// A window that opens maximized or fullscreen is created with the
     /// rectangle it returns to, so un-maximizing it later goes there; the
     /// window manager keeps that rectangle as the window's normal one.
-    pub(super) fn new(
+    pub(crate) fn new(
         options: &WindowOptions,
         shell: WindowShell,
         display: PlacementDisplay,
@@ -248,7 +248,7 @@ fn device_position(at: Point<f64>, display: PlacementDisplay) -> Option<Point<i3
 /// measurement, and none until one decorated window has been seen with its
 /// frame.
 #[derive(Debug, Default)]
-pub(super) struct FrameInset {
+pub(crate) struct FrameInset {
     measured: Mutex<Option<Size<i32>>>,
 }
 
@@ -285,7 +285,7 @@ impl FrameInset {
 
     /// The frame in logical pixels on a display of `scale_factor`; zero before
     /// any was measured.
-    pub(super) fn logical(&self, scale_factor: f64) -> Size<f64> {
+    pub(crate) fn logical(&self, scale_factor: f64) -> Size<f64> {
         let measured = *self.measured.lock();
         match measured {
             Some(frame) if scale_factor.is_finite() && scale_factor > 0.0 => Size::new(

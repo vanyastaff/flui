@@ -23,14 +23,14 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Event, MediaQueryList};
 
 use super::display::{WebDisplays, event_target, get};
-use super::listener::{Listener, warn_failure};
 use crate::owner::signal::OwnerSignal;
+use crate::owner::web::listener::{Listener, warn_failure};
 use crate::shared::dppx_query::DppxWatch;
 use crate::shared::web_feature::{GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
 
 /// The listeners that keep the display snapshot current; dropping it removes
 /// them.
-pub(super) struct DisplayObservers {
+pub(crate) struct DisplayObservers {
     /// Cleared first on drop, so a callback already queued in the browser is
     /// inert.
     active: Rc<Cell<bool>>,
@@ -43,7 +43,7 @@ pub(super) struct DisplayObservers {
 
 impl DisplayObservers {
     /// Start observing for `displays`; every change wakes `signal`.
-    pub(super) fn start(displays: &Arc<WebDisplays>, signal: &Arc<OwnerSignal>) -> Self {
+    pub(crate) fn start(displays: &Arc<WebDisplays>, signal: &Arc<OwnerSignal>) -> Self {
         let active = Rc::new(Cell::new(true));
         let pixel_ratio = displays.features.match_media.map(|proof| {
             let displays = Arc::downgrade(displays);
