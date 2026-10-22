@@ -41,9 +41,10 @@ use windows::Win32::{
 };
 use windows::core::{BOOL, PCWSTR};
 
-use super::platform::WindowsLoop;
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::PlatformHandlers;
+use crate::owner::windows::WindowsLoop;
+use crate::owner::windows::broadcast::Subscriber;
 use crate::shared::{
     system_notice::SystemNotices,
     windows_host_messages::{self, HostEvent, HostMessage, QueryAnswer},
@@ -77,7 +78,7 @@ impl std::fmt::Debug for HostEvents {
 }
 
 impl HostEvents {
-    pub(super) fn new(
+    pub(crate) fn new(
         handlers: Rc<RefCell<PlatformHandlers>>,
         notices: Arc<SystemNotices>,
     ) -> Self {
@@ -336,6 +337,22 @@ impl HostEvents {
     #[cfg(test)]
     pub(super) fn end_low_memory_hold_for_test(&self, receiver: HWND) {
         self.rearm_low_memory_at(receiver, self.now() + HOLD_INTERVAL);
+    }
+}
+
+/// The lifecycle hears the receiver's session, power, lock and memory
+/// messages, and pays its own debts on any message it gets.
+impl Subscriber for HostEvents {
+    fn attach(&self, receiver: HWND) {
+        Self::attach(self, receiver);
+    }
+
+    fn detach(&self, receiver: HWND) {
+        Self::detach(self, receiver);
+    }
+
+    fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        self.handle(hwnd, message, wparam, lparam)
     }
 }
 

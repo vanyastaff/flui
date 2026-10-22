@@ -36,6 +36,7 @@ use objc2_ui_kit::{
     UINotificationFeedbackType, UISelectionFeedbackGenerator, UIView,
 };
 
+use crate::owner::apple::ios::NativeOwner;
 use crate::shared::haptic_degradation::{
     CoreHapticsControl, CoreHapticsEngine, CoreHapticsEvent, CoreHapticsPart, IosGenerator,
     IosImpact, IosNotification, ios_feedback, ios_pattern, ios_pattern_parts,
@@ -85,7 +86,7 @@ const UNSUPPORTED: u8 = 3;
 
 /// The window's Core Haptics engine and its restart obligation.
 struct CoreHaptics {
-    engine: super::native_owner::NativeOwner<RefCell<Option<Retained<CHHapticEngine>>>>,
+    engine: NativeOwner<RefCell<Option<Retained<CHHapticEngine>>>>,
     state: AtomicU8,
     restart_in_flight: AtomicBool,
 }
@@ -93,7 +94,7 @@ struct CoreHaptics {
 impl CoreHaptics {
     fn new(mtm: MainThreadMarker) -> Self {
         Self {
-            engine: super::native_owner::NativeOwner::new(RefCell::new(None), mtm),
+            engine: NativeOwner::new(RefCell::new(None), mtm),
             state: AtomicU8::new(NOT_CREATED),
             restart_in_flight: AtomicBool::new(false),
         }
@@ -346,7 +347,7 @@ fn build_pattern(part: &CoreHapticsPart) -> Result<Retained<CHHapticPattern>, Re
 
 /// The window's haptic actuator, bound to its view on the main thread.
 pub struct IOSHaptics {
-    view: super::native_owner::NativeOwner<Retained<UIView>>,
+    view: NativeOwner<Retained<UIView>>,
     core: Arc<CoreHaptics>,
 }
 
@@ -361,7 +362,7 @@ impl std::fmt::Debug for IOSHaptics {
 impl IOSHaptics {
     pub(super) fn new(view: Retained<UIView>, mtm: MainThreadMarker) -> Self {
         Self {
-            view: super::native_owner::NativeOwner::new(view, mtm),
+            view: NativeOwner::new(view, mtm),
             core: Arc::new(CoreHaptics::new(mtm)),
         }
     }

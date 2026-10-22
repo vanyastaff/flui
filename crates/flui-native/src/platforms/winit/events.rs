@@ -232,7 +232,7 @@ struct HeldMove {
     reading: NativeReading,
 }
 
-pub(super) struct NativePointerState {
+pub(crate) struct NativePointerState {
     contacts: ContactRegistry,
     labels: HashMap<winit::event::DeviceId, DeviceLabels>,
     next_label: u64,
@@ -263,13 +263,13 @@ impl NativePointerState {
     }
 
     /// Translate for windows of `session` from now on.
-    pub(super) const fn observe_session(&mut self, session: WinitSession) {
+    pub(crate) const fn observe_session(&mut self, session: WinitSession) {
         self.session = Some(session);
     }
 
     /// Deliver the held move: the loop turn ended, or an event other than
     /// pointer input is about to be delivered after it.
-    pub(super) fn flush(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
+    pub(crate) fn flush(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
         self.settle(None)
     }
 
@@ -328,13 +328,13 @@ impl NativePointerState {
     }
 
     /// The device kinds present now, from the registry that mints device ids.
-    pub(super) fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
+    pub(crate) fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
         self.contacts.devices().present()
     }
 
     /// The device kinds present, when they changed since the last call: a
     /// device arrived, left, or its first reading told its kind.
-    pub(super) fn presence_change(
+    pub(crate) fn presence_change(
         &mut self,
     ) -> Option<flui_platform::input_capabilities::PointerKindSet> {
         let present = self.present();
@@ -361,7 +361,7 @@ impl NativePointerState {
 
     /// The window's input for `event`, after the held move it settles (which
     /// may belong to another window); `None` when `event` is no pointer input.
-    pub(super) fn window_event(
+    pub(crate) fn window_event(
         &mut self,
         window: flui_platform::WindowId,
         event: &winit::event::WindowEvent,
@@ -573,7 +573,7 @@ impl NativePointerState {
         vec![PlatformInput::Pointer(owned::PointerEvent::Scroll(scroll))]
     }
 
-    pub(super) fn cancel_window(
+    pub(crate) fn cancel_window(
         &mut self,
         window: flui_platform::WindowId,
         reason: NativeCancel,
@@ -590,7 +590,7 @@ impl NativePointerState {
         )
     }
 
-    pub(super) fn device_event(
+    pub(crate) fn device_event(
         &mut self,
         native: winit::event::DeviceId,
         event: &winit::event::DeviceEvent,
@@ -1667,7 +1667,7 @@ mod pointer_translation_tests {
 // large enough that this file's production code should not sit in its
 // first quarter. A sibling module rather than a nested one, so its tests
 // sit beside `pointer_translation_tests` rather than two
-// segments below them — same shape as `platform.rs`'s `real_loop_tests`.
+// segments below them — same shape as `owner/winit.rs`'s `real_loop_tests`.
 #[cfg(test)]
 #[path = "events/keyboard_tests.rs"]
 mod keyboard_tests;

@@ -11,7 +11,7 @@ use android_activity::AndroidApp;
 use jni::{jni_sig, jni_str, objects::JValue};
 
 /// `lastTrimLevel` of this process, `None` when the system could not be asked.
-pub(super) fn last_trim_level(app: &AndroidApp) -> Option<i32> {
+pub(crate) fn last_trim_level(app: &AndroidApp) -> Option<i32> {
     let level = super::preferences::with_activity(app, |env, _activity| {
         let info = env.new_object(
             jni_str!("android/app/ActivityManager$RunningAppProcessInfo"),

@@ -7,14 +7,14 @@ use windows::Win32::{
     UI::WindowsAndMessaging::PostMessageW,
 };
 
-pub(in crate::platforms::windows) struct OwnerWake {
+pub(crate) struct OwnerWake {
     event: OwnedHandle,
     #[cfg(test)]
-    pub(in crate::platforms::windows) fail_posts: std::sync::atomic::AtomicBool,
+    pub(crate) fail_posts: std::sync::atomic::AtomicBool,
 }
 
 impl OwnerWake {
-    pub(in crate::platforms::windows) fn new() -> windows::core::Result<Self> {
+    pub(crate) fn new() -> windows::core::Result<Self> {
         // SAFETY: unnamed, non-inheritable auto-reset event; no caller pointers.
         let event = unsafe { CreateEventW(None, false, false, None)? };
         Ok(Self {
@@ -26,11 +26,11 @@ impl OwnerWake {
         })
     }
 
-    pub(in crate::platforms::windows) fn handle(&self) -> HANDLE {
+    pub(crate) fn handle(&self) -> HANDLE {
         HANDLE(self.event.as_raw_handle())
     }
 
-    pub(in crate::platforms::windows) fn post(&self, hwnd: HWND) -> windows::core::Result<()> {
+    pub(crate) fn post(&self, hwnd: HWND) -> windows::core::Result<()> {
         #[cfg(test)]
         let inject_failure = self.fail_posts.load(std::sync::atomic::Ordering::Acquire);
         #[cfg(not(test))]

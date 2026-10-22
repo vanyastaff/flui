@@ -69,9 +69,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer,
 };
 
-use super::com_apartment::ComApartment;
 use super::events::SURFACE;
 use super::platform::WindowContext;
+use crate::owner::windows::com_apartment::ComApartment;
+use crate::owner::windows::{CreatedWindow, WindowMessages};
 use crate::shared::direct_manipulation::{
     TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
 };
@@ -695,10 +696,32 @@ impl WindowContext {
     }
 }
 
+/// The precision touchpad's hook on FLUI's window class: a window it creates
+/// gets its DirectManipulation viewport.
+pub(crate) struct Touchpad;
+
+impl WindowMessages for Touchpad {
+    fn created(&self, window: &CreatedWindow) {
+        // The precision touchpad's viewport. Without one the window
+        // reports no precise scrolling or trackpad gestures
+        // (`input_availability::windows`).
+        let hwnd = window.hwnd;
+        if let Some(host) = create_host(hwnd, window.client_size, window.apartment.clone()) {
+            let installed = super::platform::with_window_context(hwnd, "touchpad", |context| {
+                context.touchpad.install(host);
+            });
+            debug_assert!(
+                installed.is_some(),
+                "BUG: the window's context is installed"
+            );
+        }
+    }
+}
+
 /// Create the viewport for `hwnd`; `None` (logged) when DirectManipulation
 /// is unavailable, which leaves the window without precise scrolling and
 /// trackpad gestures.
-pub(super) fn create_host(
+fn create_host(
     hwnd: HWND,
     size: (i32, i32),
     apartment: Option<Rc<ComApartment>>,

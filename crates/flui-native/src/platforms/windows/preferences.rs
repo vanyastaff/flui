@@ -16,7 +16,9 @@ use flui_platform::{
 };
 use windows::Foundation::TypedEventHandler;
 use windows::UI::ViewManagement::{AccessibilitySettings, UISettings};
-use windows::Win32::Foundation::{GetLastError, SetLastError, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    GetLastError, HWND, LPARAM, LRESULT, SetLastError, WIN32_ERROR, WPARAM,
+};
 use windows::Win32::System::WinRT::{
     RO_INIT_SINGLETHREADED, RoActivateInstance, RoInitialize, RoUninitialize,
 };
@@ -24,16 +26,16 @@ use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG, SPI_GETWHEELSCROLLCHARS,
-    SPI_GETWHEELSCROLLLINES, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    SPI_GETWHEELSCROLLLINES, SPI_SETWORKAREA, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
 };
 use windows::core::{Interface, RuntimeName};
 
 use crate::PlatformError;
+use crate::owner::windows::broadcast::{Receiver, Subscriber};
 use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
 
 mod languages;
-mod receiver;
 #[cfg(test)]
 mod tests;
 
@@ -74,11 +76,40 @@ impl Invalidation {
     }
 }
 
+/// The preferences and the displays hear the system's setting and display
+/// broadcasts.
+impl Subscriber for Invalidation {
+    fn message(
+        &self,
+        _hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        if message == WM_SETTINGCHANGE {
+            self.notify();
+            // A work-area change (taskbar moved or resized) alters a
+            // display's usable bounds, which the snapshot carries.
+            if wparam.0 == SPI_SETWORKAREA.0 as usize {
+                self.notify_displays();
+            }
+            Some(LRESULT(0))
+        } else if message == WM_DISPLAYCHANGE {
+            // Only invalidates and wakes: the message can arrive inside
+            // a COM call of ours, so no sampling happens here.
+            self.notify_displays();
+            Some(LRESULT(0))
+        } else {
+            None
+        }
+    }
+}
+
 /// Native subscriptions and interfaces belong to the owner context, not its
 /// Send + Sync platform wrapper. Interfaces and receiver retire before WinRT.
 pub struct PreferenceSource {
     invalidation: Arc<Invalidation>,
-    _receiver: receiver::Receiver,
+    _receiver: Receiver,
     ui: UISettings,
     accessibility: AccessibilitySettings,
     text_token: Option<i64>,
@@ -93,8 +124,10 @@ impl std::fmt::Debug for PreferenceSource {
     }
 }
 
-impl crate::host::Preferences<super::platform::WindowsLoop> for PreferenceSource {
-    fn sample(owner: &super::platform::WindowsLoop) -> Result<SystemPreferences, PlatformError> {
+impl crate::host::Preferences<crate::owner::windows::WindowsLoop> for PreferenceSource {
+    fn sample(
+        owner: &crate::owner::windows::WindowsLoop,
+    ) -> Result<SystemPreferences, PlatformError> {
         owner
             .owner_control
             .shares("read system preferences")
@@ -115,13 +148,13 @@ impl PreferenceSource {
         Self::with_host(signal, displays, None)
     }
 
-    /// A source whose receiver also forwards the system events `host` handles
-    /// (session end, power, lock, memory); `None` for the winit backend, which
-    /// has none of them on Windows.
-    pub(super) fn with_host(
+    /// A source whose receiver also tells `host` the messages the source does
+    /// not answer (the lifecycle's session end, power, lock and memory);
+    /// `None` for the winit backend, which has none of them on Windows.
+    pub(crate) fn with_host(
         signal: &Arc<OwnerSignal>,
         displays: &Arc<super::display::WindowsDisplays>,
-        host: Option<Rc<super::host_events::HostEvents>>,
+        host: Option<Rc<dyn Subscriber>>,
     ) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
@@ -140,8 +173,7 @@ impl PreferenceSource {
             signal: Arc::downgrade(signal),
             displays: Arc::clone(displays),
         });
-        let receiver =
-            receiver::Receiver::new(Arc::clone(&invalidation), host).map_err(native_error)?;
+        let receiver = Receiver::new(Arc::clone(&invalidation), host).map_err(native_error)?;
         let mut source = Self {
             invalidation,
             _receiver: receiver,

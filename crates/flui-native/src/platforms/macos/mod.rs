@@ -9,6 +9,7 @@
 //! - **NSWindow**: Window management
 //! - **NSScreen**: Display enumeration and info
 //! - **NSRunLoop**: Owner-thread application event loop
+//!   (`owner/apple/macos.rs`)
 //! - **GCD/Tokio**: Background task execution
 //!
 //! # Features
@@ -27,8 +28,9 @@
 //!   UUID with its refresh period read from its current mode, resampled after
 //!   `NSApplicationDidChangeScreenParametersNotification` and the window's own
 //!   display
-//! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
-//!   since AppKit exposes no `ControlFlow::WaitUntil`
+//! - ✅ A wake pump that actuates the registered wake deadline
+//!   (`owner/apple/macos/wake_pump.rs`), since AppKit exposes no
+//!   `ControlFlow::WaitUntil`
 //!
 //! No Core Text system is needed: text is shaped by Parley and discovered by
 //! fontdb in flui-painting, end to end
@@ -68,15 +70,12 @@ mod display_pass;
 mod events;
 mod haptics;
 mod liquid_glass;
-mod loop_control;
 mod observation;
-mod owner_lane;
-mod platform;
+mod positions;
 pub(super) mod preferences;
 mod system_notices;
 mod text_input;
 mod view;
-mod wake_pump;
 mod window;
 mod window_ext;
 mod window_tiling;
@@ -84,11 +83,11 @@ mod window_tiling;
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
-pub(crate) use display::MacosDisplays;
+pub(crate) use display::{MacosDisplays, ScreenObserver};
 pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
-pub(crate) use platform::MacOSLoop;
-pub(crate) use preferences::PreferenceSource;
+pub(crate) use preferences::{PreferenceObservers, PreferenceSource};
+pub(crate) use system_notices::SystemNoticeSources;
 pub(crate) use text_input::MacOSTextInput;
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};

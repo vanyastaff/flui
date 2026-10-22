@@ -1,4 +1,9 @@
 //! A hidden top-level receiver; message-only HWNDs cannot receive broadcasts.
+//!
+//! The system broadcasts its setting, display, session, power and memory
+//! messages to top-level windows. The preferences, the displays and the
+//! lifecycle each hear part of them, so the receiver is the owner's and names
+//! none of them: it tells its [`Subscriber`]s, in order, until one answers.
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 use windows::{
@@ -7,31 +12,56 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-            GetWindowLongPtrW, RegisterClassW, SPI_SETWORKAREA, SetWindowLongPtrW,
-            UnregisterClassW, WINDOW_STYLE, WM_CLOSE, WM_DISPLAYCHANGE, WM_NCCREATE, WM_NCDESTROY,
-            WM_SETTINGCHANGE, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WINDOW_STYLE,
+            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WM_QUERYENDSESSION, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW,
         },
     },
     core::{PCWSTR, w},
 };
 
-use super::Invalidation;
-use crate::{
-    owner::panic_boundary::contain_owner_callback, platforms::windows::host_events::HostEvents,
-    shared::windows_host_messages::WM_QUERYENDSESSION,
-};
+use crate::owner::panic_boundary::contain_owner_callback;
+
+/// What one feature does with the messages the receiver hears. Runs on the
+/// owner thread, inside the receiver's window procedure.
+pub(crate) trait Subscriber {
+    /// The receiver's window exists: `receiver` is where the system sends
+    /// what the subscriber hears.
+    fn attach(&self, _receiver: HWND) {}
+
+    /// The receiver's window is about to be destroyed.
+    fn detach(&self, _receiver: HWND) {}
+
+    /// Hears one message of the receiver's window; `Some` answers it, and no
+    /// subscriber after this one hears it.
+    fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT>;
+}
+
+impl<S: Subscriber + ?Sized> Subscriber for Arc<S> {
+    fn attach(&self, receiver: HWND) {
+        S::attach(self, receiver);
+    }
+
+    fn detach(&self, receiver: HWND) {
+        S::detach(self, receiver);
+    }
+
+    fn message(&self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        S::message(self, hwnd, message, wparam, lparam)
+    }
+}
 
 struct Context {
-    invalidation: Arc<Invalidation>,
-    /// Where the system's session, power, lock and memory messages go; absent
-    /// for an owner that hears them another way.
-    host: Option<Rc<HostEvents>>,
+    /// Who hears the receiver's messages, in order. Shared, so a message's
+    /// dispatch holds them while a subscriber's user code may free this
+    /// context.
+    subscribers: Rc<[Rc<dyn Subscriber>]>,
     hwnd: Cell<Option<HWND>>,
 }
 
 /// The class registration is private to this receiver. Its allocation-based
 /// name stays unique while the context lives, including failed destruction.
-pub(super) struct Receiver {
+pub(crate) struct Receiver {
     context: Option<Box<Context>>,
     class: Vec<u16>,
     instance: HINSTANCE,
@@ -39,19 +69,14 @@ pub(super) struct Receiver {
 
 impl Receiver {
     #[cfg(test)]
-    pub(super) fn send_for_test(&self, message: u32, wparam: usize) {
+    pub(crate) fn send_for_test(&self, message: u32, wparam: usize) {
         self.send_with_for_test(message, wparam, 0);
     }
 
     /// Send a pointer-free message to this receiver and return the window
     /// procedure's result.
     #[cfg(test)]
-    pub(in crate::platforms::windows) fn send_with_for_test(
-        &self,
-        message: u32,
-        wparam: usize,
-        lparam: isize,
-    ) -> isize {
+    pub(crate) fn send_with_for_test(&self, message: u32, wparam: usize, lparam: isize) -> isize {
         // SAFETY: this test sends a pointer-free notification only to this
         // receiver, whose context is retained by the borrowed owner.
         unsafe {
@@ -66,7 +91,7 @@ impl Receiver {
     }
 
     #[cfg(test)]
-    pub(in crate::platforms::windows) fn hwnd_for_test(&self) -> HWND {
+    pub(crate) fn hwnd_for_test(&self) -> HWND {
         self.context
             .as_ref()
             .and_then(|context| context.hwnd.get())
@@ -74,7 +99,7 @@ impl Receiver {
     }
 
     #[cfg(test)]
-    pub(super) fn send_setting_change(&self) {
+    pub(crate) fn send_setting_change(&self) {
         let hwnd = self
             .context
             .as_ref()
@@ -85,20 +110,21 @@ impl Receiver {
         unsafe {
             windows::Win32::UI::WindowsAndMessaging::SendMessageW(
                 hwnd,
-                WM_SETTINGCHANGE,
+                windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
                 Some(WPARAM(0)),
                 Some(LPARAM(0)),
             );
         }
     }
 
-    pub(super) fn new(
-        invalidation: Arc<Invalidation>,
-        host: Option<Rc<HostEvents>>,
+    /// A receiver whose messages `first` hears, then `then` when there is one.
+    pub(crate) fn new(
+        first: impl Subscriber + 'static,
+        then: Option<Rc<dyn Subscriber>>,
     ) -> windows::core::Result<Self> {
+        let first: Rc<dyn Subscriber> = Rc::new(first);
         let context = Box::new(Context {
-            invalidation,
-            host,
+            subscribers: std::iter::once(first).chain(then).collect(),
             hwnd: Cell::new(None),
         });
         let class: Vec<_> = format!("FLUIPreferences_{:p}\0", &*context)
@@ -143,8 +169,10 @@ impl Receiver {
                 Some(std::ptr::from_ref(context).cast()),
             )?;
         }
-        if let (Some(host), Some(hwnd)) = (&context.host, context.hwnd.get()) {
-            host.attach(hwnd);
+        if let Some(hwnd) = context.hwnd.get() {
+            for subscriber in context.subscribers.iter() {
+                subscriber.attach(hwnd);
+            }
         }
         Ok(receiver)
     }
@@ -169,14 +197,14 @@ impl Drop for Receiver {
 
 impl Receiver {
     #[cfg(test)]
-    pub(super) fn class_for_test(&self) -> (Vec<u16>, HINSTANCE) {
+    pub(crate) fn class_for_test(&self) -> (Vec<u16>, HINSTANCE) {
         (self.class.clone(), self.instance)
     }
 
     /// Retire with `destroy` and `unregister` standing in for `DestroyWindow`
     /// and `UnregisterClassW`.
     #[cfg(test)]
-    pub(super) fn retire_for_test(
+    pub(crate) fn retire_for_test(
         mut self,
         destroy: impl FnOnce(HWND) -> windows::core::Result<()>,
         unregister: impl FnOnce(PCWSTR, HINSTANCE) -> windows::core::Result<()>,
@@ -184,7 +212,7 @@ impl Receiver {
         self.retire(destroy, unregister);
     }
 
-    /// Detach the host, destroy the window with `destroy`, then retire the
+    /// Detach the subscribers, destroy the window with `destroy`, then retire the
     /// class with `unregister`. A window the OS still owns keeps its context
     /// and unique class name reserved, so its procedure still finds a live,
     /// already-closed source.
@@ -197,8 +225,8 @@ impl Receiver {
             return;
         };
         if let Some(hwnd) = context.hwnd.get() {
-            if let Some(host) = &context.host {
-                host.detach(hwnd);
+            for subscriber in context.subscribers.iter() {
+                subscriber.detach(hwnd);
             }
             if let Err(error) = destroy(hwnd) {
                 // Keep both userdata and its unique class name reserved if the
@@ -242,32 +270,21 @@ unsafe extern "system" fn procedure(
                 if message == WM_NCDESTROY {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     (*context).hwnd.set(None);
-                } else if message == WM_SETTINGCHANGE {
-                    let invalidation = Arc::clone(&(*context).invalidation);
-                    invalidation.notify();
-                    // A work-area change (taskbar moved or resized) alters a
-                    // display's usable bounds, which the snapshot carries.
-                    if wparam.0 == SPI_SETWORKAREA.0 as usize {
-                        invalidation.notify_displays();
-                    }
-                    return;
-                } else if message == WM_DISPLAYCHANGE {
-                    // Only invalidates and wakes: the message can arrive inside
-                    // a COM call of ours, so no sampling happens here.
-                    let invalidation = Arc::clone(&(*context).invalidation);
-                    invalidation.notify_displays();
-                    return;
                 } else if message == WM_CLOSE {
                     // This internal receiver is retired by the host, not by
                     // ordinary window-close routing or last-user-window policy.
                     return;
-                } else if let Some(host) = (*context).host.clone()
-                    && let Some(answer) = host.handle(hwnd, message, wparam, lparam)
-                {
-                    // Cloned out of the context: a hook may drop the platform,
-                    // and nothing borrowed from userdata survives user code.
-                    result = answer;
-                    return;
+                } else {
+                    // Cloned out of the context: a subscriber may drop the
+                    // platform, and nothing borrowed from userdata survives
+                    // user code.
+                    let subscribers = Rc::clone(&(*context).subscribers);
+                    for subscriber in subscribers.iter() {
+                        if let Some(answer) = subscriber.message(hwnd, message, wparam, lparam) {
+                            result = answer;
+                            return;
+                        }
+                    }
                 }
             }
             result = DefWindowProcW(hwnd, message, wparam, lparam);

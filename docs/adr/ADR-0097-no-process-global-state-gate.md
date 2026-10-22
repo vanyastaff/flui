@@ -57,9 +57,9 @@ Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/sr
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,
 `crates/flui-app/src/app/runtime.rs:190`, and others), warn-once flags
 (`crates/flui-engine/src/batches/gradients.rs:64,77`), and platform cells that OS callbacks read
-to find their owner (`DELEGATE_STATE`, `crates/flui-native/src/platforms/ios/platform.rs:275`;
-`ACTIVE_EVENT_LOOP`, `crates/flui-native/src/platforms/winit/platform.rs:772`;
-`ON_OWNER_QUEUE`, `crates/flui-native/src/platforms/macos/owner_lane.rs:61`). This list is
+to find their owner (`DELEGATE_STATE`, `crates/flui-native/src/owner/apple/ios.rs`;
+`ACTIVE_EVENT_LOOP`, `crates/flui-native/src/owner/winit.rs`;
+`ON_OWNER_QUEUE`, `crates/flui-native/src/owner/apple/macos/owner_lane.rs`). This list is
 **not** the inventory: a regex count over `crates/` and `src/` (lines matching an upper-case
 `static` item, and `thread_local!` blocks, outside `*_tests.rs` and `tests/`, crate examples included) finds about 91 and
 29, and it cannot tell a counter from configuration or leave out inline test modules. The inventory
@@ -124,8 +124,9 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
 - **OS-callback trampolines** are the one named exception class: a thread-local that a function
   invoked by the OS without a user-data pointer (a Win32 window procedure, an AppKit or UIKit
   delegate method, a JNI entry point, winit's event-loop borrow) reads to find its owner. The
-  host has **exactly one**: `APP_RUNTIME`. Each backend module under
-  `crates/flui-native/src/platforms/` may hold at most one of its own. The entry is declared
+  host has **exactly one**: `APP_RUNTIME`. Each platform may hold at most one of its own, in its
+  backend module under `crates/flui-native/src/platforms/` or in its loop's module under
+  `crates/flui-native/src/owner/` (ADR-0151 §10). The entry is declared
   with class `trampoline`, and the gate fails if a crate other than `flui-app` and
   `flui-native`, or a second cell in the host or in one backend module, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
@@ -190,7 +191,7 @@ runs on the pinned stable toolchain, which dylint does not.
 
 - Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-native/src/lib.rs`),
   `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE`
-  (`crates/flui-native/src/platforms/winit/platform.rs`), `FLUI_DX12_NO_DCOMP`
+  (`crates/flui-native/src/owner/winit.rs`), `FLUI_DX12_NO_DCOMP`
   (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
   `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not

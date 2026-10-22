@@ -93,19 +93,19 @@ pub struct MacOSWindow {
     /// answerable long after the window is meaningless to hand a GPU handle
     /// for, and only this flag (not a nil check) can tell the two apart.
     closed: Arc<AtomicBool>,
-    loop_control: std::sync::OnceLock<std::sync::Weak<super::loop_control::LoopControl>>,
+    loop_control: std::sync::OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
 
     /// Window configuration
     config: WindowConfiguration,
 
     /// The owner lane every thread-affine AppKit message travels through
-    /// (see `super::owner_lane`). The AppKit main queue for windows created
-    /// by [`MacOSWindow::new`].
+    /// (see `owner::apple::macos::owner_lane`). The AppKit main queue for
+    /// windows created by [`MacOSWindow::new`].
     owner: &'static dispatch::Queue,
 
     /// True when `owner` is the main queue, so "on the main thread" is
     /// equivalent to "on the owner lane" for the direct-path probe in
-    /// [`super::owner_lane::exec_on_owner`].
+    /// [`crate::owner::apple::macos::exec_on_owner`].
     owner_is_main: bool,
 
     /// This window's NSAccessibility bridge, subclassed onto the content
@@ -123,7 +123,7 @@ pub struct MacOSWindow {
     /// once, by the window position's `open` right after construction. A
     /// window constructed without a platform leaves it empty and simply never
     /// arms one.
-    wake_pump: std::sync::OnceLock<super::wake_pump::WeakWakePump>,
+    wake_pump: std::sync::OnceLock<crate::owner::apple::macos::WeakWakePump>,
 
     /// This window's IME capability, built on first access by
     /// [`PlatformWindow::text_input`]. A `OnceLock` for the same reason the
@@ -155,8 +155,8 @@ pub struct MacOSWindow {
 // window surface is now mechanically routed: each travels through
 // `route_on_owner` (this file), which dispatches the body onto the window's
 // owner lane — the AppKit main queue in production, a caller-supplied serial
-// queue for test windows (see `super::owner_lane`) — so no off-owner caller
-// ever reaches AppKit bare. `request_redraw` was the first such site
+// queue for test windows (see `owner::apple::macos::owner_lane`) — so no
+// off-owner caller ever reaches AppKit bare. `request_redraw` was the first such site
 // (issue #949); the sweep (issue #1194) extended the routing to every class-A
 // body in the public window surface: the 12 `PlatformWindow` mutators,
 // `request_redraw` itself, the 12 `WindowTrait` bodies, and the 11
@@ -307,12 +307,12 @@ impl MacOSWindow {
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Production windows route every thread-affine AppKit message through
         // the AppKit main queue — the one lane all other process AppKit
-        // traffic already serializes on (see `super::owner_lane`).
+        // traffic already serializes on (see `owner::apple::macos::owner_lane`).
         Self::new_inner(
             options,
             windows_map,
             config,
-            super::owner_lane::owner_queue(),
+            crate::owner::apple::macos::owner_queue(),
             true,
         )
     }
@@ -364,7 +364,7 @@ impl MacOSWindow {
     /// parameter on purpose: `MacOSWindow` is public API, and threading a
     /// platform-internal type through its constructor would make the pump
     /// part of the surface for a dependency only the platform ever supplies.
-    pub(crate) fn install_wake_pump(&self, pump: super::wake_pump::WeakWakePump) {
+    pub(crate) fn install_wake_pump(&self, pump: crate::owner::apple::macos::WeakWakePump) {
         // A second install is silently ignored rather than racing the first:
         // the slot is read on every redraw, so "first writer wins" is the
         // only outcome that cannot leave a window flipping between pumps.
@@ -376,8 +376,9 @@ impl MacOSWindow {
     /// Called from [`PlatformWindow::request_redraw`] — the point that means
     /// "a frame is coming" for this window — because a frame arms its
     /// fallback deadline while it runs, and the pump is what looks back at
-    /// that deadline once the frame has gone. See `super::wake_pump` for why
-    /// the second look is needed at all.
+    /// that deadline once the frame has gone. See
+    /// `owner::apple::macos::wake_pump` for why the second look is needed at
+    /// all.
     fn arm_wake_pump(&self) {
         if let Some(pump) = self.wake_pump.get().and_then(std::sync::Weak::upgrade) {
             pump.arm();
@@ -669,7 +670,7 @@ impl MacOSWindow {
     /// Attach the owning standalone loop without creating a window/control cycle.
     pub(super) fn install_loop_control(
         &self,
-        control: std::sync::Weak<super::loop_control::LoopControl>,
+        control: std::sync::Weak<crate::owner::apple::macos::LoopControl>,
     ) {
         let _ = self.loop_control.set(control);
     }
@@ -693,7 +694,7 @@ pub(super) fn route_on_owner<R: Send>(
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
 ) -> R {
-    super::owner_lane::exec_on_owner(owner, owner_is_main, f)
+    crate::owner::apple::macos::exec_on_owner(owner, owner_is_main, f)
 }
 
 /// Choose which arm a redraw request takes — the display-pass deferral, or the
@@ -755,7 +756,7 @@ impl MacOSWindow {
     ///   that closed first is absent from it rather than messaged.
     unsafe fn set_needs_display(&self, deferred: bool) {
         debug_assert!(
-            super::owner_lane::on_owner_thread(self.owner, self.owner_is_main),
+            crate::owner::apple::macos::on_owner_thread(self.owner, self.owner_is_main),
             "BUG: set_needs_display must run on the window's owner lane"
         );
         unsafe {
@@ -883,7 +884,7 @@ impl MacOSWindow {
         key: u64,
         hop: u8,
     ) {
-        super::owner_lane::exec_async_guarded(owner, move || {
+        crate::owner::apple::macos::exec_async_guarded(owner, move || {
             // The hop onto the lane is asynchronous, but the AppKit message
             // inside it is still routed: `exec_async_guarded` installed the lane
             // guard before this body, so `route_on_owner` runs it inline and
@@ -1138,9 +1139,9 @@ impl PlatformWindow for MacOSWindow {
     /// the scheduler's `on_frame_scheduled` hook (issue #949), so its AppKit
     /// body — `setNeedsDisplay:` on the window's view — is dispatched onto the
     /// window's owner lane (the AppKit main queue for production windows, a
-    /// caller-supplied serial lane for test windows; see `super::owner_lane`)
-    /// and executes on the owner thread, never bare on a caller on another
-    /// thread.
+    /// caller-supplied serial lane for test windows; see
+    /// `owner::apple::macos::owner_lane`) and executes on the owner thread,
+    /// never bare on a caller on another thread.
     ///
     /// It was the FIRST mechanically-routed AppKit message site in this file;
     /// issue #1194 swept the whole public window surface, so the routing is no
@@ -1617,7 +1618,7 @@ impl Drop for MacOSWindow {
             if let Some(a11y) = a11y {
                 // A bridge failure must not skip the native window's balancing
                 // release. Keep it inside its own cleanup boundary.
-                super::owner_lane::run_cleanup_guarded(|| a11y.shutdown());
+                crate::owner::apple::macos::run_cleanup_guarded(|| a11y.shutdown());
             }
             // SAFETY: `send_release` consumes the whole `OwnerLaneId` (the
             // closure's capture is then that `Send` newtype, never its raw
@@ -1627,11 +1628,11 @@ impl Drop for MacOSWindow {
             // runs on the owner thread.
             ns_window.send_release();
         };
-        if super::owner_lane::on_owner_thread(owner, self.owner_is_main) {
-            super::owner_lane::run_cleanup_guarded(teardown);
+        if crate::owner::apple::macos::on_owner_thread(owner, self.owner_is_main) {
+            crate::owner::apple::macos::run_cleanup_guarded(teardown);
         } else {
-            super::owner_lane::exec_async_guarded(owner, move || {
-                super::owner_lane::run_cleanup_guarded(teardown);
+            crate::owner::apple::macos::exec_async_guarded(owner, move || {
+                crate::owner::apple::macos::run_cleanup_guarded(teardown);
             });
         }
     }
@@ -2842,7 +2843,7 @@ impl MacOSWindow {
         // Removal precedes `dispatch_close()` so the closing window is already
         // untracked when user close callbacks run. Unlike the repo's winit
         // backend — which removes from tracking only AFTER its own close
-        // callbacks (winit/platform.rs dispatch_close before windows.remove) —
+        // callbacks (owner/winit.rs dispatch_close before windows.remove) —
         // this ordering is safe here because the macOS map is private with no
         // content readers: the early removal is observable only as the intended
         // lifetime change. `Drop`'s removal stays as an idempotent safety net.

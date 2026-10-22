@@ -3,8 +3,8 @@
 //!
 //! Kept beside, not inside, `events.rs`: one cohesive family large enough
 //! to dwarf the production code it tests, and nothing else in the crate
-//! uses it — the same shape as `platform.rs`'s real-event-loop family in
-//! `platform/real_loop_tests.rs`.
+//! uses it — the same shape as `owner/winit.rs`'s real-event-loop family in
+//! `owner/winit/real_loop_tests.rs`.
 //!
 //! Declared with `#[path]` from `events.rs` as a sibling of its inline
 //! test modules, so these tests read as

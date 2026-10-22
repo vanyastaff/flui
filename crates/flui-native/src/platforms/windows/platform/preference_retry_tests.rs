@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::WindowsPlatform;
+use crate::{PlatformError, platform::Platform};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use windows::Win32::UI::WindowsAndMessaging::WM_QUIT;
 
 #[test]
 fn native_setting_message_replaces_the_cached_observation() {

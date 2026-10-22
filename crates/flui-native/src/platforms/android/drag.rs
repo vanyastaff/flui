@@ -35,6 +35,8 @@ use jni::objects::{JObject, JObjectArray, JString};
 use jni::{Env, JValue, jni_sig, jni_str};
 use parking_lot::Mutex;
 
+use crate::owner::android::AndroidLoop;
+use crate::owner::android::java_view::{JavaView, ViewEvent};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerSlot;
 use crate::shared::android_drag::{
@@ -44,8 +46,6 @@ use crate::shared::android_drag::{
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, DragSource};
-
-use super::java_view::{JavaView, ViewEvent};
 
 /// The size of the drag shadow, in logical pixels.
 const SHADOW: f64 = 48.0;
@@ -82,7 +82,7 @@ impl std::fmt::Debug for AndroidTransfer {
 }
 
 impl AndroidTransfer {
-    pub(super) fn new(view: Weak<JavaView>) -> Self {
+    pub(crate) fn new(view: Weak<JavaView>) -> Self {
         Self {
             view,
             offers: Mutex::default(),
@@ -114,7 +114,7 @@ impl AndroidTransfer {
     /// view answers. `position` is in logical pixels; `local` is whether this
     /// activity started the drag (for `ACTION_DRAG_ENDED`, whether the view
     /// did).
-    pub(super) fn drag(
+    pub(crate) fn drag(
         &self,
         view: &JavaView,
         action: i32,
@@ -193,7 +193,7 @@ impl AndroidTransfer {
     /// A taken drop holds what the clip carried until the target concludes
     /// it; the view holds the drop's URI permissions under the offer's
     /// [`java_key`] until then.
-    pub(super) fn drop_clip(
+    pub(crate) fn drop_clip(
         &self,
         view: &JavaView,
         position: (f64, f64),
@@ -344,8 +344,8 @@ impl DataTransferSource for AndroidTransfer {
     }
 }
 
-impl crate::host::Drag<super::AndroidLoop> for AndroidTransfer {
-    fn data_transfer(owner: &super::AndroidLoop) -> Arc<dyn DataTransferSource> {
+impl crate::host::Drag<AndroidLoop> for AndroidTransfer {
+    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn DataTransferSource> {
         // FluiView's drag and drop (ADR-0211, ADR-0247).
         Arc::clone(owner.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
@@ -354,7 +354,7 @@ impl crate::host::Drag<super::AndroidLoop> for AndroidTransfer {
 /// The key `FluiView` holds a taken drop's URI permissions under: the
 /// offer's whole identity, generation included, so a concluded offer never
 /// releases a later one's. Never zero, which the view reads as refused.
-pub(super) fn java_key(id: DataTransferId) -> i64 {
+pub(crate) fn java_key(id: DataTransferId) -> i64 {
     id.as_u64().cast_signed()
 }
 
@@ -425,7 +425,7 @@ impl AndroidDragSource {
 
     /// The system drag ended: `result` is whether a target took it. Owner
     /// thread.
-    pub(super) fn finish(&self, result: bool) {
+    pub(crate) fn finish(&self, result: bool) {
         let Some(Running { allowed, on_end }) = self.running.take() else {
             return;
         };

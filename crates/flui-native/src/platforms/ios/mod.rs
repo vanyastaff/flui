@@ -29,8 +29,8 @@
 //! UIKit is main-thread-only, and `UIApplicationMain` owns the main thread for
 //! the process's life. Every window, view, and pasteboard access therefore
 //! happens on that thread; the only background work is GCD's
-//! ([`executor::IOSExecutor`]). The delegate's session state is thread-local
-//! for the same reason — see `platform.rs`'s `DELEGATE_STATE`.
+//! ([`IOSExecutor`]). The delegate's session state is thread-local for the
+//! same reason — see `DELEGATE_STATE` in `owner/apple/ios.rs`.
 //!
 //! # iOS versions
 //!
@@ -54,23 +54,21 @@
 mod clipboard;
 mod display;
 mod events;
-mod executor;
 mod haptics;
-mod native_owner;
 mod os_version;
-mod platform;
+mod positions;
 mod preferences;
-mod scene;
 mod status_bar;
 pub(crate) mod text_sizing;
 mod window;
 
+pub use crate::owner::apple::ios::{
+    IOSExecutor, IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId,
+};
 pub use clipboard::IOSClipboard;
-pub(crate) use display::IosDisplays;
-pub use executor::IOSExecutor;
+pub(crate) use display::{IosDisplays, ScreenObserver};
 pub(crate) use haptics::IOSHaptics;
-pub(crate) use platform::IOSLoop;
 pub(crate) use preferences::IOSPreferences;
-pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};
 pub(crate) use status_bar::IOSSystemChrome;
 pub use window::IOSWindow;
+pub(crate) use window::LifecycleObservation;

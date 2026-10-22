@@ -34,16 +34,15 @@ use windows::{
     core::HSTRING,
 };
 
-use super::platform::{WindowRef, WindowsLoop, with_window_context_checked};
-use super::util::{
-    USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, checked_logical_to_device, logical_to_device,
-};
+use super::platform::{WindowRef, with_window_context_checked};
 use super::window_frame::{
     FirstShow, first_show_command, frame_style, restyled, to_screen, to_workspace,
 };
 use super::window_placement::{
-    open_spot, outer_size, placement_of, restore_rectangle, workspace_origin,
+    USER_DEFAULT_SCREEN_DPI, checked_logical_to_device, logical_to_device, open_spot, outer_size,
+    placement_of, restore_rectangle, workspace_origin,
 };
+use crate::owner::windows::{WINDOW_CLASS_NAME, WindowsLoop};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -74,7 +73,7 @@ pub struct WindowsWindow {
     /// Which native window this wrapper was built for. The callbacks
     /// themselves live in that window's owner-thread context, not here;
     /// see [`Self::register`].
-    pub(super) identity: super::platform::WindowIdentity,
+    pub(crate) identity: crate::owner::windows::WindowIdentity,
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
@@ -174,7 +173,7 @@ pub(super) struct WindowRecord {
 /// How the window occupies its monitor, with what the way back needs: the
 /// native tracking behind the public [`WindowMode`].
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) enum NativeMode {
+pub(crate) enum NativeMode {
     #[default]
     Normal,
     /// Iconified. A fullscreen window that was minimized keeps the rectangle it
@@ -228,7 +227,7 @@ impl NativeMode {
         }
     }
 
-    pub(super) fn is_minimized(&self) -> bool {
+    pub(crate) fn is_minimized(&self) -> bool {
         matches!(self, Self::Minimized { .. })
     }
 
@@ -438,12 +437,12 @@ impl WindowsWindow {
     pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<super::platform::WindowMap>,
-        shares: super::owner_control::OwnerShares,
+        shares: crate::owner::windows::control::OwnerShares,
         config: crate::config::WindowConfiguration,
-        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
-        let super::owner_control::OwnerShares {
+        let crate::owner::windows::control::OwnerShares {
             handlers,
             frames,
             exit_policy,
@@ -453,8 +452,8 @@ impl WindowsWindow {
         } = shares;
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
-        let (identity, created) = super::platform::WindowIdentity::admit(
-            super::platform::WindowIdentity::source(),
+        let (identity, created) = crate::owner::windows::WindowIdentity::admit(
+            crate::owner::windows::WindowIdentity::source(),
             || Self::create_native(&options, &displays),
         );
         let (hwnd, requested, scale_factor, normal) = created?;
@@ -564,17 +563,17 @@ impl WindowsWindow {
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Rc<RefCell<PlatformHandlers>>,
-        frames: Rc<super::platform::FrameCount>,
-        exit_policy: super::owner_control::ExitPolicyRequest,
+        frames: Rc<crate::owner::windows::FrameCount>,
+        exit_policy: crate::owner::windows::control::ExitPolicyRequest,
         displays: Arc<super::display::WindowsDisplays>,
         notices: Arc<crate::shared::system_notice::SystemNotices>,
         config: crate::config::WindowConfiguration,
-        identity: super::platform::WindowIdentity,
+        identity: crate::owner::windows::WindowIdentity,
         hwnd: HWND,
         requested: Size<i32>,
         scale_factor: f64,
         normal: Option<RECT>,
-        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
@@ -583,9 +582,10 @@ impl WindowsWindow {
         // operate on that same freshly created, still-valid `hwnd`.
         // `Box::into_raw(context)` intentionally leaks the allocation into
         // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by `WindowsLoop::window_proc`'s `WM_DESTROY` arm
-        // (`platform.rs`, `Box::from_raw`); a window destroyed by any path
-        // that skips `WM_DESTROY` (process-exit teardown) leaks the
+        // reclaimed by the `WM_DESTROY` arm of `WindowProc`, the hook every
+        // Windows host registers on the class (`platform.rs`, `Box::from_raw`);
+        // a window destroyed by any path that skips `WM_DESTROY`
+        // (process-exit teardown) leaks the
         // allocation rather than double-frees or dangles it. `ShowWindow`/
         // `UpdateWindow` again only need a valid `hwnd`, which holds here.
         unsafe {
@@ -715,7 +715,9 @@ impl WindowsWindow {
                 cloak_watch: super::window_visibility::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
-                modal_pacing: super::modal_loop::ModalPacing::new(Rc::clone(&frames)),
+                modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(Rc::clone(
+                    &frames,
+                )),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),
@@ -760,26 +762,19 @@ impl WindowsWindow {
             // another (ADR-0211).
             super::drag::register_target(this, drag);
 
-            // The precision touchpad's viewport. Without one the window
-            // reports no precise scrolling or trackpad gestures
-            // (`input_availability::windows`).
+            // The hooks of the window class learn of the window: the precision
+            // touchpad's viewport is created there.
             let mut client = windows::Win32::Foundation::RECT::default();
             let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 (client.right - client.left, client.bottom - client.top)
             } else {
                 (width, height)
             };
-            if let Some(host) =
-                super::direct_manipulation::create_host(hwnd, size, touchpad_apartment)
-            {
-                let installed = super::platform::with_window_context(hwnd, "touchpad", |context| {
-                    context.touchpad.install(host);
-                });
-                debug_assert!(
-                    installed.is_some(),
-                    "BUG: the window's context is installed"
-                );
-            }
+            crate::owner::windows::window_created(&crate::owner::windows::CreatedWindow {
+                hwnd,
+                client_size: size,
+                apartment: touchpad_apartment,
+            });
 
             // The window is still hidden: put it where and in the mode it
             // opens, then show it now, later (first frame) or never (hidden).
@@ -885,7 +880,7 @@ impl WindowsWindow {
     /// dispatched may have destroyed it, and the open then fails.
     fn activate_text_services(
         window: super::platform::WindowRef,
-        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
     ) -> bool {
         let hwnd = window.hwnd();
         let Some(apartment) = apartment else {

@@ -2,9 +2,10 @@
 
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
+use crate::owner::web::WebLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
-    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebLoop, WebPreferences, WebTextInput,
+    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebPreferences, WebTextInput,
     WebTransfer, WebWindow,
 };
 use crate::storage::UserDataDirs;

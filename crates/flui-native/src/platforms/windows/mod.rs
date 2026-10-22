@@ -15,18 +15,15 @@
 mod accessibility;
 mod appearance;
 mod clipboard;
-mod com_apartment;
 mod direct_manipulation;
 pub(crate) mod display;
-mod drag;
+pub(crate) mod drag;
 mod events;
 mod haptics;
-mod host_events;
-mod modal_loop;
-mod platform;
+pub(crate) mod host_events;
+pub(crate) mod platform;
 pub(crate) mod preferences;
 mod text_services;
-mod util;
 mod window;
 mod window_ext;
 mod window_frame;
@@ -44,8 +41,10 @@ pub(crate) use display::WindowsDisplays;
 pub(crate) use drag::OleTransfer;
 pub(crate) use haptics::WindowsHaptics;
 pub(crate) use host_events::HostEvents;
-pub(crate) use platform::WindowsLoop;
 pub(crate) use preferences::PreferenceSource;
+// The hooks the Windows host registers on FLUI's window class.
+pub(crate) use direct_manipulation::Touchpad;
+pub(crate) use platform::WindowProc;
 pub(crate) use text_services::TextServices;
 pub use window::WindowsWindow;
 pub use window_ext::{
@@ -66,5 +65,3 @@ pub mod win32 {
         UI::Controls::MARGINS,
     };
 }
-
-mod owner_control;

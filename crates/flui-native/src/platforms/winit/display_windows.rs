@@ -32,20 +32,20 @@ impl std::fmt::Debug for WinitDisplaySource {
 }
 
 impl WinitDisplaySource {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             native: Arc::new(WindowsDisplays::new()),
         })
     }
 
     /// The native source, which the settings receiver invalidates.
-    pub(super) fn native(&self) -> &Arc<WindowsDisplays> {
+    pub(crate) fn native(&self) -> &Arc<WindowsDisplays> {
         &self.native
     }
 
     /// Sample the monitors now. Returns whether the snapshot changed; a revision
     /// that cannot advance keeps the previous sample.
-    pub(super) fn resample(&self) -> bool {
+    pub(crate) fn resample(&self) -> bool {
         match self.native.resample_changed() {
             Ok(changed) => changed,
             Err(error) => {
@@ -56,7 +56,7 @@ impl WinitDisplaySource {
     }
 
     /// The current snapshot: the last sample unless something invalidated it.
-    pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.native.snapshot()
     }
 

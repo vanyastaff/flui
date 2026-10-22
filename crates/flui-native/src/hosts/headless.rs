@@ -3,10 +3,11 @@
 use flui_platform::{InMemoryClipboard, haptics::FakeHaptics};
 
 use crate::host::Host;
+use crate::owner::headless::HeadlessLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
     DragDouble, FakeAccessibility, FakeSystemChrome, FakeTextInput, HeadlessDisplays,
-    HeadlessHostEvents, HeadlessInputDevices, HeadlessLoop, HeadlessPreferences, MockWindow,
+    HeadlessHostEvents, HeadlessInputDevices, HeadlessPreferences, MockWindow,
 };
 use crate::storage::UserDataDirs;
 

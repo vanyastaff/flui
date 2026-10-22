@@ -182,7 +182,7 @@ fn unrelated_wakes_do_not_repeat_failed_native_reads() {
 
 /// A receiver wired to a host, with the notices it delivers collected.
 fn hosted_receiver() -> (
-    receiver::Receiver,
+    Receiver,
     Rc<crate::platforms::windows::host_events::HostEvents>,
     Arc<std::sync::Mutex<Vec<flui_platform::SystemNotice>>>,
 ) {
@@ -204,7 +204,8 @@ fn hosted_receiver() -> (
         signal: Weak::new(),
         displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
     });
-    let receiver = receiver::Receiver::new(invalidation, Some(Rc::clone(&host))).expect("receiver");
+    let receiver = Receiver::new(invalidation, Some(Rc::clone(&host) as Rc<dyn Subscriber>))
+        .expect("receiver");
     (receiver, host, heard)
 }
 
@@ -287,7 +288,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
         signal: Arc::downgrade(&signal),
         displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
     });
-    let receiver = receiver::Receiver::new(Arc::clone(&invalidation), None).expect("receiver");
+    let receiver = Receiver::new(Arc::clone(&invalidation), None).expect("receiver");
     let hwnd = receiver.hwnd_for_test();
     let (class, instance) = receiver.class_for_test();
     // `PreferenceSource` closes admission before its receiver retires.

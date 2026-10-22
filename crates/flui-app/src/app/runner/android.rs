@@ -98,7 +98,7 @@ where
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
-    /// first `Resume` (module doc, `platforms/android/mod.rs`'s
+    /// first `Resume` (module doc, `owner/android/looper.rs`'s
     /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
@@ -384,7 +384,7 @@ where
         // both as one bool out of its own event loop — `false` on
         // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
         // the mapping and its reason in `flui-native`'s
-        // `platforms/android/mod.rs`, "# Surface Lifecycle".
+        // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
         // The lock below is BLOCKING, unlike the frame closure's `try_lock`
         // above, and the difference is the failure mode: a skipped frame
@@ -431,7 +431,7 @@ where
         // made rather than assumed:
         //
         // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
-        //   exit path (`flui-native`'s `platforms/android/mod.rs`, after the
+        //   exit path (`flui-native`'s `owner/android/looper.rs`, after the
         //   loop and before the quit hook), on the loop's three returning
         //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
         //   plus one named exception, a panic that unwinds out of `run` and
@@ -615,7 +615,7 @@ impl AndroidFrameDriver {
             // See the desktop closure's matching comment: a wake-
             // deadline source (here, `set_wake_deadline_hook` forces
             // a dispatch once due — `flui-native`'s
-            // `platforms/android/mod.rs`'s own `run` loop) that is
+            // `owner/android/looper.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and
             // returns before this closure ever calls
             // `pump_with_device_recovery`, no matter how faithfully the
@@ -726,7 +726,7 @@ impl AndroidFrameDriver {
         // so `AndroidPlatform::run`'s poll blocks no longer than
         // the hook's deadline and forces a
         // dispatch once the deadline is due (`flui-native`'s
-        // `platforms/android/mod.rs`).
+        // `owner/android/looper.rs`).
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");

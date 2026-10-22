@@ -13,12 +13,13 @@ use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
 
 use crate::{
-    shared::android_motion::AndroidMotion, shared::android_motion::Axes,
-    shared::android_motion::DeviceCapabilities, shared::android_motion::DeviceDiscovery,
-    shared::android_motion::Motion, shared::android_motion::MotionAction,
-    shared::android_motion::PointerFacts, shared::android_motion::Tool,
-    shared::android_motion::axis, shared::android_motion::needs_device_query,
-    shared::keyboard_adapter::keyboard_input, shared::pointer_assembly::NativeCancel,
+    owner::android::AndroidLoop, shared::android_motion::AndroidMotion,
+    shared::android_motion::Axes, shared::android_motion::DeviceCapabilities,
+    shared::android_motion::DeviceDiscovery, shared::android_motion::Motion,
+    shared::android_motion::MotionAction, shared::android_motion::PointerFacts,
+    shared::android_motion::Tool, shared::android_motion::axis,
+    shared::android_motion::needs_device_query, shared::keyboard_adapter::keyboard_input,
+    shared::pointer_assembly::NativeCancel,
 };
 use flui_platform::PlatformInput;
 
@@ -240,13 +241,13 @@ impl AndroidInputState {
     }
 }
 
-impl crate::host::Input<super::AndroidLoop> for AndroidInputState {
-    fn keyboard_layout(_: &super::AndroidLoop) -> String {
+impl crate::host::Input<AndroidLoop> for AndroidInputState {
+    fn keyboard_layout(_: &AndroidLoop) -> String {
         // Android reports no keyboard layout identifier: empty means unknown.
         String::new()
     }
 
-    fn on_keyboard_layout_change(_: &super::AndroidLoop, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
         // Nothing signals a layout change, so the callback is never called.
         drop(callback);
     }

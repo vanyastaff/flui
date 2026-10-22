@@ -70,8 +70,8 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
-use super::com_apartment::ComApartment;
 use super::platform::WindowRef;
+use crate::owner::windows::com_apartment::ComApartment;
 
 #[cfg(test)]
 thread_local! {
@@ -782,7 +782,9 @@ impl TextServices {
             Serving::Nothing => {}
         }
         #[cfg(test)]
-        SHUTDOWN_IN_APARTMENT.set(Some(super::com_apartment::thread_in_apartment()));
+        SHUTDOWN_IN_APARTMENT.set(Some(
+            crate::owner::windows::com_apartment::thread_in_apartment(),
+        ));
         // SAFETY: plain COM calls on this STA thread.
         let deactivated = unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, None);

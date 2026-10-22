@@ -1,4 +1,17 @@
-//! The web host's loop: the state every position of its table reads.
+//! The web host's loop: the state every position of its table reads, and the
+//! `requestAnimationFrame` loop that drives its frames.
+//!
+//! Its `Send` and `Sync` claims rest on the page having one thread, which
+//! `platforms::web` enforces by refusing a `+atomics` build.
+
+// This module is one of the workspace's sanctioned `unsafe` islands: the page
+// has one thread, so the loop and its executor claim `Send`/`Sync` by hand. The
+// workspace lint `unsafe_code = "warn"` is opted out here, at the module
+// boundary, rather than for the whole crate (see `lib.rs`).
+#![expect(unsafe_code)]
+
+mod executor;
+pub(crate) mod listener;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,10 +33,10 @@ use crate::{
 };
 use flui_platform::{WindowEvent, WindowId};
 
-use super::{
-    clipboard::WebClipboard, display::WebDisplays, display_events::DisplayObservers,
-    executor::WebExecutor, page_events::PageObservers, preferences::WebPreferences,
+use crate::platforms::web::{
+    DisplayObservers, PageObservers, WebClipboard, WebDisplays, WebPreferences, WebTransfer,
 };
+use executor::WebExecutor;
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
@@ -36,10 +49,10 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// is the loop, and this holds what the positions reach through it.
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
-    pub(super) state: Arc<Mutex<WebState>>,
-    pub(super) signal: Arc<OwnerSignal>,
-    pub(super) preferences: RefCell<Option<WebPreferences>>,
-    pub(super) displays: Arc<WebDisplays>,
+    pub(crate) state: Arc<Mutex<WebState>>,
+    pub(crate) signal: Arc<OwnerSignal>,
+    pub(crate) preferences: RefCell<Option<WebPreferences>>,
+    pub(crate) displays: Arc<WebDisplays>,
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
     display_observers: RefCell<Option<DisplayObservers>>,
@@ -48,21 +61,21 @@ pub struct WebLoop {
     page_observers: RefCell<Option<PageObservers>>,
 }
 
-pub(super) struct WebState {
-    pub(super) handlers: PlatformHandlers,
+pub(crate) struct WebState {
+    pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
-    pub(super) clipboard: Arc<WebClipboard>,
+    pub(crate) clipboard: Arc<WebClipboard>,
     /// The one HTML drag-and-drop transport every canvas shares.
-    pub(super) transfer: Arc<super::drag::WebTransfer>,
+    pub(crate) transfer: Arc<WebTransfer>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
-    pub(super) window_callbacks: Option<Arc<WindowCallbacks>>,
+    pub(crate) window_callbacks: Option<Arc<WindowCallbacks>>,
     owner: Weak<WebLoop>,
 }
 
-// SAFETY: the page has one thread (the module refuses `+atomics`), so the value
-// is never reached from another.
+// SAFETY: the page has one thread (`platforms::web` refuses `+atomics`), so the
+// value is never reached from another.
 unsafe impl Send for WebLoop {}
 unsafe impl Sync for WebLoop {}
 
@@ -116,7 +129,7 @@ impl WebLoop {
         })
     }
 
-    pub(super) fn with_state<F, R>(&self, f: F) -> R
+    pub(crate) fn with_state<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut WebState) -> R,
     {
@@ -124,7 +137,7 @@ impl WebLoop {
     }
 
     /// One of the application's handlers, as a slot of the page state.
-    pub(super) fn handler<H>(
+    pub(crate) fn handler<H>(
         state: &Mutex<WebState>,
         project: fn(&mut WebState) -> &mut Option<H>,
     ) -> Field<'_, Mutex<WebState>, H> {
@@ -133,7 +146,7 @@ impl WebLoop {
 
     /// Call the window-event handler through the call point, outside the
     /// page state's lock; a replacement registered during the call wins.
-    pub(super) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
+    pub(crate) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
         call(
             &Self::handler(state, |state| &mut state.handlers.window_event),
             |handler| handler(event),

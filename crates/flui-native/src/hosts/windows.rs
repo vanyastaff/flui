@@ -4,14 +4,20 @@
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
+use crate::owner::windows::{WindowHooks, WindowsLoop};
 use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
-    HostEvents, OleTransfer, PreferenceSource, TextServices, WindowsClipboard, WindowsDisplays,
-    WindowsHaptics, WindowsLoop, WindowsWindow,
+    HostEvents, OleTransfer, PreferenceSource, TextServices, Touchpad, WindowProc,
+    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
+
+/// The hooks on FLUI's window class, in the order a message reaches them: the
+/// window's procedure, then the precision touchpad, which only learns of each
+/// window created.
+const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
 
 /// The Windows host's table.
 #[derive(Debug)]
@@ -45,7 +51,7 @@ pub type WindowsPlatform = HostPlatform<Windows>;
 impl HostPlatform<Windows> {
     /// Create a new Windows platform instance with default configuration
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WindowsLoop::new()?))
+        Self::with_config(WindowConfiguration::default())
     }
 
     /// Create a new Windows platform instance with custom configuration
@@ -72,6 +78,9 @@ impl HostPlatform<Windows> {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WindowsLoop::with_config(config)?))
+        Ok(Self::from_loop(WindowsLoop::with_config(
+            config,
+            WINDOW_HOOKS,
+        )?))
     }
 }

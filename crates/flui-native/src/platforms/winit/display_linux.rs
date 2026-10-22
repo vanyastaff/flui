@@ -57,7 +57,7 @@ impl std::fmt::Debug for WinitDisplaySource {
 }
 
 impl WinitDisplaySource {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             native: LinuxDisplays::new(),
             watcher: Mutex::new(None),
@@ -65,13 +65,13 @@ impl WinitDisplaySource {
     }
 
     /// The platform's outputs, for what must be marked stale on a wake.
-    pub(super) fn native(&self) -> Arc<LinuxDisplays> {
+    pub(crate) fn native(&self) -> Arc<LinuxDisplays> {
         Arc::clone(&self.native)
     }
 
     /// The current snapshot. Before the event loop runs it is read once from the
     /// compositor the environment names.
-    pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.native.snapshot()
     }
 
@@ -82,7 +82,7 @@ impl WinitDisplaySource {
     /// The environment decides which protocol the source tries first; the
     /// display winit really opened is the authority, and the two differ when
     /// winit was told to use X11 on a Wayland session.
-    pub(super) fn follow(
+    pub(crate) fn follow(
         &self,
         window_system: &impl HasDisplayHandle,
         signal: &Arc<OwnerSignal>,
@@ -127,7 +127,7 @@ impl WinitDisplaySource {
     /// once one runs (winit's own choice), else the one the environment names.
     /// A caller that asks before the event loop runs gets the environment's
     /// answer, which is winit's too unless winit was told otherwise.
-    pub(super) fn is_wayland(&self) -> bool {
+    pub(crate) fn is_wayland(&self) -> bool {
         match &*self.watcher.lock() {
             Some((protocol, _)) => *protocol == Protocol::Wayland,
             None => Protocol::current() == Some(Protocol::Wayland),
@@ -137,7 +137,7 @@ impl WinitDisplaySource {
     /// Stop the display thread and close its connection. The caller has
     /// already closed the owner signal's admission, so a wake that is still on
     /// its way finds nobody to deliver to.
-    pub(super) fn stop(&self) {
+    pub(crate) fn stop(&self) {
         let stopped = self.watcher.lock().take();
         drop(stopped);
     }

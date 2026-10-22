@@ -57,8 +57,8 @@ impl Default for WindowsClipboard {
     }
 }
 
-impl crate::host::Clipboard<super::platform::WindowsLoop> for WindowsClipboard {
-    fn clipboard(_: &super::platform::WindowsLoop) -> std::sync::Arc<dyn Clipboard> {
+impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipboard {
+    fn clipboard(_: &crate::owner::windows::WindowsLoop) -> std::sync::Arc<dyn Clipboard> {
         std::sync::Arc::new(WindowsClipboard::new())
     }
 }

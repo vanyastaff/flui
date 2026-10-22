@@ -1,6 +1,6 @@
 //! The Android API level, and the framework APIs above the floor the backend uses.
 //!
-//! The level is read in [`android_ndk`](crate::shared::android_ndk), where the NDK functions it
+//! The level is read in [`ndk`](crate::owner::android::ndk), where the NDK functions it
 //! comes from are looked up; an NDK function above the floor is a gate of its own there.
 
 use crate::shared::platform_floor::ANDROID_API;

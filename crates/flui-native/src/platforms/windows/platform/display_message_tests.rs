@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::WindowsPlatform;
+use crate::platform::Platform;
 use flui_platform::WindowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::{

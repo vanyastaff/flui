@@ -9,7 +9,7 @@
 //! # Lifecycle
 //!
 //! The backend already translates UIKit's transitions into the framework's
-//! independent observations (`platforms/ios/platform.rs`):
+//! independent observations (`owner/apple/ios.rs`):
 //!
 //! - focus and visibility → addressed presentation facts.
 //! - execution → a per-presentation suspension cap, independent of host lifecycle.

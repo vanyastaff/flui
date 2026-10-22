@@ -79,10 +79,10 @@ use flui_platform::pointer::PointerKind;
 pub(super) use com::WindowDropTarget;
 
 /// Posted to the owner window: run the session [`OleTransfer::start`] recorded.
-pub(super) const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
+pub(crate) const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
 /// Sent to the owner window while `DoDragDrop` runs: deliver the frames that
 /// are due; answered with the milliseconds until the next request.
-pub(super) const MODAL_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 22;
+pub(crate) const MODAL_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 22;
 
 /// The offers minted for drags over this platform's windows.
 #[derive(Default)]
@@ -172,7 +172,7 @@ impl std::fmt::Debug for OleTransfer {
 
 impl OleTransfer {
     /// The transport of a platform built on the calling thread.
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         let owner = OwnerSlot::new();
         if owner.replace(Rc::new(OwnerDrag::default())).is_err() {
             tracing::error!("drag-and-drop owner state refused; drags are unavailable");
@@ -185,7 +185,7 @@ impl OleTransfer {
     }
 
     /// Name the owner window a session's start is posted to.
-    pub(super) fn attach_owner(&self, address: Arc<Mutex<Option<isize>>>) {
+    pub(crate) fn attach_owner(&self, address: Arc<Mutex<Option<isize>>>) {
         let _ = self.owner_window.set(address);
     }
 
@@ -200,14 +200,14 @@ impl OleTransfer {
     /// The owner window is being destroyed: the session it was to start is
     /// cancelled now, on the owner thread, rather than whenever the last
     /// holder of this transport lets it go.
-    pub(super) fn cancel_pending(&self) {
+    pub(crate) fn cancel_pending(&self) {
         if let Some(owner) = self.owner() {
             owner.cancel_pending();
         }
     }
 
     /// Whether `DoDragDrop` is running on this thread.
-    pub(super) fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.owner().is_some_and(|owner| owner.running.get())
     }
 
@@ -303,7 +303,7 @@ impl OleTransfer {
 
     /// Run the accepted session's `DoDragDrop`, from the owner window's
     /// [`START_DRAG`] message, and tell the session how it ended.
-    pub(super) fn run_pending(&self, owner_window: HWND) {
+    pub(crate) fn run_pending(&self, owner_window: HWND) {
         let Some(owner) = self.owner() else {
             return;
         };
@@ -464,8 +464,8 @@ impl Drop for ModalPacer {
     }
 }
 
-impl crate::host::Drag<super::platform::WindowsLoop> for OleTransfer {
-    fn data_transfer(owner: &super::platform::WindowsLoop) -> Arc<dyn DataTransferSource> {
+impl crate::host::Drag<crate::owner::windows::WindowsLoop> for OleTransfer {
+    fn data_transfer(owner: &crate::owner::windows::WindowsLoop) -> Arc<dyn DataTransferSource> {
         owner.drag.clone()
     }
 }

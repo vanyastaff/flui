@@ -46,7 +46,7 @@ enum ReadScope {
     unsafe_code,
     reason = "AndroidApp lends live VM and Activity references to JNI"
 )]
-pub(super) fn with_activity<T>(
+pub(crate) fn with_activity<T>(
     app: &AndroidApp,
     query: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> jni::errors::Result<T>,
 ) -> Result<T, PreferenceQueryError> {
@@ -495,7 +495,7 @@ pub(super) fn night_mode(app: &AndroidApp) -> Result<bool, PreferenceQueryError>
 
 /// Public API26 factors, or the public theme attribute on API21–25, projected
 /// through the same Activity resource metrics that produced the measurement.
-pub(super) fn scroll_factors(
+pub(crate) fn scroll_factors(
     app: &AndroidApp,
     api: AndroidApi,
 ) -> Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
@@ -621,7 +621,7 @@ fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQ
     .map_err(Into::into)
 }
 
-pub(super) fn sample(
+pub(crate) fn sample(
     app: &AndroidApp,
     api: AndroidApi,
 ) -> Result<SystemPreferences, PreferenceQueryError> {

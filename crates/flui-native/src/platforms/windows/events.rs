@@ -290,9 +290,20 @@ mod message_clock_contract {
     }
 }
 
-use super::util::{get_x_lparam, get_y_lparam};
 use crate::{shared::events::event_timestamp_ns, shared::keys};
 use flui_platform::PlatformInput;
+
+/// Convert LPARAM to X coordinate
+#[inline]
+pub(super) fn get_x_lparam(lparam: LPARAM) -> i32 {
+    (lparam.0 & 0xFFFF) as i16 as i32
+}
+
+/// Convert LPARAM to Y coordinate
+#[inline]
+pub(super) fn get_y_lparam(lparam: LPARAM) -> i32 {
+    ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
+}
 
 /// Every Win32 registry serves one window.
 pub(super) const SURFACE: NativeSurface = NativeSurface(0);

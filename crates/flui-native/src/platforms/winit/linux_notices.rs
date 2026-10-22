@@ -9,8 +9,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use winit::event_loop::ActiveEventLoop;
 
-use super::{WinitApp, WinitLoop};
 use crate::owner::call_point::call;
+use crate::owner::winit::{WinitApp, WinitLoop};
 use crate::platforms::linux::{
     host_notices::{HostEvent, HostNoticeSource},
     x11_window_probe::X11WindowProbe,
@@ -23,7 +23,7 @@ impl WinitLoop {
     /// lock (ADR-0039), and is restored unless a newer one replaced it
     /// meanwhile — even when it panicked, so a later session end still reaches
     /// the host; its panic reaches the caller.
-    pub(super) fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
         call(
             &self.handler(|state| &mut state.handlers.session_end),
             |hook| hook(phase),
@@ -34,7 +34,7 @@ impl WinitLoop {
     /// The X11 window probe, started on first use. `None` when the platform
     /// is not running, or the X server cannot be reached again; windows then
     /// report what winit does.
-    pub(super) fn x11_probe(&self) -> Option<Arc<X11WindowProbe>> {
+    pub(crate) fn x11_probe(&self) -> Option<Arc<X11WindowProbe>> {
         let signal = self.owner_signal.lock().clone()?;
         self.x11_probe
             .get_or_init(|| match X11WindowProbe::connect(&signal) {
@@ -52,7 +52,7 @@ impl WinitApp {
     /// Sample again the windows whose mode properties the X11 window manager
     /// changed, so `on_state_changed` follows a minimize or a maximize that
     /// winit reports no event for.
-    pub(super) fn refresh_x11_windows(&self) {
+    pub(crate) fn refresh_x11_windows(&self) {
         let Some(Some(probe)) = self.platform.x11_probe.get() else {
             return;
         };
@@ -83,7 +83,7 @@ impl WinitApp {
     /// compositor's `enter` has been handled, so every Wayland window is
     /// looked at there, at one monitor lookup each. An X11 window reports a
     /// move with `Moved`, and only one with no display yet is looked at.
-    pub(super) fn sync_unannounced_displays(&self, event_loop: &ActiveEventLoop) {
+    pub(crate) fn sync_unannounced_displays(&self, event_loop: &ActiveEventLoop) {
         let wayland = self.platform.displays.is_wayland();
         let unannounced: Vec<_> = self.platform.with_state(|state| {
             state
@@ -102,14 +102,14 @@ impl WinitApp {
 /// Whether a Linux window can move to another display without winit saying
 /// so: any Wayland window (see `WinitApp::sync_unannounced_displays`), and an
 /// X11 window only before its first display is known.
-pub(super) fn moves_unannounced(wayland: bool, awaiting_display: bool) -> bool {
+pub(crate) fn moves_unannounced(wayland: bool, awaiting_display: bool) -> bool {
     wayland || awaiting_display
 }
 
 impl WinitApp {
     /// Start listening for sleep, shutdown, lock and memory pressure. A source
     /// that cannot start says so in the log and leaves the others running.
-    pub(super) fn start_host_notices(&mut self) {
+    pub(crate) fn start_host_notices(&mut self) {
         if self.host_notices.is_some() {
             return;
         }
@@ -125,7 +125,7 @@ impl WinitApp {
     /// Deliver the notices the Linux sources have queued, oldest first. The
     /// source holds a sleep or shutdown until its event has been delivered, so
     /// each runs to the end here before the next.
-    pub(super) fn deliver_host_notices(&self) {
+    pub(crate) fn deliver_host_notices(&self) {
         let Some(source) = &self.host_notices else {
             return;
         };

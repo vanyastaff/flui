@@ -1,8 +1,9 @@
-//! Winit-based platform implementation
+//! The winit host's owner thread: winit's event loop, driven by
+//! [`WinitApp`], the owner lane ([`control`]) that carries requests from other
+//! threads to it, and the owner hooks and proxy transport built on that lane.
 //!
-//! Cross-platform implementation using winit for window management — the
-//! primary desktop backend on Linux until a native Wayland/X11 backend lands
-//! (roadmap Cross.P); also covers Windows and macOS as a fallback.
+//! winit is the primary desktop backend on Linux until a native Wayland/X11
+//! backend lands, and a fallback on Windows and macOS.
 //!
 //! # Architecture
 //!
@@ -82,6 +83,12 @@
 //! other demand) still costs at most one extra `wake_action::Skip`, never
 //! a second spin.
 
+// The same-thread window creation dereferences the published event loop: a
+// small `unsafe` island, documented at its site. The workspace lint
+// `unsafe_code = "warn"` is opted out here, at the module boundary, rather
+// than for the whole crate (see `lib.rs`).
+#![expect(unsafe_code)]
+
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -105,21 +112,14 @@ use winit::{
 
 use flui_foundation::geometry::Point;
 
-#[cfg(target_os = "linux")]
-use super::super::linux::x11_window_probe::X11WindowProbe;
-use super::window::{WinitWindow, shell_of};
-use super::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use super::{
-    clipboard::ArboardClipboard,
-    control::{
-        ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
-        control_lane,
-    },
-    data_transfer::WinitDataTransfer,
-    display::WinitDisplaySource,
-    events as winit_events,
-};
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
+#[cfg(target_os = "linux")]
+use crate::platforms::linux::x11_window_probe::X11WindowProbe;
+use crate::platforms::winit::window::{WinitWindow, shell_of};
+use crate::platforms::winit::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
+use crate::platforms::winit::{
+    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, events as winit_events,
+};
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
@@ -128,13 +128,15 @@ use crate::{
     platform::PlatformExecutor, platform::PlatformReadyCallback,
     shared::system_notice::SystemNotices,
 };
+use control::{
+    ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
+    control_lane,
+};
 use flui_platform::{
     PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
-#[cfg(target_os = "linux")]
-mod linux_notices;
-mod positions;
+pub(crate) mod control;
 
 /// Convert a tracked physical cursor position to logical pixels.
 fn logical_cursor_point(
@@ -145,14 +147,14 @@ fn logical_cursor_point(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpenWindowStateError {
+pub(crate) enum OpenWindowStateError {
     NotRunning,
     Starting,
     OwnerWouldBlock,
     Stopped,
 }
 
-enum WinitRunState {
+pub(crate) enum WinitRunState {
     New {
         quit_requested: bool,
     },
@@ -168,7 +170,7 @@ enum WinitRunState {
 }
 
 impl WinitRunState {
-    fn control_for_open_window(
+    pub(crate) fn control_for_open_window(
         &self,
         caller_thread: ThreadId,
     ) -> Result<ControlSender, OpenWindowStateError> {
@@ -191,25 +193,25 @@ impl WinitRunState {
 /// and the state every position of the host's table reads.
 /// [`WinitPlatform`](crate::WinitPlatform) is its platform.
 pub struct WinitLoop {
-    owner_signal: Mutex<Option<Arc<crate::owner::signal::OwnerSignal>>>,
+    pub(crate) owner_signal: Mutex<Option<Arc<crate::owner::signal::OwnerSignal>>>,
     /// The monitors last sampled and the snapshot built from them. Shared with
     /// every window so each can name its display; outside the state lock so a
     /// window's `display_id()` never contends with the platform state.
-    displays: Arc<WinitDisplaySource>,
+    pub(crate) displays: Arc<WinitDisplaySource>,
 
     /// The frame measured around decorated windows, so a remembered outer size
     /// can be fitted before the next window exists.
-    frame_inset: Arc<FrameInset>,
+    pub(crate) frame_inset: Arc<FrameInset>,
 
     /// Where system notices go, and what a wake marks stale before the host
     /// hears of it.
-    notices: Arc<SystemNotices>,
+    pub(crate) notices: Arc<SystemNotices>,
 
     /// The X11 connections that read what winit cannot of a window, started
     /// with the first X11 window; `None` inside when the server cannot be
     /// reached a second time.
     #[cfg(target_os = "linux")]
-    x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
+    pub(crate) x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
 
     state: Arc<Mutex<WinitLoopState>>,
 }
@@ -224,52 +226,52 @@ impl std::fmt::Debug for WinitLoop {
 
 #[cfg(windows)]
 #[derive(Clone)]
-enum PreferenceObservation {
+pub(crate) enum PreferenceObservation {
     Observed(flui_platform::SystemPreferences),
     Deferred,
     Failed(String),
 }
 
 /// Internal state for WinitLoop
-struct WinitLoopState {
+pub(crate) struct WinitLoopState {
     /// Delivery values only; native observation remains on the event-loop owner.
     #[cfg(windows)]
-    preferences: PreferenceObservation,
+    pub(crate) preferences: PreferenceObservation,
     #[cfg(target_os = "macos")]
-    preferences: std::sync::Weak<super::super::macos::preferences::PreferenceSource>,
+    pub(crate) preferences: std::sync::Weak<crate::platforms::macos::PreferenceSource>,
     #[cfg(target_os = "linux")]
-    preferences: std::sync::Weak<super::preferences::PreferenceSource>,
+    pub(crate) preferences: std::sync::Weak<crate::platforms::winit::preferences::PreferenceSource>,
     /// Native pointer identities and phase state are committed before dispatch.
     native_pointer: winit_events::NativePointerState,
     /// Callback handlers
-    handlers: PlatformHandlers,
+    pub(crate) handlers: PlatformHandlers,
 
     /// Background executor
-    background_executor: Arc<BackgroundExecutor>,
+    pub(crate) background_executor: Arc<BackgroundExecutor>,
 
     /// Clipboard
-    clipboard: Arc<ArboardClipboard>,
+    pub(crate) clipboard: Arc<ArboardClipboard>,
 
     /// The one data-transfer source of this platform instance (ADR-0038):
     /// constructed once here, cloned out by `Platform::data_transfer()`,
     /// never reconstructed — it owns the single offer table, so ids stay
     /// redeemable across every clone.
-    data_transfer: Arc<WinitDataTransfer>,
+    pub(crate) data_transfer: Arc<WinitDataTransfer>,
 
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
 
     /// Map of platform window IDs to WinitWindow wrappers
-    windows: HashMap<WindowId, Arc<WinitWindow>>,
+    pub(crate) windows: HashMap<WindowId, Arc<WinitWindow>>,
 
     /// Active window ID
-    active_window: Option<WindowId>,
+    pub(crate) active_window: Option<WindowId>,
 
     /// Next window ID to allocate
     next_window_id: u64,
 
     /// Event-loop ownership and control-lane lifecycle.
-    run_state: WinitRunState,
+    pub(crate) run_state: WinitRunState,
 
     /// Current cursor position per window (physical)
     cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
@@ -375,7 +377,7 @@ impl WinitLoop {
             reason = "only the Linux display source can say a shell is Wayland"
         )
     )]
-    fn expected_shell(&self) -> WindowShell {
+    pub(crate) fn expected_shell(&self) -> WindowShell {
         #[cfg(target_os = "linux")]
         if self.displays.is_wayland() {
             return WindowShell::Wayland;
@@ -419,7 +421,7 @@ impl WinitLoop {
     }
 
     /// Get mutable access to state (for internal use)
-    fn with_state<F, R>(&self, f: F) -> R
+    pub(crate) fn with_state<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut WinitLoopState) -> R,
     {
@@ -556,7 +558,7 @@ impl WinitLoop {
     /// register it in platform state. Shared by the cross-thread control lane
     /// and `open_window`'s same-thread
     /// fast path (see the module-level doc on same-thread window creation).
-    fn create_window_now(
+    pub(crate) fn create_window_now(
         &self,
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
@@ -672,7 +674,10 @@ impl WinitLoop {
     /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
     /// (not `window_handle`) to avoid colliding with the unrelated
     /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
-    fn window_by_id(&self, window_id: WindowId) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    pub(crate) fn window_by_id(
+        &self,
+        window_id: WindowId,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         self.with_state(|state| {
             state
                 .windows
@@ -685,7 +690,7 @@ impl WinitLoop {
     }
 
     /// One of the application's handlers, as a slot of the platform state.
-    fn handler<H>(
+    pub(crate) fn handler<H>(
         &self,
         project: fn(&mut WinitLoopState) -> &mut Option<H>,
     ) -> Field<'_, Mutex<WinitLoopState>, H> {
@@ -775,7 +780,7 @@ thread_local! {
     /// Published only while `on_ready` executes synchronously inside
     /// [`WinitApp::resumed`], on the winit event-loop thread. See the
     /// module-level doc on same-thread window creation.
-    static ACTIVE_EVENT_LOOP: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
+    pub(crate) static ACTIVE_EVENT_LOOP: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
 }
 
 /// Publishes `event_loop` to [`ACTIVE_EVENT_LOOP`] for the duration of `f`,
@@ -886,24 +891,24 @@ fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> 
 ///
 /// Implements `ApplicationHandler` to receive events from winit without
 /// consuming the event loop.
-struct WinitApp {
+pub(crate) struct WinitApp {
     #[cfg(windows)]
-    preference_source: Option<super::super::windows::preferences::PreferenceSource>,
+    preference_source: Option<crate::platforms::windows::preferences::PreferenceSource>,
     #[cfg(target_os = "macos")]
-    preference_source: Option<Arc<super::super::macos::preferences::PreferenceSource>>,
+    preference_source: Option<Arc<crate::platforms::macos::PreferenceSource>>,
     /// Wakes the owner when AppKit reports a preference change; owner-thread only.
     #[cfg(target_os = "macos")]
-    preference_observers: Option<super::super::macos::preferences::PreferenceObservers>,
+    preference_observers: Option<crate::platforms::macos::PreferenceObservers>,
     #[cfg(target_os = "linux")]
-    preference_source: Option<Arc<super::preferences::PreferenceSource>>,
+    preference_source: Option<Arc<crate::platforms::winit::preferences::PreferenceSource>>,
     /// Sleep, shutdown, lock and memory pressure from logind and the kernel;
     /// owner-thread only.
     #[cfg(target_os = "linux")]
-    host_notices: Option<super::super::linux::host_notices::HostNoticeSource>,
+    pub(crate) host_notices: Option<crate::platforms::linux::host_notices::HostNoticeSource>,
     /// Marks the screens stale when AppKit reports a change; owner-thread only.
     #[cfg(target_os = "macos")]
-    screen_observer: Option<super::super::macos::display::ScreenObserver>,
-    platform: Arc<WinitLoop>,
+    screen_observer: Option<crate::platforms::macos::ScreenObserver>,
+    pub(crate) platform: Arc<WinitLoop>,
     /// The platform over `platform` that `on_ready`'s owner capability wraps.
     owner_platform: Arc<dyn Platform>,
     on_ready: Option<PlatformReadyCallback>,
@@ -1619,7 +1624,7 @@ impl ApplicationHandler for WinitApp {
             wake_deadline,
             self.preference_source
                 .as_ref()
-                .and_then(super::super::windows::preferences::PreferenceSource::retry_deadline),
+                .and_then(crate::platforms::windows::preferences::PreferenceSource::retry_deadline),
         );
         let control_flow = match earliest_deadline(wake_deadline, self.self_close_deadline) {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
@@ -1667,7 +1672,7 @@ impl WinitApp {
     /// drag-resize does not hint on every `Resized`. A window on a monitor the
     /// last sample lacks (a monitor plugged in since) marks the source stale
     /// itself, and the hint then brings the sample.
-    fn sync_window_display(
+    pub(crate) fn sync_window_display(
         &self,
         event_loop: &ActiveEventLoop,
         window: &WinitWindow,
@@ -1695,7 +1700,8 @@ impl WinitApp {
             let executor = self
                 .platform
                 .with_state(|state| Arc::clone(&state.background_executor));
-            let source = super::preferences::PreferenceSource::new(&executor, &signal);
+            let source =
+                crate::platforms::winit::preferences::PreferenceSource::new(&executor, &signal);
             self.platform
                 .with_state(|state| state.preferences = Arc::downgrade(&source));
             self.preference_source = Some(source);
@@ -1730,7 +1736,7 @@ impl WinitApp {
         }
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
-            self.screen_observer = Some(super::super::macos::display::ScreenObserver::new(
+            self.screen_observer = Some(crate::platforms::macos::ScreenObserver::new(
                 self.platform.displays.native(),
                 &signal,
             ));
@@ -1745,8 +1751,7 @@ impl WinitApp {
                     message: "the AppKit preference owner is unavailable".into(),
                 }
             })?;
-            let (source, observers) =
-                super::super::macos::preferences::PreferenceSource::new(&signal);
+            let (source, observers) = crate::platforms::macos::PreferenceSource::new(&signal);
             self.platform
                 .with_state(|state| state.preferences = Arc::downgrade(&source));
             self.preference_source = Some(source);
@@ -1761,11 +1766,12 @@ impl WinitApp {
         if self.preference_source.is_none()
             && let Some(signal) = signal
         {
-            self.preference_source =
-                Some(super::super::windows::preferences::PreferenceSource::new(
+            self.preference_source = Some(
+                crate::platforms::windows::preferences::PreferenceSource::new(
                     &signal,
                     self.platform.displays.native(),
-                )?);
+                )?,
+            );
         }
         self.refresh_preferences();
         Ok(())
@@ -2630,9 +2636,9 @@ impl OwnerHooks for WinitOwnerHooks {
 
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             // SAFETY: identical justification to `Platform::open_window`'s
-            // same-thread fast path above — this call is reached only from
-            // inside the same nested `on_ready` invocation that publishes
-            // `ACTIVE_EVENT_LOOP`.
+            // same-thread fast path (`platforms/winit/positions.rs`) — this
+            // call is reached only from inside the same nested `on_ready`
+            // invocation that publishes `ACTIVE_EVENT_LOOP`.
             let event_loop = unsafe { event_loop_ptr.as_ref() };
             let window_id = self.platform.create_window_now(event_loop, options)?;
             let window = self.platform.window_by_id(window_id)?;
@@ -2757,7 +2763,6 @@ impl ProxyTransport for WinitProxyTransport {
 // A sibling module rather than a nested one, so its tests sit beside `tests`
 // rather than two segments below it.
 #[cfg(test)]
-#[path = "platform/real_loop_tests.rs"]
 mod real_loop_tests;
 
 #[cfg(test)]
@@ -2771,7 +2776,7 @@ mod tests {
     };
 
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
-    use crate::{WinitPlatform, platform::Platform, platforms::winit::control::control_lane};
+    use crate::{WinitPlatform, owner::winit::control::control_lane, platform::Platform};
     use flui_platform::WindowOptions;
 
     /// Runs its action when dropped: a capture whose destructor calls back
@@ -2983,7 +2988,7 @@ mod tests {
             (false, false, false),
         ] {
             assert_eq!(
-                super::linux_notices::moves_unannounced(wayland, awaiting),
+                crate::platforms::winit::linux_notices::moves_unannounced(wayland, awaiting),
                 looked_at,
                 "wayland {wayland}, awaiting a display {awaiting}"
             );

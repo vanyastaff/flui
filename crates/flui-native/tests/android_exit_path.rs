@@ -35,9 +35,9 @@
 //! expanding to one, an imported `exit`). That residual is why the claim is
 //! "present in the region", never "reached".
 
-/// The Android platform module, read at compile time: a moved file fails to
+/// The Android loop module, read at compile time: a moved file fails to
 /// compile rather than silently scanning nothing.
-const ANDROID_PLATFORM_SOURCE: &str = include_str!("../src/platforms/android/mod.rs");
+const ANDROID_PLATFORM_SOURCE: &str = include_str!("../src/owner/android/looper.rs");
 
 /// The signature `AndroidLoop::run` is located by.
 const RUN_SIGNATURE: &str = "fn run(";
@@ -216,13 +216,13 @@ fn exit_region() -> Vec<String> {
     let Some(signature_at) = signature_hits.next() else {
         panic!(
             "could not locate `AndroidLoop::run`: `{RUN_SIGNATURE}` appears nowhere in \
-             platforms/android/mod.rs; read the file by hand and update this scan"
+             owner/android/looper.rs; read the file by hand and update this scan"
         );
     };
     assert!(
         signature_hits.next().is_none(),
         "could not locate `AndroidLoop::run`: `{RUN_SIGNATURE}` appears more than once in \
-         platforms/android/mod.rs; read the file by hand and update this scan"
+         owner/android/looper.rs; read the file by hand and update this scan"
     );
 
     let Some(body_offset) = source[signature_at..].find('{') else {

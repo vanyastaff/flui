@@ -16,14 +16,15 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{KillTimer, SetTimer},
 };
 
-use super::platform::{FrameCount, ModalDelivery, WindowContext, WindowsLoop};
+use super::{FrameCount, ModalDelivery, WindowsLoop};
+use crate::platforms::windows::platform::WindowContext;
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
-pub(super) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
+pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
 
 /// A window's modal-loop pacing: the frame count deliveries are keyed by and
 /// the last deadline delivered.
-pub(super) struct ModalPacing {
+pub(crate) struct ModalPacing {
     frames: Rc<FrameCount>,
     delivered: Rc<ModalDelivery>,
     /// How many modal loops are running for the window.
@@ -31,7 +32,7 @@ pub(super) struct ModalPacing {
 }
 
 impl ModalPacing {
-    pub(super) fn new(frames: Rc<FrameCount>) -> Self {
+    pub(crate) fn new(frames: Rc<FrameCount>) -> Self {
         Self {
             frames,
             delivered: Rc::default(),
@@ -42,7 +43,7 @@ impl ModalPacing {
 
 impl WindowContext {
     /// A modal loop for the window starts.
-    pub(super) fn enter_modal_loop(&self, hwnd: HWND) {
+    pub(crate) fn enter_modal_loop(&self, hwnd: HWND) {
         let pacing = &self.modal_pacing;
         if pacing.depth.replace(pacing.depth.get().saturating_add(1)) == 0 {
             pacing.delivered.clear();
@@ -51,7 +52,7 @@ impl WindowContext {
     }
 
     /// A modal loop for the window ends.
-    pub(super) fn exit_modal_loop(&self, hwnd: HWND) {
+    pub(crate) fn exit_modal_loop(&self, hwnd: HWND) {
         let pacing = &self.modal_pacing;
         let depth = pacing.depth.get().saturating_sub(1);
         pacing.depth.set(depth);
@@ -63,7 +64,7 @@ impl WindowContext {
     }
 
     /// The pacing timer fired: deliver what is due and arm it again.
-    pub(super) fn pace_modal_loop(&self, hwnd: HWND) {
+    pub(crate) fn pace_modal_loop(&self, hwnd: HWND) {
         if self.modal_pacing.depth.get() == 0 {
             // SAFETY: as in `exit_modal_loop`.
             let _ = unsafe { KillTimer(Some(hwnd), MODAL_DEADLINE_TIMER) };

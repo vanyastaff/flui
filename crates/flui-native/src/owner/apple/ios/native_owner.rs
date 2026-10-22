@@ -2,14 +2,14 @@
 use dispatch2::{DispatchQueue, MainThreadBound};
 use objc2::MainThreadMarker;
 
-pub(super) struct NativeOwner<T: 'static>(Option<MainThreadBound<T>>);
+pub(crate) struct NativeOwner<T: 'static>(Option<MainThreadBound<T>>);
 
 impl<T: 'static> NativeOwner<T> {
-    pub(super) fn new(value: T, marker: MainThreadMarker) -> Self {
+    pub(crate) fn new(value: T, marker: MainThreadMarker) -> Self {
         Self(Some(MainThreadBound::new(value, marker)))
     }
 
-    pub(super) fn get(&self, marker: MainThreadMarker) -> &T {
+    pub(crate) fn get(&self, marker: MainThreadMarker) -> &T {
         self.0
             .as_ref()
             .expect("BUG: live native owner has its value")

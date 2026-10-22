@@ -16,8 +16,8 @@ use parking_lot::Mutex;
 
 use flui_platform::Clipboard;
 
-use super::platform::WebLoop;
 use crate::host;
+use crate::owner::web::WebLoop;
 
 pub struct WebClipboard {
     /// In-memory fallback: caches the last written text for synchronous reads.
