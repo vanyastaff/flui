@@ -7,8 +7,9 @@
 //! recognises the screen again only through the object it holds.
 //!
 //! The pure half, which every host compiles and tests, is how a screen is keyed
-//! and placed ([`screen`]), the period a macOS mode's rate becomes
-//! ([`period`]) and the iOS display link's frame-rate rules ([`link_rate`]).
+//! and placed ([`screen`]) and the iOS display link's frame-rate rules
+//! ([`link_rate`]). A macOS mode's rate and a link's tick become a period by
+//! the one constructor in `display::source`.
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;
@@ -337,82 +338,17 @@ pub(crate) mod screen {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
-#[forbid(unsafe_code)]
-pub(crate) mod period {
-    //! The refresh period the macOS display source hands to the display snapshot.
-    //!
-    //! The AppKit backend read a current-mode rate (CoreGraphics, in hertz) before
-    //! the display snapshot existed. This function is the one place that rate
-    //! becomes a [`RefreshPeriod`], so the snapshot carries what
-    //! `PlatformWindow::refresh_period` answered for the same display and a 120 Hz
-    //! panel does not fall back to 60 Hz.
-
-    use flui_platform::RefreshPeriod;
-
-    /// The period of a CoreGraphics refresh rate in hertz; `None` for a rate that
-    /// does not describe a cadence (zero — CoreGraphics reports 0 for modes it
-    /// cannot describe — negative, NaN, infinite, or outside 1 to 1000 Hz).
-    pub(crate) fn core_graphics_refresh_period(hz: f64) -> Option<RefreshPeriod> {
-        RefreshPeriod::from_hz(hz).ok()
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use std::time::Duration;
-
-        use flui_platform::RefreshPeriod;
-
-        use super::core_graphics_refresh_period;
-
-        /// What `PlatformWindow::refresh_period` answered before the display
-        /// snapshot, for the macOS backend.
-        fn legacy_macos(hz: f64) -> Option<Duration> {
-            if !hz.is_finite() || hz <= 0.0 {
-                return None;
-            }
-            Some(Duration::from_secs_f64(1.0 / hz))
-        }
-
-        fn within_a_nanosecond(a: Duration, b: Duration) -> bool {
-            a.abs_diff(b) <= Duration::from_nanos(1)
-        }
-
-        #[test]
-        fn macos_shim_keeps_the_period_it_reports_today() {
-            // Common panel rates, including the fractional NTSC ones.
-            for millihertz in [
-                24_000, 30_000, 48_000, 50_000, 59_940, 60_000, 75_000, 90_000, 100_000, 119_880,
-                120_000, 144_000, 165_000, 240_000, 360_000,
-            ] {
-                let hz = f64::from(millihertz) / 1000.0;
-                let shim = core_graphics_refresh_period(hz).map(RefreshPeriod::get);
-                let legacy = legacy_macos(hz);
-                assert!(
-                    shim.zip(legacy)
-                        .is_some_and(|(shim, legacy)| within_a_nanosecond(shim, legacy)),
-                    "macOS {hz} Hz: shim {shim:?}, legacy {legacy:?}"
-                );
-            }
-            // What the backend reports no cadence for stays unknown.
-            for hz in [0.0, -60.0, f64::NAN, f64::INFINITY] {
-                assert_eq!(core_graphics_refresh_period(hz), None, "{hz}");
-            }
-        }
-    }
-}
-
 #[cfg(any(target_os = "ios", test))]
 #[forbid(unsafe_code)]
 pub(crate) mod link_rate {
     //! The two pure rules behind iOS frame pacing: which frame-rate request a
     //! `CADisplayLink` gets on a given iOS version, and when the cadence the link
-    //! measures becomes a new published refresh period.
-
-    use std::time::Duration;
+    //! measures becomes a new published refresh period, by the display model's
+    //! one constructor and publisher.
 
     use flui_platform::RefreshPeriod;
 
+    use crate::display::source::{MeasuredPeriod, Refresh};
     use crate::version::gate::{Gate, Since, apple::AppleVersion};
 
     /// The floor of the requested range: an adaptive ProMotion panel may drop to
@@ -493,7 +429,7 @@ pub(crate) mod link_rate {
     /// ticks.
     #[derive(Debug, Default)]
     pub(crate) struct LinkPeriod {
-        published: Option<RefreshPeriod>,
+        published: MeasuredPeriod,
     }
 
     impl LinkPeriod {
@@ -503,24 +439,17 @@ pub(crate) mod link_rate {
         /// nothing changes. An interval that describes no cadence (negative, not
         /// finite, outside 1 ms to 1 s) is ignored.
         pub(crate) fn observe(&mut self, interval_seconds: f64) -> Option<RefreshPeriod> {
-            let measured = Duration::try_from_secs_f64(interval_seconds)
-                .ok()
-                .and_then(|interval| RefreshPeriod::try_from(interval).ok())?;
-            if let Some(published) = self.published {
-                let published = published.get().as_secs_f64();
-                let drift = (measured.get().as_secs_f64() - published).abs();
-                if drift <= published * PUBLISH_BAND {
-                    return None;
-                }
+            let measured = Refresh::Interval(interval_seconds).period()?;
+            if !self.published.departs(measured, PUBLISH_BAND) {
+                return None;
             }
-            self.published = Some(measured);
-            Some(measured)
+            Some(self.published.publish(measured))
         }
 
         /// Forget the published period: the link moved to another screen, or was
         /// rebuilt, and its cadence is unknown until the next tick.
         pub(crate) fn forget(&mut self) {
-            self.published = None;
+            self.published.forget();
         }
     }
 

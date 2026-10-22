@@ -38,12 +38,11 @@ use objc2_foundation::{
 };
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
 
-use super::period::core_graphics_refresh_period;
 use super::screen::device_bounds_of_screen;
 use super::screen::{macos_display_key, macos_display_persistent_key};
-use crate::display::source::DisplaySource;
+use crate::display::source::{DisplaySource, Refresh};
 use crate::error::PlatformError;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
@@ -97,23 +96,25 @@ fn display_key_of(screen: &NSScreen) -> Option<DisplayKey> {
     macos_display_key(display_id_of(screen), display_uuid)
 }
 
-/// The refresh period of the display `screen` is on, or `None` when the
-/// display cannot be reached or does not report a rate.
+/// The refresh the display `screen` is on reports, or `None` when the display
+/// cannot be reached.
 ///
 /// Reads the refresh rate of the display's *current* mode
 /// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), the same
-/// source the winit backend reads. A rate of 0 — CoreGraphics reports 0 for
-/// modes it cannot describe, and some displays do — is unknown rather than an
-/// infinite period.
+/// source the winit backend reads, so the snapshot carries what
+/// `PlatformWindow::refresh_period` answered for the same display and a
+/// 120 Hz panel does not fall back to 60 Hz. A rate of 0 — CoreGraphics
+/// reports 0 for modes it cannot describe, and some displays do — becomes no
+/// period ([`Refresh::period`]), not an infinite one.
 ///
 /// Call on the owner lane: this messages the screen, which is AppKit traffic
 /// this backend keeps there.
-fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
+fn refresh_of_screen(screen: &NSScreen) -> Option<Refresh> {
     // `CGDirectDisplayID` is a `u32`; the `NSScreenNumber` number is a wider
     // CFNumber, so narrow it explicitly.
     let display_id = u32::try_from(display_id_of(screen)?).ok()?;
     let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
-    core_graphics_refresh_period(mode.refresh_rate())
+    Some(Refresh::Hertz(mode.refresh_rate()))
 }
 
 /// An AppKit rectangle as the geometry type the shared rules take.
@@ -186,7 +187,7 @@ impl MacosDisplays {
             {
                 display = display.with_persistent_key(macos_display_persistent_key(uuid));
             }
-            display.refresh_period = refresh_period_for_screen(&screen);
+            display.refresh_period = refresh_of_screen(&screen).and_then(Refresh::period);
             displays.push(display);
         }
         displays

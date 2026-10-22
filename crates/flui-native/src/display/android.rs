@@ -12,11 +12,14 @@ pub(crate) use source::AndroidDisplays;
 #[forbid(unsafe_code)]
 pub(crate) mod sample {
     //! The rules of the Android display source that need no JVM: what a sample of a
-    //! `Display` becomes in the snapshot, how a reported refresh rate becomes a
-    //! period, and what rate a window asks for. Every host runs their tests.
+    //! `Display` becomes in the snapshot, its refresh rate by the display model's
+    //! one constructor, and what rate a window asks for. Every host runs their
+    //! tests.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
+    use flui_platform::{DisplayId, DisplayInfo, FrameRateHint};
+
+    use crate::display::source::Refresh;
 
     /// What one `android.view.Display` reported, before it has an identity.
     #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +54,7 @@ pub(crate) mod sample {
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
             let mut info = DisplayInfo::new(id, &self.name, bounds, scale_factor(self.density_dpi))
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID);
-            info.refresh_period = refresh_period(self.refresh_hz);
+            info.refresh_period = Refresh::Hertz(f64::from(self.refresh_hz)).period();
             Some(info)
         }
     }
@@ -61,17 +64,11 @@ pub(crate) mod sample {
         f64::from(density_dpi) / 160.0
     }
 
-    /// The period of a rate Android reports. A value that is zero, negative, not a
-    /// number or outside 1 Hz to 1 kHz describes no cadence and is unknown.
-    pub(crate) fn refresh_period(hz: f32) -> Option<RefreshPeriod> {
-        RefreshPeriod::from_hz(f64::from(hz)).ok()
-    }
-
-    /// The highest valid rate among `rates`.
+    /// The highest rate among `rates` that describes a cadence.
     pub(crate) fn max_refresh_hz(rates: impl IntoIterator<Item = f32>) -> Option<f32> {
         rates
             .into_iter()
-            .filter(|hz| refresh_period(*hz).is_some())
+            .filter(|hz| Refresh::Hertz(f64::from(*hz)).period().is_some())
             .max_by(f32::total_cmp)
     }
 
@@ -92,32 +89,6 @@ pub(crate) mod sample {
         use flui_platform::{DisplayKey, DisplayRegistry};
 
         use super::*;
-
-        /// The period of `hz` to within a microsecond, which is all a float rate
-        /// carries.
-        fn micros(hz: f32) -> Option<u128> {
-            refresh_period(hz).map(|period| period.get().as_micros())
-        }
-
-        fn android_refresh_value_table() {
-            for (hz, expected) in [
-                (60.0, Some(16_666)),
-                (90.0, Some(11_111)),
-                (120.0, Some(8_333)),
-                (1000.0, Some(1_000)),
-                (1.0, Some(1_000_000)),
-                // An old driver reports nothing, or something that is not a rate.
-                (0.0, None),
-                (-60.0, None),
-                (f32::NAN, None),
-                (f32::INFINITY, None),
-                // Outside 1 ms to 1 s there is no cadence to follow.
-                (0.5, None),
-                (5000.0, None),
-            ] {
-                assert_eq!(micros(hz), expected, "a display reporting {hz} Hz");
-            }
-        }
 
         fn a_display_without_size_or_density_is_not_described() {
             let registry = DisplayRegistry::new();
@@ -196,10 +167,6 @@ pub(crate) mod sample {
             crate::table_test::run_table(
                 "android_display_table",
                 &[
-                    (
-                        "android_refresh_value_table",
-                        android_refresh_value_table as fn(),
-                    ),
                     (
                         "a_display_without_size_or_density_is_not_described",
                         a_display_without_size_or_density_is_not_described as fn(),

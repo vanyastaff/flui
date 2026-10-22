@@ -321,11 +321,13 @@ pub(crate) mod refresh_estimate {
     //! published.
     //!
     //! Pure: the platform feeds in timestamps and reads the published value, so
-    //! the rules run on every host.
-
-    use std::time::Duration;
+    //! the rules run on every host. The estimate becomes a period by the display
+    //! model's one constructor, and is published by its one publisher, whose
+    //! band is the hysteresis below.
 
     use flui_platform::RefreshPeriod;
+
+    use crate::display::source::{MeasuredPeriod, Refresh};
 
     /// How many of the most recent frame intervals the estimate is taken over.
     const WINDOW: usize = 30;
@@ -364,7 +366,7 @@ pub(crate) mod refresh_estimate {
         /// is not a frame interval.
         previous: Option<f64>,
         intervals: Intervals,
-        published: Option<RefreshPeriod>,
+        published: MeasuredPeriod,
         /// The candidate that has stayed outside the published band, with the
         /// latest intervals agreeing, and for how many consecutive frames.
         pending: Option<Pending>,
@@ -460,12 +462,12 @@ pub(crate) mod refresh_estimate {
         /// page is on another display, so the old value describes none it is on.
         pub(crate) fn forget(&mut self) {
             self.restart();
-            self.published = None;
+            self.published.forget();
         }
 
         /// The period published so far; `None` until enough frames have run.
         pub(crate) fn published(&self) -> Option<RefreshPeriod> {
-            self.published
+            self.published.published()
         }
 
         /// The trimmed mean of the recent intervals without background
@@ -475,7 +477,7 @@ pub(crate) mod refresh_estimate {
             // The first estimate waits for a full window, so what is published
             // first is the best the window can say; a replacement needs fewer
             // because it is judged against what is already published.
-            let needed = if self.published.is_none() {
+            let needed = if self.published().is_none() {
                 WINDOW
             } else {
                 MIN_INTERVALS
@@ -498,8 +500,7 @@ pub(crate) mod refresh_estimate {
             let trim = kept.len() / 10;
             let middle = &kept[trim..kept.len() - trim];
             let millis = middle.iter().sum::<f64>() / middle.len() as f64;
-            let period = Duration::try_from_secs_f64(millis / 1000.0).ok()?;
-            RefreshPeriod::try_from(period).ok()
+            Refresh::Interval(millis / 1000.0).period()
         }
 
         /// Publish `candidate` if it has left the hysteresis band for
@@ -508,9 +509,8 @@ pub(crate) mod refresh_estimate {
         /// published at once.
         fn publish(&mut self, candidate: RefreshPeriod) -> Option<RefreshPeriod> {
             let candidate_ms = candidate.get().as_secs_f64() * 1000.0;
-            if let Some(published) = self.published {
-                let published_ms = published.get().as_secs_f64() * 1000.0;
-                if !differs(candidate_ms, published_ms, HYSTERESIS) {
+            if self.published().is_some() {
+                if !self.published.departs(candidate, HYSTERESIS) {
                     self.pending = None;
                     return None;
                 }
@@ -542,8 +542,7 @@ pub(crate) mod refresh_estimate {
                 }
             }
             self.pending = None;
-            self.published = Some(candidate);
-            Some(candidate)
+            Some(self.published.publish(candidate))
         }
     }
 

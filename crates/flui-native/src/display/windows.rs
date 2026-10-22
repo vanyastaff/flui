@@ -21,13 +21,14 @@ pub(crate) use source::WindowsDisplays;
 #[cfg(any(windows, test))]
 #[forbid(unsafe_code)]
 pub(crate) mod sample {
-    //! The rules of the Windows display source that need no Win32 call: how a rate
-    //! the OS reports becomes a [`RefreshPeriod`], which sampled display a
-    //! window's nearest monitor is, and from which build the display query is
-    //! virtual-mode aware. Every host runs their tests.
+    //! The rules of the Windows display source that need no Win32 call: which
+    //! of the rates the OS reports gives a display its [`RefreshPeriod`], which
+    //! sampled display a window's nearest monitor is, and from which build the
+    //! display query is virtual-mode aware. Every host runs their tests.
 
     use flui_platform::{DisplayId, DisplayKey, RefreshPeriod};
 
+    use crate::display::source::Refresh;
     use crate::version::gate::Gate;
     use crate::version::gate::windows::WindowsBuild;
 
@@ -42,25 +43,33 @@ pub(crate) mod sample {
         const SINCE: u64 = 18362;
     }
 
-    /// The period of the rational rate `QueryDisplayConfig` reports for a target
-    /// (`DISPLAYCONFIG_RATIONAL`), kept exact: 60000/1001 stays 16.683 ms. `None`
-    /// for a zero numerator or denominator (a path that carries no rate) and for a
-    /// rate outside 1 to 1000 Hz.
-    pub(crate) fn rational_refresh_period(
-        numerator: u32,
-        denominator: u32,
+    /// The refresh period of a Windows display: the rational rate
+    /// `QueryDisplayConfig` reports for its target (`DISPLAYCONFIG_RATIONAL`,
+    /// kept exact: 60000/1001 stays 16.683 ms), or, when the display has no
+    /// path or its rate describes no cadence, `dmDisplayFrequency`, the
+    /// whole-hertz rate `EnumDisplaySettingsW` reports for the current mode,
+    /// read only then. That frequency's zero and one are the documented
+    /// "hardware default" values, not a rate, so they are unknown.
+    pub(crate) fn display_period(
+        target_rate: Option<(u32, u32)>,
+        mode_frequency: impl FnOnce() -> u32,
     ) -> Option<RefreshPeriod> {
-        RefreshPeriod::from_ratio(numerator, denominator).ok()
-    }
-
-    /// The period of `dmDisplayFrequency`, the whole-hertz rate
-    /// `EnumDisplaySettingsW` reports. Zero and one are the documented "hardware
-    /// default" values, not a cadence, so they are unknown.
-    pub(crate) fn frequency_period(hertz: u32) -> Option<RefreshPeriod> {
-        match hertz {
-            0 | 1 => None,
-            hertz => RefreshPeriod::from_ratio(hertz, 1).ok(),
-        }
+        target_rate
+            .and_then(|(numerator, denominator)| {
+                Refresh::HertzRatio {
+                    numerator,
+                    denominator,
+                }
+                .period()
+            })
+            .or_else(|| match mode_frequency() {
+                0 | 1 => None,
+                hertz => Refresh::HertzRatio {
+                    numerator: hertz,
+                    denominator: 1,
+                }
+                .period(),
+            })
     }
 
     /// One monitor of a sample: the handle `EnumDisplayMonitors` reported for it
@@ -100,8 +109,7 @@ pub(crate) mod sample {
         use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
         use super::{
-            QdcVirtualModeAware, SampledMonitor, WindowsBuild, frequency_period,
-            rational_refresh_period, resolve_display,
+            QdcVirtualModeAware, SampledMonitor, WindowsBuild, display_period, resolve_display,
         };
 
         /// The display query's gate, the row of `version::gate`'s table for the
@@ -133,38 +141,59 @@ pub(crate) mod sample {
             a.abs_diff(b) <= Duration::from_nanos(1)
         }
 
+        /// The period of a display with no path, by its mode's frequency.
+        fn mode_frequency_only(hertz: u32) -> Option<RefreshPeriod> {
+            display_period(None, || hertz)
+        }
+
+        /// The period of a display whose path reports `numerator / denominator`.
+        fn path_rate_only(numerator: u32, denominator: u32) -> Option<RefreshPeriod> {
+            display_period(Some((numerator, denominator)), || 0)
+        }
+
         fn windows_zero_or_one_hz_is_unknown() {
-            assert_eq!(frequency_period(0), None);
-            assert_eq!(frequency_period(1), None, "1 Hz is the hardware default");
+            assert_eq!(mode_frequency_only(0), None);
+            assert_eq!(mode_frequency_only(1), None, "1 Hz is the hardware default");
             assert_eq!(
-                frequency_period(2).map(RefreshPeriod::get),
+                mode_frequency_only(2).map(RefreshPeriod::get),
                 Some(Duration::from_millis(500))
             );
             assert_eq!(
-                frequency_period(60).map(RefreshPeriod::get),
+                mode_frequency_only(60).map(RefreshPeriod::get),
                 Some(Duration::from_nanos(16_666_667))
             );
-            assert_eq!(frequency_period(u32::MAX), None, "beyond 1000 Hz");
+            assert_eq!(mode_frequency_only(u32::MAX), None, "beyond 1000 Hz");
         }
 
         fn rational_refresh_converts_exactly() {
-            let ntsc = rational_refresh_period(60_000, 1001).expect("59.94 Hz");
+            let ntsc = path_rate_only(60_000, 1001).expect("59.94 Hz");
             assert!(
                 within_a_nanosecond(ntsc.get(), Duration::from_nanos(16_683_333)),
                 "59.94 Hz is {:?}, not 1/60 s",
                 ntsc.get()
             );
             for (hertz, nanos) in [(144, 6_944_444), (165, 6_060_606)] {
-                let period = rational_refresh_period(hertz, 1).expect("whole rate");
+                let period = path_rate_only(hertz, 1).expect("whole rate");
                 assert!(
                     within_a_nanosecond(period.get(), Duration::from_nanos(nanos)),
                     "{hertz} Hz is {:?}",
                     period.get()
                 );
             }
-            assert_eq!(rational_refresh_period(60, 0), None, "zero denominator");
-            assert_eq!(rational_refresh_period(0, 1), None, "zero numerator");
-            assert_eq!(rational_refresh_period(0, 0), None, "a path with no rate");
+            assert_eq!(path_rate_only(60, 0), None, "zero denominator");
+            assert_eq!(path_rate_only(0, 1), None, "zero numerator");
+            assert_eq!(path_rate_only(0, 0), None, "a path with no rate");
+            // A path that carries no rate falls back to the mode's frequency,
+            // which is read only then.
+            assert_eq!(
+                display_period(Some((0, 0)), || 60).map(RefreshPeriod::get),
+                Some(Duration::from_nanos(16_666_667))
+            );
+            assert_eq!(
+                display_period(Some((144, 1)), || panic!("the path's rate decides"))
+                    .map(RefreshPeriod::get),
+                Some(Duration::from_nanos(6_944_444))
+            );
         }
 
         fn nearest_monitor_resolves_by_native_key() {
@@ -310,10 +339,7 @@ pub(crate) mod source {
     // BOOL moved from Win32::Foundation to windows_core in windows 0.62
     use windows::core::{BOOL, PCWSTR};
 
-    use super::sample::{
-        QdcVirtualModeAware, SampledMonitor, frequency_period, rational_refresh_period,
-        resolve_display,
-    };
+    use super::sample::{QdcVirtualModeAware, SampledMonitor, display_period, resolve_display};
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::version::gate::Since;
@@ -508,9 +534,9 @@ pub(crate) mod source {
                 if let Some(interface) = monitor_interface_path(&monitor.device_name) {
                     display = display.with_persistent_key(interface);
                 }
-                display.refresh_period = path
-                    .and_then(|path| rational_refresh_period(path.refresh.0, path.refresh.1))
-                    .or_else(|| frequency_period(current_mode_frequency(&monitor.device_name)));
+                display.refresh_period = display_period(path.map(|path| path.refresh), || {
+                    current_mode_frequency(&monitor.device_name)
+                });
                 displays.push(display);
                 sampled.push(SampledMonitor {
                     handle: monitor.handle,

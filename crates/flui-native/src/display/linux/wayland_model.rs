@@ -29,9 +29,10 @@
 //!   bounds.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayKey, RefreshPeriod};
+use flui_platform::DisplayKey;
 
 use super::view::{Identity, OutputView};
+use crate::display::source::Refresh;
 
 /// One event of an output, in the terms the model needs. The adapter maps the
 /// protocol's events onto these.
@@ -278,7 +279,9 @@ fn view_of(global: u32, state: &OutputState, key_name: Option<&str>) -> Option<O
         bounds,
         usable_bounds: bounds,
         scale_factor,
-        refresh_period: refresh_period(mode.refresh_millihertz),
+        // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
+        // less means the compositor does not know.
+        refresh_period: Refresh::Millihertz(i64::from(mode.refresh_millihertz)).period(),
         is_primary: false,
         persistent_key: key_name.map(str::to_owned),
     })
@@ -297,17 +300,11 @@ fn label_of(state: &OutputState) -> String {
         .unwrap_or_else(|| "Display".to_owned())
 }
 
-/// `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or less means
-/// the compositor does not know.
-fn refresh_period(refresh_millihertz: i32) -> Option<RefreshPeriod> {
-    RefreshPeriod::from_millihertz(i64::from(refresh_millihertz)).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use flui_platform::DisplayRegistry;
+    use flui_platform::{DisplayRegistry, RefreshPeriod};
 
     use super::super::view::FreshIds;
     use super::*;
