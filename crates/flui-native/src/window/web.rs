@@ -34,7 +34,7 @@ use flui_platform::{
     WindowMode, WindowOptions, WindowState,
 };
 
-use crate::owner::web::HostDisplays;
+use crate::owner::web::{CanvasListeners, HostDisplays};
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -1214,7 +1214,23 @@ impl Listener {
         capture: bool,
         body: impl Fn(web_sys::Event) + 'static,
     ) -> Result<Self, OpenWindowError> {
-        let body: Rc<dyn Fn(web_sys::Event)> = Rc::new(body);
+        Self::install_body(target, kind, accepting, capture, Rc::new(body))
+    }
+
+    /// [`Self::install_in_phase`] for a body handed over behind its `Rc`, of
+    /// which the listener keeps the only strong reference.
+    fn install_body(
+        target: &web_sys::EventTarget,
+        kind: &'static str,
+        accepting: &Rc<Cell<bool>>,
+        capture: bool,
+        body: Rc<dyn Fn(web_sys::Event)>,
+    ) -> Result<Self, OpenWindowError> {
+        debug_assert_eq!(
+            Rc::strong_count(&body),
+            1,
+            "BUG: a listener keeps the only strong reference to its body"
+        );
         let weak = Rc::downgrade(&body);
         let accepting = Rc::clone(accepting);
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |event| {
@@ -1341,15 +1357,20 @@ pub(crate) struct Registration {
     claim: CanvasClaim,
 }
 
-/// What the drag transport adds its canvas listeners to.
-impl crate::owner::web::CanvasListeners for Registration {
-    fn add_listener(
+/// The canvas window's listeners, which its input and the drag transport add
+/// theirs to.
+impl CanvasListeners for Registration {
+    fn listen(
         &mut self,
         target: &web_sys::EventTarget,
         kind: &'static str,
-        body: Box<dyn Fn(web_sys::Event)>,
+        body: Rc<dyn Fn(web_sys::Event)>,
     ) -> Result<(), OpenWindowError> {
-        self.listen(target, kind, body)
+        // A refused add drops its token at once, which attempts removal; the
+        // installed prefix is removed when the registration rolls back.
+        let listener = Listener::install_body(target, kind, &self.accepting, false, body)?;
+        self.listeners.push(listener);
+        Ok(())
     }
 }
 
@@ -1389,19 +1410,6 @@ impl Registration {
         });
         self.timers.push(Rc::clone(&timer));
         timer
-    }
-
-    pub(crate) fn listen(
-        &mut self,
-        target: &web_sys::EventTarget,
-        kind: &'static str,
-        body: impl Fn(web_sys::Event) + 'static,
-    ) -> Result<(), OpenWindowError> {
-        // A refused add drops its token at once, which attempts removal; the
-        // installed prefix is removed when the registration rolls back.
-        let listener = Listener::install(target, kind, &self.accepting, body)?;
-        self.listeners.push(listener);
-        Ok(())
     }
 
     /// Observe the canvas's size; `body` gets each report's device-pixel

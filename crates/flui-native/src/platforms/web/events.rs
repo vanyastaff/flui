@@ -37,6 +37,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::display::web::PixelRatioWatch;
 use crate::owner::handlers::WindowCallbacks;
+use crate::owner::web::CanvasListeners;
 use crate::window::web::{Registration, WebWindow, effective_focus};
 use flui_platform::{PlatformInput, WindowExecutionState};
 
@@ -92,14 +93,18 @@ pub(crate) fn register_event_listeners(
     );
     let visibility = Rc::new(window.visibility_sync(Rc::clone(&registration.accepting)));
     let observer = Rc::clone(&visibility);
-    registration.listen(visibility.document.as_ref(), "visibilitychange", move |e| {
-        // The sequences end before the change is reported: its callback
-        // may close the window.
-        if observer.document.hidden() {
-            loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
-        }
-        observer.sync();
-    })?;
+    registration.listen(
+        visibility.document.as_ref(),
+        "visibilitychange",
+        Rc::new(move |e: web_sys::Event| {
+            // The sequences end before the change is reported: its callback
+            // may close the window.
+            if observer.document.hidden() {
+                loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
+            }
+            observer.sync();
+        }),
+    )?;
     register_wheel_events(canvas, &callbacks, &pinch, registration)?;
     register_gesture_events(canvas, &pinch, registration)?;
     register_context_menu(canvas, &menu, registration)?;
@@ -180,12 +185,16 @@ fn register_layout_events(
     // the query with it.
     let ratio = PixelRatioWatch::for_layout(&registration.accepting, move || ratio_sync.sync());
     let browser = web_sys::window().expect("BUG: window construction verified browser environment");
-    registration.listen(browser.as_ref(), "resize", move |_| {
-        if let Some(ratio) = &ratio {
-            ratio.arm_if_unarmed();
-        }
-        sync.sync();
-    })
+    registration.listen(
+        browser.as_ref(),
+        "resize",
+        Rc::new(move |_: web_sys::Event| {
+            if let Some(ratio) = &ratio {
+                ratio.arm_if_unarmed();
+            }
+            sync.sync();
+        }),
+    )
 }
 
 // ==================== Appearance ====================
@@ -201,9 +210,13 @@ fn register_appearance_events(
         return Ok(());
     };
     let callbacks = Arc::clone(callbacks);
-    registration.listen(query.as_ref(), "change", move |_| {
-        callbacks.dispatch_appearance_changed();
-    })
+    registration.listen(
+        query.as_ref(),
+        "change",
+        Rc::new(move |_: web_sys::Event| {
+            callbacks.dispatch_appearance_changed();
+        }),
+    )
 }
 
 // ==================== Page lifecycle ====================
@@ -223,7 +236,11 @@ fn register_page_lifecycle_events(
         ("resume", WindowExecutionState::Running),
     ] {
         let execution = Rc::clone(&execution);
-        registration.listen(document.as_ref(), kind, move |_| execution.set(state))?;
+        registration.listen(
+            document.as_ref(),
+            kind,
+            Rc::new(move |_: web_sys::Event| execution.set(state)),
+        )?;
     }
     Ok(())
 }
@@ -241,9 +258,9 @@ fn register_fullscreen_events(
     registration.listen(
         document_of(window).as_ref(),
         "fullscreenchange",
-        move |_| {
+        Rc::new(move |_: web_sys::Event| {
             publisher.publish();
-        },
+        }),
     )
 }
 
@@ -270,12 +287,16 @@ fn register_context_loss_events(
 ) -> Result<(), crate::OpenWindowError> {
     for (kind, available) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
         let callbacks = Arc::clone(window.callbacks());
-        registration.listen(window.canvas().as_ref(), kind, move |event| {
-            if !available {
-                event.prevent_default();
-            }
-            callbacks.dispatch_surface_status_change(available);
-        })?;
+        registration.listen(
+            window.canvas().as_ref(),
+            kind,
+            Rc::new(move |event: web_sys::Event| {
+                if !available {
+                    event.prevent_default();
+                }
+                callbacks.dispatch_surface_status_change(available);
+            }),
+        )?;
     }
     Ok(())
 }
@@ -319,37 +340,41 @@ fn register_pointer_events(
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         let menu = Rc::clone(menu);
-        registration.listen(canvas.as_ref(), "pointerdown", move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            if !accepting.get() {
-                return;
-            }
-            let buttons = pe.buttons();
-            let contextual = opens_menu(pe.button(), pe.ctrl_key());
-            if !accepting.get() {
-                return;
-            }
-            active.borrow_mut().insert(id, buttons);
-            if !custody.admit(id) {
-                active.borrow_mut().remove(&id);
-                return;
-            }
-            // Admission precedes application callbacks, which can remove the
-            // canvas or synchronously dispatch another terminal event.
-            if let Err(error) = capture.set_pointer_capture(id) {
-                tracing::debug!(?error, "browser pointer capture was not admitted");
-            }
-            if !accepting.get() {
-                // The host can close before performing the native operation.
-                // Release that outgoing capture unless a newer owner has
-                // already admitted this pointer on the same actual canvas.
-                custody.release(id);
-                return;
-            }
-            let pressed = dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
-            menu.record(contextual, pressed);
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            "pointerdown",
+            Rc::new(move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
+                let buttons = pe.buttons();
+                let contextual = opens_menu(pe.button(), pe.ctrl_key());
+                if !accepting.get() {
+                    return;
+                }
+                active.borrow_mut().insert(id, buttons);
+                if !custody.admit(id) {
+                    active.borrow_mut().remove(&id);
+                    return;
+                }
+                // Admission precedes application callbacks, which can remove the
+                // canvas or synchronously dispatch another terminal event.
+                if let Err(error) = capture.set_pointer_capture(id) {
+                    tracing::debug!(?error, "browser pointer capture was not admitted");
+                }
+                if !accepting.get() {
+                    // The host can close before performing the native operation.
+                    // Release that outgoing capture unless a newer owner has
+                    // already admitted this pointer on the same actual canvas.
+                    custody.release(id);
+                    return;
+                }
+                let pressed = dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
+                menu.record(contextual, pressed);
+            }),
+        )?;
     }
 
     // pointermove
@@ -362,7 +387,7 @@ fn register_pointer_events(
         registration.listen(
             canvas.as_ref(),
             move_event(input_latency),
-            move |e: web_sys::Event| {
+            Rc::new(move |e: web_sys::Event| {
                 let pe: web_sys::PointerEvent = e.unchecked_into();
                 let id = pe.pointer_id();
                 if !accepting.get() {
@@ -379,7 +404,7 @@ fn register_pointer_events(
                 // A chorded press opens the menu as a first one does.
                 let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
                 menu.record(contextual, pressed);
-            },
+            }),
         )?;
     }
 
@@ -395,22 +420,26 @@ fn register_pointer_events(
         let contacts = Rc::clone(contacts);
         let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
-        registration.listen(canvas.as_ref(), kind, move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            if !accepting.get() {
-                return;
-            }
-            let hovers = matches!(pe.pointer_type().as_str(), "mouse" | "pen");
-            if !accepting.get() || !hovers || active.borrow().contains_key(&id) {
-                return;
-            }
-            dispatch(
-                &pinch,
-                &pe,
-                assemble(&contacts, &pointer_reading(&pe, action)),
-            );
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            kind,
+            Rc::new(move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
+                let hovers = matches!(pe.pointer_type().as_str(), "mouse" | "pen");
+                if !accepting.get() || !hovers || active.borrow().contains_key(&id) {
+                    return;
+                }
+                dispatch(
+                    &pinch,
+                    &pe,
+                    assemble(&contacts, &pointer_reading(&pe, action)),
+                );
+            }),
+        )?;
     }
 
     // pointerup
@@ -420,22 +449,26 @@ fn register_pointer_events(
         let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
-        registration.listen(canvas.as_ref(), "pointerup", move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            if !accepting.get() {
-                return;
-            }
-            let was_active = active.borrow_mut().remove(&id).is_some();
-            if !was_active {
-                return;
-            }
-            custody.release(id);
-            if !accepting.get() {
-                return;
-            }
-            dispatch(&pinch, &pe, convert_pointer_up(&pe, &contacts));
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            "pointerup",
+            Rc::new(move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
+                let was_active = active.borrow_mut().remove(&id).is_some();
+                if !was_active {
+                    return;
+                }
+                custody.release(id);
+                if !accepting.get() {
+                    return;
+                }
+                dispatch(&pinch, &pe, convert_pointer_up(&pe, &contacts));
+            }),
+        )?;
     }
 
     // A browser gesture takeover is a terminal event even when no release
@@ -449,7 +482,7 @@ fn register_pointer_events(
         registration.listen(
             canvas.as_ref(),
             "pointercancel",
-            move |e: web_sys::Event| {
+            Rc::new(move |e: web_sys::Event| {
                 let pe: web_sys::PointerEvent = e.unchecked_into();
                 let id = pe.pointer_id();
                 if !accepting.get() {
@@ -468,7 +501,7 @@ fn register_pointer_events(
                     &pe,
                     convert_pointer_cancel(&pe, NativeCancel::Platform, &contacts),
                 );
-            },
+            }),
         )?;
     }
 
@@ -480,7 +513,7 @@ fn register_pointer_events(
         registration.listen(
             canvas.as_ref(),
             "lostpointercapture",
-            move |e: web_sys::Event| {
+            Rc::new(move |e: web_sys::Event| {
                 let pe: web_sys::PointerEvent = e.unchecked_into();
                 let id = pe.pointer_id();
                 if !accepting.get() {
@@ -498,7 +531,7 @@ fn register_pointer_events(
                     &pe,
                     convert_pointer_cancel(&pe, NativeCancel::CaptureLost, &contacts),
                 );
-            },
+            }),
         )?;
     }
     // The page's focus and visibility listeners end the sequences through
@@ -639,12 +672,16 @@ fn register_keyboard_events(
     for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
         let keys = Rc::clone(keys);
         let target = canvas.clone();
-        registration.listen(canvas.as_ref(), kind, move |event| {
-            if !effective_focus(&target) || event.target().as_ref() != Some(target.as_ref()) {
-                return;
-            }
-            keys.deliver(&event, state);
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            kind,
+            Rc::new(move |event: web_sys::Event| {
+                if !effective_focus(&target) || event.target().as_ref() != Some(target.as_ref()) {
+                    return;
+                }
+                keys.deliver(&event, state);
+            }),
+        )?;
     }
     Ok(())
 }
@@ -677,28 +714,36 @@ fn register_focus_events(
             let focus = Rc::clone(&focus);
             let loss = Rc::clone(loss);
             let canvas = window.canvas().clone();
-            registration.listen(target, kind, move |event| {
-                // The page itself losing the OS focus (`blur` does not
-                // bubble, so the window's own) ends every sequence before
-                // the change is reported: its callback may close the window.
-                let page_lost = event.type_() == "blur"
-                    && event
-                        .target()
-                        .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
-                if page_lost {
-                    loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
-                }
-                if !is_focus_handoff(&canvas, &event) {
-                    focus.sync();
-                }
-            })?;
+            registration.listen(
+                target,
+                kind,
+                Rc::new(move |event: web_sys::Event| {
+                    // The page itself losing the OS focus (`blur` does not
+                    // bubble, so the window's own) ends every sequence before
+                    // the change is reported: its callback may close the window.
+                    let page_lost = event.type_() == "blur"
+                        && event
+                            .target()
+                            .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
+                    if page_lost {
+                        loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
+                    }
+                    if !is_focus_handoff(&canvas, &event) {
+                        focus.sync();
+                    }
+                }),
+            )?;
         }
     }
     for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
         let callbacks = Arc::clone(window.callbacks());
-        registration.listen(window.canvas().as_ref(), kind, move |_| {
-            callbacks.dispatch_hover_status_change(hovered);
-        })?;
+        registration.listen(
+            window.canvas().as_ref(),
+            kind,
+            Rc::new(move |_: web_sys::Event| {
+                callbacks.dispatch_hover_status_change(hovered);
+            }),
+        )?;
     }
     Ok(focus)
 }
@@ -838,62 +883,68 @@ fn register_wheel_events(
     let callbacks = Arc::clone(callbacks);
     let pinch = Rc::clone(pinch);
     let target = canvas.clone();
-    registration.listen(canvas.as_ref(), "wheel", move |e: web_sys::Event| {
-        let we: &web_sys::WheelEvent = e.unchecked_ref();
-        let step = WheelStep {
-            ctrl: we.ctrl_key(),
-            mode: we.delta_mode(),
-            dx: we.delta_x(),
-            dy: we.delta_y(),
-            scale: web_sys::window().map_or(1.0, |window| window.device_pixel_ratio()),
-            time: event_time(we.time_stamp()),
-        };
-        let ended = {
-            let mut wheel = pinch.wheel.borrow_mut();
-            if step.ctrl {
-                wheel.expire(step.time)
-            } else {
-                wheel.finish(step.time)
+    registration.listen(
+        canvas.as_ref(),
+        "wheel",
+        Rc::new(move |e: web_sys::Event| {
+            let we: &web_sys::WheelEvent = e.unchecked_ref();
+            let step = WheelStep {
+                ctrl: we.ctrl_key(),
+                mode: we.delta_mode(),
+                dx: we.delta_x(),
+                dy: we.delta_y(),
+                scale: web_sys::window().map_or(1.0, |window| window.device_pixel_ratio()),
+                time: event_time(we.time_stamp()),
+            };
+            let ended = {
+                let mut wheel = pinch.wheel.borrow_mut();
+                if step.ctrl {
+                    wheel.expire(step.time)
+                } else {
+                    wheel.finish(step.time)
+                }
+            };
+            if let Some((end, at)) = ended {
+                let inputs = pinch.assemble(end, at, None, Modifiers::NONE);
+                pinch.deliver(inputs, None);
             }
-        };
-        if let Some((end, at)) = ended {
-            let inputs = pinch.assemble(end, at, None, Modifiers::NONE);
-            pinch.deliver(inputs, None);
-        }
-        let route = pinch.wheel.borrow_mut().route(step);
-        match route {
-            WheelRoute::Refused => {}
-            WheelRoute::Scroll => {
-                if let Some(input) = convert_wheel_event(we, &target, &pinch.contacts) {
-                    answer(&e, callbacks.dispatch_input(input));
+            let route = pinch.wheel.borrow_mut().route(step);
+            match route {
+                WheelRoute::Refused => {}
+                WheelRoute::Scroll => {
+                    if let Some(input) = convert_wheel_event(we, &target, &pinch.contacts) {
+                        answer(&e, callbacks.dispatch_input(input));
+                    }
+                }
+                WheelRoute::Pinch(reading) => {
+                    let Ok(focal) = PointerPosition::try_new(wheel_position(we, &target)) else {
+                        return;
+                    };
+                    // Chromium sets Control on a pinch it encodes as a wheel; it
+                    // is not a key the user holds.
+                    let modifiers = observed_modifiers(
+                        [we.shift_key(), false, we.alt_key(), we.meta_key()],
+                        |name| name != "Control" && we.get_modifier_state(name),
+                    );
+                    let inputs = pinch.assemble(reading, step.time, Some(focal.get()), modifiers);
+                    let first = reading.phase == GesturePhase::Began;
+                    pinch.step(
+                        inputs,
+                        first,
+                        &e,
+                        || pinch.wheel.borrow_mut().refuse(),
+                        step.time,
+                    );
+                    let deadline = pinch.wheel.borrow().deadline();
+                    if let Some(deadline) = deadline {
+                        timer.arm(
+                            deadline.saturating_duration_since(performance_now()) + TIMER_SLACK,
+                        );
+                    }
                 }
             }
-            WheelRoute::Pinch(reading) => {
-                let Ok(focal) = PointerPosition::try_new(wheel_position(we, &target)) else {
-                    return;
-                };
-                // Chromium sets Control on a pinch it encodes as a wheel; it
-                // is not a key the user holds.
-                let modifiers = observed_modifiers(
-                    [we.shift_key(), false, we.alt_key(), we.meta_key()],
-                    |name| name != "Control" && we.get_modifier_state(name),
-                );
-                let inputs = pinch.assemble(reading, step.time, Some(focal.get()), modifiers);
-                let first = reading.phase == GesturePhase::Began;
-                pinch.step(
-                    inputs,
-                    first,
-                    &e,
-                    || pinch.wheel.borrow_mut().refuse(),
-                    step.time,
-                );
-                let deadline = pinch.wheel.borrow().deadline();
-                if let Some(deadline) = deadline {
-                    timer.arm(deadline.saturating_duration_since(performance_now()) + TIMER_SLACK);
-                }
-            }
-        }
-    })
+        }),
+    )
 }
 
 /// One nanosecond on the event timeline.
@@ -954,57 +1005,61 @@ fn register_gesture_events(
     ] {
         let pinch = Rc::clone(pinch);
         let target = canvas.clone();
-        registration.listen(canvas.as_ref(), name, move |e: web_sys::Event| {
-            let values: &GestureEventValues = e.unchecked_ref();
-            let time = event_time(e.time_stamp());
-            pinch.flush(time);
-            // WebKit on a touch screen reports a two-finger pinch as gesture
-            // events beside the touches themselves, which the application
-            // already has: delivering both would scale it twice. A gesture
-            // that starts over an open touch is left to the touches.
-            if kind == GestureEventKind::Start
-                && pinch
-                    .contacts
-                    .borrow()
-                    .has_open_kind(SURFACE, PointerKind::Touch)
-            {
-                *pinch.gesture.borrow_mut() = GestureTracker::default();
-                return;
-            }
-            let scale = values.scale().unwrap_or(f64::NAN);
-            let rotation = values.rotation().unwrap_or(f64::NAN);
-            let focal = values
-                .gesture_client_x()
-                .ok()
-                .zip(values.gesture_client_y().ok())
-                .and_then(|(x, y)| client_to_canvas(&target, x, y))
-                .and_then(|point| PointerPosition::try_new(point).ok())
-                .map(PointerPosition::get);
-            let modifiers = [
-                (values.gesture_shift(), Modifiers::SHIFT),
-                (values.gesture_ctrl(), Modifiers::CONTROL),
-                (values.gesture_alt(), Modifiers::ALT),
-                (values.gesture_meta(), Modifiers::META),
-            ]
-            .into_iter()
-            .filter(|(held, _)| held.unwrap_or(false))
-            .fold(Modifiers::NONE, |all, (_, flag)| all | flag);
-            let readings = pinch.gesture.borrow_mut().step(kind, scale, rotation);
-            let mut inputs = Assembled::new();
-            for reading in readings.into_iter().flatten() {
-                inputs.extend(pinch.assemble(reading, time, focal, modifiers));
-            }
-            if pinch.gesture.borrow().is_refused() {
-                return;
-            }
-            pinch.step(
-                inputs,
-                kind == GestureEventKind::Start,
-                &e,
-                || pinch.gesture.borrow_mut().refuse(),
-                time,
-            );
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            name,
+            Rc::new(move |e: web_sys::Event| {
+                let values: &GestureEventValues = e.unchecked_ref();
+                let time = event_time(e.time_stamp());
+                pinch.flush(time);
+                // WebKit on a touch screen reports a two-finger pinch as gesture
+                // events beside the touches themselves, which the application
+                // already has: delivering both would scale it twice. A gesture
+                // that starts over an open touch is left to the touches.
+                if kind == GestureEventKind::Start
+                    && pinch
+                        .contacts
+                        .borrow()
+                        .has_open_kind(SURFACE, PointerKind::Touch)
+                {
+                    *pinch.gesture.borrow_mut() = GestureTracker::default();
+                    return;
+                }
+                let scale = values.scale().unwrap_or(f64::NAN);
+                let rotation = values.rotation().unwrap_or(f64::NAN);
+                let focal = values
+                    .gesture_client_x()
+                    .ok()
+                    .zip(values.gesture_client_y().ok())
+                    .and_then(|(x, y)| client_to_canvas(&target, x, y))
+                    .and_then(|point| PointerPosition::try_new(point).ok())
+                    .map(PointerPosition::get);
+                let modifiers = [
+                    (values.gesture_shift(), Modifiers::SHIFT),
+                    (values.gesture_ctrl(), Modifiers::CONTROL),
+                    (values.gesture_alt(), Modifiers::ALT),
+                    (values.gesture_meta(), Modifiers::META),
+                ]
+                .into_iter()
+                .filter(|(held, _)| held.unwrap_or(false))
+                .fold(Modifiers::NONE, |all, (_, flag)| all | flag);
+                let readings = pinch.gesture.borrow_mut().step(kind, scale, rotation);
+                let mut inputs = Assembled::new();
+                for reading in readings.into_iter().flatten() {
+                    inputs.extend(pinch.assemble(reading, time, focal, modifiers));
+                }
+                if pinch.gesture.borrow().is_refused() {
+                    return;
+                }
+                pinch.step(
+                    inputs,
+                    kind == GestureEventKind::Start,
+                    &e,
+                    || pinch.gesture.borrow_mut().refuse(),
+                    time,
+                );
+            }),
+        )?;
     }
     Ok(())
 }
@@ -1027,16 +1082,20 @@ fn register_context_menu(
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     let menu = Rc::clone(menu);
-    registration.listen(canvas.as_ref(), "contextmenu", move |e: web_sys::Event| {
-        let contextual = e
-            .dyn_ref::<web_sys::MouseEvent>()
-            .is_some_and(|mouse| opens_menu(mouse.button(), mouse.ctrl_key()));
-        let answered = if contextual { menu.answer.take() } else { None };
-        match answered {
-            Some(result) => answer(&e, result),
-            None => e.prevent_default(),
-        }
-    })
+    registration.listen(
+        canvas.as_ref(),
+        "contextmenu",
+        Rc::new(move |e: web_sys::Event| {
+            let contextual = e
+                .dyn_ref::<web_sys::MouseEvent>()
+                .is_some_and(|mouse| opens_menu(mouse.button(), mouse.ctrl_key()));
+            let answered = if contextual { menu.answer.take() } else { None };
+            match answered {
+                Some(result) => answer(&e, result),
+                None => e.prevent_default(),
+            }
+        }),
+    )
 }
 
 // ==================== Event Conversion ====================

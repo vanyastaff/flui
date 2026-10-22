@@ -95,31 +95,19 @@ pub(crate) trait HostDrag: DataTransferSource {
 /// the window adds to: they run only while the window accepts input, and go
 /// when it retires or its opening rolls back.
 pub(crate) trait CanvasListeners {
-    /// Listen for `kind` events on `target`.
+    /// Listen for `kind` events on `target` with `body`, handed over as
+    /// `Rc::new(..)`: the listener keeps its only strong reference, and the
+    /// browser's callback reaches it weakly, so a retired listener runs and
+    /// keeps nothing of it.
     ///
     /// # Errors
     /// What the browser reports when the listener cannot be added.
-    fn add_listener(
+    fn listen(
         &mut self,
         target: &web_sys::EventTarget,
         kind: &'static str,
-        body: Box<dyn Fn(web_sys::Event)>,
+        body: Rc<dyn Fn(web_sys::Event)>,
     ) -> Result<(), crate::OpenWindowError>;
-}
-
-impl dyn CanvasListeners + '_ {
-    /// [`add_listener`](CanvasListeners::add_listener) with any closure.
-    ///
-    /// # Errors
-    /// What the browser reports when the listener cannot be added.
-    pub(crate) fn listen(
-        &mut self,
-        target: &web_sys::EventTarget,
-        kind: &'static str,
-        body: impl Fn(web_sys::Event) + 'static,
-    ) -> Result<(), crate::OpenWindowError> {
-        self.add_listener(target, kind, Box::new(body))
-    }
 }
 
 /// What a canvas's drag registration leaves its window.
