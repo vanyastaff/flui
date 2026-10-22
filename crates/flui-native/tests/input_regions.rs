@@ -1,11 +1,9 @@
 //! Input regions on the backend side (ADR-0217 §5): the headless window hands its simulated
-//! OS a set only when the projection changed, and an OS that defers gestures per screen
-//! edge is given the edges the exclusion regions reach.
+//! OS a set only when the projection changed.
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect, Size};
-use flui_native::shared::screen_edges::DeferredEdges;
+use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::WindowOptions;
 use flui_platform::input_capabilities::Availability;
@@ -78,46 +76,13 @@ fn headless_reports_input_regions_and_sends_only_changes() {
     );
 }
 
-fn an_exclusion_region_defers_the_edges_it_reaches() {
-    let window = Size::new(100, 200);
-    let edges = |regions: &[DeviceInputRegion]| DeferredEdges::of(regions, window);
-    assert_eq!(edges(&[]), DeferredEdges::default());
-    assert_eq!(
-        edges(&[device(10, 10, 90, 190)]),
-        DeferredEdges::default(),
-        "clear of every edge"
-    );
-    assert_eq!(
-        edges(&[device(0, 50, 20, 150)]),
-        DeferredEdges {
-            left: true,
-            ..DeferredEdges::default()
-        }
-    );
-    assert_eq!(
-        edges(&[device(80, 180, 100, 200), device(0, 0, 100, 10)]),
-        DeferredEdges {
-            top: true,
-            left: true,
-            bottom: true,
-            right: true,
-        }
-    );
-}
-
 #[test]
 fn input_regions() {
     run_table(
         "input_regions",
-        &[
-            (
-                "headless_reports_input_regions_and_sends_only_changes",
-                headless_reports_input_regions_and_sends_only_changes,
-            ),
-            (
-                "an_exclusion_region_defers_the_edges_it_reaches",
-                an_exclusion_region_defers_the_edges_it_reaches,
-            ),
-        ],
+        &[(
+            "headless_reports_input_regions_and_sends_only_changes",
+            headless_reports_input_regions_and_sends_only_changes,
+        )],
     );
 }

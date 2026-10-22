@@ -11,25 +11,18 @@
 // that makes it sound.
 #![expect(unsafe_code)]
 
-mod appearance;
-mod direct_manipulation;
+pub(crate) mod direct_manipulation;
 pub(crate) mod events;
-pub(crate) mod platform;
-mod window;
-mod window_ext;
-mod window_frame;
-mod window_limits;
-mod window_modes;
-mod window_placement;
-mod window_visibility;
+pub(crate) mod input_messages;
 
 // The types the Windows host's table names: public where they are defined (a
 // table names only public types), and nameable only inside the crate.
 // The hooks the Windows host registers on FLUI's window class.
 pub(crate) use direct_manipulation::Touchpad;
-pub(crate) use platform::WindowProc;
-pub use window::WindowsWindow;
-pub use window_ext::{
+pub(crate) use input_messages::InputMessages;
+// The window feature's public types, at the paths applications name them by.
+pub use crate::window::windows::WindowsWindow;
+pub use crate::window::windows::backdrop::{
     TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
 };
 

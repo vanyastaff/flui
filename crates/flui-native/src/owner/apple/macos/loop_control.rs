@@ -1,8 +1,5 @@
 //! Standalone AppKit loop ownership and orderly, policy-aware stopping.
-use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
@@ -30,7 +27,6 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
-    platforms::macos::MacOSWindow,
 };
 use flui_platform::PlatformWindow;
 
@@ -67,7 +63,7 @@ struct State {
 pub(crate) struct LoopControl {
     pub(crate) owner_signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Mutex<State>,
-    windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
+    windows: super::WindowRegistry,
     handlers: Arc<Mutex<PlatformHandlers>>,
     /// Connects the session-end announcement to the terminate request that
     /// follows it. Never held across a call into the session-end hook.
@@ -76,7 +72,7 @@ pub(crate) struct LoopControl {
 
 impl LoopControl {
     pub(super) fn new(
-        windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
+        windows: super::WindowRegistry,
         handlers: Arc<Mutex<PlatformHandlers>>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
@@ -606,6 +602,7 @@ impl Drop for LoopOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn control() -> Arc<LoopControl> {

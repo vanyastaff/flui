@@ -16,10 +16,10 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::web::{HostDisplays, HostDrag, PageLifecycle, WebHost, WebLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::web::WebWindow;
 use crate::preferences::web::WebPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::web::WebTextInput;
+use crate::window::web::WebWindow;
 
 /// The web host's table.
 #[derive(Debug)]
@@ -80,6 +80,6 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WebLoop::new::<Web>()?))
+        Self::try_from_parts((), |_| WebLoop::new::<Web>())
     }
 }

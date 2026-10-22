@@ -17,6 +17,9 @@
 //! - `sources`: what a loop keeps of its host's preference source;
 //! - `watch`: an observation a feature started for a loop, which the loop
 //!   ends by dropping it;
+//! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
+//!   and when its user data is torn down, which the owner control and the
+//!   loop apply (on Windows, and in tests on every host);
 //! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
@@ -65,6 +68,11 @@ pub(crate) mod headless;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
+// The rules by which the Win32 loop and its windows reach a window's context
+// across threads: pure, so `test` compiles them on every host. Beside the
+// loop's module rather than in it, which is Windows' alone.
+#[cfg(any(windows, test))]
+pub(crate) mod hwnd_affinity;
 pub(crate) mod panic_boundary;
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod redraw_poll;

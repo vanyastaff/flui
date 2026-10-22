@@ -184,7 +184,7 @@ use windows::Win32::UI::WindowsAndMessaging::{WM_EXITSIZEMOVE, WM_MOVE};
 #[cfg(windows)]
 use crate::owner::windows::{CreatedWindow, WindowMessages};
 #[cfg(windows)]
-use crate::platforms::windows::platform::{WindowRef, with_window_context};
+use crate::window::windows::proc::{WindowRef, with_window_context};
 
 /// The text services' hook on FLUI's window class: each window the class
 /// creates gets its TSF connection, held in the window's context

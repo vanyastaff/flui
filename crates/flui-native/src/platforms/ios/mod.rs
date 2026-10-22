@@ -41,9 +41,6 @@
 //! call takes the proof a version check hands out (`shared::os_version`).
 //! Before iOS 15 the link gets `preferredFramesPerSecond` instead.
 
-// Some screen/geometry APIs remain deprecated in SDK 26.2. Scene ownership is
-// implemented; this allowance does not exempt new code from scene lifetime rules.
-#![expect(deprecated)]
 // This module (and its submodules) is the workspace's sanctioned `unsafe` FFI
 // island for UIKit — direct Objective-C calls have no safe wrapper. The
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -51,15 +48,10 @@
 // uses).
 #![expect(unsafe_code)]
 
-mod events;
+pub(crate) mod events;
 pub(crate) mod os_version;
-mod positions;
-mod status_bar;
-mod window;
 
-pub use crate::owner::apple::ios::{
-    IOSExecutor, IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId,
-};
-pub(crate) use status_bar::IOSSystemChrome;
-pub use window::IOSWindow;
-pub(crate) use window::LifecycleObservation;
+pub use crate::owner::apple::ios::{IOSExecutor, IOSSceneAttachmentId, IOSSceneSessionId};
+// The window and the scene event that hands it over live in the window
+// feature; their public names stay here.
+pub use crate::window::apple::ios::{IOSSceneEvent, IOSWindow};

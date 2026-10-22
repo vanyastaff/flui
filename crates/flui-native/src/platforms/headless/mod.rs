@@ -2,14 +2,11 @@
 
 mod platform;
 
-mod window_policy;
-
 pub use crate::display::headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
 };
-pub use platform::{FakeSystemChrome, HeadlessInputDevices, MockWindow};
-pub(crate) use platform::{TextStoreHostFactory, create_mock_window};
-pub use window_policy::HeadlessWindowPolicy;
+pub use platform::HeadlessInputDevices;
+pub(crate) use platform::TextStoreHostFactory;
 
 pub use crate::lifecycle::headless::HeadlessHostEvents;
 pub use crate::owner::headless::{
@@ -17,3 +14,5 @@ pub use crate::owner::headless::{
 };
 pub use crate::preferences::headless::HeadlessPreferences;
 pub use crate::text::headless::FakeTextInput;
+// The window feature's headless types, at the paths tests name them by.
+pub use crate::window::headless::{FakeSystemChrome, HeadlessWindowPolicy, MockWindow};

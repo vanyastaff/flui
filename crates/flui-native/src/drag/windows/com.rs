@@ -41,13 +41,14 @@ use super::{OleTransfer, clipboard_format, describe, global_format, write_global
 use crate::drag::windows::crossing::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
-use crate::platforms::windows::platform::WindowRef;
+use crate::owner::windows::WindowRef;
 
-pub(crate) use objects::WindowDropTarget;
 pub(super) use objects::{
     DropSource, DropSource_Impl, FormatList, FormatList_Impl, SourceData, SourceData_Impl,
     WindowDropTarget_Impl,
 };
+// The window's context keeps its drop target.
+pub(crate) use objects::WindowDropTarget;
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
 fn com_boundary<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
@@ -76,7 +77,7 @@ mod objects {
 
     use super::super::OleTransfer;
     use super::SourceEntry;
-    use crate::platforms::windows::platform::WindowRef;
+    use crate::owner::windows::WindowRef;
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
     // `!Send` provider): `Agile = false` withholds `IAgileObject` and the

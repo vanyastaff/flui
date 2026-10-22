@@ -545,9 +545,9 @@ use crate::{
     owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
+    owner::windows::WindowRef,
     owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow},
     owner::windows::{CreatedWindow, HostDrag, WindowMessages},
-    platforms::windows::platform::WindowRef,
 };
 #[cfg(windows)]
 use crossing::{

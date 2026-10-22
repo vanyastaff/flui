@@ -6,11 +6,13 @@
 //! callback and enters `UIApplicationMain`, and the `AppDelegate` this module
 //! declares runs it from `application:didFinishLaunchingWithOptions:` — the
 //! process bootstrap. The scene delegate owns subsequent window attachments.
-//! Windows, the clipboard and the other features keep their code under
-//! `platforms::ios` and reach the owner thread through what this module
-//! re-exports. The loop holds the displays, the preference source and the
-//! notice channel through the hooks the table makes ([`IosHost`]), and is the
-//! table's displays, preference and lifecycle position.
+//! The loop makes and drives each scene's window as a [`SceneWindow`], the
+//! window feature's, without naming it; the clipboard and the other features
+//! keep their code under `platforms::ios` and reach the owner thread through
+//! what this module re-exports. The loop holds the displays, the preference
+//! source and the notice channel through the hooks the table makes
+//! ([`IosHost`]), and is the table's displays, preference and lifecycle
+//! position.
 //!
 //! # Lifecycle
 //!
@@ -42,8 +44,8 @@ mod scene_error;
 
 pub(crate) use super::NativeOwner;
 pub use executor::IOSExecutor;
-use scene::SceneHandler;
-pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};
+pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
+pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
@@ -67,22 +69,19 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::call_point::{Called, Field, Once, SharedField, call, install, retire};
 use crate::owner::handlers::{PlatformHandlers, SessionEndHook};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel};
 use crate::owner::sources::SystemPreferenceSource;
-use crate::platform::HostPlatform;
 use crate::{
     owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
 };
-use flui_platform::{
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId,
-};
+use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId};
 
+use crate::host_window::HostWindow;
 use crate::owner::watch::Watch;
-use crate::platforms::ios::{IOSWindow, LifecycleObservation};
 use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::UIScreen;
@@ -168,15 +167,84 @@ pub(crate) trait HostDisplays: Send + Sync {
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
 }
 
+/// What a scene's delegate reports of its window's life.
+#[derive(Clone, Copy)]
+pub(crate) enum LifecycleObservation {
+    Active,
+    Inactive,
+    Background,
+    Foreground,
+    Detached,
+}
+
+/// A scene's window as the iOS loop drives it: the window feature's, which
+/// the loop holds without naming it (ADR-0151 §10). A scene connection
+/// attaches it to a `UIWindowScene`, the loop publishes it once the
+/// application installed it, and a disconnection or discard retires it.
+pub(crate) trait SceneWindow: HostWindow {
+    /// Attach the window to `scene` as `attachment`.
+    fn attach(
+        &self,
+        scene: &UIWindowScene,
+        attachment: IOSSceneAttachmentId,
+        marker: MainThreadMarker,
+    );
+
+    /// Put `attachment` on screen.
+    fn publish(&self, attachment: IOSSceneAttachmentId, marker: MainThreadMarker);
+
+    /// The window's lifecycle generation, which moves on at every background,
+    /// foreground and detach: a step that waited compares it to learn whether
+    /// the window moved on meanwhile.
+    fn resource_generation(&self) -> u64;
+
+    /// Whether the window's current attachment is `attachment`.
+    fn attachment_matches(
+        &self,
+        attachment: IOSSceneAttachmentId,
+        marker: MainThreadMarker,
+    ) -> bool;
+
+    /// Pause or resume the window's frame source.
+    fn set_frame_tick_paused(&self, paused: bool);
+
+    /// Tell the window what its scene did.
+    fn observe_lifecycle(&self, observation: LifecycleObservation);
+
+    /// Stop the window's frames ahead of a disconnection or discard.
+    fn begin_retirement(&self);
+
+    /// Detach the window from its scene; the window stays to reattach.
+    fn disconnect(&self, marker: MainThreadMarker);
+
+    /// Close the window for good: it reports its close and drops its native
+    /// attachment, and answers nothing more.
+    fn close_for_good(&self);
+}
+
+/// Makes the windows the scenes connect: the window feature's, handed to the
+/// loop by the host.
+pub(crate) trait SceneWindows: Send + Sync {
+    /// A new window `id`, which wakes the owner through `signal` and names its
+    /// screen through `displays`.
+    fn create(
+        &self,
+        marker: MainThreadMarker,
+        id: WindowId,
+        signal: std::sync::Weak<OwnerSignal>,
+        displays: Arc<dyn HostDisplays>,
+    ) -> Arc<dyn SceneWindow>;
+}
+
 #[derive(Clone)]
 struct SceneOrigin {
     session: IOSSceneSessionId,
-    attachment: u64,
+    attachment: IOSSceneAttachmentId,
 }
 struct SessionRecord {
     origin: SceneOrigin,
     session: Retained<UISceneSession>,
-    window: Arc<IOSWindow>,
+    window: Arc<dyn SceneWindow>,
     installed: bool,
     attaching: bool,
     retiring: bool,
@@ -188,7 +256,7 @@ struct PendingSceneInstallation {
     origin: SceneOrigin,
     scene: Retained<UIWindowScene>,
     resource_generation: u64,
-    completion: crate::shared::window_installation::PendingWindowInstallation,
+    completion: Box<dyn SceneInstallation>,
 }
 
 struct SceneInstallationGuard<'a> {
@@ -215,7 +283,7 @@ enum SceneAction {
 struct SceneState {
     terminal_sessions: HashSet<IOSSceneSessionId>,
     session: Option<SessionRecord>,
-    handler: Option<SceneHandler>,
+    handler: Option<Box<dyn SceneConsumer>>,
     registered: bool,
     reservation: Option<SceneOrigin>,
     pending: VecDeque<SceneAction>,
@@ -229,6 +297,8 @@ struct SceneState {
 /// [`IOSPlatform`](crate::IOSPlatform) is its platform.
 pub struct IOSLoop {
     handlers: Arc<Mutex<PlatformHandlers>>,
+    /// Makes the window a scene session connects.
+    windows: Arc<dyn SceneWindows>,
     running: Arc<AtomicBool>,
     scenes: NativeOwner<RefCell<SceneState>>,
     /// The system preference source the table made.
@@ -253,7 +323,13 @@ impl std::fmt::Debug for IOSLoop {
 }
 
 impl IOSLoop {
-    pub(crate) fn new<H: IosHost>() -> Result<Self, PlatformError> {
+    /// A loop over the displays `H` makes, whose scenes' windows `windows`
+    /// makes.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] off the main thread.
+    pub(crate) fn new<H: IosHost>(windows: Arc<dyn SceneWindows>) -> Result<Self, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Init {
                 message: "IOSPlatform::new must run on the main thread (UIKit is \
@@ -287,6 +363,7 @@ impl IOSLoop {
         let screen_observer = Arc::clone(&displays).observe(&signal);
         Ok(Self {
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
+            windows,
             running: Arc::new(AtomicBool::new(true)),
             scenes: NativeOwner::new(
                 RefCell::new(SceneState {
@@ -318,7 +395,12 @@ impl IOSLoop {
             .get(MainThreadMarker::new().expect("BUG: UIKit scene owner is main-thread-only"))
     }
 
-    fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
+    /// Register the application's consumer of scene sessions, before UIKit
+    /// connects one; a later registration replaces it.
+    pub(crate) fn install_scene_consumer(
+        &self,
+        consumer: Box<dyn SceneConsumer>,
+    ) -> Result<(), PlatformError> {
         if MainThreadMarker::new().is_none() || !self.signal.accepting() {
             return Err(PlatformError::Init {
                 message: "scene registration requires a live main-thread owner".into(),
@@ -327,18 +409,21 @@ impl IOSLoop {
         self.state().borrow_mut().registered = true;
         install(
             &Field::new(self.state(), |state| &mut state.handler),
-            callback,
+            consumer,
         );
         Ok(())
     }
 
-    /// Deliver `event` to the scene consumer through the call point, with no
-    /// borrow of the scene state held. It goes back afterwards while the
+    /// Tell the scene consumer what `tell` says, through the call point, with
+    /// no borrow of the scene state held. It goes back afterwards while the
     /// owner still accepts work; a consumer registered meanwhile wins.
-    fn emit_scene(&self, event: IOSSceneEvent) -> Result<(), crate::BootstrapError> {
+    fn tell_scene_consumer<T>(
+        &self,
+        tell: impl FnOnce(&mut dyn SceneConsumer) -> Result<T, crate::BootstrapError>,
+    ) -> Result<T, crate::BootstrapError> {
         let consumer = Field::new(self.state(), |state| &mut state.handler)
             .restoring_while(|| self.signal.accepting());
-        match call(&consumer, |handler| handler(event)) {
+        match call(&consumer, |consumer| tell(consumer.as_mut())) {
             Called::Vacant => Err(Box::new(PlatformError::Init {
                 message: "no scene consumer registered".into(),
             })),
@@ -366,7 +451,7 @@ impl IOSLoop {
         retire(consumer);
     }
 
-    pub(crate) fn active(&self) -> Option<Arc<IOSWindow>> {
+    pub(crate) fn active(&self) -> Option<Arc<dyn SceneWindow>> {
         self.state()
             .borrow()
             .session
@@ -694,18 +779,6 @@ impl LifecycleHooks for IOSLoop {
     }
 }
 
-/// What the iOS platform offers beyond [`Platform`].
-impl<H: Host<Loop = IOSLoop>> HostPlatform<H> {
-    /// Register the session consumer before entering UIKit. Native connection
-    /// invokes it on the owner thread, outside storage borrows. An initial
-    /// installation failure retires that session rather than publishing it.
-    /// The accepted consumer is invoked and retired on main and may capture
-    /// owner-local state such as `Rc`; no `Send` bound is required.
-    pub fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
-        self.owner().on_scene_event(callback)
-    }
-}
-
 /// Run the bootstrap stashed by [`IOSLoop`]'s `run`, on the main thread,
 /// from `didFinishLaunching`. Returns `true` if a bootstrap ran.
 fn run_pending_bootstrap() -> bool {
@@ -868,7 +941,7 @@ impl IOSLoop {
                     .expect("BUG: scene attachment identity exhausted");
                 let origin = SceneOrigin {
                     session: id.clone(),
-                    attachment,
+                    attachment: IOSSceneAttachmentId(attachment),
                 };
                 let fresh = if state.session.is_some() {
                     None
@@ -892,12 +965,12 @@ impl IOSLoop {
             return None;
         };
         if let Some(id) = fresh {
-            let window = Arc::new(IOSWindow::new(
+            let window = self.windows.create(
                 marker,
                 id,
                 Arc::downgrade(&self.signal),
                 Arc::clone(&self.displays),
-            ));
+            );
             let admitted = {
                 let mut state = self.state().borrow_mut();
                 let admitted = self.signal.accepting()
@@ -921,14 +994,14 @@ impl IOSLoop {
                 admitted
             };
             if !admitted {
-                window.close_inner();
+                window.close_for_good();
                 return None;
             }
         }
         Some(origin)
     }
 
-    fn current(&self, origin: &SceneOrigin) -> Option<(Arc<IOSWindow>, bool)> {
+    fn current(&self, origin: &SceneOrigin) -> Option<(Arc<dyn SceneWindow>, bool)> {
         if !self.signal.accepting() {
             return None;
         }
@@ -1107,18 +1180,18 @@ impl IOSLoop {
         let completed = {
             let mut state = self.state().borrow_mut();
             state.session.as_mut().and_then(|record| {
-                let outcome = record.installation.as_ref()?.completion.outcome()?;
+                let installed = record.installation.as_ref()?.completion.installed()?;
                 Some((
                     record
                         .installation
                         .take()
                         .expect("BUG: observed installation is retained"),
-                    outcome,
+                    installed,
                 ))
             })
         };
-        if let Some((pending, outcome)) = completed {
-            if outcome.is_ok() {
+        if let Some((pending, installed)) = completed {
+            if installed {
                 self.enqueue(SceneAction::Publish(pending));
             } else {
                 self.enqueue(SceneAction::Rollback(pending.origin));
@@ -1170,8 +1243,26 @@ impl IOSLoop {
                 let proxy = crate::PlatformProxy::new(Arc::new(
                     crate::owner::signal::SignalTransport::new(&self.signal),
                 ));
-                let (acknowledgement, completion) =
-                    crate::shared::window_installation::WindowInstallation::channel(proxy);
+                let result = self.tell_scene_consumer(|consumer| {
+                    consumer.connected(
+                        origin.session.clone(),
+                        origin.attachment,
+                        Arc::clone(&window) as Arc<dyn HostWindow>,
+                        reconnect,
+                        proxy,
+                    )
+                });
+                let completion = match result {
+                    Ok(completion) => completion,
+                    Err(error) => {
+                        tracing::error!(%error, "scene installation failed");
+                        self.enqueue(SceneAction::Rollback(origin));
+                        return;
+                    }
+                };
+                // The record keeps what the loop watches of the installation;
+                // the poll below reads an outcome the application already
+                // reached.
                 if let Some(record) = self.state().borrow_mut().session.as_mut() {
                     record.installation = Some(PendingSceneInstallation {
                         origin: origin.clone(),
@@ -1179,18 +1270,6 @@ impl IOSLoop {
                         resource_generation,
                         completion,
                     });
-                }
-                let result = self.emit_scene(IOSSceneEvent::Connected {
-                    session: origin.session.clone(),
-                    attachment: IOSSceneAttachmentId(origin.attachment),
-                    window: Arc::clone(&window) as Arc<dyn crate::host_window::HostWindow>,
-                    reconnect,
-                    installation: acknowledgement,
-                });
-                if let Err(error) = result {
-                    tracing::error!(%error, "scene installation failed");
-                    self.enqueue(SceneAction::Rollback(origin));
-                    return;
                 }
                 installation.origin = None;
                 self.poll_scene_installation();
@@ -1260,9 +1339,8 @@ impl IOSLoop {
                         return;
                     }
                     window.disconnect(marker);
-                    if let Err(error) = self.emit_scene(IOSSceneEvent::Disconnected {
-                        session: origin.session,
-                        attachment: IOSSceneAttachmentId(origin.attachment),
+                    if let Err(error) = self.tell_scene_consumer(|consumer| {
+                        consumer.disconnected(origin.session, origin.attachment)
                     }) {
                         tracing::error!(%error, "scene disconnect observer failed");
                     }
@@ -1283,10 +1361,9 @@ impl IOSLoop {
                     }
                 };
                 if let Some(record) = record {
-                    record.window.close_inner();
-                    if let Err(error) = self.emit_scene(IOSSceneEvent::InstallationAborted {
-                        session: origin.session,
-                        attachment: IOSSceneAttachmentId(origin.attachment),
+                    record.window.close_for_good();
+                    if let Err(error) = self.tell_scene_consumer(|consumer| {
+                        consumer.installation_aborted(origin.session, origin.attachment)
                     }) {
                         tracing::error!(%error, "scene installation rollback observer failed");
                     }
@@ -1306,8 +1383,9 @@ impl IOSLoop {
                     }
                 };
                 let Some(record) = record else { return };
-                record.window.close_inner();
-                if let Err(error) = self.emit_scene(IOSSceneEvent::Discarded { session }) {
+                record.window.close_for_good();
+                if let Err(error) = self.tell_scene_consumer(|consumer| consumer.discarded(session))
+                {
                     tracing::error!(%error, "scene discard observer failed");
                 }
                 if request_native {

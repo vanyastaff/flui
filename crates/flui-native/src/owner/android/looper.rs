@@ -64,9 +64,9 @@ use parking_lot::Mutex;
 use crate::host::{self, Host};
 use crate::owner::android::java_view;
 use crate::owner::android::{ActivityPreferences, AndroidHost, HostDisplays};
+use crate::owner::handlers::CallbackWindow;
 use crate::platform::HostPlatform;
-use crate::platforms::android::window::ActivityFlags;
-use crate::platforms::android::{AndroidWindow, input};
+use crate::platforms::android::input;
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -92,7 +92,6 @@ use crate::{
     shared::os_version::android::AndroidApi,
     shared::os_version::android::StylusHandwriting,
 };
-use flui_platform::PlatformWindow;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -123,6 +122,66 @@ fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) 
     deadline.is_some_and(|deadline| now >= deadline)
 }
 
+/// The Activity's lifecycle as its callbacks reported it, shared by the
+/// platform's event loop and the window it opened.
+///
+/// Three independent facts (see `lifecycle::android`): the Activity is on
+/// screen (`onStart` to `onStop`), it may run (`onResume` to `onPause`), and its
+/// window has input focus. None implies another: a dialog takes focus from a
+/// running, visible Activity. All three are false until their first callback.
+#[derive(Debug, Default)]
+pub(crate) struct ActivityFlags {
+    pub(crate) visible: AtomicBool,
+    pub(crate) resumed: AtomicBool,
+    pub(crate) focused: AtomicBool,
+}
+
+/// The Activity's window as the looper drives it: the window feature's, which
+/// the loop holds without naming it (ADR-0151 §10). The looper hands it what
+/// the Activity reports — a native window that comes or goes, a resize, a
+/// configuration change, the Java view's events — and asks it for a frame.
+pub(crate) trait ActivityWindow: CallbackWindow {
+    /// Publishes the window's state if the Activity's changed it.
+    fn publish_state(&self);
+
+    /// Reads the input capabilities again (the Java view became ready).
+    fn refresh_capabilities(&self);
+
+    /// The outgoing drag the window started ended; `result` is whether a
+    /// target took it.
+    fn drag_ended(&self, result: bool);
+
+    /// Asks the Java view for the system-bar and cutout insets.
+    fn request_safe_area(&self);
+
+    /// Delivers the insets the Java view answered with.
+    fn settle_safe_area(&self);
+
+    /// Delivers the night mode the configuration reports.
+    fn settle_appearance(&self);
+
+    /// The text sizing captured so far is stale.
+    fn invalidate_text_sizing(&self);
+
+    /// No text sizing is captured until the window has a surface again.
+    fn fence_text_sizing(&self);
+
+    /// The native window is gone: its geometry is no longer read.
+    fn revoke_geometry(&self);
+
+    /// The Java view is retired with the window it served.
+    fn retire_java_view(&self);
+
+    /// Sends the system the refresh-rate request the window last made.
+    fn apply_frame_rate_hint(&self);
+
+    /// Whether a frame was asked for.
+    fn has_redraw_request(&self) -> bool;
+
+    /// Takes the frame request when the window may run.
+    fn take_deliverable_redraw_request(&self) -> bool;
+}
+
 /// The Android host's loop, over `android-activity`: the state every
 /// position of its table reads.
 ///
@@ -138,7 +197,7 @@ pub struct AndroidLoop {
     activity_callbacks: Box<dyn ActivityCallbacks>,
     /// Where the trim level and the low-memory call hand system notices.
     notices: Arc<dyn NoticeChannel>,
-    pub(crate) window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
+    pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
     pub(crate) input_state: Mutex<input::AndroidInputState>,
@@ -236,13 +295,13 @@ impl AndroidLoop {
     fn publish_activity_fact(
         &self,
         record: impl FnOnce(&ActivityFlags),
-        notify: impl FnOnce(&AndroidWindow),
+        notify: impl FnOnce(&dyn ActivityWindow),
     ) {
         record(&self.activity);
         let window = self.window.lock().clone();
         if let Some(window) = window {
             window.publish_state();
-            notify(&window);
+            notify(window.as_ref());
         }
     }
 
@@ -322,7 +381,7 @@ impl AndroidLoop {
                 }
                 java_view::ViewEvent::RunOnWindow(work) => {
                     if let Some(window) = &window {
-                        work(window);
+                        work(&**window);
                     }
                 }
                 java_view::ViewEvent::Drag(event) => match &window {
@@ -340,7 +399,7 @@ impl AndroidLoop {
                 },
                 java_view::ViewEvent::DragEnded { result } => {
                     if let Some(window) = &window {
-                        window.drag_source_of().finish(result);
+                        window.drag_ended(result);
                     }
                 }
                 java_view::ViewEvent::SettingsChanged => {
@@ -362,7 +421,11 @@ impl AndroidLoop {
     /// handwriting takes a stroke inside the focused field (API 33+):
     /// Android's own initiation sees only the stylus events native code
     /// leaves unhandled.
-    fn offer_handwriting(&self, window: &AndroidWindow, events: &[flui_platform::PlatformInput]) {
+    fn offer_handwriting(
+        &self,
+        window: &dyn ActivityWindow,
+        events: &[flui_platform::PlatformInput],
+    ) {
         use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
         if self.api.since::<StylusHandwriting>().is_none() {
             return;
@@ -459,7 +522,7 @@ impl AndroidLoop {
                                 motion_event!(tracing::Level::DEBUG);
                             }
                             let mut any_handled = false;
-                            self.offer_handwriting(&window, &events);
+                            self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);
                                 if result.default_prevented {

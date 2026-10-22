@@ -268,12 +268,12 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 /// the duration so `request_redraw` can tell that case apart from a request
 /// made at any other moment and defer only the former.
 ///
-/// [`DisplayPassGuard`]: super::display_pass::DisplayPassGuard
+/// [`DisplayPassGuard`]: crate::window::apple::macos::display_pass::DisplayPassGuard
 extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
     // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
     // is the documented NSView teardown of the dirty region.
     unsafe {
-        let _display_pass = super::display_pass::DisplayPassGuard::enter();
+        let _display_pass = crate::window::apple::macos::display_pass::DisplayPassGuard::enter();
         if let Some(callbacks) = get_context(this).and_then(|ctx| ctx.callbacks.upgrade()) {
             tracing::trace!("FLUIContentView drawRect: dispatching frame request");
             callbacks.dispatch_request_frame();
@@ -292,7 +292,7 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
 
 /// The light/dark half of `object`'s effective appearance: the system theme,
 /// unless the app or a window overrides it.
-pub(super) fn effective_appearance(
+pub(crate) fn effective_appearance(
     object: &(impl NSAppearanceCustomization + objc2::Message),
 ) -> WindowAppearance {
     // SAFETY: AppKit exports both names as constant strings that live for the

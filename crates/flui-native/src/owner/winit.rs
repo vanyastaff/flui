@@ -35,8 +35,10 @@
 //! A window leaves this backend by exactly one body,
 //! [`WinitApp::complete_window_close`], whichever way it was asked to go:
 //! the compositor's `CloseRequested` (after the should-close veto) runs it
-//! in the event arm, and [`PlatformWindow::close`] — a decision the embedder
-//! already made, so no veto — posts a per-window request on the owner
+//! in the event arm, and
+//! [`PlatformWindow::close`](flui_platform::PlatformWindow::close) — a
+//! decision the embedder already made, so no veto — posts a per-window
+//! request on the owner
 //! control lane ([`ControlSender::request_close_window`]) that the owner
 //! runs on its next turn. It cannot run in place: the teardown ends the
 //! loop when the last window goes, which needs the live `ActiveEventLoop`
@@ -107,7 +109,7 @@ use winit::{
     event::{StartCause, WindowEvent as WinitWindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::ModifiersState,
-    window::{WindowAttributes, WindowId as WinitWindowId},
+    window::WindowId as WinitWindowId,
 };
 
 use flui_foundation::geometry::Point;
@@ -120,25 +122,33 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 #[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
-#[cfg(target_os = "linux")]
-use crate::platforms::linux::x11_window_probe::X11WindowProbe;
 use crate::platforms::winit::events as winit_events;
-use crate::platforms::winit::window::{WinitWindow, shell_of};
-use crate::platforms::winit::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
 use crate::{
-    error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
-    host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
-    owner::handlers::PlatformHandlers, platform::HostPlatform, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
+    error::BootstrapError,
+    error::PlatformError,
+    executor::BackgroundExecutor,
+    host,
+    host::Host,
+    host_window::HostWindow,
+    owner::OpenWindowError,
+    owner::OwnerHooks,
+    owner::OwnerPlatform,
+    owner::PendingWindow,
+    owner::ProxySendError,
+    owner::ProxyTransport,
+    owner::WindowOpen,
+    owner::handlers::{CallbackWindow, PlatformHandlers},
+    platform::HostPlatform,
+    platform::Platform,
+    platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
 };
 use control::{
     ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
     control_lane,
 };
 use flui_platform::{
-    DisplayId, DisplaySnapshot, PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode,
-    WindowOptions,
+    DisplayId, DisplaySnapshot, PlatformInput, WindowEvent, WindowId, WindowOptions,
 };
 
 pub(crate) mod control;
@@ -324,19 +334,13 @@ pub struct WinitLoop {
     /// contends with the platform state.
     pub(crate) displays: Arc<dyn HostDisplays>,
 
-    /// The frame measured around decorated windows, so a remembered outer size
-    /// can be fitted before the next window exists.
-    pub(crate) frame_inset: Arc<FrameInset>,
+    /// The window feature's side of the loop: it opens the windows the loop
+    /// tracks.
+    pub(crate) windows: Arc<dyn LoopWindows>,
 
     /// Where system notices go, and what a wake marks stale before the host
     /// hears of it.
     pub(crate) notices: Arc<dyn NoticeChannel>,
-
-    /// The X11 connections that read what winit cannot of a window, started
-    /// with the first X11 window; `None` inside when the server cannot be
-    /// reached a second time.
-    #[cfg(target_os = "linux")]
-    pub(crate) x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
 
     /// Starts the system preference source as the loop resumes, as the table
     /// made it ([`WinitHost::preferences`]).
@@ -353,6 +357,93 @@ pub struct WinitLoop {
     pub(crate) turn_read_hook_for_test: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     state: Arc<Mutex<WinitLoopState>>,
+}
+
+/// A window as the winit loop drives it: the window feature's, which the loop
+/// holds without naming it (ADR-0151 §10). The loop hands it winit's window
+/// events and closes it.
+pub(crate) trait LoopWindow: CallbackWindow {
+    /// The loop tracks the window now: it finishes opening (a window created
+    /// unmapped, for its window manager to read its mode first, is mapped).
+    fn finish_opening(&self);
+
+    /// The winit window behind it.
+    fn inner(&self) -> &Arc<winit::window::Window>;
+
+    /// Reads the window again and publishes its state if it changed.
+    fn refresh_state(&self);
+
+    /// winit reported the window focused or not.
+    fn set_focused(&self, focused: bool);
+
+    /// winit reported the window occluded or not.
+    fn set_occluded(&self, occluded: bool);
+
+    /// The window was shown or hidden.
+    fn set_visible(&self, visible: bool);
+
+    /// Tells the runtime the window's visibility when it changed.
+    fn report_visibility(&self);
+
+    /// Whether the window moved to another display since the last call.
+    fn take_display_change(&self) -> bool;
+
+    /// Whether no display has been reported for the window yet, so the loop
+    /// looks again when it goes idle.
+    #[cfg(target_os = "linux")]
+    fn awaiting_display(&self) -> bool;
+
+    /// The desktop portal's appearance changed: whether the window's did.
+    #[cfg(target_os = "linux")]
+    fn observe_portal_appearance(&self, appearance: flui_platform::WindowAppearance) -> bool;
+
+    /// The window's id on the X server, when its window manager is watched.
+    #[cfg(target_os = "linux")]
+    fn x11_id(&self) -> Option<u32>;
+
+    /// The window closed: it refuses commands from now on.
+    fn mark_closed(&self);
+}
+
+/// What the loop hands the window feature to build a window with.
+pub(crate) struct WindowSeed<'a> {
+    /// The id the window reports from its creation on.
+    pub(crate) id: WindowId,
+    /// The lane a programmatic close travels to the owner by.
+    pub(crate) close_lane: ControlSender,
+    /// The monitors, by which the window names its display.
+    pub(crate) displays: &'a Arc<dyn HostDisplays>,
+    /// Where a wake marks the window's state stale.
+    pub(crate) notices: &'a Arc<dyn NoticeChannel>,
+    /// The owner's signal, while the loop runs: what a window manager's view
+    /// wakes when a window it watches changes.
+    #[cfg(target_os = "linux")]
+    pub(crate) signal: Option<&'a Arc<crate::owner::signal::OwnerSignal>>,
+}
+
+/// The windows of the winit loop, which the window feature builds
+/// (ADR-0151 §10): the host builds the window feature's object and hands it
+/// to [`WinitLoop::new`]. The loop numbers, registers and finishes each window
+/// it builds.
+pub(crate) trait LoopWindows: Send + Sync {
+    /// Builds a window on `event_loop` from `seed` and `options`: the native
+    /// window and the window around it, which the loop then tracks.
+    ///
+    /// # Errors
+    ///
+    /// What `Platform::open_window` reports.
+    fn build(
+        &self,
+        event_loop: &ActiveEventLoop,
+        seed: WindowSeed<'_>,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn LoopWindow>, OpenWindowError>;
+
+    /// The X11 ids of the windows whose state the window manager changed
+    /// without a winit event since the last call, which the loop reads again;
+    /// empty when no window manager is watched.
+    #[cfg(target_os = "linux")]
+    fn take_unreported(&self) -> Vec<u32>;
 }
 
 impl std::fmt::Debug for WinitLoop {
@@ -402,8 +493,8 @@ pub(crate) struct WinitLoopState {
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
 
-    /// Map of platform window IDs to WinitWindow wrappers
-    pub(crate) windows: HashMap<WindowId, Arc<WinitWindow>>,
+    /// Map of platform window IDs to the windows the window feature opened
+    pub(crate) windows: HashMap<WindowId, Arc<dyn LoopWindow>>,
 
     /// Active window ID
     pub(crate) active_window: Option<WindowId>,
@@ -456,17 +547,20 @@ impl WinitLoopState {
         }
     }
 
+    /// The id the next window carries from its creation on.
     fn allocate_window_id(&mut self) -> WindowId {
         let id = WindowId(self.next_window_id);
         self.next_window_id += 1;
         id
     }
 
+    /// Tracks `window`, which winit knows as `winit_id`: the first window
+    /// becomes the active one.
     fn register_window(
         &mut self,
         winit_id: WinitWindowId,
         platform_id: WindowId,
-        window: Arc<WinitWindow>,
+        window: Arc<dyn LoopWindow>,
     ) {
         self.window_id_map.insert(winit_id, platform_id);
         self.windows.insert(platform_id, window);
@@ -483,15 +577,14 @@ impl WinitLoopState {
 
 impl WinitLoop {
     /// A loop that has not run yet, over the displays, the notice channel, the
-    /// sources, the clipboard and the drag-and-drop transport `H` makes.
-    pub(crate) fn new<H: WinitHost>() -> Self {
+    /// sources, the clipboard and the drag-and-drop transport `H` makes, whose
+    /// windows `windows` opens.
+    pub(crate) fn new<H: WinitHost>(windows: Arc<dyn LoopWindows>) -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
             displays: H::displays(),
-            frame_inset: Arc::new(FrameInset::default()),
+            windows,
             notices: H::notices(),
-            #[cfg(target_os = "linux")]
-            x11_probe: std::sync::OnceLock::new(),
             #[cfg(test)]
             turn_read_hook_for_test: Mutex::new(None),
             preference_start: H::preferences(),
@@ -514,22 +607,6 @@ impl WinitLoop {
         }
     }
 
-    /// The shell windows opened from here will be on, before any exists.
-    #[cfg_attr(
-        not(target_os = "linux"),
-        expect(
-            clippy::unused_self,
-            reason = "only the Linux display source can say a shell is Wayland"
-        )
-    )]
-    pub(crate) fn expected_shell(&self) -> WindowShell {
-        #[cfg(target_os = "linux")]
-        if self.displays.is_wayland() {
-            return WindowShell::Wayland;
-        }
-        WindowShell::Desktop
-    }
-
     /// Bring the display source up to date with `event_loop` and wake the owner
     /// when that may have changed the snapshot, so the host samples it again
     /// ([`HostDisplays::resample`]).
@@ -549,6 +626,28 @@ impl WinitLoop {
     {
         let mut state = self.state.lock();
         f(&mut state)
+    }
+
+    /// Read again the windows whose mode the X11 window manager changed, so
+    /// `on_state_changed` follows a minimize or a maximize that winit reports
+    /// no event for. Each window publishes with the state lock released.
+    #[cfg(target_os = "linux")]
+    fn refresh_unreported(&self) {
+        let changed = self.windows.take_unreported();
+        if changed.is_empty() {
+            return;
+        }
+        let windows: Vec<_> = self.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| window.x11_id().is_some_and(|id| changed.contains(&id)))
+                .cloned()
+                .collect()
+        });
+        for window in windows {
+            window.refresh_state();
+        }
     }
 
     /// Create and run the event loop for `platform`, the
@@ -679,9 +778,9 @@ impl WinitLoop {
     }
 
     /// Create a winit window immediately using a live `ActiveEventLoop` and
-    /// register it in platform state. Shared by the cross-thread control lane
-    /// and `open_window`'s same-thread
-    /// fast path (see the module-level doc on same-thread window creation).
+    /// register it in platform state: the window feature builds it. Shared by
+    /// the cross-thread control lane and `open_window`'s same-thread fast path
+    /// (see the module-level doc on same-thread window creation).
     pub(crate) fn create_window_now(
         &self,
         event_loop: &ActiveEventLoop,
@@ -698,60 +797,23 @@ impl WinitLoop {
                 rejected: Some(Box::new(options)),
             });
         };
-        let display =
-            PlacementDisplay::choose(self.displays.snapshot().ok().as_ref(), options.display);
-        let plan = OpenPlan::new(
-            &options,
-            shell_of(event_loop),
-            display,
-            self.frame_inset.logical(display.scale_factor),
-        );
-        let mut attributes = WindowAttributes::default()
-            .with_title(options.title.clone())
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                plan.content_size.width,
-                plan.content_size.height,
-            ))
-            .with_resizable(options.resizable)
-            .with_decorations(options.decorated)
-            .with_visible(options.visible && !plan.created_unmapped())
-            .with_maximized(plan.mode == WindowMode::Maximized);
-        if plan.mode == WindowMode::Fullscreen {
-            attributes =
-                attributes.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-        }
-        if let Some(at) = plan.position {
-            attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(at.x, at.y));
-        }
-
-        if let Some(min) = options.min_size {
-            attributes =
-                attributes.with_min_inner_size(winit::dpi::LogicalSize::new(min.width, min.height));
-        }
-        if let Some(max) = options.max_size {
-            attributes =
-                attributes.with_max_inner_size(winit::dpi::LogicalSize::new(max.width, max.height));
-        }
-
-        let raw_window = Arc::new(event_loop.create_window(attributes).map_err(|error| {
-            OpenWindowError::Backend {
-                message: format!("winit window creation failed: {error}"),
-            }
-        })?);
-        let winit_id = raw_window.id();
-        // Allocate the platform identity before constructing the wrapper so
-        // `WinitWindow` can carry its own `id()` from the start, rather than
-        // being registered under an identity it cannot itself report.
-        let platform_id = self.with_state(WinitLoopState::allocate_window_id);
-        let winit_window = Arc::new(WinitWindow::new(
-            platform_id,
-            raw_window,
-            close_lane,
-            Arc::clone(&self.displays),
-            &options,
-            &plan,
-            Arc::clone(&self.frame_inset),
-        ));
+        // The platform identity comes before the window, so the window
+        // carries its own `id()` from the start rather than being registered
+        // under an identity it cannot itself report.
+        let id = self.with_state(WinitLoopState::allocate_window_id);
+        let signal = self.owner_signal.lock().clone();
+        let window = self.windows.build(
+            event_loop,
+            WindowSeed {
+                id,
+                close_lane,
+                displays: &self.displays,
+                notices: &self.notices,
+                #[cfg(target_os = "linux")]
+                signal: signal.as_ref(),
+            },
+            options,
+        )?;
         #[cfg(target_os = "linux")]
         if let Some(source) = self.with_state(|state| {
             state
@@ -759,50 +821,45 @@ impl WinitLoop {
                 .as_ref()
                 .and_then(std::sync::Weak::upgrade)
         }) {
-            winit_window.observe_portal_appearance(source.appearance());
+            window.observe_portal_appearance(source.appearance());
         }
-        let availability = crate::shared::input_availability::winit(winit_session(event_loop));
-        let signal = self.owner_signal.lock().clone();
+        let session = winit_session(event_loop);
+        let availability = crate::shared::input_availability::winit(session);
         if let Some(signal) = signal {
-            let window = Arc::downgrade(&winit_window);
-            winit_window
+            let resumed = Arc::downgrade(&window);
+            window
                 .callbacks()
                 .set_input_wake(crate::owner::signal::OwnerSignal::input_wake(
                     &signal,
                     move || {
-                        if let Some(window) = window.upgrade() {
+                        if let Some(window) = resumed.upgrade() {
                             window.callbacks().resume_input_delivery();
                         }
                     },
                 ));
         }
-
         self.with_state(|state| {
-            state
-                .native_pointer
-                .observe_session(winit_session(event_loop));
+            state.native_pointer.observe_session(session);
             // The initial snapshot reflects the devices already seen.
-            winit_window
+            window
                 .callbacks()
                 .set_input_capabilities(availability.with_present(state.native_pointer.present()));
-            state.register_window(winit_id, platform_id, winit_window.clone());
+            state.register_window(window.inner().id(), id, Arc::clone(&window));
         });
-        self.notices.mark_stale_on_wake(winit_window.state_cell());
-        #[cfg(target_os = "linux")]
-        winit_window.attach_x11_probe(|| self.x11_probe());
-        winit_window.finish_setup();
+        window.finish_opening();
         // A monitor attached since the last sample is first seen here.
         self.resample_displays(event_loop);
 
-        tracing::info!(?platform_id, "Created window");
+        tracing::info!(?id, "Created window");
 
-        Ok(platform_id)
+        Ok(id)
     }
 
     /// Look up a previously-created window by [`WindowId`] and return the
     /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
     /// (not `window_handle`) to avoid colliding with the unrelated
-    /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
+    /// [`PlatformWindow::window_handle`](flui_platform::PlatformWindow::window_handle)
+    /// raw GPU-handle accessor.
     pub(crate) fn window_by_id(
         &self,
         window_id: WindowId,
@@ -963,9 +1020,9 @@ enum SelfCloseRoute {
     /// veto and all.
     #[default]
     Compositor,
-    /// Call [`PlatformWindow::close`] on the tracked window: the
-    /// programmatic path, exactly as an application closing its own window
-    /// does (issue #919).
+    /// Call [`PlatformWindow::close`](flui_platform::PlatformWindow::close)
+    /// on the tracked window: the programmatic path, exactly as an
+    /// application closing its own window does (issue #919).
     Programmatic,
 }
 
@@ -1080,7 +1137,8 @@ pub(crate) struct WinitApp {
     self_close_deadline: Option<Instant>,
     /// Which close route the armed self-close drives
     /// (`FLUI_SELF_CLOSE_ROUTE`): the synthesized compositor
-    /// `CloseRequested` by default, or [`PlatformWindow::close`] on the
+    /// `CloseRequested` by default, or
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on the
     /// tracked window — so a harness can prove the
     /// programmatic route's teardown (issue #919) against a real app, real
     /// GPU surface, and the embedder's real exit-policy hook, which no
@@ -1123,7 +1181,7 @@ enum NativeDispatch {
 fn presence_dispatch(
     state: &WinitLoopState,
     present: flui_platform::input_capabilities::PointerKindSet,
-) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
+) -> Vec<(Arc<dyn LoopWindow>, NativeDispatch)> {
     let mut windows: Vec<_> = state.windows.iter().collect();
     windows.sort_by_key(|(id, _)| id.0);
     windows
@@ -1137,7 +1195,7 @@ fn presence_dispatch(
 fn native_batch(
     state: &mut WinitLoopState,
     inputs: Vec<(WindowId, flui_platform::PlatformInput)>,
-) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
+) -> Vec<(Arc<dyn LoopWindow>, NativeDispatch)> {
     let mut batch = state
         .native_pointer
         .presence_change()
@@ -1152,7 +1210,7 @@ fn native_batch(
     batch
 }
 
-fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
+fn dispatch_native_inputs(inputs: Vec<(Arc<dyn LoopWindow>, NativeDispatch)>) {
     let mut first = None;
     for (window, input) in inputs {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match input {
@@ -1810,7 +1868,7 @@ impl WinitApp {
     pub(crate) fn sync_window_display(
         &self,
         event_loop: &ActiveEventLoop,
-        window: &WinitWindow,
+        window: &Arc<dyn LoopWindow>,
         forced: bool,
     ) {
         if forced {
@@ -1846,7 +1904,7 @@ impl WinitApp {
     fn handle_drag_drop_path(
         &self,
         platform_id: WindowId,
-        window: Option<&Arc<WinitWindow>>,
+        window: Option<&Arc<dyn LoopWindow>>,
         path: PathBuf,
         kind: DragPath,
     ) {
@@ -1894,7 +1952,7 @@ impl WinitApp {
 
         // Snapshot window handles and cursor positions first; the platform
         // lock is released before scale-factor reads and dispatch.
-        let mut snapshots: Vec<(WindowId, Arc<WinitWindow>, Option<_>)> = Vec::new();
+        let mut snapshots: Vec<(WindowId, Arc<dyn LoopWindow>, Option<_>)> = Vec::new();
         self.platform.with_state(|state| {
             for window_id in &windows {
                 if let Some(win) = state.windows.get(window_id) {
@@ -1908,7 +1966,7 @@ impl WinitApp {
         });
 
         let mut positions = HashMap::new();
-        let mut handles: HashMap<WindowId, Arc<WinitWindow>> = HashMap::new();
+        let mut handles: HashMap<WindowId, Arc<dyn LoopWindow>> = HashMap::new();
         for (window_id, win, cursor) in snapshots {
             if let Some(cursor) = cursor {
                 positions.insert(window_id, logical_cursor_point(cursor, win.scale_factor()));
@@ -2010,7 +2068,7 @@ impl WinitApp {
         #[cfg(target_os = "linux")]
         self.deliver_host_notices();
         #[cfg(target_os = "linux")]
-        self.refresh_x11_windows();
+        self.platform.refresh_unreported();
         #[cfg(test)]
         self.platform.run_turn_read_hook_for_test();
         if let Some(turn) = turn
@@ -2120,8 +2178,8 @@ impl WinitApp {
     /// should-close veto, per-window close callbacks, global handler, map
     /// removal, exit policy — runs exactly as a compositor-delivered close
     /// would; on [`SelfCloseRoute::Programmatic`] it calls
-    /// [`PlatformWindow::close`] on that window instead, exactly as an
-    /// application would. One-shot: the deadline is cleared on fire. If no window exists
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on
+    /// that window instead, exactly as an application would. One-shot: the deadline is cleared on fire. If no window exists
     /// yet at the deadline, it stays armed until one does — re-paced a
     /// short interval forward on each check, never left in the past, so the
     /// loop keeps waiting instead of busy-waking on an expired
@@ -2183,8 +2241,9 @@ impl WinitApp {
     /// is final — the ONE body behind both routes, because issue #919 was
     /// exactly the two routes being written separately: the compositor's
     /// `CloseRequested` arm (after its should-close veto) did all of this,
-    /// while the programmatic [`PlatformWindow::close`] hid the window and
-    /// fired its callback but never left the tracking map, so the exit
+    /// while the programmatic
+    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) hid
+    /// the window and fired its callback but never left the tracking map, so the exit
     /// policy — consulted only against that map — never saw the last
     /// window go, and the process lingered with nothing on screen.
     ///
@@ -2241,7 +2300,7 @@ impl WinitApp {
         &mut self,
         event_loop: &ActiveEventLoop,
         platform_id: WindowId,
-        window: Option<&Arc<WinitWindow>>,
+        window: Option<&Arc<dyn LoopWindow>>,
     ) {
         if let Some(win) = window {
             win.mark_closed();
@@ -2805,6 +2864,9 @@ impl ProxyTransport for WinitProxyTransport {
 // rather than two segments below it.
 #[cfg(test)]
 mod real_loop_tests;
+// The real loop the tests here and the window's tests run on.
+#[cfg(test)]
+pub(crate) mod testing;
 
 #[cfg(test)]
 mod tests {

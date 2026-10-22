@@ -672,7 +672,7 @@ pub trait PlatformWindow: Send + Sync {
     /// window manager may rarely or never produce.
     ///
     /// The native backends derive their own signal (rules in
-    /// `shared::visibility`, host-tested): **Win32** from
+    /// `flui-native`'s `window::visibility`, host-tested): **Win32** from
     /// `WM_SIZE`-minimize/restore plus `WM_SHOWWINDOW` hide/show (Windows
     /// has no occlusion events at all), **AppKit** from
     /// `windowDidChangeOcclusionState:`'s visible bit (fires on full
@@ -831,8 +831,8 @@ pub trait PlatformWindow: Send + Sync {
     ///   native window for as long as it is alive; there is no destroyed
     ///   state to detect separately.
     /// - **Win32** (`WindowsWindow`) — consults the pure `teardown_route`
-    ///   identity probe (`shared::hwnd_affinity`) and returns `Unavailable`
-    ///   for `AlreadyGone`/`StaleHandle` instead of handing out a handle
+    ///   identity probe (`flui-native`'s `owner::hwnd_affinity`) and returns
+    ///   `Unavailable` for `AlreadyGone`/`StaleHandle` instead of handing out a handle
     ///   wrapping a destroyed or recycled `HWND`.
     /// - **AppKit** (`MacOSWindow`) — an explicit `closed` flag, set from the
     ///   `windowWillClose:` delegate callback, which AppKit's own `-close`

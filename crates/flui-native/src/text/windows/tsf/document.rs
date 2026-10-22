@@ -43,7 +43,7 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
 use super::{TextServices, input_scope};
-use crate::platforms::windows::platform::WindowRef;
+use crate::owner::windows::WindowRef;
 use crate::text::windows::geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
 /// The state one TSF document shares between its COM object and the

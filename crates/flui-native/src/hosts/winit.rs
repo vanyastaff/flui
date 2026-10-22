@@ -24,7 +24,6 @@ use crate::owner::notices::NoticeChannel;
 use crate::owner::winit::HostNoticeStart;
 use crate::owner::winit::{FileDrops, HostDisplays, PreferenceStart, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::winit::WinitWindow;
 #[cfg(target_os = "macos")]
 use crate::preferences::apple::macos::WinitSettings;
 #[cfg(target_os = "linux")]
@@ -33,6 +32,9 @@ use crate::preferences::linux::WinitSettings;
 use crate::preferences::windows::WinitSettings;
 use crate::storage::UserDataDirs;
 use crate::text::winit::WinitTextInput;
+#[cfg(target_os = "linux")]
+use crate::window::linux::x11::connect_window_manager;
+use crate::window::winit::{WinitWindow, WinitWindows};
 
 /// The winit host's table.
 #[derive(Debug)]
@@ -134,7 +136,14 @@ pub type WinitPlatform = HostPlatform<Winit>;
 impl HostPlatform<Winit> {
     /// Create a new winit platform
     pub fn new() -> Self {
-        Self::from_loop(WinitLoop::new::<Winit>())
+        // On Linux the X11 probe reads what winit does not report of a window.
+        let windows = WinitWindows::new(
+            #[cfg(target_os = "linux")]
+            connect_window_manager,
+        );
+        Self::from_parts(windows, |windows| {
+            WinitLoop::new::<Winit>(Arc::clone(windows) as _)
+        })
     }
 }
 

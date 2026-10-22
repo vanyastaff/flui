@@ -184,7 +184,7 @@
 
 pub(crate) mod accessibility;
 pub(crate) mod clipboard;
-pub mod config;
+pub use window::config;
 mod display;
 pub(crate) mod drag;
 pub mod error;
@@ -219,11 +219,17 @@ pub mod text;
 pub use text::sizing::{
     CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState, capture_text_sizing,
 };
+mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
 
 pub use config::{FullscreenMonitor, WindowConfiguration};
+// The acknowledgement a host waits for before it publishes a window it
+// attached (a UIKit scene's), which the composition root completes.
+pub use window::installation::{
+    InstallationCancelled, PendingWindowInstallation, WindowInstallation,
+};
 // The typed lifecycle/service error taxonomy — `anyhow` is retired from
 // this crate's public API (the window-open family lives with its
 // capability types in `owner`).

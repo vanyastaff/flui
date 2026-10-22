@@ -1,5 +1,7 @@
-use flui_native::shared::window_installation::WindowInstallation;
-use flui_native::{HeadlessPlatform, Platform};
+//! The window installation acknowledgement through the names an application
+//! uses (`flui_native::{WindowInstallation, PendingWindowInstallation}`).
+
+use flui_native::{HeadlessPlatform, Platform, WindowInstallation};
 
 fn acknowledgement_and_cancellation_are_committed_before_notification() {
     Box::new(HeadlessPlatform::new())

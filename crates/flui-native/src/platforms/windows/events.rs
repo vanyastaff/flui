@@ -73,7 +73,7 @@ use crate::shared::pointer_assembly::{
 /// Rebases the queue's wrapping millisecond timestamp, and pointer readings'
 /// performance-counter timestamps, onto the shared epoch.
 /// The owner snapshots a sample before callback-capable native or user calls.
-pub(super) struct MessageClock {
+pub(crate) struct MessageClock {
     native: NativeClock,
     /// The latest stamp the window delivered, coarse or precise: a message
     /// stamp never precedes it. A key in the same system tick as a
@@ -99,7 +99,7 @@ fn performance_anchor() -> Option<CounterAnchor> {
 }
 
 impl MessageClock {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: argument-free monotonic system uptime query.
         let uptime_ms = unsafe { GetTickCount64() };
         // The counter and the epoch are read back to back: `Instant` is the
@@ -120,7 +120,7 @@ impl MessageClock {
     }
 
     /// The anchors pointer readings are stamped against.
-    pub(super) const fn native(&self) -> NativeClock {
+    pub(crate) const fn native(&self) -> NativeClock {
         self.native
     }
 
@@ -295,13 +295,13 @@ use flui_platform::PlatformInput;
 
 /// Convert LPARAM to X coordinate
 #[inline]
-pub(super) fn get_x_lparam(lparam: LPARAM) -> i32 {
+pub(crate) fn get_x_lparam(lparam: LPARAM) -> i32 {
     (lparam.0 & 0xFFFF) as i16 as i32
 }
 
 /// Convert LPARAM to Y coordinate
 #[inline]
-pub(super) fn get_y_lparam(lparam: LPARAM) -> i32 {
+pub(crate) fn get_y_lparam(lparam: LPARAM) -> i32 {
     ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
 }
 
@@ -355,7 +355,7 @@ fn pointer_contact(mouse: bool, raw: u32) -> NativeContact {
 
 /// A window's pointer registry on `clock`, with the OS double-click
 /// thresholds at `scale`.
-pub(super) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistry {
+pub(crate) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistry {
     let mut registry = ContactRegistry::new(clock).with_reserved_contact(MOUSE_CONTACT);
     registry.set_click_settings(click_settings(scale));
     registry
@@ -363,7 +363,7 @@ pub(super) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistr
 
 /// The OS double-click interval and rectangle at `scale`, in device pixels;
 /// `None` when the metrics cannot be read.
-pub(super) fn click_settings(scale: f64) -> Option<ClickSettings> {
+pub(crate) fn click_settings(scale: f64) -> Option<ClickSettings> {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
     #[expect(
         clippy::cast_possible_truncation,

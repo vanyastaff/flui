@@ -55,8 +55,8 @@ use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger}
 use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 
+use crate::owner::apple::macos::exec_on_owner;
 use crate::platforms::macos::view::{ViewContext, get_context as get_view_context};
-use crate::platforms::macos::window::route_on_owner;
 use flui_platform::PlatformTextInput;
 
 // ============================================================================
@@ -650,7 +650,7 @@ pub(crate) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
 ///
 /// The methods are the only part of this module reachable off the main thread:
 /// [`PlatformTextInput`] is a public `Send + Sync` capability, so both travel
-/// through [`route_on_owner`] (the standing rule for every AppKit-messaging
+/// through [`exec_on_owner`] (the standing rule for every AppKit-messaging
 /// window site) even though the state they touch is main-thread-only by AppKit's
 /// delivery contract.
 pub struct MacOSTextInput {
@@ -677,7 +677,7 @@ pub struct MacOSTextInput {
 
 // SAFETY: the same argument as `MacOSWindow`'s own `unsafe impl Send`/`Sync`:
 // `view` is a raw AppKit pointer that is only ever messaged from inside
-// `route_on_owner`, which runs the body on the window's owner lane; the
+// `exec_on_owner`, which runs the body on the window's owner lane; the
 // remaining fields are `Arc`/`&'static`/`bool`. The residual — a capability
 // clone outliving its window — is why `closed` is consulted in both bodies: the
 // window's close is what makes further AppKit contact meaningless, and a
@@ -714,7 +714,7 @@ impl MacOSTextInput {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = self;
-        route_on_owner(owner, owner_is_main, move || {
+        exec_on_owner(owner, owner_is_main, move || {
             if this.is_closed() {
                 tracing::trace!("text input call on a closed window; dropped");
                 return None;
@@ -733,7 +733,7 @@ impl MacOSTextInput {
 impl PlatformTextInput for MacOSTextInput {
     fn set_ime_allowed(&self, allowed: bool) {
         // The gate and the announcement travel in one owner-lane round trip:
-        // `route_on_owner` blocks the caller until the body returns, so a
+        // `exec_on_owner` blocks the caller until the body returns, so a
         // second hop here would be a second blocking round trip for no gain.
         let reached = self.with_content_view(|ctx| {
             {

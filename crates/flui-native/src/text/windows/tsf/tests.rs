@@ -43,11 +43,10 @@ fn composing_store() -> Rc<InMemoryTextStore> {
 }
 
 /// The case window `hwnd` with the identity of its context.
-fn window_ref(hwnd: HWND) -> crate::platforms::windows::platform::WindowRef {
-    let identity =
-        crate::platforms::windows::platform::with_window_context(hwnd, "test", |c| c.identity)
-            .expect("the case window's context");
-    crate::platforms::windows::platform::WindowRef::new(hwnd, identity)
+fn window_ref(hwnd: HWND) -> crate::owner::windows::WindowRef {
+    let identity = crate::window::windows::proc::with_window_context(hwnd, "test", |c| c.identity)
+        .expect("the case window's context");
+    crate::owner::windows::WindowRef::new(hwnd, identity)
 }
 
 /// An entry into this thread's STA (nested in the platform's) for services
@@ -739,12 +738,11 @@ fn a_window_offers_its_text_services_as_its_host() {
     let host = win32
         .text_store_host(OwnerThreadToken::new())
         .expect("a real window offers its host");
-    let services =
-        crate::platforms::windows::platform::with_window_context(hwnd, "test", |context| {
-            context.text_services.borrow().clone()
-        })
-        .flatten()
-        .expect("the window holds its text services");
+    let services = crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
+        context.text_services.borrow().clone()
+    })
+    .flatten()
+    .expect("the window holds its text services");
     assert!(
         std::ptr::addr_eq(Rc::as_ptr(&host), Rc::as_ptr(&services)),
         "the host is the window's own TSF connection"
@@ -1212,7 +1210,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
                 .expect("Win32 window")
                 .hwnd();
             assert!(
-                crate::platforms::windows::platform::with_window_context(hwnd, "test", |context| {
+                crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
                     context.text_services.borrow().is_some()
                 })
                 .unwrap_or(false),
@@ -1309,16 +1307,15 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         clippy::used_underscore_binding,
         reason = "Observe the drop-only apartment hold without extending its lifetime."
     )]
-    let apartment =
-        crate::platforms::windows::platform::with_window_context(hwnd, "test", |context| {
-            context
-                .text_services
-                .borrow()
-                .as_ref()
-                .map(|services| Rc::downgrade(&services._apartment))
-        })
-        .flatten()
-        .expect("the window's text services are active");
+    let apartment = crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
+        context
+            .text_services
+            .borrow()
+            .as_ref()
+            .map(|services| Rc::downgrade(&services._apartment))
+    })
+    .flatten()
+    .expect("the window's text services are active");
 
     // A second COM client may keep the process MTA alive while this
     // window releases its own STA. Hold it until the assertion, including

@@ -101,7 +101,7 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   - It registered `Cursor`, `TextInput` and `Accessibility` as widget capabilities, against §5.
   - It removed the defaults of `text_input()` and `accessibility()` but kept `Option`.
   - It did not edit macOS. `MacOSWindow::accessibility` exists only under `a11y`
-    (`crates/flui-native/src/platforms/macos/window.rs:926-927`), and `a11y` is off by default
+    (`crates/flui-native/src/window/apple/macos.rs:1096-1097`), and `a11y` is off by default
     (`crates/flui-native/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
     was never compiled for macOS.
   - There are three `cfg`-gated `accessibility` overrides, not two: Windows

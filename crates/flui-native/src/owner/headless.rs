@@ -26,16 +26,23 @@ use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
-use crate::platforms::headless::{
-    HeadlessWindowPolicy, MockWindow, TextStoreHostFactory, create_mock_window,
-};
+use crate::platforms::headless::TextStoreHostFactory;
 use crate::{
-    error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
-    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
-    owner::WindowOpen, owner::handlers::PlatformHandlers, platform::Platform,
-    platform::PlatformExecutor, platform::PlatformReadyCallback,
+    error::PlatformError,
+    host_window::HostWindow,
+    owner::DirectOwnerHooks,
+    owner::OpenWindowError,
+    owner::OwnerHooks,
+    owner::OwnerPlatform,
+    owner::PendingWindow,
+    owner::ProxyTransport,
+    owner::WindowOpen,
+    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
+    platform::Platform,
+    platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplaySnapshot, WindowCapabilities, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
@@ -60,6 +67,33 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
     fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
         Ok(owner.with_state(|state| state.displays.clone()))
     }
+}
+
+/// The windows the headless platform tracks, which the window feature opens
+/// and keeps (ADR-0151 §10).
+///
+/// The loop holds them without naming them: the host builds the window
+/// feature's object and hands it to [`HeadlessLoop::new`]. The loop asks it
+/// whether a window is left (the exit policy) and opens a deferred window
+/// through it; the simulated devices and drag sessions reach a window's
+/// callbacks through it.
+pub(crate) trait TrackedWindows: OpenWindows {
+    /// Builds a window under the locked `state` and tracks it; `platform` is
+    /// the lock `state` came from, which the window keeps to close. The caller
+    /// announces the window (`WindowEvent::Created`) once it released the
+    /// lock.
+    fn open(
+        self: Arc<Self>,
+        state: &mut HeadlessState,
+        platform: Weak<Mutex<HeadlessState>>,
+        options: WindowOptions,
+    ) -> Arc<dyn HostWindow>;
+
+    /// The callbacks of every open window, in the order they opened.
+    fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>>;
+
+    /// The callbacks of the open window `id` names.
+    fn callbacks_of(&self, id: WindowId) -> Option<Arc<WindowCallbacks>>;
 }
 
 /// The headless host's loop: the state every position of its table reads.
@@ -116,12 +150,9 @@ pub(crate) struct HeadlessState {
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     pub(crate) clipboard: Arc<InMemoryClipboard>,
-    pub(crate) active_window: Option<WindowId>,
     is_running: bool,
-    pub(crate) windows: Vec<MockWindow>,
-    /// Whether the windows sit on one desktop and answer
-    /// [`PlatformWindow::window_at`](flui_platform::PlatformWindow::window_at) ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
-    pub(crate) placement: bool,
+    /// The windows the platform tracks: the window feature's.
+    pub(crate) windows: Arc<dyn TrackedWindows>,
     pub(crate) keyboard_layout: String,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
@@ -158,12 +189,6 @@ pub(crate) struct HeadlessState {
     /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
     /// [`HeadlessDisplayControls`](crate::platforms::headless::HeadlessDisplayControls).
     pub(crate) displays: DisplaySnapshot,
-    /// What every window opened from now on honours
-    /// ([`HeadlessPlatform::with_window_capabilities`](crate::HeadlessPlatform::with_window_capabilities)).
-    pub(crate) window_capabilities: WindowCapabilities,
-    /// What the host clamps or declines for every window opened from now on
-    /// ([`HeadlessPlatform::with_window_policy`](crate::HeadlessPlatform::with_window_policy)).
-    pub(crate) window_policy: HeadlessWindowPolicy,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
     pub(crate) notices: Arc<dyn crate::owner::notices::NoticeChannel>,
@@ -180,8 +205,8 @@ pub(crate) struct HeadlessState {
 
 impl HeadlessLoop {
     /// The loop of host `H`, whose table makes the displays and the notice
-    /// channel.
-    pub(crate) fn new<H: HeadlessHost>() -> Self {
+    /// channel, and whose windows are `windows`, the window feature's.
+    pub(crate) fn new<H: HeadlessHost>(windows: Arc<dyn TrackedWindows>) -> Self {
         let state = HeadlessState {
             drags: Arc::default(),
             os_drag_start: None,
@@ -189,10 +214,8 @@ impl HeadlessLoop {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(InMemoryClipboard::new()),
-            active_window: None,
             is_running: false,
-            windows: Vec::new(),
-            placement: false,
+            windows,
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
@@ -203,8 +226,6 @@ impl HeadlessLoop {
             devices: crate::shared::pointer_assembly::DeviceRegistry::default(),
             device_labels: flui_foundation::IdMint::new(),
             displays: H::displays(),
-            window_capabilities: WindowCapabilities::ALL,
-            window_policy: HeadlessWindowPolicy::default(),
             notices: H::notices(),
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
@@ -726,7 +747,8 @@ impl HeadlessDeferredWindowOpens {
                 return None;
             }
             let (slot, options) = state.pending_opens.remove(0);
-            let window = create_mock_window(&mut state, Arc::downgrade(&platform_state), options);
+            let windows = Arc::clone(&state.windows);
+            let window = windows.open(&mut state, Arc::downgrade(&platform_state), options);
             (slot, window)
         };
         emit_window_event(&platform_state, WindowEvent::Created(window.id()));
@@ -779,6 +801,59 @@ mod tests {
     use super::*;
     use crate::host::Loop as _;
 
+    /// A host with no display and no notice, for a loop whose test reads
+    /// neither.
+    struct EmptyHost;
+
+    impl HeadlessHost for EmptyHost {
+        fn displays() -> DisplaySnapshot {
+            DisplaySnapshot::empty()
+        }
+
+        fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel> {
+            Arc::new(NoNotices)
+        }
+    }
+
+    /// A notice channel that drops what it is handed.
+    struct NoNotices;
+
+    impl crate::owner::notices::NoticeChannel for NoNotices {
+        fn set_hook(&self, _: crate::owner::notices::SystemNoticeHook) {}
+
+        fn mark_held_stale_on_wake(&self, _: Weak<dyn crate::owner::notices::StaleOnWake>) {}
+
+        fn dispatch(&self, _: flui_platform::SystemNotice) {}
+    }
+
+    /// No window, for a loop whose test opens none.
+    struct NoWindows;
+
+    impl OpenWindows for NoWindows {
+        fn is_empty(&self) -> bool {
+            true
+        }
+    }
+
+    impl TrackedWindows for NoWindows {
+        fn open(
+            self: Arc<Self>,
+            _: &mut HeadlessState,
+            _: Weak<Mutex<HeadlessState>>,
+            _: WindowOptions,
+        ) -> Arc<dyn HostWindow> {
+            unreachable!("the test opens no window")
+        }
+
+        fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>> {
+            Vec::new()
+        }
+
+        fn callbacks_of(&self, _: WindowId) -> Option<Arc<WindowCallbacks>> {
+            None
+        }
+    }
+
     #[test]
     fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -798,7 +873,7 @@ mod tests {
                     .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
             }
         }
-        let platform = Arc::new(HeadlessLoop::new::<crate::hosts::headless::Headless>());
+        let platform = Arc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
         platform.state.lock().is_running = true;
         let calls = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicBool::new(false));

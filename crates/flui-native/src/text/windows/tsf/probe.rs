@@ -453,7 +453,7 @@ fn text_services_probe() {
             .expect("(1) the window offers its text-store host")
     };
     let services: Rc<TextServices> =
-        crate::platforms::windows::platform::with_window_context(hwnd, "probe", |context| {
+        crate::window::windows::proc::with_window_context(hwnd, "probe", |context| {
             context.text_services.borrow().clone()
         })
         .flatten()
@@ -777,11 +777,10 @@ fn activate_profile(
 
 /// The window's scale and client origin.
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
-    let scale = crate::platforms::windows::platform::with_window_context(hwnd, "probe", |c| {
-        c.scale_factor.get()
-    })
-    .and_then(DevicePixelRatio::new)
-    .unwrap_or_default();
+    let scale =
+        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale_factor.get())
+            .and_then(DevicePixelRatio::new)
+            .unwrap_or_default();
     let mut origin = POINT::default();
     // SAFETY: a live local.
     let _ = unsafe { ClientToScreen(hwnd, &raw mut origin) };

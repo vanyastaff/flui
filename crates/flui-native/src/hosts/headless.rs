@@ -14,10 +14,11 @@ use crate::lifecycle::notice::SystemNotices;
 use crate::owner::headless::{HeadlessHost, HeadlessLoop};
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
-use crate::platforms::headless::{FakeSystemChrome, HeadlessInputDevices, MockWindow};
+use crate::platforms::headless::HeadlessInputDevices;
 use crate::preferences::headless::HeadlessPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::headless::FakeTextInput;
+use crate::window::headless::{FakeSystemChrome, HeadlessWindows, MockWindow};
 
 /// The headless host's table.
 #[derive(Debug)]
@@ -60,7 +61,9 @@ impl HostPlatform<Headless> {
     /// A headless platform with one display and every window capability.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_loop(HeadlessLoop::new::<Headless>())
+        Self::from_parts(HeadlessWindows::default(), |windows| {
+            HeadlessLoop::new::<Headless>(Arc::clone(windows) as _)
+        })
     }
 }
 

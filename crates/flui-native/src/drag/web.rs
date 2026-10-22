@@ -305,9 +305,8 @@ use crate::{
     drag::offers::payload_of_bytes,
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
-    owner::web::{CanvasDrag, HostDrag},
+    owner::web::{CanvasDrag, CanvasListeners, HostDrag},
     platforms::web::events::{answer, pointer_position},
-    platforms::web::registration::Registration,
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -463,7 +462,7 @@ impl HostDrag for WebTransfer {
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
-        registration: &mut Registration,
+        registration: &mut dyn CanvasListeners,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
         Ok(Box::new(register(canvas, &self, callbacks, registration)?))
     }
@@ -798,7 +797,7 @@ fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
     callbacks: &Arc<WindowCallbacks>,
-    registration: &mut Registration,
+    registration: &mut dyn CanvasListeners,
 ) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
     let source = Arc::new(WebDragSource::new());
@@ -810,48 +809,52 @@ fn register(
             Arc::clone(callbacks),
             Rc::clone(&hover),
         );
-        registration.listen(canvas.as_ref(), kind, move |event| {
-            let Some(data) = transfer_of(&event) else {
-                return;
-            };
-            let allowed = allowed_of(&data.effect_allowed());
-            let position = drag_position(&event);
-            let (input, id) = if let Some((id, _)) = hover.get() {
-                (
-                    DragDropEvent::Moved {
+        registration.listen(
+            canvas.as_ref(),
+            kind,
+            Rc::new(move |event: web_sys::Event| {
+                let Some(data) = transfer_of(&event) else {
+                    return;
+                };
+                let allowed = allowed_of(&data.effect_allowed());
+                let position = drag_position(&event);
+                let (input, id) = if let Some((id, _)) = hover.get() {
+                    (
+                        DragDropEvent::Moved {
+                            id,
+                            allowed,
+                            position,
+                        },
                         id,
-                        allowed,
-                        position,
-                    },
-                    id,
-                )
-            } else {
-                let offer = transfer.open_offer(offered_by(&data));
-                let id = offer.id();
-                (
-                    DragDropEvent::Entered {
-                        offer,
-                        allowed,
-                        position: Some(position),
-                    },
-                    id,
-                )
-            };
-            hover.set(Some((id, allowed)));
-            let result = callbacks.dispatch_input(PlatformInput::DragDrop(input));
-            let effect = drop_effect(transfer.feedback(id), allowed);
-            data.set_drop_effect(effect);
-            // Cancelling `dragenter` makes the canvas the drag's target;
-            // cancelling `dragover` accepts the drop with `dropEffect`.
-            let accepts = event.type_() == "dragenter" || effect != "none";
-            answer(
-                &event,
-                flui_platform::DispatchEventResult::resolved(
-                    result.propagate,
-                    result.default_prevented && accepts,
-                ),
-            );
-        })?;
+                    )
+                } else {
+                    let offer = transfer.open_offer(offered_by(&data));
+                    let id = offer.id();
+                    (
+                        DragDropEvent::Entered {
+                            offer,
+                            allowed,
+                            position: Some(position),
+                        },
+                        id,
+                    )
+                };
+                hover.set(Some((id, allowed)));
+                let result = callbacks.dispatch_input(PlatformInput::DragDrop(input));
+                let effect = drop_effect(transfer.feedback(id), allowed);
+                data.set_drop_effect(effect);
+                // Cancelling `dragenter` makes the canvas the drag's target;
+                // cancelling `dragover` accepts the drop with `dropEffect`.
+                let accepts = event.type_() == "dragenter" || effect != "none";
+                answer(
+                    &event,
+                    flui_platform::DispatchEventResult::resolved(
+                        result.propagate,
+                        result.default_prevented && accepts,
+                    ),
+                );
+            }),
+        )?;
     }
     {
         let (transfer, callbacks, hover) = (
@@ -859,94 +862,118 @@ fn register(
             Arc::clone(callbacks),
             Rc::clone(&hover),
         );
-        registration.listen(canvas.as_ref(), "dragleave", move |event| {
-            let Some((id, _)) = hover.take() else {
-                return;
-            };
-            let result =
-                callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
-            transfer.close_offer(id);
-            answer(&event, result);
-        })?;
-    }
-    {
-        let (transfer, callbacks, hover) = (
-            Arc::clone(transfer),
-            Arc::clone(callbacks),
-            Rc::clone(&hover),
-        );
-        registration.listen(canvas.as_ref(), "drop", move |event| {
-            let Some((id, allowed)) = hover.take() else {
-                return;
-            };
-            let action = action_of(drop_effect(transfer.feedback(id), allowed));
-            if action.is_empty() {
+        registration.listen(
+            canvas.as_ref(),
+            "dragleave",
+            Rc::new(move |event: web_sys::Event| {
+                let Some((id, _)) = hover.take() else {
+                    return;
+                };
                 let result =
                     callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
                 transfer.close_offer(id);
                 answer(&event, result);
-                return;
-            }
-            if let Some(data) = transfer_of(&event) {
-                transfer.materialize(id, &data);
-            }
-            let result =
-                callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
-                    id,
-                    action,
-                    position: Some(drag_position(&event)),
-                }));
-            answer(&event, result);
-        })?;
+            }),
+        )?;
+    }
+    {
+        let (transfer, callbacks, hover) = (
+            Arc::clone(transfer),
+            Arc::clone(callbacks),
+            Rc::clone(&hover),
+        );
+        registration.listen(
+            canvas.as_ref(),
+            "drop",
+            Rc::new(move |event: web_sys::Event| {
+                let Some((id, allowed)) = hover.take() else {
+                    return;
+                };
+                let action = action_of(drop_effect(transfer.feedback(id), allowed));
+                if action.is_empty() {
+                    let result = callbacks
+                        .dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
+                    transfer.close_offer(id);
+                    answer(&event, result);
+                    return;
+                }
+                if let Some(data) = transfer_of(&event) {
+                    transfer.materialize(id, &data);
+                }
+                let result =
+                    callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
+                        id,
+                        action,
+                        position: Some(drag_position(&event)),
+                    }));
+                answer(&event, result);
+            }),
+        )?;
     }
 
     // The source.
     {
         let source = Arc::clone(&source);
-        registration.listen(canvas.as_ref(), "pointerdown", move |event| {
-            let pointer: &web_sys::PointerEvent = event.unchecked_ref();
-            if pointer.pointer_type() != "touch" {
-                source.pressed.set(true);
-                source.refused.set(false);
-            }
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            "pointerdown",
+            Rc::new(move |event: web_sys::Event| {
+                let pointer: &web_sys::PointerEvent = event.unchecked_ref();
+                if pointer.pointer_type() != "touch" {
+                    source.pressed.set(true);
+                    source.refused.set(false);
+                }
+            }),
+        )?;
     }
     for kind in ["pointerup", "pointercancel"] {
         let source = Arc::clone(&source);
-        registration.listen(canvas.as_ref(), kind, move |_| {
-            source.pressed.set(false);
-            // A session no `dragstart` took by the release never runs.
-            if matches!(*source.outgoing.borrow(), Outgoing::Waiting(_)) {
-                source.end(OsDragEnd::Cancelled);
-            }
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            kind,
+            Rc::new(move |_: web_sys::Event| {
+                source.pressed.set(false);
+                // A session no `dragstart` took by the release never runs.
+                if matches!(*source.outgoing.borrow(), Outgoing::Waiting(_)) {
+                    source.end(OsDragEnd::Cancelled);
+                }
+            }),
+        )?;
     }
     {
         let source = Arc::clone(&source);
-        registration.listen(canvas.as_ref(), "dragstart", move |event| {
-            if !source.begin(transfer_of(&event).as_ref()) {
-                event.prevent_default();
-            }
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            "dragstart",
+            Rc::new(move |event: web_sys::Event| {
+                if !source.begin(transfer_of(&event).as_ref()) {
+                    event.prevent_default();
+                }
+            }),
+        )?;
     }
     {
         let source = Arc::clone(&source);
-        registration.listen(canvas.as_ref(), "dragend", move |event| {
-            let effect = transfer_of(&event).map(|data| data.drop_effect());
-            let allowed = match &*source.outgoing.borrow() {
-                Outgoing::Running { allowed, .. } => *allowed,
-                _ => return,
-            };
-            let action = effect
-                .as_deref()
-                .map_or(TransferActions::empty(), action_of)
-                & allowed;
-            source.end(if action.is_empty() {
-                OsDragEnd::Cancelled
-            } else {
-                OsDragEnd::Dropped(action)
-            });
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            "dragend",
+            Rc::new(move |event: web_sys::Event| {
+                let effect = transfer_of(&event).map(|data| data.drop_effect());
+                let allowed = match &*source.outgoing.borrow() {
+                    Outgoing::Running { allowed, .. } => *allowed,
+                    _ => return,
+                };
+                let action = effect
+                    .as_deref()
+                    .map_or(TransferActions::empty(), action_of)
+                    & allowed;
+                source.end(if action.is_empty() {
+                    OsDragEnd::Cancelled
+                } else {
+                    OsDragEnd::Dropped(action)
+                });
+            }),
+        )?;
     }
     Ok(HtmlCanvasDrag {
         source,

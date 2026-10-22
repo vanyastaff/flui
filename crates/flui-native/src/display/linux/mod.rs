@@ -7,14 +7,14 @@
 //!
 //! - **Wayland**: `wl_output` (version 2 to 4) with `zxdg_output_v1` for the
 //!   logical position and size, applied only when the compositor closes a burst
-//!   of events with `done` ([`wayland_model`]).
+//!   of events with `done` (`wayland_model`).
 //! - **X11**: RandR 1.5 monitors with the output, CRTC and mode behind each
-//!   ([`x11_model`]).
+//!   (`x11_model`).
 //!
 //! Both models are pure: they take the events or state a protocol reports and
-//! answer [`OutputView`](view::OutputView)s, and they are checked on every host
+//! answer `view::OutputView`s, and they are checked on every host
 //! with no compositor. Thin adapters over `wayland-client` and `x11rb` feed
-//! them, behind the `wayland` and `x11` features. [`source::LinuxDisplays`]
+//! them, behind the `wayland` and `x11` features. `source::LinuxDisplays`
 //! turns the views into the display snapshot and keeps them current from a
 //! thread that waits on the connection.
 //!

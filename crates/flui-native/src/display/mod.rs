@@ -1,7 +1,7 @@
 //! The displays: the outputs a platform reports, their geometry, scale and
 //! refresh period, and the snapshot a host publishes of them (ADR-0151 §10).
 //!
-//! The model is [`source`]: the id registry and last snapshot every native
+//! The model is `source`: the id registry and last snapshot every native
 //! display source keeps, and when that snapshot is read from the operating
 //! system again. Beside it is one file per platform, each reading its
 //! operating system's own source:

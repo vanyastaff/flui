@@ -19,10 +19,11 @@ use crate::owner::android::{ActivityPreferences, AndroidHost, AndroidLoop, HostD
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
-use crate::platforms::android::{AndroidInputState, AndroidSystemChrome, AndroidWindow};
+use crate::platforms::android::AndroidInputState;
 use crate::preferences::android::AndroidPreferences;
 use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
+use crate::window::android::{AndroidWindow, system_chrome::AndroidSystemChrome};
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -114,6 +115,6 @@ impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new::<Android>(app))
+        Self::from_parts((), |_| AndroidLoop::new::<Android>(app))
     }
 }

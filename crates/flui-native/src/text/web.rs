@@ -108,9 +108,8 @@ mod input {
     use super::ime::input_mode;
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::platforms::web::events::{KeyRoute, is_focus_handoff};
-    use crate::platforms::web::registration::{EditorSlot, Listener};
-    use crate::platforms::web::window::FocusSync;
     use crate::text::ime::{diff, document_text, scalar_spans};
+    use crate::window::web::{EditorSlot, FocusSync, Listener};
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -740,7 +739,7 @@ mod input {
                 .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
             parent.insert_before(&element, self.canvas.next_sibling().as_ref())?;
             self.editor.set(Some(element.unchecked_ref()));
-            let canvas_focused = crate::platforms::web::registration::effective_focus(&self.canvas);
+            let canvas_focused = crate::window::web::effective_focus(&self.canvas);
             if canvas_focused {
                 let _ = element.focus();
             }

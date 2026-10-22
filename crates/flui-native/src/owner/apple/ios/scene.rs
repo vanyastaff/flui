@@ -1,6 +1,14 @@
-//! UIKit session identities and the platform-to-runner installation boundary.
-use crate::{BootstrapError, HostWindow};
+//! UIKit session identities, and the consumer of scene sessions as the loop
+//! calls it.
+//!
+//! The application registers a handler of `IOSSceneEvent`s, which carry the
+//! window's installation acknowledgement; the window feature
+//! (`window::apple::ios`) adapts that handler to [`SceneConsumer`], so the
+//! loop drives sessions without naming the installation it hands over.
+
 use std::sync::Arc;
+
+use crate::{BootstrapError, HostWindow, PlatformProxy};
 
 /// UIKit's persistent logical scene-session identity, independent of attachments.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -12,84 +20,57 @@ impl IOSSceneSessionId {
     }
 }
 
-/// One connection of a retained logical session to a native scene.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One connection of a retained logical session to a native scene. The loop
+/// numbers connections in the order they are made, so a later one compares
+/// greater.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct IOSSceneAttachmentId(pub(super) u64);
 
-/// Owner-thread session notification. A connection carries explicit completion
-/// authority for renderer and tree installation; returning from the handler does
-/// not publish the attachment. Reconnect keeps the previously installed logical UI.
-pub enum IOSSceneEvent {
-    /// A native attachment is ready for installation, with display ticks paused.
-    Connected {
-        /// Persistent session identity.
+/// The application's consumer of scene sessions, which the loop calls on the
+/// owner thread through its call point.
+pub(crate) trait SceneConsumer {
+    /// `window` connected to `session` as `attachment`; `reconnect` says the
+    /// session installed its application before. Returns what the loop
+    /// watches of the window's installation, whose acknowledgement wakes the
+    /// owner through `wake`: an accepted connection always carries one, so
+    /// the loop publishes the window or rolls it back. The application may
+    /// have completed or dropped the installation before this returns.
+    ///
+    /// # Errors
+    /// What the application's handler reports; the loop rolls the
+    /// connection back.
+    fn connected(
+        &mut self,
         session: IOSSceneSessionId,
-        /// Origin of this native connection.
         attachment: IOSSceneAttachmentId,
-        /// Stable logical window, also retained across reconnects.
         window: Arc<dyn HostWindow>,
-        /// Whether this session already installed its application tree.
         reconnect: bool,
-        /// Complete only after logical state and native drivers are installed.
-        /// Until then the attachment remains unpublished; dropping this aborts it.
-        installation: crate::shared::window_installation::WindowInstallation,
-    },
-    /// Reversible loss of a native attachment; retain logical application state.
-    Disconnected {
-        /// Persistent session identity.
+        wake: PlatformProxy,
+    ) -> Result<Box<dyn SceneInstallation>, BootstrapError>;
+
+    /// `attachment` of `session` was lost; the session may connect again.
+    fn disconnected(
+        &mut self,
         session: IOSSceneSessionId,
-        /// The attachment being retired.
         attachment: IOSSceneAttachmentId,
-    },
-    /// Failed provisional installation was disposed; the same session may retry.
-    InstallationAborted {
-        /// Persistent session identity, still eligible for a later connection.
+    ) -> Result<(), BootstrapError>;
+
+    /// `attachment` of `session` failed to install and was retired; the
+    /// session may connect again.
+    fn installation_aborted(
+        &mut self,
         session: IOSSceneSessionId,
-        /// Failed attachment, whose native resources have been retired.
         attachment: IOSSceneAttachmentId,
-    },
-    /// Terminal session disposal. This persistent identity cannot reconnect.
-    Discarded {
-        /// Persistent session identity.
-        session: IOSSceneSessionId,
-    },
-}
-impl std::fmt::Debug for IOSSceneEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Connected {
-                session,
-                attachment,
-                reconnect,
-                ..
-            } => f
-                .debug_struct("Connected")
-                .field("session", session)
-                .field("attachment", attachment)
-                .field("reconnect", reconnect)
-                .finish_non_exhaustive(),
-            Self::Disconnected {
-                session,
-                attachment,
-            } => f
-                .debug_struct("Disconnected")
-                .field("session", session)
-                .field("attachment", attachment)
-                .finish(),
-            Self::InstallationAborted {
-                session,
-                attachment,
-            } => f
-                .debug_struct("InstallationAborted")
-                .field("session", session)
-                .field("attachment", attachment)
-                .finish(),
-            Self::Discarded { session } => f
-                .debug_struct("Discarded")
-                .field("session", session)
-                .finish(),
-        }
-    }
+    ) -> Result<(), BootstrapError>;
+
+    /// `session` ended for good.
+    fn discarded(&mut self, session: IOSSceneSessionId) -> Result<(), BootstrapError>;
 }
 
-pub(super) type SceneHandler = Box<dyn FnMut(IOSSceneEvent) -> Result<(), BootstrapError>>;
+/// What the loop watches of a connected window's installation, which the
+/// application completes or drops.
+pub(crate) trait SceneInstallation {
+    /// `None` until the application completed or dropped the installation;
+    /// then whether it completed.
+    fn installed(&self) -> Option<bool>;
+}
