@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -11,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use super::broadcast::Subscriber;
-use super::control::OwnerObjects;
+use super::control::{OwnerControl, OwnerMessages, OwnerObjects, OwnerPost, OwnerWindow};
 use super::{
     CreatedWindow, LoopParts, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
     WindowsLoop, dispatch_window_message, window_created,
@@ -19,6 +20,7 @@ use super::{
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
 use crate::owner::positions::PositionObjects;
+use crate::platforms::windows::display::WindowsDisplays;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -306,6 +308,51 @@ fn broadcast_subscribers_hear_a_message_in_order() {
         ),
         "a message nobody answers gets the default procedure's answer"
     );
+}
+
+/// An owner-window hook that hears the window go, and may panic as it does.
+struct Ending {
+    name: &'static str,
+    panics: bool,
+}
+
+impl OwnerMessages for Ending {
+    fn attach(&self, _owner: OwnerPost) {}
+
+    fn message(&self, _owner: &OwnerWindow, _message: u32) -> Option<LRESULT> {
+        None
+    }
+
+    fn destroyed(&self) {
+        hear(self.name);
+        assert!(!self.panics, "a hook that panics as the owner window goes");
+    }
+}
+
+/// Every owner-window hook hears the window go, the one after a hook that
+/// panics too.
+#[test]
+fn every_owner_hook_hears_the_window_go_after_one_panics() {
+    let control = OwnerControl::new::<TestHost>(
+        WindowIdentity::mint_from(WindowIdentity::source()),
+        Weak::new(),
+        vec![
+            Arc::new(Ending {
+                name: "first",
+                panics: true,
+            }),
+            Arc::new(Ending {
+                name: "second",
+                panics: false,
+            }),
+        ],
+        Arc::new(WindowsDisplays::new()),
+        Arc::default(),
+    )
+    .expect("the owner control");
+    HEARD.with(|heard| heard.borrow_mut().clear());
+    drop(control);
+    assert_eq!(HEARD.with(RefCell::take), ["first", "second"]);
 }
 
 /// Windows holds one window class of a name per process: a loop for a second

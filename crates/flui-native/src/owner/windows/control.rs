@@ -122,7 +122,7 @@ pub(crate) struct OwnerControlContext {
 pub(crate) trait OwnerMessages {
     /// The owner window exists: a message posted through `owner` reaches the
     /// procedure until the window is closed.
-    fn attach(&self, _owner: OwnerPost) {}
+    fn attach(&self, owner: OwnerPost);
 
     /// Answers `message` for the owner window, or passes it on with `None`.
     /// User code may run here and destroy the window: `owner` holds clones of
@@ -130,8 +130,9 @@ pub(crate) trait OwnerMessages {
     fn message(&self, owner: &OwnerWindow, message: u32) -> Option<LRESULT>;
 
     /// The owner window is destroyed, and the owner's state with it: what the
-    /// feature was to run from the window never runs.
-    fn destroyed(&self) {}
+    /// feature was to run from the window never runs. Every hook is told, each
+    /// apart, so one that panics leaves the next one told.
+    fn destroyed(&self);
 }
 
 /// Posts a message to the owner window while it exists. `Send + Sync`: it
@@ -678,11 +679,13 @@ unsafe extern "system" fn procedure(
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 let context = Box::from_raw(pointer);
                 let hooks = Rc::clone(&context.owner_hooks);
-                drop(context);
+                // Each step is contained apart: a panic in one leaves the
+                // rest to run.
+                contain_owner_callback(|| drop(context));
                 // What a feature was to run from this window never runs: it
                 // is told so here, with nothing of the window left to reach.
                 for hook in hooks.iter() {
-                    hook.destroyed();
+                    contain_owner_callback(|| hook.destroyed());
                 }
             } else if message == WAKE && !pointer.is_null() {
                 let signal = Arc::clone(&(*pointer).signal);
