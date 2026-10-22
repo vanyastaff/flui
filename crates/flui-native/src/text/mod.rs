@@ -18,11 +18,13 @@
 //! - `winit`: winit's IME enablement and cursor area;
 //! - `headless`: the recording double of IME requests.
 //!
-//! The pure halves of the Android and web modules (their `ime`) are built on
-//! every target and public, hidden from the documentation: the backend
-//! conformance table in `tests/` decodes a key the input method owns with
-//! them. Every other platform module is built for its own target, and
-//! `windows` for tests too, which check its geometry on every host.
+//! Two pure parts are built on every target and public, hidden from the
+//! documentation, because the backend conformance table in `tests/` decodes a
+//! key the input method owns with them until that table reaches the hosts
+//! through the public API: Android's `keys` and the web's `ime`. Every other
+//! platform module is built for its own target; Android's `ime` and `sizing`
+//! and the whole of `windows` for tests too, which check their pure halves on
+//! every host.
 
 use std::rc::Rc;
 use std::sync::Arc;
