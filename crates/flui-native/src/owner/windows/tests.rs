@@ -13,17 +13,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use super::broadcast::Subscriber;
-use super::control::{
-    OwnerControl, OwnerLifecycle, OwnerMessages, OwnerObjects, OwnerPost, OwnerPreferences,
-    OwnerSeeds, OwnerWindow,
-};
-use super::testing::{NoDisplays, NoInputs, NoPreferences, NoWindows, QuietHost};
+use super::control::{OwnerControl, OwnerMessages, OwnerPost, OwnerWindow};
+use super::testing::{ClassHooks, NoDisplays, NoPreferences, NoWindows, QuietHost};
 use super::{
-    CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowGone, WindowHooks, WindowIdentity,
-    WindowMessages, WindowsHost, dispatch_window_message, window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
+    WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::error::PlatformError;
-use crate::owner::notices::NoticeChannel;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -89,46 +85,21 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks over the quiet host's sources, no
-/// broadcast subscriber and a drag position that takes no drags.
-struct TestHost;
+/// The tests' two hooks, in order.
+struct FirstThenSecond;
+
+impl ClassHooks for FirstThenSecond {
+    fn hooks() -> WindowHooks {
+        test_hooks()
+    }
+}
+
+/// A host of the tests' own: the quiet host with the two hooks.
+type TestHost = QuietHost<FirstThenSecond>;
 
 /// The test host's hooks, in order.
 fn test_hooks() -> WindowHooks {
     Rc::new([Rc::new(First) as Rc<dyn WindowMessages>, Rc::new(Second)])
-}
-
-impl WindowsHost for TestHost {
-    fn window_class() -> WindowClass {
-        WindowClass {
-            hooks: test_hooks(),
-            input: Rc::new(NoInputs),
-        }
-    }
-
-    fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-        QuietHost::preferences(owner)
-    }
-
-    fn notices() -> Arc<dyn NoticeChannel> {
-        QuietHost::notices()
-    }
-
-    fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
-        QuietHost::lifecycle(owner)
-    }
-
-    fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
-        QuietHost::broadcast_subscribers(owner)
-    }
-
-    fn displays() -> Arc<dyn HostDisplays> {
-        QuietHost::displays()
-    }
-
-    fn drag() -> Arc<dyn HostDrag> {
-        QuietHost::drag()
-    }
 }
 
 /// The class's procedure offers a message to the hooks in order: the first
@@ -396,4 +367,24 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
     HEARD.with(|heard| heard.borrow_mut().clear());
     drop(control);
     assert_eq!(HEARD.with(RefCell::take), ["first", "second"]);
+}
+
+/// Windows holds one window class of a name per process: once a loop of one
+/// host registered it, a loop for another host is refused, not handed a class
+/// that dispatches to the first host's hooks. The hosts are told apart by type:
+/// the quiet host and the quiet host with the tests' hooks are two. The class
+/// stays registered for the quiet host in this process, which nextest runs
+/// this test alone in, as it runs every test.
+#[test]
+fn a_second_host_is_refused_the_window_class() {
+    let _first = WindowsLoop::new::<QuietHost>(Arc::new(NoWindows))
+        .expect("the first host registers the class");
+    match WindowsLoop::new::<TestHost>(Arc::new(NoWindows)) {
+        Err(PlatformError::Init { message }) => assert!(
+            message.contains("another host"),
+            "the refusal names the class's other host: {message}"
+        ),
+        Err(error) => panic!("refused for another reason: {error}"),
+        Ok(_) => panic!("a second host was given the first host's window class"),
+    }
 }

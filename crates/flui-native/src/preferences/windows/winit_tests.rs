@@ -24,8 +24,8 @@ use winit::{
 };
 
 use crate::owner::winit::WinitApp;
-use crate::owner::winit::control::control_lane;
-use crate::owner::winit::testing::build_test_event_loop;
+
+use crate::owner::winit::testing::{build_test_event_loop, install_control_lane};
 use crate::{WinitPlatform, host_window::HostWindow, platform::Platform};
 use flui_platform::WindowOptions;
 
@@ -211,8 +211,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let host = Arc::new(WinitPlatform::new());
     let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
-    let proxy = event_loop.create_proxy();
-    let owner_proxy = proxy.clone();
+    let owner_proxy = event_loop.create_proxy();
     let signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
         owner_proxy
             .send_event(())
@@ -221,12 +220,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             })
     }));
     *platform.owner_signal.lock() = Some(signal.clone());
-    let (control, receiver) = control_lane(Arc::new(move || {
-        let _ = proxy.send_event(());
-    }));
-    platform
-        .install_control_lane(thread::current().id(), control.clone())
-        .expect("install actual owner lane");
+    let (control, lane) = install_control_lane(&platform, &event_loop);
     let scrolls = Arc::new(Mutex::new(Vec::new()));
     let observations = Arc::new(Mutex::new(None));
     let frames = Arc::new(Mutex::new(0_usize));
@@ -243,7 +237,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         move || {
             let _ = signal.wake();
         },
-        move || timeout_control.request_quit(),
+        move || timeout_control.request_quit_for_test(),
     );
     let sink = scrolls.clone();
     let observed = observations.clone();
@@ -373,7 +367,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         Ok(())
     });
     let mut observer = RetryObserver {
-        inner: WinitApp::for_test(platform, host.clone(), receiver, Some(on_ready)),
+        inner: WinitApp::for_test(platform, host.clone(), lane, Some(on_ready)),
         packets: scrolls.clone(),
         frames,
         injected: false,
@@ -504,8 +498,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let host = Arc::new(WinitPlatform::new());
     let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
-    let proxy = event_loop.create_proxy();
-    let owner_proxy = proxy.clone();
+    let owner_proxy = event_loop.create_proxy();
     let signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
         owner_proxy
             .send_event(())
@@ -514,12 +507,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
             })
     }));
     *platform.owner_signal.lock() = Some(signal.clone());
-    let (control, receiver) = control_lane(Arc::new(move || {
-        let _ = proxy.send_event(());
-    }));
-    platform
-        .install_control_lane(thread::current().id(), control.clone())
-        .expect("install owner lane");
+    let (control, lane) = install_control_lane(&platform, &event_loop);
     let frames = Arc::new(Mutex::new(0_usize));
     let baseline = Arc::new(Mutex::new(None));
     let deferred = Arc::new(AtomicBool::new(false));
@@ -534,7 +522,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         move || {
             let _ = signal.wake();
         },
-        move || control.request_quit(),
+        move || control.request_quit_for_test(),
     );
     let bootstrap_deferred = deferred.clone();
     let wake_platform = host.clone();
@@ -607,7 +595,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         Ok(())
     });
     let mut observer = ColdRead {
-        inner: WinitApp::for_test(platform, host.clone(), receiver, Some(on_ready)),
+        inner: WinitApp::for_test(platform, host.clone(), lane, Some(on_ready)),
         frames,
         baseline,
     };

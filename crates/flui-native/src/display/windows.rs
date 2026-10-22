@@ -1087,5 +1087,27 @@ mod broadcasts {
                 "a detached subscriber woke the owner"
             );
         }
+
+        /// The winit loop's receiver takes its subscriber from the displays'
+        /// winit hook, which gives the same one: a display change marks the
+        /// monitors stale and wakes the owner.
+        #[cfg(feature = "winit-backend")]
+        #[test]
+        fn the_winit_loop_s_displays_hear_a_display_change() {
+            let (signal, wakes) = counting_signal();
+            let displays = Arc::new(WindowsDisplays::new());
+            let sampled: Arc<dyn HostDisplays> = Arc::clone(&displays) as _;
+            let subscriber = crate::owner::winit::HostDisplays::broadcasts(displays, &signal);
+            let receiver = Receiver::new([subscriber]).expect("a receiver");
+            sampled.snapshot().expect("the first sample");
+
+            receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
+            assert!(samples_again(&sampled), "a display change marked nothing");
+            assert_eq!(
+                wakes.load(Ordering::SeqCst),
+                1,
+                "a display change did not wake the owner"
+            );
+        }
     }
 }

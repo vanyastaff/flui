@@ -17,11 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::WinitApp;
 use super::testing::{
-    build_test_event_loop, install_test_owner_signal, quiet_platform, wait_for_running,
+    build_test_event_loop, install_control_lane, install_test_owner_signal, quiet_platform,
+    wait_for_running,
 };
-use super::{SelfCloseRoute, WinitApp};
-use crate::owner::winit::control::control_lane;
 
 /// A wake that lands while a turn reads what wakes asked of it (an X11
 /// window's properties, host notices, the portal's appearance) gets a turn of
@@ -48,14 +48,7 @@ fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
     signal
         .register(Box::new(|| {}))
         .expect("the owner registers its turn");
-    let event_loop_proxy = event_loop.create_proxy();
-    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        let _ = event_loop_proxy.send_event(());
-    });
-    let (control, receiver) = control_lane(wake_owner);
-    platform
-        .install_control_lane(thread::current().id(), control.clone())
-        .expect("first install succeeds");
+    let (control, lane) = install_control_lane(&platform, &event_loop);
 
     // Set by the worker once the loop runs: the next read wakes the owner.
     let armed = Arc::new(AtomicBool::new(false));
@@ -107,27 +100,7 @@ fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
         }
     });
 
-    let mut app = WinitApp {
-        platform: Arc::clone(&platform),
-        owner_platform: host,
-        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-        preference_source: None,
-        #[cfg(windows)]
-        broadcasts: None,
-        #[cfg(target_os = "macos")]
-        preference_observers: None,
-        #[cfg(target_os = "linux")]
-        host_notices: None,
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        display_watch: None,
-        on_ready: None,
-        control: receiver,
-        quit_notified: false,
-        in_flight_replies: Vec::new(),
-        bootstrap_error: None,
-        self_close_deadline: None,
-        self_close_route: SelfCloseRoute::default(),
-    };
+    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");

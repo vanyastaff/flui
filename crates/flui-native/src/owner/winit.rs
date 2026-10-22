@@ -546,7 +546,7 @@ pub(crate) struct WinitLoopState {
     pub(crate) data_transfer: Arc<dyn FileDrops>,
 
     /// Map of winit window IDs to platform window IDs
-    pub(crate) window_id_map: HashMap<WinitWindowId, WindowId>,
+    window_id_map: HashMap<WinitWindowId, WindowId>,
 
     /// Map of platform window IDs to the windows the window feature opened
     pub(crate) windows: HashMap<WindowId, Arc<dyn LoopWindow>>,
@@ -561,7 +561,7 @@ pub(crate) struct WinitLoopState {
     pub(crate) run_state: WinitRunState,
 
     /// Current cursor position per window (physical)
-    pub(crate) cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
+    cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
 
     /// Current keyboard modifiers, held in winit's own raw form.
     ///
@@ -790,7 +790,7 @@ impl WinitLoop {
         combine_shutdown_result(bootstrap_error, result)
     }
 
-    pub(crate) fn install_control_lane(
+    fn install_control_lane(
         &self,
         owner_thread: ThreadId,
         control: ControlSender,
@@ -2791,7 +2791,7 @@ impl OwnerHooks for WinitOwnerHooks {
 
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             // SAFETY: identical justification to `Platform::open_window`'s
-            // same-thread fast path (`platforms/winit/positions.rs`) — this
+            // same-thread fast path (the winit window position's `open`) — this
             // call is reached only from inside the same nested `on_ready`
             // invocation that publishes `ACTIVE_EVENT_LOOP`.
             let event_loop = unsafe { event_loop_ptr.as_ref() };
@@ -2912,14 +2912,14 @@ impl ProxyTransport for WinitProxyTransport {
     }
 }
 
-// The real-event-loop test family lives in its own file: every test in it
-// runs `event_loop.run_app` on an ordinary test thread, and together with the
-// four helpers nothing else uses it outgrew this file's budget (issue #923).
-// A sibling module rather than a nested one, so its tests sit beside `tests`
-// rather than two segments below it.
+// The loop's test on a real winit event loop, which runs `event_loop.run_app`
+// on an ordinary test thread with no window; the real-loop tests that open
+// windows are the window feature's. A sibling module rather than a nested one,
+// so its test sits beside `tests` rather than two segments below it.
 #[cfg(test)]
 mod real_loop_tests;
-// The real loop the tests here and the window's tests run on.
+// The real loop the tests here and the window's tests run on, and the quiet
+// host and table they run over.
 #[cfg(test)]
 pub(crate) mod testing;
 
@@ -2933,7 +2933,7 @@ mod tests {
         },
     };
 
-    use super::testing::{Quiet, quiet_platform};
+    use super::testing::{QuietTable, quiet_platform};
     use super::{SelfCloseRoute, WinitApp, WinitRunState};
     use crate::owner::winit::control::control_lane;
     use crate::platform::{HostPlatform, Platform};
@@ -2962,7 +2962,10 @@ mod tests {
         use flui_platform::{WindowEvent, WindowId};
         use std::sync::atomic::AtomicBool;
 
-        fn calls_back(platform: &Arc<HostPlatform<Quiet>>, reached: &Arc<AtomicBool>) -> OnDrop {
+        fn calls_back(
+            platform: &Arc<HostPlatform<QuietTable>>,
+            reached: &Arc<AtomicBool>,
+        ) -> OnDrop {
             let (weak, reached) = (Arc::downgrade(platform), Arc::clone(reached));
             OnDrop(Some(Box::new(move || {
                 if let Some(platform) = weak.upgrade() {
@@ -3148,14 +3151,15 @@ mod tests {
         use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::WM_DISPLAYCHANGE;
 
+        use super::HostDisplays;
         use super::testing::{QuietHost, quiet_platform_over};
-        use super::{FileDrops, HostDisplays, LoopInput, PreferenceStart, WinitHost};
-        use crate::owner::notices::{NoticeChannel, StaleOnWake};
+        use crate::owner::notices::StaleOnWake;
         use crate::owner::signal::OwnerSignal;
         use crate::owner::windows::broadcast::Subscriber;
 
         /// Displays whose part of the system's broadcasts wakes the owner on
         /// a display change, as the Win32 source's does.
+        #[derive(Default)]
         struct ChangingDisplays;
 
         impl StaleOnWake for ChangingDisplays {
@@ -3196,36 +3200,7 @@ mod tests {
             }
         }
 
-        /// The quiet host with displays that hear a change.
-        struct DisplayHost;
-
-        impl WinitHost for DisplayHost {
-            fn displays() -> Arc<dyn HostDisplays> {
-                Arc::new(ChangingDisplays)
-            }
-
-            fn notices() -> Arc<dyn NoticeChannel> {
-                QuietHost::notices()
-            }
-
-            fn preferences() -> Box<dyn PreferenceStart> {
-                QuietHost::preferences()
-            }
-
-            fn clipboard() -> Arc<dyn flui_platform::Clipboard> {
-                QuietHost::clipboard()
-            }
-
-            fn drag() -> Arc<dyn FileDrops> {
-                QuietHost::drag()
-            }
-
-            fn input() -> Box<dyn LoopInput> {
-                QuietHost::input()
-            }
-        }
-
-        let host = Arc::new(quiet_platform_over::<DisplayHost>());
+        let host = Arc::new(quiet_platform_over::<QuietHost<ChangingDisplays>>());
         let platform = host.shared_owner();
         let wakes = Arc::new(AtomicUsize::new(0));
         let signal = crate::owner::signal::OwnerSignal::new({

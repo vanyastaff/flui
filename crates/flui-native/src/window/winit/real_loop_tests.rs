@@ -28,9 +28,9 @@ use winit::{
 };
 
 use crate::owner::winit::WinitApp;
-use crate::owner::winit::control::control_lane;
 use crate::owner::winit::testing::{
-    build_test_event_loop, install_test_owner_signal, wait_for_map_len, wait_for_running,
+    build_test_event_loop, install_control_lane, install_test_owner_signal, wait_for_map_len,
+    wait_for_running,
 };
 use crate::{WinitPlatform, host_window::HostWindow, platform::Platform};
 use flui_platform::{WindowEvent, WindowId, WindowOptions};
@@ -64,15 +64,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
     let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     install_test_owner_signal(&platform, &event_loop);
-    let event_loop_proxy = event_loop.create_proxy();
-    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        let _ = event_loop_proxy.send_event(());
-    });
-    let (control, receiver) = control_lane(wake_owner);
-    let owner_thread = thread::current().id();
-    platform
-        .install_control_lane(owner_thread, control.clone())
-        .expect("first install succeeds");
+    let (control, lane) = install_control_lane(&platform, &event_loop);
 
     let platform_for_worker = Arc::clone(&platform);
     let control_for_worker = control;
@@ -86,7 +78,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
             wait_for_running(&platform_for_worker);
 
             let keys_before: HashSet<_> = platform_for_worker
-                .with_state(|state| state.window_id_map.keys().copied().collect());
+                .with_state(|state| state.window_ids_for_test().keys().copied().collect());
 
             let handle = control_for_worker
                 .request_open_window(options("orphan-after-delivery"))
@@ -110,13 +102,13 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
             // window-identity maps.
             let (orphan_id, data_transfer) = platform_for_worker.with_state(|state| {
                 let new_winit_id = *state
-                    .window_id_map
+                    .window_ids_for_test()
                     .keys()
                     .find(|id| !keys_before.contains(id))
                     .expect("a new winit id must have appeared");
-                let orphan_id = state.window_id_map[&new_winit_id];
+                let orphan_id = state.window_ids_for_test()[&new_winit_id];
                 state
-                    .cursor_positions
+                    .cursor_positions_for_test()
                     .insert(orphan_id, winit::dpi::PhysicalPosition::new(1.0, 2.0));
                 (orphan_id, Arc::clone(&state.data_transfer))
             });
@@ -142,7 +134,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
                 platform_for_worker.with_state(|state| {
                     (
                         state.windows.len(),
-                        state.cursor_positions.contains_key(&orphan_id),
+                        state.cursor_positions_for_test().contains_key(&orphan_id),
                     )
                 });
             assert_eq!(
@@ -163,13 +155,13 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
             );
         }));
 
-        control_for_worker.request_quit();
+        control_for_worker.request_quit_for_test();
         if let Err(payload) = outcome {
             resume_unwind(payload);
         }
     });
 
-    let mut app = WinitApp::for_test(Arc::clone(&platform), host, receiver, None);
+    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
@@ -307,7 +299,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
             let (window, host) = self.inner.platform.with_state(|state| {
                 (
-                    state.window_id_map.keys().next().copied(),
+                    state.window_ids_for_test().keys().next().copied(),
                     state.windows.values().next().cloned(),
                 )
             });
@@ -361,15 +353,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let platform = host.shared_owner();
     let event_loop = build_test_event_loop();
     install_test_owner_signal(&platform, &event_loop);
-    let event_loop_proxy = event_loop.create_proxy();
-    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        let _ = event_loop_proxy.send_event(());
-    });
-    let (control, receiver) = control_lane(wake_owner);
+    let (control, lane) = install_control_lane(&platform, &event_loop);
     let owner_thread = thread::current().id();
-    platform
-        .install_control_lane(owner_thread, control.clone())
-        .expect("first install succeeds");
 
     let exiting = Arc::new(AtomicBool::new(false));
     let move_before_close = Arc::new(AtomicBool::new(false));
@@ -453,14 +438,14 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         // Success path: the teardown's own exit already ended the loop
         // and this quit is a no-op. Failure path: it unparks `run_app`
         // so the main thread reaches its assertions instead of hanging.
-        control_for_worker.request_quit();
+        control_for_worker.request_quit_for_test();
         if let Err(payload) = outcome {
             resume_unwind(payload);
         }
     });
 
     let mut app = ExitObserver {
-        inner: WinitApp::for_test(Arc::clone(&platform), host, receiver, None),
+        inner: WinitApp::for_test(Arc::clone(&platform), host, lane, None),
         exiting,
         move_before_close,
         registered: false,
@@ -502,8 +487,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     );
     assert!(
         platform.with_state(|state| state.windows.is_empty()
-            && state.window_id_map.is_empty()
-            && state.cursor_positions.is_empty()
+            && state.window_ids_for_test().is_empty()
+            && state.cursor_positions_for_test().is_empty()
             && state.active_window.is_none()),
         "the programmatic close must leave no trace in the tracking maps"
     );
@@ -555,14 +540,7 @@ mod wayland_window {
         let platform = host.shared_owner();
         let event_loop = build_wayland_event_loop();
         install_test_owner_signal(&platform, &event_loop);
-        let event_loop_proxy = event_loop.create_proxy();
-        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = event_loop_proxy.send_event(());
-        });
-        let (control, receiver) = control_lane(wake_owner);
-        platform
-            .install_control_lane(thread::current().id(), control.clone())
-            .expect("first install succeeds");
+        let (control, lane) = install_control_lane(&platform, &event_loop);
 
         let platform_for_worker = Arc::clone(&platform);
         let host_for_worker = Arc::clone(&host);
@@ -624,13 +602,13 @@ mod wayland_window {
                 window.reveal_after_first_frame();
                 assert!(window.state().visible);
             }));
-            control_for_worker.request_quit();
+            control_for_worker.request_quit_for_test();
             if let Err(payload) = outcome {
                 resume_unwind(payload);
             }
         });
 
-        let mut app = WinitApp::for_test(Arc::clone(&platform), host, receiver, None);
+        let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
         event_loop
             .run_app(&mut app)
             .expect("event loop runs to completion");

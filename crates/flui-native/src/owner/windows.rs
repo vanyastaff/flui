@@ -724,7 +724,7 @@ impl WindowsLoop {
                 Self::admit::<testing::QuietHost>(
                     Arc::new(testing::NoWindows),
                     &source,
-                    testing::QuietHost::drag,
+                    <testing::QuietHost>::drag,
                 )
             });
             assert!(

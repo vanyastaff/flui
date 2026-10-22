@@ -94,11 +94,15 @@ trait depends on `flui-platform` instead.
   `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
   import from it into a feature's directory. Its public items are named at the
   crate root only. Its tests name no feature or host either: they run over
-  stand-ins of the owner's own (`owner::windows::testing::QuietHost`, a Win32
-  host with no window hooks; `owner::winit::testing::{QuietHost,
-  quiet_platform}`, a winit loop whose hooks report nothing under a table whose
-  window position opens no window), and a test that needs a host's real
-  windows is that feature's or that table's.
+  stand-ins of the owner's own (`owner::windows::testing::QuietHost<C>`, a
+  Win32 host with the window hooks `C` gives, none by default;
+  `owner::winit::testing::{QuietHost<D>, QuietTable, quiet_platform}`, a winit
+  loop whose hooks report nothing but the displays `D` gives, under a table
+  whose window position opens no window; `owner::notices::testing::NoNotices`),
+  and a test that needs a host's real windows is that feature's. A feature's
+  test that runs the winit loop by hand reaches it through
+  `owner::winit::testing` (`install_control_lane`, `WinitApp::for_test` and
+  accessors marked `_for_test`), and the loop keeps its state private.
 - **Each platform's loop is a module of `owner/` (ADR-0151 §10).**
   `owner::windows` is the Win32 message loop and its wake deadlines, the
   owner's message-only window (`control`), the thread's COM apartment, FLUI's
@@ -178,13 +182,14 @@ trait depends on `flui-platform` instead.
     own keys, the fullscreen hotkey. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
+    `a_second_host_is_refused_the_window_class` (two instances of the owner's
+    quiet host, told apart by type),
     `two_windows_keep_their_own_input`,
     `a_windows_input_is_gone_once_it_is_destroyed`,
-    `a_window_the_input_never_saw_has_no_input`, and the Windows table's
+    `a_window_the_input_never_saw_has_no_input`, and
     `hosts::windows::tests::the_window_hooks_answer_disjoint_messages`, which
     fails if two of the table's hooks list one message, timer or system
-    command, and `hosts::windows::tests::a_second_host_is_refused_the_window_class`,
-    which needs the Windows host to hold the class first.
+    command.
   - The owner control owns the broadcast receiver and builds it from the
     subscribers the host names over its objects (`OwnerObjects`, with the
     sources `WindowsHost::{preferences, lifecycle}` built from `OwnerSeeds`):
@@ -206,7 +211,8 @@ trait depends on `flui-platform` instead.
     displays subscribed. Tests: `broadcast_subscribers_hear_a_message_in_order`,
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
     `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`,
-    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
+    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`,
+    `the_winit_loop_s_displays_hear_a_display_change`.
   - The owner's message-only window answers its own messages (the wake, the
     exit policy) and offers any other, in order, to the `OwnerMessages` hooks
     of the objects the loop holds: today the drag transport the table makes

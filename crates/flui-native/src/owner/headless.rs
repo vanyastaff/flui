@@ -834,6 +834,7 @@ impl PlatformExecutor for TestExecutor {
 mod tests {
     use super::*;
     use crate::host::Loop as _;
+    use crate::owner::notices::testing::NoNotices;
 
     /// A host with no display, notice or device, for a loop whose test reads
     /// none of them.
@@ -876,17 +877,6 @@ mod tests {
         fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
             flui_platform::input_capabilities::PointerKindSet::empty()
         }
-    }
-
-    /// A notice channel that drops what it is handed.
-    struct NoNotices;
-
-    impl crate::owner::notices::NoticeChannel for NoNotices {
-        fn set_hook(&self, _: crate::owner::notices::SystemNoticeHook) {}
-
-        fn mark_held_stale_on_wake(&self, _: Weak<dyn crate::owner::notices::StaleOnWake>) {}
-
-        fn dispatch(&self, _: flui_platform::SystemNotice) {}
     }
 
     /// No window, for a loop whose test opens none.

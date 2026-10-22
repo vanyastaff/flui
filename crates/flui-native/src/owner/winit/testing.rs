@@ -1,17 +1,21 @@
 //! A real winit loop for tests: the event loop a test thread may build, the
-//! owner signal a hand-built [`WinitApp`] needs, the application a test runs
-//! the loop with ([`WinitApp::for_test`]) and the waits for the loop to run
-//! and to track its windows.
+//! owner signal and the control lane a hand-built [`WinitApp`] needs
+//! ([`install_test_owner_signal`], [`install_control_lane`]), the application
+//! a test runs the loop with ([`WinitApp::for_test`]), what a test reads of
+//! the loop's state, and the waits for the loop to run and to track its
+//! windows.
 //!
 //! The loop's own tests run over a host whose loop hooks report nothing
-//! ([`QuietHost`]) and a platform over it that opens no window
-//! ([`quiet_platform`]), so they name no feature. The tests of the windows the
-//! loop drives open a window through the loop's control lane and run a
-//! scenario against it on a worker thread while the loop runs on the test's
-//! own (`run_window_scenario`).
+//! ([`QuietHost`]) and a platform over it whose table opens no window
+//! ([`QuietTable`], [`quiet_platform`]), so they name no feature. The tests of
+//! the windows the loop drives open a window through the loop's control lane
+//! and run a scenario against it on a worker thread while the loop runs on the
+//! test's own (`run_window_scenario`).
 
 use std::{
-    sync::{Arc, Weak},
+    collections::HashMap,
+    marker::PhantomData,
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -24,25 +28,27 @@ use flui_platform::data_transfer::{
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::{
     Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
-    InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemNotice, SystemPreferences,
+    InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemPreferences,
     WindowCapabilities, WindowEvent, WindowId, WindowOptions,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::window::WindowId as WinitWindowId;
 
 #[cfg(target_os = "linux")]
 pub(crate) use window_scenario::run_window_scenario;
 
-use super::control::ControlReceiver;
+use super::control::{ControlReceiver, ControlSender, control_lane};
 use super::{
     FileDrops, HostDisplays, LoopInput, LoopWindow, LoopWindows, PreferenceStart, SelfCloseRoute,
-    WindowSeed, WinitApp, WinitHost, WinitLoop, WinitRunState,
+    WindowSeed, WinitApp, WinitHost, WinitLoop, WinitLoopState, WinitRunState,
 };
 use crate::error::PlatformError;
 use crate::host::{self, Absent, Host, position};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::install;
-use crate::owner::notices::{NoticeChannel, StaleOnWake, SystemNoticeHook};
+use crate::owner::notices::testing::NoNotices;
+use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::{HostPlatform, Platform, PlatformReadyCallback};
@@ -114,6 +120,51 @@ pub(crate) fn install_test_owner_signal(platform: &WinitLoop, event_loop: &Event
     })));
 }
 
+/// The receiving end of the control lane a test installed
+/// ([`install_control_lane`]), which the application it builds drains
+/// ([`WinitApp::for_test`]).
+pub(crate) struct LaneReceiver(ControlReceiver);
+
+/// Installs on `platform` the control lane `run_event_loop` installs for the
+/// thread that runs `event_loop`, the calling one: a request posts a user event
+/// that wakes the loop. Returns the sending end, through which a test opens
+/// windows and quits, and the receiving end for the application.
+pub(crate) fn install_control_lane(
+    platform: &WinitLoop,
+    event_loop: &EventLoop<()>,
+) -> (ControlSender, LaneReceiver) {
+    let proxy = event_loop.create_proxy();
+    let (control, receiver) = control_lane(Arc::new(move || {
+        let _ = proxy.send_event(());
+    }));
+    platform
+        .install_control_lane(thread::current().id(), control.clone())
+        .expect("a loop that has not started takes its lane");
+    (control, LaneReceiver(receiver))
+}
+
+impl ControlSender {
+    /// Asks the loop to quit, as its owner's quit does.
+    pub(crate) fn request_quit_for_test(&self) {
+        self.request_quit();
+    }
+}
+
+impl WinitLoopState {
+    /// The windows the loop tracks, by their winit ids.
+    pub(crate) fn window_ids_for_test(&self) -> &HashMap<WinitWindowId, WindowId> {
+        &self.window_id_map
+    }
+
+    /// The cursor position the loop keeps of each window, which a test may
+    /// seed to see the loop forget it.
+    pub(crate) fn cursor_positions_for_test(
+        &mut self,
+    ) -> &mut HashMap<WindowId, winit::dpi::PhysicalPosition<f64>> {
+        &mut self.cursor_positions
+    }
+}
+
 /// Polls (bounded, 2s) until the owner has reached `Running` — the point
 /// at which `resumed()` has returned and the owner lane accepts
 /// deferred, post-bootstrap requests. Real wall-clock, not simulated:
@@ -152,12 +203,12 @@ pub(crate) fn wait_for_map_len(platform: &WinitLoop, expected: usize, what: &str
 impl WinitApp {
     /// The application `run_event_loop` runs over `platform`, for a test that
     /// runs a real loop by hand: `owner_platform` is what `on_ready`'s owner
-    /// capability wraps, `control` the receiving end of the lane the test
+    /// capability wraps, `lane` the receiving end of the lane the test
     /// installed, and nothing is observed yet.
     pub(crate) fn for_test(
         platform: Arc<WinitLoop>,
         owner_platform: Arc<dyn Platform>,
-        control: ControlReceiver,
+        LaneReceiver(control): LaneReceiver,
         on_ready: Option<PlatformReadyCallback>,
     ) -> Self {
         Self {
@@ -214,15 +265,16 @@ impl WinitApp {
     }
 }
 
-/// A winit host whose loop hooks report nothing: no displays, notices,
-/// preferences or host notices, an in-memory clipboard, no file drags and
-/// no input. The loop's tests and the tests of a window run a real loop over
-/// it without the host table.
-pub(crate) struct QuietHost;
+/// A winit host whose loop hooks report nothing: displays of `D` (none by
+/// default), no notices, preferences or host notices, an in-memory clipboard,
+/// no file drags and no input. The loop's tests and the tests of a window run a
+/// real loop over it without the host table; a test that needs the displays to
+/// answer gives its own `D`.
+pub(crate) struct QuietHost<D = NoDisplays>(PhantomData<fn() -> D>);
 
-impl WinitHost for QuietHost {
+impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
     fn displays() -> Arc<dyn HostDisplays> {
-        Arc::new(NoDisplays)
+        Arc::new(D::default())
     }
 
     fn notices() -> Arc<dyn NoticeChannel> {
@@ -251,12 +303,12 @@ impl WinitHost for QuietHost {
     }
 }
 
-/// The table of a loop that opens no window: every position the loop does
+/// The host table of a loop that opens no window: every position the loop does
 /// not answer itself is absent. Its tests reach the platform through it,
 /// as an application does, without naming a feature.
-pub(crate) struct Quiet;
+pub(crate) struct QuietTable;
 
-impl Host for Quiet {
+impl Host for QuietTable {
     const NAME: &'static str = "winit loop with no windows (tests)";
 
     type Loop = WinitLoop;
@@ -278,15 +330,15 @@ impl Host for Quiet {
     type Storage = Absent<position::Storage>;
 }
 
-/// A platform of [`Quiet`] over a loop whose hooks `H` makes.
-pub(crate) fn quiet_platform_over<H: WinitHost>() -> HostPlatform<Quiet> {
+/// A platform of [`QuietTable`] over a loop whose hooks `H` makes.
+pub(crate) fn quiet_platform_over<H: WinitHost>() -> HostPlatform<QuietTable> {
     HostPlatform::from_parts(NoWindows, |windows| {
         WinitLoop::new::<H>(Arc::clone(windows) as _)
     })
 }
 
-/// A platform of [`Quiet`] over a loop of [`QuietHost`].
-pub(crate) fn quiet_platform() -> HostPlatform<Quiet> {
+/// A platform of [`QuietTable`] over a loop of [`QuietHost`].
+pub(crate) fn quiet_platform() -> HostPlatform<QuietTable> {
     quiet_platform_over::<QuietHost>()
 }
 
@@ -403,6 +455,7 @@ impl LoopInput for NoInput {
 }
 
 /// Displays the source holds none of.
+#[derive(Default)]
 pub(crate) struct NoDisplays;
 
 impl StaleOnWake for NoDisplays {
@@ -456,17 +509,6 @@ impl crate::owner::windows::broadcast::Subscriber for NoBroadcasts {
     ) -> Option<windows::Win32::Foundation::LRESULT> {
         None
     }
-}
-
-/// A notice channel that keeps no hook and marks nothing stale.
-struct NoNotices;
-
-impl NoticeChannel for NoNotices {
-    fn set_hook(&self, _: SystemNoticeHook) {}
-
-    fn mark_held_stale_on_wake(&self, _: Weak<dyn StaleOnWake>) {}
-
-    fn dispatch(&self, _: SystemNotice) {}
 }
 
 /// Preferences that stay the defaults.
@@ -614,9 +656,8 @@ mod window_scenario {
     use flui_platform::WindowOptions;
     use winit::event_loop::EventLoop;
 
-    use super::{install_test_owner_signal, wait_for_running};
+    use super::{install_control_lane, install_test_owner_signal, wait_for_running};
     use crate::host_window::HostWindow;
-    use crate::owner::winit::control::control_lane;
     use crate::owner::winit::{WinitApp, WinitLoop};
     use crate::platform::Platform;
 
@@ -632,14 +673,7 @@ mod window_scenario {
         scenario: impl FnOnce(Arc<dyn HostWindow>) + Send + 'static,
     ) {
         install_test_owner_signal(&platform, &event_loop);
-        let event_loop_proxy = event_loop.create_proxy();
-        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = event_loop_proxy.send_event(());
-        });
-        let (control, receiver) = control_lane(wake_owner);
-        platform
-            .install_control_lane(thread::current().id(), control.clone())
-            .expect("first install succeeds");
+        let (control, lane) = install_control_lane(&platform, &event_loop);
 
         let platform_for_worker = Arc::clone(&platform);
         let control_for_worker = control;
@@ -662,7 +696,7 @@ mod window_scenario {
             }
         });
 
-        let mut app = WinitApp::for_test(Arc::clone(&platform), owner_platform, receiver, None);
+        let mut app = WinitApp::for_test(Arc::clone(&platform), owner_platform, lane, None);
         event_loop
             .run_app(&mut app)
             .expect("event loop runs to completion");

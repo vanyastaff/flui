@@ -1,11 +1,12 @@
-//! A Win32 host of the owner's own for tests: no window hooks, sources that
-//! report nothing and a drag position that takes no drags ([`QuietHost`]),
-//! and the windows of a loop that opens none ([`NoWindows`]). The loop's tests
-//! run over it without the host table, and a test that needs a second host
-//! beside the Windows one names it.
+//! A Win32 host of the owner's own for tests: the window hooks a test gives
+//! it (none by default), sources that report nothing and a drag position that
+//! takes no drags ([`QuietHost`]), and the windows of a loop that opens none
+//! ([`NoWindows`]). The loop's tests run over it without the host table; two
+//! of its instances are two hosts.
 
+use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 
@@ -15,7 +16,7 @@ use flui_platform::data_transfer::{
     RepresentationIndex, TransferLimits, TransferRequest,
 };
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::{DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences};
+use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences};
 
 use super::broadcast::Subscriber;
 use super::control::{
@@ -23,22 +24,39 @@ use super::control::{
     OwnerWindow,
 };
 use super::{
-    ClassWindows, HostDisplays, HostDrag, WindowClass, WindowInputs, WindowMessages, WindowRef,
+    ClassWindows, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs, WindowRef,
     WindowsHost,
 };
 use crate::error::PlatformError;
 use crate::owner::handlers::OpenWindows;
-use crate::owner::notices::{NoticeChannel, StaleOnWake, SystemNoticeHook};
+use crate::owner::notices::testing::NoNotices;
+use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;
 
-/// A Win32 host whose window class has no hooks, whose sources report
-/// nothing and whose drag position takes no drags.
-pub(crate) struct QuietHost;
+/// The hooks of a test host's window class, in the order the class's
+/// procedure offers them a message.
+pub(crate) trait ClassHooks: 'static {
+    /// The hooks, made once per owner thread as the class is.
+    fn hooks() -> WindowHooks;
+}
 
-impl WindowsHost for QuietHost {
+/// A window class with no hooks: every message goes to `DefWindowProcW`.
+pub(crate) struct NoHooks;
+
+impl ClassHooks for NoHooks {
+    fn hooks() -> WindowHooks {
+        Rc::new([])
+    }
+}
+
+/// A Win32 host whose window class has the hooks of `C` (none by default),
+/// whose sources report nothing and whose drag position takes no drags.
+pub(crate) struct QuietHost<C = NoHooks>(PhantomData<fn() -> C>);
+
+impl<C: ClassHooks> WindowsHost for QuietHost<C> {
     fn window_class() -> WindowClass {
         WindowClass {
-            hooks: Rc::new([]) as Rc<[Rc<dyn WindowMessages>]>,
+            hooks: C::hooks(),
             input: Rc::new(NoInputs),
         }
     }
@@ -149,17 +167,6 @@ impl OwnerPreferences for NoPreferences {
     ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError> {
         Err(flui_platform::PreferenceQueryError::Unavailable)
     }
-}
-
-/// A notice channel that keeps no hook and marks nothing stale.
-pub(crate) struct NoNotices;
-
-impl NoticeChannel for NoNotices {
-    fn set_hook(&self, _: SystemNoticeHook) {}
-
-    fn mark_held_stale_on_wake(&self, _: Weak<dyn StaleOnWake>) {}
-
-    fn dispatch(&self, _: SystemNotice) {}
 }
 
 /// A lifecycle that hears no broadcast and holds no session end.

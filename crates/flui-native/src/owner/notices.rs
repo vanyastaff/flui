@@ -86,3 +86,24 @@ pub(crate) trait LifecycleHooks {
     /// application. A loop whose host has no reopen drops it unused.
     fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>);
 }
+
+/// The notice channel the loops' tests give a loop that hears nothing.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::Weak;
+
+    use flui_platform::SystemNotice;
+
+    use super::{NoticeChannel, StaleOnWake, SystemNoticeHook};
+
+    /// A notice channel that keeps no hook and marks nothing stale.
+    pub(crate) struct NoNotices;
+
+    impl NoticeChannel for NoNotices {
+        fn set_hook(&self, _: SystemNoticeHook) {}
+
+        fn mark_held_stale_on_wake(&self, _: Weak<dyn StaleOnWake>) {}
+
+        fn dispatch(&self, _: SystemNotice) {}
+    }
+}
