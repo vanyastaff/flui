@@ -378,10 +378,16 @@ fn a_quit_after_the_native_close_dispatches_no_second_close() {
                     log.contains("Quitting headless platform"),
                     "vacuous-pass guard: the quit ran inside the capture\n{log}"
                 );
+                let complaints = log
+                    .records()
+                    .iter()
+                    .filter(|record| record.level <= tracing::Level::WARN)
+                    .count();
                 assert_eq!(
-                    log.count_containing("dispatch refused"),
+                    complaints,
                     0,
-                    "native_close={native_close}\n{log}"
+                    "native_close={native_close}\n{}",
+                    log.render_at_least(tracing::Level::WARN)
                 );
                 assert_eq!(runtimes(), 0, "native_close={native_close}");
                 teardown_platform_ui_runtime();
