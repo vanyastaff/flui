@@ -1187,7 +1187,7 @@ pub(crate) mod source {
 
         fn watch_pixel_ratio(
             &self,
-            active: &std::rc::Rc<std::cell::Cell<bool>>,
+            active: &crate::owner::web::Accepting,
             on_change: Box<dyn Fn()>,
         ) -> Option<Box<dyn crate::owner::web::PixelRatioWatch>> {
             let watch = super::events::PixelRatioWatch::for_layout(active, on_change)?;
@@ -1623,13 +1623,17 @@ mod events {
                 let displays = Arc::downgrade(displays);
                 let signal = Arc::downgrade(signal);
                 // A new scale is a new snapshot and a new cadence to measure.
-                PixelRatioWatch::start(proof, &active, move || {
-                    if let Some(displays) = displays.upgrade() {
-                        displays.invalidate();
-                        displays.restart_estimate();
-                        wake(&signal);
-                    }
-                })
+                PixelRatioWatch::start(
+                    proof,
+                    &crate::owner::web::Accepting::reading(&active),
+                    move || {
+                        if let Some(displays) = displays.upgrade() {
+                            displays.invalidate();
+                            displays.restart_estimate();
+                            wake(&signal);
+                        }
+                    },
+                )
             });
             let visibility = visibility_listener(displays, &active);
             let ratio = pixel_ratio.as_ref().map(PixelRatioWatch::handle);
@@ -1781,7 +1785,7 @@ mod events {
         function: RefCell<Option<js_sys::Function>>,
         /// What a changed ratio means to whoever watches it.
         on_change: Box<dyn Fn()>,
-        active: Rc<Cell<bool>>,
+        active: crate::owner::web::Accepting,
         /// The callback that arms again on a frame after an arming that failed; it
         /// is owned here and never replaced while a frame may call it.
         retry: RefCell<Option<FrameCallback>>,
@@ -1899,7 +1903,7 @@ mod events {
         /// box misses it while the rounded size stays. `None` in a browser
         /// without media queries.
         pub(crate) fn for_layout(
-            active: &Rc<Cell<bool>>,
+            active: &crate::owner::web::Accepting,
             on_change: impl Fn() + 'static,
         ) -> Option<Self> {
             let proof = super::source::BrowserFeatures::detect().match_media?;
@@ -1912,7 +1916,7 @@ mod events {
 
         fn start(
             proof: WebFeature<MatchMedia>,
-            active: &Rc<Cell<bool>>,
+            active: &crate::owner::web::Accepting,
             on_change: impl Fn() + 'static,
         ) -> Self {
             let shared = Rc::new(PixelRatioShared {
@@ -1921,7 +1925,7 @@ mod events {
                 query: RefCell::new(None),
                 function: RefCell::new(None),
                 on_change: Box::new(on_change),
-                active: Rc::clone(active),
+                active: active.clone(),
                 retry: RefCell::new(None),
                 retry_frame: Cell::new(None),
                 retries: Cell::new(0),

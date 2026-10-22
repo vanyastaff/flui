@@ -14,7 +14,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::Arc,
 };
@@ -35,7 +34,7 @@ use flui_platform::{
 };
 
 use crate::owner::web::{
-    CanvasFocus, CanvasRegistration, CanvasTimer, HostDisplays, PointerCustody,
+    Accepting, CanvasFocus, CanvasRegistration, CanvasTimer, HostDisplays, PointerCustody,
 };
 
 /// Web window wrapping a `<canvas>` element
@@ -392,7 +391,7 @@ impl WebWindow {
         let text = crate::text::web::WebTextInput::new(
             &self.canvas,
             registration.editor_slot(),
-            Rc::clone(&registration.accepting),
+            registration.accepting(),
             keys,
             Rc::clone(&focus),
         );
@@ -471,9 +470,10 @@ impl WebWindow {
         let ratio_sync = Rc::clone(&sync);
         // Owned by the `resize` listener, so the registration's teardown removes
         // the query with it.
-        let ratio = self
-            .displays
-            .watch_pixel_ratio(&registration.accepting, Box::new(move || ratio_sync.sync()));
+        let ratio = self.displays.watch_pixel_ratio(
+            &Accepting::reading(&registration.accepting),
+            Box::new(move || ratio_sync.sync()),
+        );
         let browser =
             web_sys::window().expect("BUG: window construction verified browser environment");
         registration.listen(
@@ -1412,7 +1412,7 @@ impl Listener {
     pub(crate) fn install(
         target: &web_sys::EventTarget,
         kind: &'static str,
-        accepting: &Rc<Cell<bool>>,
+        accepting: &Accepting,
         body: impl Fn(web_sys::Event) + 'static,
     ) -> Result<Self, OpenWindowError> {
         Self::install_in_phase(target, kind, accepting, false, body)
@@ -1423,7 +1423,7 @@ impl Listener {
     pub(crate) fn install_in_phase(
         target: &web_sys::EventTarget,
         kind: &'static str,
-        accepting: &Rc<Cell<bool>>,
+        accepting: &Accepting,
         capture: bool,
         body: impl Fn(web_sys::Event) + 'static,
     ) -> Result<Self, OpenWindowError> {
@@ -1435,7 +1435,7 @@ impl Listener {
     fn install_body(
         target: &web_sys::EventTarget,
         kind: &'static str,
-        accepting: &Rc<Cell<bool>>,
+        accepting: &Accepting,
         capture: bool,
         body: Rc<dyn Fn(web_sys::Event)>,
     ) -> Result<Self, OpenWindowError> {
@@ -1445,7 +1445,7 @@ impl Listener {
             "BUG: a listener keeps the only strong reference to its body"
         );
         let weak = Rc::downgrade(&body);
-        let accepting = Rc::clone(accepting);
+        let accepting = accepting.clone();
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |event| {
             if accepting.get()
                 && let Some(body) = weak.upgrade()
@@ -1562,11 +1562,12 @@ impl Drop for DeadlineTimer {
 
 pub(crate) struct Registration {
     pub(crate) accepting: Rc<Cell<bool>>,
-    pub(crate) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
     observers: Vec<ResizeSubscription>,
     timers: Vec<Rc<DeadlineTimer>>,
+    /// What the features registered to run as the registration retires.
+    retiring: Vec<Box<dyn FnOnce()>>,
     claim: CanvasClaim,
 }
 
@@ -1581,21 +1582,27 @@ impl CanvasRegistration for Registration {
     ) -> Result<(), OpenWindowError> {
         // A refused add drops its token at once, which attempts removal; the
         // installed prefix is removed when the registration rolls back.
-        let listener = Listener::install_body(target, kind, &self.accepting, false, body)?;
+        let listener = Listener::install_body(
+            target,
+            kind,
+            &Accepting::reading(&self.accepting),
+            false,
+            body,
+        )?;
         self.listeners.push(listener);
         Ok(())
     }
 
-    fn accepting(&self) -> Rc<Cell<bool>> {
-        Rc::clone(&self.accepting)
+    fn accepting(&self) -> Accepting {
+        Accepting::reading(&self.accepting)
     }
 
     fn timer(&mut self, body: Box<dyn Fn()>) -> Rc<dyn CanvasTimer> {
         Registration::timer(self, body)
     }
 
-    fn captured(&self) -> Rc<RefCell<HashMap<i32, u16>>> {
-        Rc::clone(&self.pointers)
+    fn on_retire(&mut self, retire: Box<dyn FnOnce()>) {
+        self.retiring.push(retire);
     }
 
     fn custody(&self) -> Rc<dyn PointerCustody> {
@@ -1640,11 +1647,11 @@ impl Registration {
     pub(crate) fn new(canvas: &web_sys::HtmlCanvasElement, claim: CanvasClaim) -> Self {
         Self {
             accepting: Rc::new(Cell::new(true)),
-            pointers: Rc::default(),
             canvas: canvas.clone(),
             listeners: Vec::new(),
             observers: Vec::new(),
             timers: Vec::new(),
+            retiring: Vec::new(),
             claim,
         }
     }
@@ -1781,14 +1788,11 @@ impl EditorSlot {
 impl Drop for Registration {
     fn drop(&mut self) {
         self.fence();
-        let pointers = std::mem::take(&mut *self.pointers.borrow_mut());
-        let owner = self.capture_owner();
-        for &id in pointers.keys() {
-            owner.forget(id);
-        }
-        // Admission ends before release, which can synchronously dispatch loss.
-        for id in pointers.into_keys() {
-            crate::owner::panic_boundary::contain_owner_callback(|| owner.release(id));
+        // Each in a boundary of its own, so one that panics leaves the next
+        // run: what a feature ends there (the pointers it captured) may
+        // synchronously dispatch a loss.
+        for retire in std::mem::take(&mut self.retiring) {
+            crate::owner::panic_boundary::contain_owner_callback(retire);
         }
         let observers = std::mem::take(&mut self.observers);
         let listeners = std::mem::take(&mut self.listeners);

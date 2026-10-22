@@ -24,7 +24,6 @@ mod executor;
 pub(crate) mod listener;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -165,15 +164,17 @@ pub(crate) trait CanvasRegistration {
 
     /// Whether the registration accepts: what a feature keeps beside its
     /// listeners reads it before it delivers.
-    fn accepting(&self) -> Rc<Cell<bool>>;
+    fn accepting(&self) -> Accepting;
 
     /// A deadline timer whose body runs only while the registration accepts;
     /// its retirement clears it.
     fn timer(&mut self, body: Box<dyn Fn()>) -> Rc<dyn CanvasTimer>;
 
-    /// The pointers the canvas holds captured, by DOM pointer id with the
-    /// buttons they hold: the registration releases each as it retires.
-    fn captured(&self) -> Rc<RefCell<HashMap<i32, u16>>>;
+    /// Run `retire` when the registration retires, once it no longer
+    /// accepts and before its listeners go: what a feature holds of the
+    /// canvas beyond its listeners (the pointers it captured) ends there. A
+    /// registration whose opening rolls back retires too.
+    fn on_retire(&mut self, retire: Box<dyn FnOnce()>);
 
     /// The custody of the canvas's pointer captures.
     fn custody(&self) -> Rc<dyn PointerCustody>;
@@ -181,6 +182,24 @@ pub(crate) trait CanvasRegistration {
     /// The canvas's focus area: the canvas and the editor its text input keeps
     /// beside it.
     fn focus(&self) -> Rc<dyn CanvasFocus>;
+}
+
+/// Whether a canvas's registration, or a source a window watches, still
+/// accepts, as its readers see it: they read it, and only its owner, which
+/// holds the flag itself, ends it.
+#[derive(Clone)]
+pub(crate) struct Accepting(Rc<Cell<bool>>);
+
+impl Accepting {
+    /// A reader of `flag`, which its owner keeps and ends.
+    pub(crate) fn reading(flag: &Rc<Cell<bool>>) -> Self {
+        Self(Rc::clone(flag))
+    }
+
+    /// Whether it still accepts.
+    pub(crate) fn get(&self) -> bool {
+        self.0.get()
+    }
 }
 
 /// A canvas's focus area ([`CanvasRegistration::focus`]).
@@ -275,7 +294,7 @@ pub(crate) trait HostDisplays {
     /// `None` in a browser without media queries.
     fn watch_pixel_ratio(
         &self,
-        active: &Rc<Cell<bool>>,
+        active: &Accepting,
         on_change: Box<dyn Fn()>,
     ) -> Option<Box<dyn PixelRatioWatch>>;
 }

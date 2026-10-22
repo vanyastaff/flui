@@ -93,6 +93,8 @@ pub(crate) mod pinch {
     //! into the per-step factor and radians the shared accumulator takes, and the
     //! same refusal applies to its first event.
 
+    #![forbid(unsafe_code)]
+
     use std::time::Duration;
 
     use flui_platform::EventTime;
@@ -405,6 +407,7 @@ pub(crate) mod events {
 
     use std::{
         cell::{Cell, RefCell},
+        collections::HashMap,
         rc::Rc,
         sync::Arc,
     };
@@ -437,7 +440,7 @@ pub(crate) mod events {
     use wasm_bindgen::prelude::*;
 
     use crate::owner::handlers::WindowCallbacks;
-    use crate::owner::web::{CanvasKeys, CanvasRegistration, HostInput, PointerCustody};
+    use crate::owner::web::{Accepting, CanvasKeys, CanvasRegistration, HostInput, PointerCustody};
     use flui_platform::PlatformInput;
 
     /// The page's input, as the web loop holds it ([`HostInput`]).
@@ -469,7 +472,7 @@ pub(crate) mod events {
             ));
             let pinch = Rc::new(Pinch {
                 callbacks: Arc::clone(callbacks),
-                accepting: Rc::clone(&accepting),
+                accepting: accepting.clone(),
                 contacts: Rc::clone(&contacts),
                 wheel: RefCell::default(),
                 gesture: RefCell::default(),
@@ -482,9 +485,27 @@ pub(crate) mod events {
                 composing: Cell::new(false),
             });
 
+            // The pointers the canvas holds captured, by DOM pointer id with
+            // the buttons they hold: each is released as the registration
+            // retires, which the browser would not do for a removed canvas.
+            let captured: Captured = Rc::default();
+            {
+                let captured = Rc::clone(&captured);
+                let custody = registration.custody();
+                registration.on_retire(Box::new(move || {
+                    release_captures(&captured, &*custody);
+                }));
+            }
             let menu = Rc::new(MenuAnswer::default());
-            let loss =
-                register_pointer_events(canvas, &contacts, &pinch, &menu, latency, registration)?;
+            let loss = register_pointer_events(
+                canvas,
+                &contacts,
+                &captured,
+                &pinch,
+                &menu,
+                latency,
+                registration,
+            )?;
             register_keyboard_events(canvas, &keys, registration)?;
             register_loss_events(canvas, &loss, registration)?;
             register_hover_events(canvas, callbacks, registration)?;
@@ -495,12 +516,29 @@ pub(crate) mod events {
         }
     }
 
+    /// The pointers a canvas holds captured, by DOM pointer id with the
+    /// buttons they hold.
+    type Captured = Rc<RefCell<HashMap<i32, u16>>>;
+
+    /// End the captures the canvas still holds as its registration retires:
+    /// custody first, since a release can synchronously dispatch the capture
+    /// loss, then each release in a boundary of its own.
+    fn release_captures(captured: &RefCell<HashMap<i32, u16>>, custody: &dyn PointerCustody) {
+        let ids: Vec<i32> = captured.borrow_mut().drain().map(|(id, _)| id).collect();
+        for &id in &ids {
+            custody.forget(id);
+        }
+        for id in ids {
+            crate::owner::panic_boundary::contain_owner_callback(|| custody.release(id));
+        }
+    }
+
     /// How a DOM key event reaches the window: from the canvas, or from the
     /// text input's own editor.
     struct KeyRoute {
         callbacks: Arc<WindowCallbacks>,
         pinch: Rc<Pinch>,
-        accepting: Rc<Cell<bool>>,
+        accepting: Accepting,
         /// Whether the window's text input composes now.
         composing: Cell<bool>,
     }
@@ -613,12 +651,13 @@ pub(crate) mod events {
     fn register_pointer_events(
         canvas: &web_sys::HtmlCanvasElement,
         contacts: &Rc<RefCell<ContactRegistry>>,
+        captured: &Captured,
         pinch: &Rc<Pinch>,
         menu: &Rc<MenuAnswer>,
         input_latency: flui_platform::InputLatency,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Rc<PointerLoss>, crate::OpenWindowError> {
-        let active = registration.captured();
+        let active = Rc::clone(captured);
         // DOM getters and application callbacks can synchronously dispatch another
         // pointer event. Listener captures are immutable; mutable state is scoped
         // inside the active-pointer cell instead of the JavaScript closure.
@@ -831,7 +870,7 @@ pub(crate) mod events {
         Ok(Rc::new(PointerLoss {
             contacts: Rc::clone(contacts),
             pinch: Rc::clone(pinch),
-            active: registration.captured(),
+            active: Rc::clone(captured),
             custody: registration.custody(),
             menu: Rc::clone(menu),
         }))
@@ -906,7 +945,7 @@ pub(crate) mod events {
     struct PointerLoss {
         contacts: Rc<RefCell<ContactRegistry>>,
         pinch: Rc<Pinch>,
-        active: Rc<RefCell<std::collections::HashMap<i32, u16>>>,
+        active: Captured,
         custody: Rc<dyn PointerCustody>,
         /// A menu answer the ended press left is not a later menu's.
         menu: Rc<MenuAnswer>,
@@ -979,7 +1018,7 @@ pub(crate) mod events {
     /// can dispatch another DOM event at the canvas synchronously.
     struct Pinch {
         callbacks: Arc<WindowCallbacks>,
-        accepting: Rc<Cell<bool>>,
+        accepting: Accepting,
         contacts: Rc<RefCell<ContactRegistry>>,
         wheel: RefCell<CtrlWheel>,
         gesture: RefCell<GestureTracker>,

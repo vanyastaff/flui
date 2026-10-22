@@ -79,7 +79,7 @@ mod input {
 
     use super::ime::input_mode;
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::owner::web::CanvasKeys;
+    use crate::owner::web::{Accepting, CanvasKeys};
     use crate::text::ime::{diff, document_text, scalar_spans};
     use crate::window::web::{EditorSlot, FocusSync, Listener, is_focus_handoff};
 
@@ -177,7 +177,7 @@ mod input {
     pub struct WebTextInput {
         canvas: web_sys::HtmlCanvasElement,
         editor: EditorSlot,
-        accepting: Rc<Cell<bool>>,
+        accepting: Accepting,
         keys: Rc<dyn CanvasKeys>,
         focus: Rc<FocusSync>,
         /// Whether this browser has `EditContext`, decided when the window
@@ -246,7 +246,7 @@ mod input {
         pub(crate) fn new(
             canvas: &web_sys::HtmlCanvasElement,
             editor: EditorSlot,
-            accepting: Rc<Cell<bool>>,
+            accepting: Accepting,
             keys: Rc<dyn CanvasKeys>,
             focus: Rc<FocusSync>,
         ) -> Rc<Self> {
