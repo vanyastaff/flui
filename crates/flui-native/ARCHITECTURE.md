@@ -127,6 +127,11 @@ trait depends on `flui-platform` instead.
   `display::winit` reads `display::linux`, the one edge between platform
   files `module-dag` admits, by name, until winit goes (ADR-0151 §11). The
   Android loop's poll rule is the loop's (`owner::android::poll`).
+  `platforms` is `retiring` in `[package.metadata.flui.modules]`: a feature
+  reaches a module under it only through a named exception, and the display
+  feature has two, the Android source's `with_activity`
+  (`platforms::android::preferences`) and the iOS source's version read
+  (`platforms::ios::os_version`).
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's

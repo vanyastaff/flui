@@ -684,8 +684,18 @@ graph LR
   `display_linux.rs` → `display/winit/linux.rs` под корнем `display/winit.rs`. Linux:
   `linux/display/` → `display/linux/` (модуль `#[path]` для тестов не на Linux исчез: каталог
   собирается под `cfg(any(linux, test))`). headless: `headless/display.rs` → `display/headless.rs`.
-  `display` вошёл в `features` `module-dag`; правила держатся как есть, `exceptions` — одна запись
-  `display::winit` → `display::linux` (выход ADR-0151 §11). Решения: (1) `owner/` не называет
+  `display` вошёл в `features` `module-dag`; правила держатся как есть. `module-dag` получил ключ
+  `retiring` (`platforms` в `flui-native`): модуль под ним — свой узел, фича называет его только
+  через поимённое исключение (правило «names a retiring module», самотест — 54 находки: посаженное
+  нарушение, допущенное исключением ребро и `retiring` с неизвестным именем); без этого исключение
+  для ребра в `platforms/` было бы «stale», ведь правила уровня крейта его допускают. `exceptions` —
+  три записи, выход у всех ADR-0151 (номер задачи в TOML — маркер процесса, поэтому задача названа
+  словами): `display::winit` → `display::linux` (§11, уходит с winit, LY87); `display::android` →
+  `platforms::android::preferences` (`with_activity`; уходит с LY33, или с LY34, если помощник
+  переедет в `owner/android`); `display::apple::ios` → `platforms::ios::os_version` (`read`,
+  расширенный до `pub(crate)` ради дисплеев; уходит с LY34, `version/gate.rs`). Других рёбер из
+  `display/` в `platforms/` нет (`--print-edges`); в `shared/` — `system_notice::StaleOnWake`
+  (будущая модель lifecycle) и `os_version` (будущий `version/`), оба разрешены. Решения: (1) `owner/` не называет
   дисплеи: каждый модуль владельца объявляет `HostDisplays` — что цикл и открытые им окна спрашивают
   у дисплеев, — а таблица делает объект через трейт хоста владельца: `WindowsHost::displays`
   (добавлен), `MacosHost`, `IosHost`, `AndroidHost::displays(api, library, owner)`, `WebHost`,
@@ -727,10 +737,9 @@ graph LR
   `display::apple::macos::bounds_of` (NSRect в `Bounds`, 3 места), `platforms/ios/window.rs` →
   `display::apple::{change_screen, link_rate::LinkPeriod}`, `platforms/web/events.rs` →
   `display::web::PixelRatioWatch`, `platforms/headless/platform.rs` → `display::headless::
-  {DisplayChangeError, LaidOutDisplays}` — их снимает LY28; дисплеи → предпочтения —
-  `display/android/source.rs` → `platforms::android::preferences::with_activity` (JNI-помощник,
-  которым пользуются и `owner::android::java_view`, haptics, memory; его место — `owner/android`) —
-  LY33 или LY34. Тесты: перенесённые без правок смысла (`windows_display`, `monitor_key_table`,
+  {DisplayChangeError, LaidOutDisplays}` — их снимает LY28; ребро дисплеи → предпочтения
+  (`with_activity`, JNI-помощник, которым пользуются и `owner::android::java_view`, haptics, memory;
+  его место — `owner/android`) названо исключением выше. Тесты: перенесённые без правок смысла (`windows_display`, `monitor_key_table`,
   `display_message_tests` — три строки, `apple_display_identity` и строка экранных границ,
   `display_period`, `display_link_rate`, `android_display_table`, `a_paused_loop_blocks_until_it_is_woken`,
   правила Web, модели Linux и `source/tests.rs`, `x11/tests.rs`, тесты `DisplaySource`);
@@ -747,7 +756,8 @@ graph LR
   `flui-native/winit-backend` — 307 (2 пропущены); nextest `-p xtask` — 45; `wasm-check`,
   `wasm-test` (49 утверждений); clippy Android (`-p flui-native -p flui-app --all-targets`), macOS
   lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`); `module-dag` (260 модулей, 1 фича с 11
-  файлами платформ, 1 base, 106 рёбер, 1 исключение) и самотест (52), `globals` (55) и самотест
+  файлами платформ, 1 base, 448 рёбер с узлами `platforms::*`, 3 исключения) и самотест (54),
+  `globals` (55) и самотест
   (15), `file-length`, `markers`, `testing`, `docs-paths`, `checks`, `doc-strict`, `workspace`,
   `reach`, `android-dex`; rustdoc `--document-private-items` с `-D warnings`, с
   `winit-backend,a11y` и без. WSL Ubuntu 24.04: clippy `-p flui-native -p flui-app --all-targets`
@@ -759,7 +769,10 @@ graph LR
   последующих ревизий (правка не закоммичена): адаптивная частота 120 → 60 → 120 Гц (ревизии 2, 3:
   16666 и 8333 мкс), поворот в ландшафт — ревизия 4, 2400×1080, id 1 тот же, обратно — ревизия 6,
   1080×2400; Back — `Destroy`, «Android platform event loop finished»; `FATAL`, ANR и паник нет;
-  `accelerometer_rotation` и `user_rotation` восстановлены (1 и 0). Не запускалось: `cross-typecheck`
+  `accelerometer_rotation` и `user_rotation` восстановлены (1 и 0), снимок экрана с устройства удалён.
+  После rebase на `origin/main` @ `0f52e4e32` и ключа `retiring`: `cargo fmt --check`, clippy
+  `-p flui-native -p flui-app --all-targets -D warnings` и `-p xtask --all-targets`, `module-dag` и
+  самотест, `markers`, nextest `-p flui-native` — 235 (1 пропущен), `-p xtask` — 45. Не запускалось: `cross-typecheck`
   (нет `zig`; job в CI); `web_browser` и DOM-тесты `tests/wasm32` — нужен ChromeDriver под Chrome 155,
   его здесь нет; смена масштаба или разрешения на Windows — системная настройка, её не меняли,
   опора — тесты; Mac и iPhone — в очереди vanyastaff/flui#1840.
