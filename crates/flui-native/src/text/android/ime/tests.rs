@@ -6,14 +6,16 @@
 
 use std::rc::Rc;
 
+use super::super::keys::key_composition;
 use super::{
-    EditorState, IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
-    IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, PROTECTED_UNIT, Replayed, Snapshot,
-    TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
+    IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
+    IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER,
+    TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
     TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI,
-    cursor_anchor, editor_action_key, editor_info, key_composition, replay_current,
-    starts_handwriting,
+    cursor_anchor, editor_action_key, editor_info, replay_current, starts_handwriting,
 };
+use crate::owner::android::EditorState;
+use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::{ImeComposition, NamedKey};
 use flui_platform::text_store::{

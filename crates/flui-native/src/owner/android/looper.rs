@@ -197,7 +197,7 @@ impl AndroidLoop {
             app.clone(),
             Arc::downgrade(&owner_signal),
             api,
-            H::field_mirror(),
+            H::input_method(),
         );
         let owner = Arc::downgrade(&owner_signal);
         Self {
@@ -319,19 +319,9 @@ impl AndroidLoop {
                         window.refresh_capabilities();
                     }
                 }
-                java_view::ViewEvent::Window(work) => {
+                java_view::ViewEvent::RunOnWindow(work) => {
                     if let Some(window) = &window {
                         work(window);
-                    }
-                }
-                java_view::ViewEvent::CursorUpdates(mode) => {
-                    if let Some(input) = window.as_ref().and_then(|window| window.text_input()) {
-                        input.cursor_updates(mode);
-                    }
-                }
-                java_view::ViewEvent::EditorAction { action, uptime_ms } => {
-                    if let Some(window) = &window {
-                        window.editor_action(action, uptime_ms);
                     }
                 }
                 java_view::ViewEvent::Drag(event) => match &window {
@@ -367,26 +357,24 @@ impl AndroidLoop {
         }
     }
 
-    /// A pen tip that touches down inside the focused field hands its stroke
-    /// to the input method's handwriting (API 33+): Android's own initiation
-    /// sees only the stylus events native code leaves unhandled.
+    /// A pen tip that touches down is offered to the input method, whose
+    /// handwriting takes a stroke inside the focused field (API 33+):
+    /// Android's own initiation sees only the stylus events native code
+    /// leaves unhandled.
     fn offer_handwriting(&self, window: &AndroidWindow, events: &[flui_platform::PlatformInput]) {
         use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
-        let Some(handwriting) = self.api.since::<StylusHandwriting>() else {
+        if self.api.since::<StylusHandwriting>().is_none() {
             return;
-        };
+        }
         for event in events {
             let flui_platform::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
                 continue;
             };
-            let pen = press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip });
-            if !pen {
-                continue;
+            if press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip }) {
+                self.java_view
+                    .input_method()
+                    .pen_down(window, press.sample.position.get());
             }
-            let Some(input) = window.text_input() else {
-                return;
-            };
-            input.offer_pen(handwriting, press.sample.position.get());
         }
     }
 

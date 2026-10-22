@@ -346,7 +346,7 @@ pub(crate) fn editor_action_keys(
 
 /// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
 /// the input method composes now: a key it passed on during a composition is
-/// still its own (`text::android::ime::key_composition`).
+/// still its own (`text::android::keys::key_composition`).
 pub fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
@@ -393,7 +393,7 @@ pub fn convert_key_event(
             location,
             modifiers,
             repeat,
-            is_composing: crate::text::android::ime::key_composition(composing)
+            is_composing: crate::text::android::keys::key_composition(composing)
                 == flui_platform::keyboard::ImeComposition::Active,
         },
         u64::try_from(event.event_time()).ok()?,

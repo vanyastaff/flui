@@ -33,7 +33,7 @@ use flui_native::shared::pointer_assembly::{
     NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
     ScrollReading, decode,
 };
-use flui_native::text::android::ime as android_ime;
+use flui_native::text::android::keys as android_keys;
 use flui_native::text::web::ime::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::EventTime;
@@ -668,7 +668,7 @@ impl SharedAssembly {
                 // (WebKit after `compositionend`, and every Android key).
                 let host_composing = !self.faulty(Fault::ComposingKeyFromEventOnly);
                 let composing = if self.profile.keys == Some(KeyDecoder::Android) {
-                    android_ime::key_composition(host_composing)
+                    android_keys::key_composition(host_composing)
                 } else {
                     key_composition(false, ESCAPE_KEY_CODE, host_composing)
                 };

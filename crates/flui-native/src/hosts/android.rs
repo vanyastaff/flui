@@ -1,19 +1,17 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
-use std::sync::Arc;
-
 use android_activity::AndroidApp;
 
 use crate::host::{Absent, Host, position};
-use crate::owner::android::java_view::FieldMirror;
+use crate::owner::android::java_view::InputMethod;
 use crate::owner::android::{AndroidHost, AndroidLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
     AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer,
     AndroidWindow, MockClipboard,
 };
-use crate::text::android::{AndroidTextInput, ViewMirror};
+use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -38,9 +36,9 @@ impl Host for Android {
 }
 
 impl AndroidHost for Android {
-    /// The text input's mirror of the focused field.
-    fn field_mirror() -> Arc<dyn FieldMirror> {
-        Arc::new(ViewMirror::default())
+    /// The text feature's answer to the input method's calls.
+    fn input_method() -> Box<dyn InputMethod> {
+        Box::new(ViewInputMethod::default())
     }
 }
 

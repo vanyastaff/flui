@@ -188,19 +188,6 @@ impl AndroidWindow {
         Some(shared)
     }
 
-    /// The input method performed its editor action (`performEditorAction`)
-    /// at `uptime_ms`: the focused field hears it, and it arrives as the key
-    /// it stands for.
-    pub(crate) fn editor_action(&self, action: i32, uptime_ms: i64) {
-        if let Some(input) = self.text_input() {
-            input.editor_action();
-        }
-        let (key, shift) = crate::text::android::ime::editor_action_key(action);
-        for input in super::input::editor_action_keys(key, shift, uptime_ms) {
-            self.callbacks.dispatch_input(input);
-        }
-    }
-
     pub(crate) fn drag_source_of(&self) -> &Arc<super::drag::AndroidDragSource> {
         &self.drag_source
     }

@@ -2,19 +2,44 @@
 //! field for the input method (ADR-0247, ADR-0090), and the system font scale
 //! sizes text natively.
 //!
-//! - [`ime`]: the decidable half, how the view's mirror and the field's store
-//!   stay one document while two threads own the session; built on every
-//!   target and public, hidden from the documentation, for the backend
-//!   conformance table in `tests/`, until that table reaches the hosts
-//!   through the public API;
+//! - `ime`: the decidable half, how the view's mirror and the field's store
+//!   stay one document while two threads own the session;
+//! - [`keys`]: which key belongs to the input method, built on every target and
+//!   public, hidden from the documentation, for the backend conformance table
+//!   in `tests/`, until that table reaches the hosts through the public API;
 //! - `input`: `AndroidTextInput`, the window's `TextStoreHost` over the view,
-//!   and `ViewMirror`, the view's copy of the focused field, which the host's
-//!   table hands `FluiView` (`owner::android::AndroidHost`);
+//!   and `ViewInputMethod`, which answers the input method's calls through
+//!   `FluiView` (the host's table hands it the view through
+//!   `owner::android::AndroidHost`);
 //! - `sizing`: the system text size captured on the Java main thread, its
 //!   acquisition checked on every host.
 
 #[doc(hidden)]
-pub mod ime {
+pub mod keys {
+    //! Which key the native queue delivers belongs to the input method.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::keyboard::ImeComposition;
+
+    /// A key the native queue delivers while the input method composes belongs
+    /// to the input method. Android hands every key to the input method before
+    /// native code (`NativePreImeInputStage` pre-dispatches it), so a key that
+    /// reaches FLUI during a composition is one the input method passed on; it
+    /// arrives marked [`ImeComposition::Active`] so no shortcut, focus traversal
+    /// or drag cancellation takes it from the composition.
+    #[must_use]
+    pub const fn key_composition(composing: bool) -> ImeComposition {
+        if composing {
+            ImeComposition::Active
+        } else {
+            ImeComposition::Inactive
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod ime {
     //! The decidable half of the Android backend's input method (ADR-0247,
     //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
     //! document while two threads own the session.
@@ -32,50 +57,29 @@ pub mod ime {
     //! selection leaves the dropped edit's text in the input method. The owner
     //! is the authority; the mirror never is.
     //!
-    //! Cfg-free plain values over UTF-16, so Linux CI pins them;
-    //! `text::android` moves them across JNI.
+    //! Plain values over UTF-16, built for tests on every host, so Linux CI
+    //! pins them; `input` moves them across JNI. What the view reports
+    //! ([`EditorState`]) is the view's own vocabulary, `owner::android`'s.
 
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::keyboard::{ImeComposition, NamedKey};
+    use flui_platform::keyboard::NamedKey;
     use flui_platform::text_store::{
         Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
         TextStoreStatus, Utf16Offset, Utf16Range,
     };
 
+    use crate::owner::android::EditorState;
     use crate::text::ime::{diff, document_text};
-
-    pub use crate::text::ime::PROTECTED_UNIT;
-
-    /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
-    pub const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
-    /// `InputConnection.CURSOR_UPDATE_MONITOR`: send it whenever it changes.
-    pub const CURSOR_UPDATE_MONITOR: i32 = 2;
-
-    /// What `FluiView` reports after an input method edit: its mirror's text and
-    /// the raw offsets of `Selection` and the composing span (`-1` for none), as
-    /// Java counts them, in UTF-16 code units.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct EditorState {
-        /// The mirror's text.
-        pub text: String,
-        /// `Selection.getSelectionStart`: the selection's anchor.
-        pub selection_start: i32,
-        /// `Selection.getSelectionEnd`: the selection's moving end.
-        pub selection_end: i32,
-        /// `BaseInputConnection.getComposingSpanStart`.
-        pub composition_start: i32,
-        /// `BaseInputConnection.getComposingSpanEnd`.
-        pub composition_end: i32,
-    }
 
     /// The focused store as the owner last published it to the view.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Snapshot {
         /// Which publication this is; every edit names the one it was made on.
         pub generation: u32,
-        /// The text, or [`PROTECTED_UNIT`]s for a protected field.
+        /// The text, or [`PROTECTED_UNIT`](crate::text::ime::PROTECTED_UNIT)s for a
+        /// protected field.
         pub text: String,
         /// The store's selection.
         pub selection: Selection,
@@ -202,6 +206,7 @@ pub mod ime {
 
     impl Mirror {
         /// The view now holds `snapshot`.
+        #[cfg(test)]
         pub fn install(&mut self, snapshot: &Snapshot) {
             self.hold(snapshot.generation, &snapshot.text);
         }
@@ -211,12 +216,6 @@ pub mod ime {
         pub fn hold(&mut self, generation: u32, text: &str) {
             self.generation = generation;
             self.units = text.encode_utf16().collect();
-        }
-
-        /// The generation of the snapshot the view holds.
-        #[must_use]
-        pub const fn generation(&self) -> u32 {
-            self.generation
         }
 
         /// The edit that turned the mirror into `state`, which the view reported
@@ -280,21 +279,6 @@ pub mod ime {
             && matches!(units[offset - 1], 0xD800..=0xDBFF)
             && matches!(units[offset], 0xDC00..=0xDFFF);
         if splits_pair { offset - 1 } else { offset }
-    }
-
-    /// A key the native queue delivers while the input method composes belongs
-    /// to the input method. Android hands every key to the input method before
-    /// native code (`NativePreImeInputStage` pre-dispatches it), so a key that
-    /// reaches FLUI during a composition is one the input method passed on; it
-    /// arrives marked [`ImeComposition::Active`] so no shortcut, focus traversal
-    /// or drag cancellation takes it from the composition.
-    #[must_use]
-    pub const fn key_composition(composing: bool) -> ImeComposition {
-        if composing {
-            ImeComposition::Active
-        } else {
-            ImeComposition::Inactive
-        }
     }
 
     /// `EditorInfo.TYPE_CLASS_TEXT`.
@@ -466,52 +450,82 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, EditorState, ImeEdit, Mirror, Snapshot,
-        cursor_anchor, editor_info, replay_current, starts_handwriting,
+        ImeEdit, Mirror, Snapshot, cursor_anchor, editor_action_key, editor_info, replay_current,
+        starts_handwriting,
     };
+    use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::shared::os_version::Since;
     use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
 
-    use crate::owner::android::java_view::{FieldMirror, JavaView, ViewEvent};
+    use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
     use crate::platforms::android::AndroidWindow;
 
-    /// The text `FluiView` holds of the focused field, as the owner last published
-    /// it or the input method last reported it: each report becomes one edit of
-    /// the field against it, which the window's text input replays.
-    #[derive(Debug, Default)]
-    pub(crate) struct ViewMirror(parking_lot::Mutex<Mirror>);
+    /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
+    const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
+    /// `InputConnection.CURSOR_UPDATE_MONITOR`: send it whenever it changes.
+    const CURSOR_UPDATE_MONITOR: i32 = 2;
 
-    impl FieldMirror for ViewMirror {
+    /// What answers the input method's calls through `FluiView`: the text the
+    /// view holds of the focused field, as the owner last published it or the
+    /// input method last reported it, against which each report becomes one
+    /// edit of the field; and the window's text input, which the work it hands
+    /// the owner reaches.
+    #[derive(Debug, Default)]
+    pub(crate) struct ViewInputMethod {
+        mirror: parking_lot::Mutex<Mirror>,
+    }
+
+    impl InputMethod for ViewInputMethod {
         fn hold(&self, generation: u32, text: &str) {
-            self.0.lock().hold(generation, text);
+            self.mirror.lock().hold(generation, text);
         }
 
-        fn report(
-            &self,
-            view: &JavaView,
-            generation: u32,
-            text: String,
-            selection: [i32; 2],
-            composition: [i32; 2],
-        ) {
-            let state = EditorState {
-                text,
-                selection_start: selection[0],
-                selection_end: selection[1],
-                composition_start: composition[0],
-                composition_end: composition[1],
-            };
-            let edit = self.0.lock().report(generation, &state);
-            if let Some(edit) = edit {
-                view.set_composing(edit.composes());
-                view.push_event(ViewEvent::Window(Box::new(
-                    move |window: &AndroidWindow| {
-                        if let Some(input) = window.text_input() {
-                            input.apply(edit);
-                        }
-                    },
-                )));
+        fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply> {
+            let edit = self.mirror.lock().report(generation, &state)?;
+            Some(InputMethodReply {
+                composing: Some(edit.composes()),
+                work: Box::new(move |window: &AndroidWindow| {
+                    if let Some(input) = window.text_input() {
+                        input.apply(edit);
+                    }
+                }),
+            })
+        }
+
+        fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply {
+            InputMethodReply {
+                composing: None,
+                work: Box::new(move |window: &AndroidWindow| {
+                    if let Some(input) = window.text_input() {
+                        input.editor_action();
+                    }
+                    // The action arrives as the key it stands for, which a field
+                    // answers as it answers a keyboard's.
+                    let (key, shift) = editor_action_key(action);
+                    for key_input in
+                        crate::platforms::android::input::editor_action_keys(key, shift, uptime_ms)
+                    {
+                        window.callbacks().dispatch_input(key_input);
+                    }
+                }),
+            }
+        }
+
+        fn cursor_updates(&self, mode: i32) -> InputMethodReply {
+            InputMethodReply {
+                composing: None,
+                work: Box::new(move |window: &AndroidWindow| {
+                    if let Some(input) = window.text_input() {
+                        input.cursor_updates(mode);
+                    }
+                }),
+            }
+        }
+
+        fn pen_down(&self, window: &AndroidWindow, at: Point<f64>) {
+            if let Some(input) = window.text_input() {
+                input.offer_pen(at);
             }
         }
     }
@@ -569,7 +583,7 @@ mod input {
     /// Publish `snapshot` to the view: it becomes the mirror the next reports are
     /// diffed against, and the view takes it as `how` says.
     fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32, i32, bool)) {
-        view.field_mirror()
+        view.input_method()
             .hold(snapshot.generation, &snapshot.text);
         view.set_composing(snapshot.composition.is_some());
         let [
@@ -691,7 +705,7 @@ mod input {
 
         /// One input method edit the view reported: replayed into the focused
         /// store in order, or dropped when it was made on an older snapshot.
-        pub(crate) fn apply(&self, edit: ImeEdit) {
+        fn apply(&self, edit: ImeEdit) {
             let Some(store) = self.focused() else {
                 return;
             };
@@ -825,7 +839,7 @@ mod input {
         /// Keyboard's Done does); the field would otherwise take the action's
         /// Enter for the input method's own and ignore it. The commit is queued
         /// like an edit, so the key that follows lands after it.
-        pub(crate) fn editor_action(&self) {
+        fn editor_action(&self) {
             let Some(store) = self.focused() else {
                 return;
             };
@@ -859,7 +873,7 @@ mod input {
         }
 
         /// `requestCursorUpdates(mode)`.
-        pub(crate) fn cursor_updates(&self, mode: i32) {
+        fn cursor_updates(&self, mode: i32) {
             self.cursor_mode.set(mode & CURSOR_UPDATE_MONITOR);
             if mode & CURSOR_UPDATE_IMMEDIATE != 0 {
                 self.push_cursor();
@@ -904,9 +918,13 @@ mod input {
             });
         }
 
-        /// A pen tip touched down at `point`: inside the focused field, its stroke
-        /// is handed to the input method's handwriting.
-        pub(crate) fn offer_pen(&self, handwriting: Since<StylusHandwriting>, point: Point<f64>) {
+        /// A pen tip touched down at `point`: on a device that has the input
+        /// method's handwriting, a stroke inside the focused field is handed to
+        /// it.
+        fn offer_pen(&self, point: Point<f64>) {
+            let Some(handwriting) = self.handwriting else {
+                return;
+            };
             if starts_handwriting(true, self.field_bounds(), point) {
                 self.start_handwriting(handwriting);
             }
@@ -1648,4 +1666,4 @@ pub(crate) mod sizing {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use input::{AndroidTextInput, ViewMirror};
+pub(crate) use input::{AndroidTextInput, ViewInputMethod};
