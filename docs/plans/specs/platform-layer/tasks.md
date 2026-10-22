@@ -776,7 +776,7 @@ graph LR
   в поле и эхе; три Backspace, затем « мир» — «hello  мир» в обоих; ошибок в консоли нет; набор
   `web_browser` не запускался — на хосте нет chromedriver. Не запускалось: `cross-typecheck`
   локально (нет `zig`; job — в CI); Mac и iPhone — в очереди vanyastaff/flui#1840.
-- [x] **LY32** — ветка `platform/services`. Четыре каталога фич, модель рядом с файлом на
+- [x] **LY32** — ветка `platform/services` (на `main` @ `0f52e4e32`). Четыре каталога фич, модель рядом с файлом на
   платформу; переносы — `git mv`, тела без правок, кроме путей, `use` и видимости. `clipboard/`:
   `lock.rs` (модель: замок сессий Win32, общий у Win32 и `arboard`), `windows.rs`,
   `apple/{macos,ios}.rs`, `android.rs` (внутрипроцессная заглушка, в таблице до LY50), `web.rs`,
@@ -819,25 +819,45 @@ graph LR
   тестовой сборке чужой ОС. (4) Drag-сообщений у `WindowProc` нет; шаг отзыва drop target в
   `WM_DESTROY` (между освобождением тачпада и колбэками закрытия) и регистрация цели при создании
   (между TSF и viewport) остались в окне — путь `crate::drag::windows`: хук перед `WindowProc`
-  изменил бы их порядок внутри одного сообщения. (5) Видимость `pub(super)` → `pub(crate)`:
-  `WindowRef` и его методы, `WindowContext::drop_target`, `events::{SURFACE, MOUSE_BUTTONS}`,
-  `web::events::{answer, pointer_position}`, `web::registration::{Registration, listen}`.
-  (6) Публичные пути `platforms::<os>::{WindowsClipboard, …}`, скрытые
+  изменил бы их порядок внутри одного сообщения. Слот регистрации drop target при создании окна —
+  drag'а: LY30 ставит переходный хук `WindowMessages` между `Tsf` и `Touchpad`; кто сольётся
+  вторым, переносит его в `drag/windows.rs` (или оставляет там), не меняя порядка. (5) Рёбра фич
+  в `platforms/` названы механизмом LY31 (`8ed043411` взят cherry-pick'ом и уходит при rebase
+  после LY31): `retiring = ["platforms"]` и по исключению на ребро (`exit = "ADR-0151"`, задача —
+  словами в `reason`, идентификаторы задач в TOML запрещает `markers`). Кто снимает: LY28 (каталог
+  окна) — `drag::windows` → `platforms::windows::platform` (`WindowRef`, контекст окна:
+  `drop_target`, `pointer_registry`, колбэки), `haptics::windows` →
+  `platforms::windows::platform` (`WindowRef`), `drag::web` → `platforms::web::registration`
+  (`Registration`); LY29 (каталог ввода) — `drag::windows` → `platforms::windows::events`
+  (`MOUSE_BUTTONS`), `drag::web` → `platforms::web::events` (`answer`, `pointer_position`); LY33
+  (каталог предпочтений) — `haptics::android` → `platforms::android::preferences`
+  (`with_activity`; то же ребро у `display::android` в LY31). Обратные рёбра — из `platforms/` в
+  фичи — `retiring` как источник не проверяет, они записаны здесь, и с каталогом окна (LY28) и
+  ввода (LY29) станут исключениями `ForeignPlatform`, которые снимает подключение позиций окна
+  через таблицу (LY38): окно делает адаптер доступности, актуатор и источник drag
+  (`platforms::windows::window` → `accessibility::windows`, `haptics::windows`, `drag::windows`;
+  `platforms::macos::window` → `accessibility::apple::macos`, `haptics::apple::macos`;
+  `platforms::ios::window` → `haptics::apple::ios`; `platforms::android::window` →
+  `haptics::android`, `drag::android`; `platforms::web::window` → `haptics::web`, `drag::web`;
+  `platforms::winit::window` → `accessibility::linux`; `platforms::headless::platform` →
+  `accessibility::headless`, `drag::headless`), контекст окна Win32 хранит и отзывает drop target
+  (`platforms::windows::platform` → `drag::windows`, LY28), регистрация ввода холста ставит
+  слушатели drag (`platforms::web::events` → `drag::web`, LY29). Расширения видимости
+  `pub(super)` → `pub(crate)` ради этих рёбер: в окне и вводе — `WindowRef` и его `new`, `hwnd`,
+  `with_context`, `WindowContext::drop_target`, `mod events` и `events::{SURFACE, MOUSE_BUTTONS}`
+  Win32; `mod events` и `events::{answer, pointer_position}`, `mod registration`,
+  `Registration` и `Registration::listen` Web; в фичах — `Win32DragSource` и его `new`,
+  `register_target`, `revoke_target`, реэкспорт `WindowDropTarget` (`drag::windows::ole`),
+  `pub(in crate::platforms::windows)` → `pub(crate)` в `ole/com.rs`, `WindowsHaptics::new`,
+  `AndroidHaptics::new`, `IOSHaptics::new`, `AndroidDragSource::{new, retire}`, `WebDragSource`
+  и его `retire`, `CanvasDrag` с полем `source` и `arm`, `drag::web::register`. (6) Публичные пути `platforms::<os>::{WindowsClipboard, …}`, скрытые
   `shared::{ole_drag_drop, android_drag, html_drag_drop}` удалены, `shared::haptic_degradation` →
   `haptics::degradation` (скрытый: его читает `backend_conformance`), фрагмент
   `changelog.d/platform-services.md`; имена корня (`FakeAccessibility`, `FakeHaptics`,
-  `HeadlessDragAndDrop`) те же, `flui-app` не тронут. Что не выдержит соседей — рёбра между
-  файлами платформ двух фич, законные, пока `platforms/` — уровень крейта: окно называет адаптер
-  доступности, актуатор и источник drag своей платформы (`platforms::*` → `accessibility::*`,
-  `haptics::*`, `drag::*`); `drag::windows` и `haptics::windows` достигают окна через
-  `platforms::windows::platform::WindowRef` (контекст окна: `drop_target`, `pointer_registry`,
-  колбэки); `drag::windows` читает `events::MOUSE_BUTTONS` (ввод), `drag::web` —
-  `events::{answer, pointer_position}` (ввод) и `registration::Registration` (окно),
-  `haptics::android` — `preferences::with_activity` (LY33). С каталогами LY28, LY29 и LY33 они
-  станут находками `ForeignPlatform`; снимает их подключение оконных позиций через таблицу (LY38)
-  или перенос общих помощников в модели и `owner/`. `globals`: `clipboard::lock::{CLIPBOARD,
+  `HeadlessDragAndDrop`) те же, `flui-app` не тронут. `globals`: `clipboard::lock::{CLIPBOARD,
   reentrancy::SESSION_OPEN}`, `clipboard::windows::owner_window::OWNER` (итого 55); `module-dag`:
-  `features = ["clipboard", "drag", "accessibility", "haptics"]`, исключений нет; allowlist
+  `features = ["clipboard", "drag", "accessibility", "haptics"]`, `retiring = ["platforms"]`, 6
+  исключений (5); allowlist
   `testing` — путь `drag/windows/ole/tests.rs`, `docs-paths` — ADR-0247 называет
   `tests/android_drag.rs` (запись не переписывается). Тесты: `ole_drag_drop_contracts`,
   `android_drag_mapping`, `html_drag_drop_table`, `haptic_degradation_table` и
@@ -851,7 +871,7 @@ graph LR
   flui-native -p flui-app` — 280 (2 пропущены), `-p flui-native --features winit-backend` — 262
   (1 пропущен), `-p xtask` — 45; clippy Android (`-p flui-native -p flui-app --all-targets`),
   macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`); `wasm-check`, `wasm-test` (49
-  утверждений); `module-dag` (268 модулей, 4 фичи с 25 файлами платформ, 1 base) и самотест (52),
+  утверждений); `module-dag` (268 модулей, 4 фичи с 25 файлами платформ, 1 base, 461 ребро, 6 исключений) и самотест (54),
   `globals` (55) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`, `checks` (с
   `android-dex`), `doc-strict`, `workspace`, `reach`; rustdoc `--document-private-items` с
   `winit-backend,a11y` под `-D warnings`. WSL Ubuntu 24.04: clippy `-p flui-native -p flui-app`

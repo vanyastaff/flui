@@ -174,10 +174,12 @@ trait depends on `flui-platform` instead.
   source it hands out by naming the feature's platform file, and the Win32 drag
   transport and actuator reach a window through
   `platforms::windows::platform::WindowRef`; the Web drag answers through the
-  input file's `answer`. These are edges between two features' platform files,
-  allowed while the window and input code is crate-level, which the window's
-  and input's directories turn into findings until the window-level positions
-  reach the window through the table.
+  input file's `answer`. These are edges between two features' platform files.
+  `platforms` is `retiring` in `[package.metadata.flui.modules]`, so each edge
+  from a feature into it is a named exception there, with the change that
+  removes it (the window's, input's and preferences' directories); the
+  window's own edges into the features are checked once the window's directory
+  exists, and go when the window-level positions reach it through the table.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
