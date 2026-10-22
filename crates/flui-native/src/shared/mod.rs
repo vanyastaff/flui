@@ -6,8 +6,8 @@
 //! # Rule modules
 //!
 //! The cfg-free rule modules below (`#[doc(hidden)]`) hold one backend's
-//! mapping as pure functions — key and motion decoding, the haptics and
-//! availability tables, drag and drop translation, pointer assembly — so
+//! mapping as pure functions — key and motion decoding, the availability
+//! table, pointer assembly — so
 //! Linux CI runs every backend's rules. Each is consumed by the backends of
 //! some targets only, and a crate-private module would be dead code, with
 //! its re-exports unused, on every other target; so they are `pub` for this
@@ -16,23 +16,9 @@
 //! `events` and `window_installation` are the exceptions, named by the
 //! composition root (`flui-app`).
 
-// Adapter-side accessibility state, shared by the AT-SPI / UIA /
-// NSAccessibility bridges. Gated to the targets that have one so the
-// module is never dead code on Android or wasm.
-#[cfg(all(
-    feature = "a11y",
-    any(target_os = "linux", target_os = "windows", target_os = "macos")
-))]
-pub(crate) mod accessibility_bridge;
-// The Win32 clipboard lock shared by the Win32 and winit (`arboard`) backends.
-#[cfg(windows)]
-pub(crate) mod clipboard_lock;
 // Rule module; consumer: the Android backend.
 #[doc(hidden)]
 pub mod android_motion;
-// Rule module; consumer: the Android backend's `FluiView`.
-#[doc(hidden)]
-pub mod android_drag;
 // Rule module; consumer: the Android backend.
 #[doc(hidden)]
 pub mod android_keys;
@@ -54,9 +40,6 @@ pub(crate) mod window_state;
 // Rule module; consumer: the Win32 backend.
 #[doc(hidden)]
 pub mod hwnd_affinity;
-// Rule module: every backend's haptics degradation table (ADR-0210 §7).
-#[doc(hidden)]
-pub mod haptic_degradation;
 // Rule module; consumer: the Win32 DirectManipulation viewport.
 #[doc(hidden)]
 pub mod direct_manipulation;
@@ -77,9 +60,6 @@ pub mod keys;
 // Rule module; consumer: the AppKit backend.
 #[doc(hidden)]
 pub mod keys_macos;
-// Rule module; consumer: the Win32 OLE drag and drop.
-#[doc(hidden)]
-pub mod ole_drag_drop;
 // Rule module: every native backend assembles pointers through it.
 #[doc(hidden)]
 pub mod pointer_assembly;
@@ -95,9 +75,6 @@ pub mod visibility;
 // Rule module; consumer: the web backend's wheel and gesture events.
 #[doc(hidden)]
 pub mod web_pinch;
-// Rule module; consumer: the web backend's HTML drag and drop.
-#[doc(hidden)]
-pub mod html_drag_drop;
 // The Win32 backend turns window limits into its window's bounds by these
 // rules; `test` keeps them checked on every host.
 #[cfg(any(windows, test))]

@@ -3,12 +3,18 @@
 
 use std::sync::Arc;
 
+use flui_platform::Clipboard;
+
+#[cfg(all(target_os = "linux", feature = "a11y"))]
+use crate::accessibility::linux::UnixAccessibility;
+use crate::clipboard::winit::ArboardClipboard;
 #[cfg(target_os = "macos")]
 use crate::display::apple::macos::MacosDisplays;
 #[cfg(windows)]
 use crate::display::windows::WindowsDisplays;
 #[cfg(target_os = "linux")]
 use crate::display::winit::WinitDisplaySource;
+use crate::drag::winit::WinitDataTransfer;
 use crate::host::{Absent, Host, position};
 #[cfg(target_os = "linux")]
 use crate::lifecycle::linux::WinitNotices;
@@ -16,11 +22,9 @@ use crate::lifecycle::notice::SystemNotices;
 use crate::owner::notices::NoticeChannel;
 #[cfg(target_os = "linux")]
 use crate::owner::winit::HostNoticeStart;
-use crate::owner::winit::{HostDisplays, PreferenceStart, WinitHost, WinitLoop};
+use crate::owner::winit::{FileDrops, HostDisplays, PreferenceStart, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
-#[cfg(all(target_os = "linux", feature = "a11y"))]
-use crate::platforms::linux::UnixAccessibility;
-use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitWindow};
+use crate::platforms::winit::WinitWindow;
 #[cfg(target_os = "macos")]
 use crate::preferences::apple::macos::WinitSettings;
 #[cfg(target_os = "linux")]
@@ -52,8 +56,8 @@ impl Host for Winit {
     type Accessibility = UnixAccessibility;
     #[cfg(not(all(target_os = "linux", feature = "a11y")))]
     type Accessibility = Absent<position::Accessibility>;
-    type Clipboard = ArboardClipboard;
-    type Drag = WinitDataTransfer;
+    type Clipboard = WinitLoop;
+    type Drag = WinitLoop;
     // Desktop winit targets have no haptic hardware to drive.
     type Haptics = Absent<position::Haptics>;
     // winit reports no preferences: the loop reads the source of the system
@@ -96,6 +100,17 @@ impl WinitHost for Winit {
     #[cfg(target_os = "linux")]
     fn host_notices() -> Box<dyn HostNoticeStart> {
         Box::new(WinitNotices)
+    }
+
+    /// The system clipboard through `arboard`, or an inert one where it
+    /// cannot open (a headless session).
+    fn clipboard() -> Arc<dyn Clipboard> {
+        ArboardClipboard::or_inert()
+    }
+
+    /// The files winit reports dragged and dropped.
+    fn drag() -> Arc<dyn FileDrops> {
+        Arc::new(WinitDataTransfer::new())
     }
 }
 

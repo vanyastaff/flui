@@ -31,18 +31,21 @@ use crate::{
     owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
+use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::drag::PlatformDragSource;
 use flui_platform::{
-    DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences, WindowEvent, WindowId,
+    Clipboard, DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences, WindowEvent, WindowId,
 };
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
-use crate::platforms::web::{WebClipboard, WebTransfer};
+use crate::platforms::web::registration::Registration;
 use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
-/// displays, the preference source and the page's lifecycle the loop holds.
-/// The owner reaches them through the hooks and names no feature.
+/// displays, the preference source, the page's lifecycle, the clipboard and
+/// the drag-and-drop transport the loop holds. The owner reaches them through
+/// the hooks and names no feature.
 pub(crate) trait WebHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to the window it opens.
@@ -61,6 +64,60 @@ pub(crate) trait WebHost: 'static {
 
     /// The page's lifecycle, which the loop observes while it runs.
     fn page() -> Box<dyn PageLifecycle>;
+
+    /// The clipboard, made once per loop: the loop holds it and answers the
+    /// table's clipboard position from it.
+    fn clipboard() -> Arc<dyn Clipboard>;
+
+    /// The drag-and-drop transport, made once per loop: the loop holds it and
+    /// answers the table's drag position from it, and the window it opens
+    /// registers its canvas through it.
+    fn drag() -> Arc<dyn HostDrag>;
+}
+
+/// The page's drag-and-drop transport as the loop and its window reach it,
+/// which the table makes ([`WebHost::drag`]): the platform's one
+/// data-transfer source.
+pub(crate) trait HostDrag: DataTransferSource {
+    /// Listen, in `registration`, for drags over `canvas` and for the drags
+    /// its window starts, dispatching to the window's `callbacks`.
+    ///
+    /// # Errors
+    /// What the registration of a listener reports.
+    fn register(
+        self: Arc<Self>,
+        canvas: &web_sys::HtmlCanvasElement,
+        callbacks: &Arc<WindowCallbacks>,
+        registration: &mut Registration,
+    ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
+}
+
+/// What a canvas's drag registration leaves its window.
+pub(crate) trait CanvasDrag {
+    /// The drag source the window hands out.
+    fn source(&self) -> Arc<dyn PlatformDragSource>;
+
+    /// Make the canvas draggable, once its whole registration succeeded.
+    fn arm(&self);
+
+    /// Put the canvas's draggable attribute back as the page had it.
+    fn retire(&self);
+}
+
+/// The clipboard position: the clipboard the host's [`WebHost::clipboard`]
+/// made, which the loop holds.
+impl host::Clipboard<WebLoop> for WebLoop {
+    fn clipboard(owner: &WebLoop) -> Arc<dyn Clipboard> {
+        owner.with_state(|state| Arc::clone(&state.clipboard))
+    }
+}
+
+/// The drag position: the transport the host's [`WebHost::drag`] made, which
+/// the loop holds.
+impl host::Drag<WebLoop> for WebLoop {
+    fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
+        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    }
 }
 
 /// The page's lifecycle as the web loop observes it while it runs.
@@ -105,6 +162,9 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
+    /// The one HTML drag-and-drop transport every canvas shares, as the table
+    /// made it.
+    pub(crate) drag: Arc<dyn HostDrag>,
     pub(crate) signal: Arc<OwnerSignal>,
     /// The system preference source the table made; present until the platform
     /// quits.
@@ -124,9 +184,7 @@ pub struct WebLoop {
 pub(crate) struct WebState {
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
-    pub(crate) clipboard: Arc<WebClipboard>,
-    /// The one HTML drag-and-drop transport every canvas shares.
-    pub(crate) transfer: Arc<WebTransfer>,
+    pub(crate) clipboard: Arc<dyn Clipboard>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
@@ -154,8 +212,7 @@ impl WebLoop {
         let state = WebState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
-            clipboard: Arc::new(WebClipboard::new()),
-            transfer: Arc::default(),
+            clipboard: H::clipboard(),
             is_running: false,
             window_callbacks: None,
             owner: Weak::new(),
@@ -181,6 +238,7 @@ impl WebLoop {
         let preferences = H::preferences(&signal)?;
         Ok(Self {
             state,
+            drag: H::drag(),
             signal,
             preferences: RefCell::new(Some(preferences)),
             displays: H::displays(),

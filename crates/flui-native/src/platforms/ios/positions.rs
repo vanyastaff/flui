@@ -4,16 +4,14 @@ use std::sync::Arc;
 
 use objc2::MainThreadMarker;
 
-use super::{IOSClipboard, IOSWindow};
+use super::IOSWindow;
 use crate::host;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::apple::IOSLoop;
 use crate::owner::call_point::install;
 use flui_foundation::geometry::Size;
-use flui_platform::{
-    Clipboard, PlatformWindow, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
-};
+use flui_platform::{PlatformWindow, WindowCapabilities, WindowEvent, WindowId, WindowOptions};
 
 impl host::Window<IOSLoop> for IOSWindow {
     fn open(_: &IOSLoop, _options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
@@ -38,11 +36,5 @@ impl host::Window<IOSLoop> for IOSWindow {
             &owner.handler(|handlers| &mut handlers.window_event),
             callback,
         );
-    }
-}
-
-impl host::Clipboard<IOSLoop> for IOSClipboard {
-    fn clipboard(owner: &IOSLoop) -> Arc<dyn Clipboard> {
-        owner.clipboard.clone()
     }
 }

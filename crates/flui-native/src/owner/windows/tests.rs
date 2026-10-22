@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -10,14 +11,26 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
+use flui_foundation::DataTransferId;
+use flui_platform::data_transfer::{
+    DataTransferOffer, DataTransferSource, DropFeedback, NullDataTransferSource,
+    RepresentationIndex, TransferLimits, TransferRequest,
+};
+use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+
 use super::broadcast::Subscriber;
-use super::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
+use super::control::{
+    OwnerControl, OwnerLifecycle, OwnerMessages, OwnerObjects, OwnerPost, OwnerPreferences,
+    OwnerSeeds, OwnerWindow,
+};
 use super::{
-    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
-    WindowsLoop, dispatch_window_message, window_created,
+    CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages,
+    WindowsHost, WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::config::WindowConfiguration;
+use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
+use crate::platforms::windows::platform::WindowRef;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -75,8 +88,8 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks, the Windows host's sources and no
-/// broadcast subscriber.
+/// A host of the tests' own: two hooks, the Windows host's sources, no
+/// broadcast subscriber and a drag position that takes no drags.
 pub(super) struct TestHost;
 
 impl WindowsHost for TestHost {
@@ -98,9 +111,64 @@ impl WindowsHost for TestHost {
         Vec::new()
     }
 
-    fn displays() -> std::sync::Arc<dyn super::HostDisplays> {
-        std::sync::Arc::new(crate::display::windows::WindowsDisplays::new())
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(WindowsDisplays::new())
     }
+
+    fn drag() -> Arc<dyn HostDrag> {
+        Arc::new(NoDrag)
+    }
+}
+
+/// A transport that takes and starts no drags, and leaves the owner window's
+/// messages to the rest.
+struct NoDrag;
+
+impl OwnerMessages for NoDrag {
+    fn attach(&self, _owner: OwnerPost) {}
+
+    fn message(&self, _owner: &OwnerWindow, _message: u32) -> Option<LRESULT> {
+        None
+    }
+
+    fn destroyed(&self) {}
+}
+
+impl DataTransferSource for NoDrag {
+    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
+        None
+    }
+
+    fn request(
+        &self,
+        id: DataTransferId,
+        representation: RepresentationIndex,
+        limits: TransferLimits,
+    ) -> TransferRequest {
+        NullDataTransferSource.request(id, representation, limits)
+    }
+
+    fn update_drop_feedback(&self, _id: DataTransferId, _feedback: DropFeedback) {}
+
+    fn conclude_drop(&self, _id: DataTransferId) {}
+}
+
+impl PlatformDragSource for NoDrag {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
+        Err(DragError::Unavailable)
+    }
+}
+
+impl HostDrag for NoDrag {
+    fn drag_source(self: Arc<Self>, _window: WindowRef) -> Arc<dyn PlatformDragSource> {
+        self
+    }
+
+    fn register_target(self: Arc<Self>, _window: WindowRef) {}
 }
 
 /// The class's procedure offers a message to the hooks in order: the first
@@ -314,6 +382,51 @@ fn broadcast_subscribers_hear_a_message_in_order() {
         ),
         "a message nobody answers gets the default procedure's answer"
     );
+}
+
+/// An owner-window hook that hears the window go, and may panic as it does.
+struct Ending {
+    name: &'static str,
+    panics: bool,
+}
+
+impl OwnerMessages for Ending {
+    fn attach(&self, _owner: OwnerPost) {}
+
+    fn message(&self, _owner: &OwnerWindow, _message: u32) -> Option<LRESULT> {
+        None
+    }
+
+    fn destroyed(&self) {
+        hear(self.name);
+        assert!(!self.panics, "a hook that panics as the owner window goes");
+    }
+}
+
+/// Every owner-window hook hears the window go, the one after a hook that
+/// panics too.
+#[test]
+fn every_owner_hook_hears_the_window_go_after_one_panics() {
+    let control = OwnerControl::new::<TestHost>(
+        WindowIdentity::mint_from(WindowIdentity::source()),
+        Weak::new(),
+        vec![
+            Arc::new(Ending {
+                name: "first",
+                panics: true,
+            }),
+            Arc::new(Ending {
+                name: "second",
+                panics: false,
+            }),
+        ],
+        Arc::new(WindowsDisplays::new()),
+        TestHost::notices(),
+    )
+    .expect("the owner control");
+    HEARD.with(|heard| heard.borrow_mut().clear());
+    drop(control);
+    assert_eq!(HEARD.with(RefCell::take), ["first", "second"]);
 }
 
 /// Windows holds one window class of a name per process: a loop for a second

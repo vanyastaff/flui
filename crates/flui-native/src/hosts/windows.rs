@@ -4,23 +4,23 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(feature = "a11y")]
+use crate::accessibility::windows::WindowsAccessibility;
+use crate::clipboard::windows::WindowsClipboard;
 use crate::config::WindowConfiguration;
 use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
+use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
+use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
 use crate::lifecycle::notice::SystemNotices;
 use crate::lifecycle::windows::HostEvents;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
-use crate::owner::windows::{HostDisplays, WindowHooks, WindowsHost, WindowsLoop};
+use crate::owner::windows::{HostDisplays, HostDrag, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
-#[cfg(feature = "a11y")]
-use crate::platforms::windows::WindowsAccessibility;
-use crate::platforms::windows::{
-    DropTargetRegistration, OleTransfer, Touchpad, WindowProc, WindowsClipboard, WindowsHaptics,
-    WindowsWindow,
-};
+use crate::platforms::windows::{Touchpad, WindowProc, WindowsWindow};
 use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
 use crate::text::windows::{TextServices, Tsf};
@@ -42,7 +42,7 @@ impl Host for Windows {
     #[cfg(not(feature = "a11y"))]
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WindowsClipboard;
-    type Drag = OleTransfer;
+    type Drag = WindowsLoop;
     type Haptics = WindowsHaptics;
     type Preferences = WindowsLoop;
     type Lifecycle = WindowsLoop;
@@ -87,6 +87,11 @@ impl WindowsHost for Windows {
 
     fn displays() -> Arc<dyn HostDisplays> {
         Arc::new(WindowsDisplays::new())
+    }
+
+    /// OLE drag and drop, whose sessions run from the owner window.
+    fn drag() -> Arc<dyn HostDrag> {
+        OleTransfer::new()
     }
 }
 

@@ -1,23 +1,17 @@
 //! What each position of the winit host's table answers.
 //!
 //! The table names the types the host's windows and loop hand out
-//! ([`WinitWindow`], [`ArboardClipboard`], …), but every answer is read from
-//! the loop's state: its one lock, its run state, its owner signal.
+//! ([`WinitWindow`], …), but every answer is read from the loop's state: its
+//! one lock, its run state, its owner signal.
 
 use std::{cell::Cell, sync::Arc, thread};
 
-use flui_platform::{
-    WindowCapabilities, WindowEvent, WindowId, WindowOptions, data_transfer::DataTransferSource,
-};
+use flui_platform::{WindowCapabilities, WindowEvent, WindowId, WindowOptions};
 
 use crate::owner::winit::{ACTIVE_EVENT_LOOP, OpenWindowStateError, WinitLoop};
 use crate::{
-    host,
-    host_window::HostWindow,
-    owner::OpenWindowError,
-    owner::call_point::install,
-    owner::winit::control::ControlSendError,
-    platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitWindow},
+    host, host_window::HostWindow, owner::OpenWindowError, owner::call_point::install,
+    owner::winit::control::ControlSendError, platforms::winit::WinitWindow,
 };
 use flui_foundation::{ClaimOutcome, geometry::Size};
 
@@ -152,19 +146,5 @@ impl host::Input<WinitLoop> for WinitLoop {
     fn on_keyboard_layout_change(_: &WinitLoop, callback: Box<dyn FnMut() + Send>) {
         // No layout is read, so no change is ever reported.
         drop(callback);
-    }
-}
-
-impl host::Clipboard<WinitLoop> for ArboardClipboard {
-    fn clipboard(owner: &WinitLoop) -> Arc<dyn flui_platform::Clipboard> {
-        owner.with_state(|state| state.clipboard.clone())
-    }
-}
-
-impl host::Drag<WinitLoop> for WinitDataTransfer {
-    fn data_transfer(owner: &WinitLoop) -> Arc<dyn DataTransferSource> {
-        // Clones of the ONE source constructed at platform init (ADR-0038
-        // §2): every id it mints stays redeemable at every clone.
-        owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
     }
 }

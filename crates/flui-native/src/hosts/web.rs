@@ -3,15 +3,20 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_platform::Clipboard;
+
+use crate::clipboard::web::WebClipboard;
 use crate::display::web::WebDisplays;
+use crate::drag::web::WebTransfer;
 use crate::error::PlatformError;
+use crate::haptics::web::WebHaptics;
 use crate::host::{Absent, Host, position};
 use crate::lifecycle::web::PageSession;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
-use crate::owner::web::{HostDisplays, PageLifecycle, WebHost, WebLoop};
+use crate::owner::web::{HostDisplays, HostDrag, PageLifecycle, WebHost, WebLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::web::{WebClipboard, WebHaptics, WebTransfer, WebWindow};
+use crate::platforms::web::WebWindow;
 use crate::preferences::web::WebPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::web::WebTextInput;
@@ -29,8 +34,8 @@ impl Host for Web {
     type Input = WebLoop;
     type Text = Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
-    type Clipboard = WebClipboard;
-    type Drag = WebTransfer;
+    type Clipboard = WebLoop;
+    type Drag = WebLoop;
     type Haptics = WebHaptics;
     type Preferences = WebLoop;
     type Lifecycle = WebLoop;
@@ -51,6 +56,16 @@ impl WebHost for Web {
 
     fn page() -> Box<dyn PageLifecycle> {
         Box::new(PageSession)
+    }
+
+    /// The page's own clipboard, which reads only its own writes.
+    fn clipboard() -> Arc<dyn Clipboard> {
+        Arc::new(WebClipboard::new())
+    }
+
+    /// HTML drag and drop.
+    fn drag() -> Arc<dyn HostDrag> {
+        Arc::new(WebTransfer::default())
     }
 }
 

@@ -12,7 +12,8 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::{FrameCount, ModalDelivery, WindowIdentity};
+use super::modal_loop::ModalFrames;
+use super::{FrameCount, WindowIdentity};
 use crate::platforms::windows::platform::WindowMap;
 use crate::{
     PlatformError, WakeRegistrationError,
@@ -102,11 +103,97 @@ pub(crate) struct OwnerControlContext {
     /// Set while an [`EXIT_POLICY`] message is queued; see
     /// [`ExitPolicyRequest`].
     exit_policy_pending: Arc<AtomicBool>,
-    /// OLE drag and drop, whose sessions run from this window.
-    drag: Arc<crate::platforms::windows::drag::OleTransfer>,
-    /// The last wake deadline the modal drag loop delivered, with the frame
-    /// count it was delivered at (see `WindowsLoop::deliver_modal_frames`).
-    modal_delivery: Rc<ModalDelivery>,
+    /// The features' hooks on this window (OLE drag and drop, whose sessions
+    /// run from it), in the order a message reaches them.
+    owner_hooks: Rc<[Arc<dyn OwnerMessages>]>,
+    /// What a modal loop run from this window (OLE's drag loop) delivers its
+    /// frames from.
+    modal_frames: Rc<ModalFrames>,
+}
+
+/// One feature's part of the procedure of the owner's message-only window: the
+/// messages the feature posts or sends there so that they run on a fresh owner
+/// turn, with no window callback in progress, and the window's end.
+///
+/// The procedure answers its own messages (the wake, the exit policy) and
+/// offers any other to its hooks in order (the loop's: the drag-and-drop
+/// transport the host makes, [`WindowsHost::drag`](super::WindowsHost::drag)):
+/// the first that answers ends the message's dispatch, and a message no hook
+/// answers goes to `DefWindowProcW`. A feature's messages are `WM_APP`
+/// messages of its own, distinct from every other hook's and the owner's.
+pub(crate) trait OwnerMessages {
+    /// The owner window exists: a message posted through `owner` reaches the
+    /// procedure until the window is closed.
+    fn attach(&self, owner: OwnerPost);
+
+    /// Answers `message` for the owner window, or passes it on with `None`.
+    /// User code may run here and destroy the window: `owner` holds clones of
+    /// what it offers, not a borrow of the owner's state.
+    fn message(&self, owner: &OwnerWindow, message: u32) -> Option<LRESULT>;
+
+    /// The owner window is destroyed, and the owner's state with it: what the
+    /// feature was to run from the window never runs. Every hook is told, each
+    /// apart, so one that panics leaves the next one told.
+    fn destroyed(&self);
+}
+
+/// Posts a message to the owner window while it exists. `Send + Sync`: it
+/// carries only the window's address, read under the lock the owner control
+/// clears before it destroys the window.
+#[derive(Clone)]
+pub(crate) struct OwnerPost {
+    address: Arc<Mutex<Option<isize>>>,
+}
+
+impl OwnerPost {
+    /// Post `message`, with no parameters, to the owner window; `false` once
+    /// the window is closed or when the post fails.
+    pub(crate) fn post(&self, message: u32) -> bool {
+        let address = self.address.lock();
+        let Some(raw) = *address else {
+            return false;
+        };
+        // SAFETY: the address is read under the lock the owner control
+        // clears before destroying its window, so it names the live owner
+        // window; the message carries no pointer.
+        unsafe { PostMessageW(Some(HWND(raw as *mut _)), message, WPARAM(0), LPARAM(0)) }.is_ok()
+    }
+
+    /// The owner window, while it is open.
+    #[cfg(test)]
+    pub(crate) fn hwnd(&self) -> Option<HWND> {
+        (*self.address.lock()).map(|raw| HWND(raw as *mut _))
+    }
+}
+
+/// The owner window as an [`OwnerMessages`] hook sees it for one message: its
+/// handle, and what the owner delivers on the hook's behalf. It holds the
+/// owner's state weakly, so a hook that runs user code keeps none of it alive
+/// past the window.
+pub(crate) struct OwnerWindow {
+    hwnd: HWND,
+    signal: Weak<OwnerSignal>,
+    frames: std::rc::Weak<ModalFrames>,
+}
+
+impl OwnerWindow {
+    /// The owner window's handle.
+    pub(crate) fn hwnd(&self) -> HWND {
+        self.hwnd
+    }
+
+    /// While a modal loop run from the owner window stands in for the message
+    /// loop, deliver what that loop would ([`ModalFrames::deliver`]): the
+    /// milliseconds to wait before asking again, or `None`, delivering
+    /// nothing, once the platform no longer accepts work or its owner state is
+    /// gone.
+    pub(crate) fn deliver_modal_frames(&self) -> Option<u32> {
+        let signal = self.signal.upgrade()?;
+        if !signal.accepting() {
+            return None;
+        }
+        Some(self.frames.upgrade()?.deliver())
+    }
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -253,11 +340,11 @@ impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
     /// `WindowsLoop::with_config`), with the broadcast subscribers and window
-    /// hooks `H` names.
+    /// hooks `H` names and the owner window's `owner_hooks`.
     pub(crate) fn new<H: super::WindowsHost>(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
-        drag: Arc<crate::platforms::windows::drag::OleTransfer>,
+        owner_hooks: Vec<Arc<dyn OwnerMessages>>,
         displays: Arc<dyn super::HostDisplays>,
         notices: Arc<dyn NoticeChannel>,
     ) -> Result<Self, PlatformError> {
@@ -318,22 +405,24 @@ impl OwnerControl {
         .map_err(|error| PlatformError::Init {
             message: format!("the broadcast receiver: {error}"),
         })?;
+        let owner_hooks: Rc<[Arc<dyn OwnerMessages>]> = owner_hooks.into();
+        let frames = Rc::new(FrameCount::default());
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
-            handlers,
+            handlers: Rc::clone(&handlers),
             turn: Rc::new(OwnerTurnSlot::default()),
-            frames: Rc::new(FrameCount::default()),
+            frames: Rc::clone(&frames),
             preferences,
             broadcasts,
             lifecycle,
             window_hooks: H::WINDOW_HOOKS,
             notices,
             displays,
-            windows,
+            windows: windows.clone(),
             exit_policy_pending: Arc::clone(&exit_policy_pending),
-            drag: Arc::clone(&drag),
-            modal_delivery: Rc::default(),
+            owner_hooks: Rc::clone(&owner_hooks),
+            modal_frames: Rc::new(ModalFrames::new(handlers, windows, frames)),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -365,7 +454,11 @@ impl OwnerControl {
             let mut address_slot = address.lock();
             *address_slot = Some(hwnd.0 as isize);
         }
-        drag.attach_owner(Arc::clone(&address));
+        for hook in owner_hooks.iter() {
+            hook.attach(OwnerPost {
+                address: Arc::clone(&address),
+            });
+        }
         Ok(Self {
             signal,
             wake,
@@ -619,20 +712,24 @@ unsafe extern "system" fn procedure(
     contain_owner_callback(|| {
         // SAFETY: only this class stores `OwnerControlContext` userdata, and
         // Win32 runs this procedure on the owner thread, the only thread
-        // that frees it (`WM_NCDESTROY`, below). A wake turn, a drag
-        // session and the modal frame tick clone what they use out of the
-        // context before running callbacks, so a callback that tears the
-        // window down cannot free what they still use.
+        // that frees it (`WM_NCDESTROY`, below). A wake turn, the exit
+        // policy and a feature's hook clone what they use out of the context
+        // before running callbacks, so a callback that tears the window down
+        // cannot free what they still use.
         unsafe {
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
             if message == WM_NCDESTROY && !pointer.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 let context = Box::from_raw(pointer);
-                let drag = Arc::clone(&context.drag);
-                drop(context);
-                // The session this window was to start never runs: it is
-                // told so here, with nothing of the window left to reach.
-                drag.cancel_pending();
+                let hooks = Rc::clone(&context.owner_hooks);
+                // Each step is contained apart: a panic in one leaves the
+                // rest to run.
+                contain_owner_callback(|| drop(context));
+                // What a feature was to run from this window never runs: it
+                // is told so here, with nothing of the window left to reach.
+                for hook in hooks.iter() {
+                    contain_owner_callback(|| hook.destroyed());
+                }
             } else if message == WAKE && !pointer.is_null() {
                 let signal = Arc::clone(&(*pointer).signal);
                 let turn = Rc::clone(&(*pointer).turn);
@@ -651,27 +748,22 @@ unsafe extern "system" fn procedure(
                     quit_owner_loop(&signal, &turn);
                 }
                 return;
-            } else if message == crate::platforms::windows::drag::START_DRAG && !pointer.is_null() {
-                // Cloned out first: the modal loop runs user code that may
-                // tear this window down.
-                let drag = Arc::clone(&(*pointer).drag);
-                drag.run_pending(hwnd);
-                return;
-            } else if message == crate::platforms::windows::drag::MODAL_FRAME && !pointer.is_null()
-            {
-                let context = &*pointer;
-                if !context.drag.is_running() || !context.signal.accepting() {
+            } else if !pointer.is_null() {
+                // Cloned out first: a hook runs user code (a drag session's
+                // modal loop) that may tear this window down.
+                let (hooks, owner) = {
+                    let context = &*pointer;
+                    let owner = OwnerWindow {
+                        hwnd,
+                        signal: Arc::downgrade(&context.signal),
+                        frames: Rc::downgrade(&context.modal_frames),
+                    };
+                    (Rc::clone(&context.owner_hooks), owner)
+                };
+                if let Some(answer) = hooks.iter().find_map(|hook| hook.message(&owner, message)) {
+                    result = answer;
                     return;
                 }
-                let handlers = Rc::clone(&context.handlers);
-                let frames = Rc::clone(&context.frames);
-                let delivered = Rc::clone(&context.modal_delivery);
-                let windows = context.windows.clone();
-                let wait = super::WindowsLoop::deliver_modal_frames(
-                    &handlers, &windows, &frames, &delivered,
-                );
-                result = LRESULT(wait as isize);
-                return;
             }
             result = DefWindowProcW(hwnd, message, wparam, lparam);
         }

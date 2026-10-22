@@ -97,8 +97,10 @@ trait depends on `flui-platform` instead.
     the window's moves, which TSF hears before the procedure answers them),
     the window's procedure (`platforms::windows::WindowProc`, which still
     answers every message, its default included), the drop target
-    (`platforms::windows::DropTargetRegistration`) and the precision touchpad,
-    whose `created` gives the window its DirectManipulation viewport. Tests:
+    (`drag::windows::DropTargetRegistration`, which registers the window with
+    the transport its context holds, the loop's `HostDrag`) and the precision
+    touchpad, whose `created` gives the window its DirectManipulation
+    viewport. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class`.
@@ -124,18 +126,50 @@ trait depends on `flui-platform` instead.
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
     `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`,
     `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
+  - The owner's message-only window answers its own messages (the wake, the
+    exit policy) and offers any other, in order, to the `OwnerMessages` hooks
+    of the objects the loop holds: today the drag transport the table makes
+    (`WindowsHost::drag`). It answers `START_DRAG`, from which a session's
+    `DoDragDrop` runs on a fresh owner turn, and `MODAL_FRAME`, for which the
+    owner delivers the frames due while the modal loop runs
+    (`owner::windows::modal_loop::ModalFrames`, which the owner window holds
+    and hands a hook weakly), and it cancels a session that has not started
+    when the window is destroyed. Every hook hears that end, each in a
+    boundary of its own, so one that panics leaves the next told. A window's
+    `DefWindowProc` move and size loops deliver through a `ModalFrames` of
+    their own, at the owner's modal pace (`owner::modal_pace`). Tests:
+    `ole_drag_and_drop_on_real_windows`,
+    `a_replaced_wake_hook_gets_its_modal_frame`,
+    `every_owner_hook_hears_the_window_go_after_one_panics`.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
-  what the loop holds (the displays, the preference source, the notice channel
-  and what the Activity's callbacks mean: `displays`, `preferences`, `notices`,
-  `activity`) and names the features' objects `FluiView` hands its reports:
-  today the text feature's `InputMethod` (`input_method`), which answers the
-  input method's calls through the view.
+  what the loop holds (the displays, the preference source, the notice
+  channel, what the Activity's callbacks mean, the clipboard and the
+  drag-and-drop transport: `displays`, `preferences`, `notices`, `activity`,
+  `clipboard`, `transfer`) and names the features' objects `FluiView` hands
+  its reports: the text feature's `InputMethod` (`input_method`), which
+  answers the input method's calls through the view, and the transport, to
+  which the view hands its drag events.
 
-  Until each feature takes its own state, a loop still holds the state the
-  table's positions read (windows, drag) and calls that feature's code by name.
-  The text input, the displays, the preferences and the lifecycle already took
-  theirs (below).
+  A loop keeps a feature's object in a field typed by a hook trait declared
+  beside the loop, which says what the loop and the windows it opens ask of
+  the object, and the owner's host trait makes it: `WindowsHost::drag`
+  (`HostDrag`: the owner window's `OwnerMessages`, a window's drag source and
+  drop target), `WebHost::clipboard` and `WebHost::drag` (`HostDrag`: a
+  canvas's registration, `CanvasDrag`), `WinitHost::clipboard` and
+  `WinitHost::drag` (`FileDrops`), `AndroidHost::clipboard` and
+  `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`). The table
+  names the loop as such a position (`type Drag = WindowsLoop`, as it names
+  the loop for the displays, the preferences and the lifecycle), and the loop
+  answers it from that field, so a table cannot name one type and build
+  another. The headless loop holds the simulated system's drag state
+  (`owner::headless::OsDrags`) as it holds the rest of that system;
+  `drag::headless` is the data-transfer source, a window's drag source and the
+  test's side over it. A position whose object is made per call (the Win32,
+  AppKit and UIKit clipboards) stays the feature's type. Until the window
+  takes its own state, a loop still holds what the window positions read and
+  calls the window's code by name; the text input, the displays, the
+  preferences and the lifecycle already took theirs (below).
 - **A feature is a directory of `flui-native`: its model beside one file per
   platform (ADR-0151 §10).** `text` is the first. The model is `ime` (what
   the Android and web hosts mirror of a focused field, and the one edit
@@ -162,6 +196,39 @@ trait depends on `flui-platform` instead.
   tests on every host. Tests of the model and the pure halves sit beside
   them (`text::ime::tests`, `text::android::ime::tests`,
   `text::web::ime::tests`, `text::windows::geometry::tests`).
+- **Clipboard, drag and drop, accessibility and haptics are feature
+  directories (ADR-0151 §10).** Each holds its model beside one file per
+  platform, and `[package.metadata.flui.modules]` lists the four as
+  `features`: `cargo xtask module-dag` holds a platform file to its own model,
+  `owner/`, `version/` and other features' models. The models are
+  `clipboard::lock` (the Win32 session lock the Win32 and `arboard` clipboards
+  share), `drag::offers` (what a media type offers and its bytes carry, shared
+  by Android and the Web), `accessibility::bridge` and `haptics::degradation`.
+  A platform is one file. One whose decisions need no OS keeps them in a
+  module of the file under `forbid(unsafe_code)`, named for what it decides
+  (`drag::windows::crossing`, what crosses OLE; `drag::android::clip`, what a
+  clip offers, holds and answers; `drag::web::mapping`, how `DataTransfer`
+  types and effects map); the file is compiled under `cfg(any(<os>, test))`
+  and its OS side under `cfg(<os>)`, so every host tests that module. A child
+  file is a module's tests, the mechanism of one OS object
+  (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
+  position a platform does not have is `Absent`: drag on macOS and
+  iOS, accessibility on Android, iOS and the Web (and everywhere without
+  `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
+  until the system clipboard is reached through JNI.
+
+  The window still makes the accessibility adapter and the actuator it hands
+  out by naming the feature's platform file, as the Android and headless
+  windows make their drag source (the Win32 and Web windows reach theirs
+  through the loop's `HostDrag`), and the Win32 drag transport and actuator
+  reach a window through
+  `platforms::windows::platform::WindowRef`; the Web drag answers through the
+  input file's `answer`. These are edges between two features' platform files.
+  `platforms` is `retiring` in `[package.metadata.flui.modules]`, so each edge
+  from a feature into it is a named exception there, with the change that
+  removes it (the window's and input's directories); the
+  window's own edges into the features are checked once the window's directory
+  exists, and go when the window-level positions reach it through the table.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
   model is `display::source`, the id registry and last snapshot every native
   source keeps; beside it is one file per platform: `windows.rs` (the
@@ -753,7 +820,7 @@ zoomed detent in the decoder).
 
 ### Web drag and drop is HTML drag and drop, answered in its events
 
-`platforms::web::drag` holds the platform's one `DataTransferSource`,
+`drag::web` holds the platform's one `DataTransferSource`,
 `WebTransfer`, and each canvas's `WebDragSource` (ADR-0211 §11). A drag over
 a canvas mints an offer from `DataTransfer.types` and its file items: the
 browser hides the data until the drop, so a hover reads only types, and
@@ -776,7 +843,7 @@ Chrome keeps delivering, and a session the runtime starts later in that press
 is refused as `DragError::Unavailable` so it stays in its window. A waiting
 session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
 `dropEffect` is the end it reports. A provider that panics at `dragstart` is
-contained and reported (`shared::html_drag_drop::serve_stored`), its session
+contained and reported (`drag::web::mapping::serve_stored`), its session
 ends `Cancelled` and the `dragstart` is cancelled, since no `dragend` follows a
 refused drag. Close restores the canvas's draggable attribute and ends a
 waiting or running session cancelled.
@@ -1203,7 +1270,7 @@ not before `run`. A session on a worker thread would also block on a
 on that worker. A thread per process costs one idle stack and removes all of
 this.
 
-The process-wide `clipboard_lock` stays: `arboard` sessions still open with a
+The process-wide `clipboard::lock` stays: `arboard` sessions still open with a
 `NULL` owner, and a `WindowsClipboard` session would be let in beside one.
 `OpenClipboard(NULL)` also leaves `SetClipboardData` without an owner to
 record, which Win32 documents as liable to fail; with an owner it is on the
@@ -2906,7 +2973,7 @@ backends report their initial table without presence changes yet.
 
 ### Every backend's haptics table is a pure function
 
-`shared::haptic_degradation` holds each backend's ADR-0210 §7 row as a cfg-free
+`haptics::degradation`, the haptics model, holds each backend's ADR-0210 §7 row as a
 function from the device's facts (OS version, API level, primitives, pen
 waveforms) to the native call and its `HapticOutcome`; the native backends call
 it, and Linux CI runs every row (`haptic_degradation_table`). A source the backend
@@ -3111,17 +3178,20 @@ action is that cached answer; a refused drop leaves instead. Formats map one to
 one (`CF_UNICODETEXT`, CF_HTML, `CF_HDROP`, `PNG` and a registered format per
 media type); the session identity travels as the format registered under its
 bare media type, with its parameters in the data, because Win32 cannot register
-a format per session. The cfg-free mapping, the byte layouts, the effect mapping
-and the drop source's decision live in `shared::ole_drag_drop`.
+a format per session. The mapping, the byte layouts, the effect mapping and the
+drop source's decision are the platform file's pure module,
+`drag::windows::crossing`, checked on every host; the COM side is the rest of
+`drag::windows`, its COM objects in `drag::windows::com`.
 
 A window's drag source starts the session the runtime asks for, but not inside
 the call. The host calls it once its outermost runtime callback ends, which is
 still inside the window's own callback drain; a modal loop there would queue the
 source window's input and frames until the drag ended. So the start records the
 request (one at a time; a second is refused with `DragError::Unavailable`) and
-posts `START_DRAG` to the owner window, whose procedure runs `DoDragDrop` on a
-fresh turn of the message loop; a request whose message never runs is told
-`Cancelled` when the platform goes. `DoDragDrop`'s loop follows the mouse
+posts `START_DRAG` to the owner window, whose procedure hands it to the
+transport's own `OwnerMessages` hook, which runs `DoDragDrop` on a fresh turn of
+the message loop; a request whose message never runs is told `Cancelled` when
+the owner window is destroyed (the hook's `destroyed`) or the platform goes. `DoDragDrop`'s loop follows the mouse
 alone, and a pen or touch contact the window takes as `WM_POINTER` is never
 promoted to mouse input, so it sets no mouse button in the key state the loop
 reads: a start whose contact is a pen or touch (by the window's pointer
@@ -3135,9 +3205,12 @@ are released and cancels on Escape or on another button.
 nothing else: while the pointer rests it dispatches no posted message, timer or
 paint, so the main loop's deadline delivery and a `WM_TIMER` would both stall.
 A pacing thread sends `MODAL_FRAME` to the owner window instead, which the
-loop's wait does dispatch; the owner delivers a due wake deadline as the main
-loop would (once per frame generation), sends `WM_PAINT` to every invalidated
-window with `UpdateWindow`, and answers how long to wait. The session's
+loop's wait does dispatch; the transport's hook asks the owner
+(`OwnerWindow::deliver_modal_frames`), which delivers a due wake deadline as the
+main loop would (once per frame generation), sends `WM_PAINT` to every
+invalidated window with `UpdateWindow`, and answers how long to wait by the
+owner's modal pace (`owner::modal_pace`, which `DefWindowProc`'s move
+and size loops share). The session's
 callbacks run with no `RefCell` borrow or lock held across a COM call or a
 dispatch: the provider is leased out of the data object while it runs, so a
 fetch from inside it is refused rather than reentered, and every COM method
@@ -3159,7 +3232,8 @@ callback closes), the deferred start through a real `DoDragDrop`, a second
 window's frames while the loop rests, a drop into a FLUI window through the
 real loop, woken by posted mouse moves rather than the system pointer, and
 `window_at` across two placed real windows.
-`ole_drag_drop_contracts` pins the cfg-free half everywhere. Not run: a drag to
+`ole_drag_drop_contracts` pins the pure half everywhere, and
+`the_modal_loop_waits_for_the_next_deadline_within_a_frame` the pace. Not run: a drag to
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
 
@@ -3182,10 +3256,10 @@ view's mirror; `text::android::ime::Mirror` turns each report into one edit agai
 snapshot the view holds, and the host replays it under an async lock, dropping one made on an
 older snapshot than it published last (`replay_current`). A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
-every key to the input method, so such a key is one it passed on. `drag::AndroidTransfer` is the
+every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DataTransferSource`: drags over the view mint offers from their
-`ClipDescription` (`shared::android_drag::offered`) and drops are answered from the cached
-feedback; `drag::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
+`ClipDescription` (`drag::android::clip::offered`) and drops are answered from the cached
+feedback; `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
 `ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
 window reports no drag source and `outgoing_drag()` `Unavailable`.
 
@@ -3200,8 +3274,8 @@ view reports of its editor (`EditorState`) is the view's own vocabulary. A pen t
 reads is offered to `InputMethod::pen_down`; stylus handwriting has not run on a device (the
 S21 has no S Pen).
 
-`android_ime_adapter` and `android_drag_mapping` (`src/text/android/ime/tests.rs`,
-`tests/android_drag.rs`) pin the pure halves in Linux CI, with the Android rows of
+`android_ime_adapter` (`src/text/android/ime/tests.rs`) and `android_drag_mapping` (beside
+`drag::android::clip`) pin the pure halves in Linux CI, with the Android rows of
 `backend_conformance` and `input_capabilities_contracts`. A run on a device
 covered the JNI half: a drag started there dropped on its own window, and the default
 keyboard composed, committed, passed Escape on while composing and sent its action key.

@@ -111,6 +111,7 @@ use winit::{
 };
 
 use flui_foundation::geometry::Point;
+use flui_platform::data_transfer::DataTransferSource;
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
@@ -121,9 +122,9 @@ use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(target_os = "linux")]
 use crate::platforms::linux::x11_window_probe::X11WindowProbe;
+use crate::platforms::winit::events as winit_events;
 use crate::platforms::winit::window::{WinitWindow, shell_of};
 use crate::platforms::winit::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, events as winit_events};
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
@@ -141,19 +142,21 @@ use flui_platform::{
 };
 
 pub(crate) mod control;
+mod file_drops;
 #[cfg(target_os = "linux")]
 mod session_end;
 mod system_sources;
 
+pub(crate) use file_drops::FileDrops;
 pub(crate) use system_sources::PreferenceStart;
 #[cfg(target_os = "linux")]
 pub(crate) use system_sources::{HostNoticeStart, HostNotices, PortalPreferences};
 
 /// What the winit host's table names for its owner thread (ADR-0151 §10): the
-/// displays the loop holds, the channel its system notices take, and the
-/// operating system's own sources winit lacks, which the loop starts as it
-/// runs, once its signal exists. The owner reaches them through the hooks and
-/// names no feature.
+/// displays the loop holds, the channel its system notices take, the clipboard
+/// and the drag-and-drop transport, and the operating system's own sources
+/// winit lacks, which the loop starts as it runs, once its signal exists. The
+/// owner reaches them through the hooks and names no feature.
 pub(crate) trait WinitHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to every window it opens.
@@ -169,6 +172,32 @@ pub(crate) trait WinitHost: 'static {
     /// memory pressure.
     #[cfg(target_os = "linux")]
     fn host_notices() -> Box<dyn HostNoticeStart>;
+
+    /// The clipboard, made once per loop: the loop holds it and answers the
+    /// table's clipboard position from it.
+    fn clipboard() -> Arc<dyn flui_platform::Clipboard>;
+
+    /// The drag-and-drop transport, made once per loop: the loop holds it,
+    /// answers the table's drag position from it and tells it of the files
+    /// winit reports dragged and dropped.
+    fn drag() -> Arc<dyn FileDrops>;
+}
+
+/// The clipboard position: the clipboard the host's [`WinitHost::clipboard`]
+/// made, which the loop holds.
+impl host::Clipboard<WinitLoop> for WinitLoop {
+    fn clipboard(owner: &WinitLoop) -> Arc<dyn flui_platform::Clipboard> {
+        owner.with_state(|state| Arc::clone(&state.clipboard))
+    }
+}
+
+/// The drag position: the transport the host's [`WinitHost::drag`] made,
+/// which the loop holds. Every answer is a clone of that one source (ADR-0038
+/// §2), so every id it mints stays redeemable at every clone.
+impl host::Drag<WinitLoop> for WinitLoop {
+    fn data_transfer(owner: &WinitLoop) -> Arc<dyn DataTransferSource> {
+        owner.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
+    }
 }
 
 /// The host's displays as the winit loop and the windows it opens reach them:
@@ -362,13 +391,13 @@ pub(crate) struct WinitLoopState {
     pub(crate) background_executor: Arc<BackgroundExecutor>,
 
     /// Clipboard
-    pub(crate) clipboard: Arc<ArboardClipboard>,
+    pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
 
     /// The one data-transfer source of this platform instance (ADR-0038):
-    /// constructed once here, cloned out by `Platform::data_transfer()`,
-    /// never reconstructed — it owns the single offer table, so ids stay
-    /// redeemable across every clone.
-    pub(crate) data_transfer: Arc<WinitDataTransfer>,
+    /// constructed once by the host's table, cloned out by
+    /// `Platform::data_transfer()`, never reconstructed — it owns the single
+    /// offer table, so ids stay redeemable across every clone.
+    pub(crate) data_transfer: Arc<dyn FileDrops>,
 
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
@@ -401,20 +430,10 @@ pub(crate) struct WinitLoopState {
 }
 
 impl WinitLoopState {
-    fn new() -> Self {
-        // Initialize clipboard (may fail in headless environments).
-        // `inert()` explicitly, not `default()`: init just failed, and
-        // `default()` would retry the same doomed backend init before
-        // falling back — the fallback for a KNOWN-failed init is the inert
-        // clipboard directly.
-        let clipboard = ArboardClipboard::new().map_or_else(
-            |err| {
-                tracing::warn!(?err, "Failed to initialize clipboard, using inert fallback");
-                Arc::new(ArboardClipboard::inert())
-            },
-            Arc::new,
-        );
-
+    fn new(
+        clipboard: Arc<dyn flui_platform::Clipboard>,
+        data_transfer: Arc<dyn FileDrops>,
+    ) -> Self {
         Self {
             native_pointer: winit_events::NativePointerState::default(),
             #[cfg(windows)]
@@ -424,7 +443,7 @@ impl WinitLoopState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
-            data_transfer: Arc::new(WinitDataTransfer::new()),
+            data_transfer,
             window_id_map: HashMap::new(),
             windows: HashMap::new(),
             active_window: None,
@@ -463,8 +482,8 @@ impl WinitLoopState {
 }
 
 impl WinitLoop {
-    /// A loop that has not run yet, over the displays, the notice channel and
-    /// the sources `H` makes.
+    /// A loop that has not run yet, over the displays, the notice channel, the
+    /// sources, the clipboard and the drag-and-drop transport `H` makes.
     pub(crate) fn new<H: WinitHost>() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
@@ -478,7 +497,7 @@ impl WinitLoop {
             preference_start: H::preferences(),
             #[cfg(target_os = "linux")]
             host_notice_start: H::host_notices(),
-            state: Arc::new(Mutex::new(WinitLoopState::new())),
+            state: Arc::new(Mutex::new(WinitLoopState::new(H::clipboard(), H::drag()))),
         };
         #[cfg(target_os = "linux")]
         platform

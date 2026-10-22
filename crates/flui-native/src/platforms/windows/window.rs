@@ -99,15 +99,15 @@ pub struct WindowsWindow {
     /// This window's UIA bridge, subclassed onto `hwnd` at construction so
     /// a UI Automation client that asks at any later point is answered.
     /// Inert until one does — see
-    /// [`WindowsAccessibility::new`](super::accessibility::WindowsAccessibility::new).
+    /// [`WindowsAccessibility::new`](crate::accessibility::windows::WindowsAccessibility::new).
     #[cfg(feature = "a11y")]
-    accessibility: Arc<super::accessibility::WindowsAccessibility>,
+    accessibility: Arc<crate::accessibility::windows::WindowsAccessibility>,
 
     /// This window's haptic actuator: the pen in range of it.
-    haptics: Arc<super::haptics::WindowsHaptics>,
+    haptics: Arc<crate::haptics::windows::WindowsHaptics>,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
-    drag_source: Arc<super::drag::Win32DragSource>,
+    drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
@@ -440,7 +440,7 @@ impl WindowsWindow {
         shares: crate::owner::windows::control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<super::drag::OleTransfer>,
+        drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let crate::owner::windows::control::OwnerShares {
             handlers,
@@ -576,7 +576,7 @@ impl WindowsWindow {
         scale_factor: f64,
         normal: Option<RECT>,
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
-        drag: Arc<super::drag::OleTransfer>,
+        drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
@@ -685,7 +685,7 @@ impl WindowsWindow {
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
-                handlers,
+                handlers: Rc::clone(&handlers),
                 exit_policy,
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
@@ -718,9 +718,13 @@ impl WindowsWindow {
                 cloak_watch: super::window_visibility::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
-                modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(Rc::clone(
-                    &frames,
-                )),
+                modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
+                    crate::owner::windows::modal_loop::ModalFrames::new(
+                        handlers,
+                        Arc::downgrade(&windows_map),
+                        Rc::clone(&frames),
+                    ),
+                ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),
@@ -748,9 +752,11 @@ impl WindowsWindow {
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
                 #[cfg(feature = "a11y")]
-                accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
-                haptics: super::haptics::WindowsHaptics::new(this),
-                drag_source: super::drag::Win32DragSource::new(drag, this),
+                accessibility: Arc::new(crate::accessibility::windows::WindowsAccessibility::new(
+                    hwnd,
+                )),
+                haptics: crate::haptics::windows::WindowsHaptics::new(this),
+                drag_source: drag.drag_source(this),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -1807,7 +1813,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform::drag::PlatformDragSource>)
+        Some(Arc::clone(&self.drag_source))
     }
 
     fn window_at(&self, position: Point<f64>) -> flui_platform::WindowAt {

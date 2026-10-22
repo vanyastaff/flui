@@ -7,20 +7,27 @@
 //! opens it defers.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
 
-use flui_foundation::{ClaimSlot, claim_slot};
+use flui_foundation::geometry::Point;
+use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::InMemoryClipboard;
+use flui_platform::data_transfer::{
+    DropFeedback, OfferTable, RepresentationDescriptor, TransferActions,
+};
+use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DragDouble, HeadlessWindowPolicy, MockWindow, TextStoreHostFactory, create_mock_window,
+    HeadlessWindowPolicy, MockWindow, TextStoreHostFactory, create_mock_window,
 };
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
@@ -66,10 +73,45 @@ pub struct HeadlessLoop {
     pub(crate) state: Arc<Mutex<HeadlessState>>,
 }
 
+/// What the simulated system keeps of drag and drop (ADR-0211): the offers it
+/// holds open and the session in flight. The loop holds it as it holds the
+/// rest of the simulated system; `drag::headless` plays the sessions over it
+/// and is the platform's one data-transfer source over it.
+#[derive(Default)]
+pub(crate) struct OsDrags {
+    pub(crate) table: OfferTable,
+    pub(crate) session: Option<OsDragSession>,
+    /// The providers behind offers still open at the system, by id, so a
+    /// target may fetch after the drop until it concludes it.
+    pub(crate) open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
+}
+
+/// One drag session in flight at the simulated system.
+pub(crate) struct OsDragSession {
+    pub(crate) representations: Arc<[RepresentationDescriptor]>,
+    pub(crate) allowed: TransferActions,
+    pub(crate) provider: Arc<OwnerSlot<OsDragProvider>>,
+    /// Told once how the session ended; absent for a drag from another
+    /// application.
+    pub(crate) on_end: Option<OwnerSlot<OsDragEndHook>>,
+    pub(crate) over: Option<DragOver>,
+}
+
+/// The window the simulated pointer is over.
+pub(crate) struct DragOver {
+    pub(crate) window: WindowId,
+    pub(crate) offer: DataTransferId,
+    pub(crate) feedback: DropFeedback,
+    pub(crate) position: Point<f64>,
+}
+
 pub(crate) struct HeadlessState {
-    /// The simulated OS drag session and the platform's one data-transfer
-    /// source (ADR-0211).
-    pub(crate) drag: Arc<DragDouble>,
+    /// What the simulated system keeps of drag and drop.
+    pub(crate) drags: Arc<Mutex<OsDrags>>,
+    /// When a window opened from now on may start a drag session at the
+    /// system; `None`, the default: its windows have no drag source
+    /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
+    pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
@@ -141,7 +183,8 @@ impl HeadlessLoop {
     /// channel.
     pub(crate) fn new<H: HeadlessHost>() -> Self {
         let state = HeadlessState {
-            drag: Arc::new(DragDouble::new()),
+            drags: Arc::default(),
+            os_drag_start: None,
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
@@ -183,11 +226,7 @@ impl HeadlessLoop {
             })),
             state: Arc::new(Mutex::new(state)),
         };
-        {
-            let mut state = platform.state.lock();
-            state.owner_signal = Arc::downgrade(&platform.signal);
-            state.drag.attach(Arc::downgrade(&platform.state));
-        }
+        platform.state.lock().owner_signal = Arc::downgrade(&platform.signal);
         platform
     }
 

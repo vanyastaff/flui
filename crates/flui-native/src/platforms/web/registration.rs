@@ -341,7 +341,7 @@ impl Drop for DeadlineTimer {
     }
 }
 
-pub(super) struct Registration {
+pub(crate) struct Registration {
     pub(super) accepting: Rc<Cell<bool>>,
     pub(super) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
@@ -389,7 +389,7 @@ impl Registration {
         timer
     }
 
-    pub(super) fn listen(
+    pub(crate) fn listen(
         &mut self,
         target: &web_sys::EventTarget,
         kind: &'static str,

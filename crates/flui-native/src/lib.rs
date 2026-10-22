@@ -29,6 +29,10 @@
 //!   ├─ lifecycle/           - Session end and system notices, one source per
 //!   │                         platform
 //!   │
+//!   ├─ clipboard/, drag/,   - A feature each: its model beside one file per
+//!   │  accessibility/,        platform
+//!   │  haptics/
+//!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │
 //!   └─ platforms/           - Concrete implementations
@@ -161,13 +165,13 @@
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
 // `platforms::winit`, the loops `owner::windows`, `owner::apple`, `owner::web`,
-// `owner::winit`, the display sources `display::windows::source`,
+// `owner::winit`, and the platform files of the features that call the OS
+// directly (the display sources `display::windows::source`,
 // `display::apple::{macos, ios}`, the text services `text::windows::tsf`,
-// `text::apple::macos`, `text::apple::ios`, and a preference or lifecycle
-// platform file that calls the OS itself, such as `preferences::windows`)
-// carries its own module-level `expect(unsafe_code)` where it is declared, and
-// the two
-// small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
+// `text::apple::macos`, `text::apple::ios`, and a preference or lifecycle file
+// such as `preferences::windows` among them) carries its own module-level
+// `#![expect(unsafe_code)]` where it is declared, and the two small
+// marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
 // a `# Safety` rustdoc section) stating the invariant that makes it sound.
@@ -178,11 +182,18 @@
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+pub(crate) mod accessibility;
+pub(crate) mod clipboard;
 pub mod config;
 mod display;
+pub(crate) mod drag;
 pub mod error;
+// Reachable for the backend conformance suite, which reads every backend's
+// haptics degradation table (`tests/backend_conformance.rs`); not API.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
+#[doc(hidden)]
+pub mod haptics;
 // Reachable so a crate outside can show that a table missing a position does
 // not compile (`tests/ui/host_table_names_every_position.rs`); not an embedding
 // API: nothing outside the crate can build a `HostPlatform`.
@@ -231,11 +242,14 @@ pub use platform::HostPlatform;
 #[cfg(target_os = "android")]
 pub use hosts::AndroidPlatform;
 // Re-export platform implementations
+pub use accessibility::headless::FakeAccessibility;
+pub use drag::headless::HeadlessDragAndDrop;
+pub use haptics::headless::FakeHaptics;
 pub use platforms::{
-    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
-    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
+    DisplayChange, DisplayChangeError, DisplaySpec, FakeSystemChrome, FakeTextInput,
+    HeadlessDeferredWindowOpens, HeadlessDisplayControls, HeadlessExitReevaluation,
+    HeadlessHostEvents, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPreferences,
+    HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

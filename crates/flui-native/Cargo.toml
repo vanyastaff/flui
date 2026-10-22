@@ -585,12 +585,12 @@ globals = [
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "platforms::macos::window::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
     { item = "platforms::macos::window::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
-    { item = "platforms::windows::clipboard::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
+    { item = "clipboard::windows::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
     { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
     { item = "owner::windows::WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "Windows' registration of FLUI's window class with the host whose hooks its procedure dispatches to: Windows holds the class, and the procedure it was registered with, once per process, so a second host is refused" },
     { item = "owner::winit::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
-    { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
-    { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
+    { item = "clipboard::lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
+    { item = "clipboard::lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
     { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]
 
@@ -599,7 +599,16 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = ["display", "text", "preferences", "lifecycle"]
+features = [
+    "display",
+    "text",
+    "preferences",
+    "lifecycle",
+    "clipboard",
+    "drag",
+    "accessibility",
+    "haptics",
+]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
@@ -622,4 +631,9 @@ exceptions = [
     { from = "text::web", to = "platforms::web::registration", exit = "ADR-0151", since = "2026-10-22", reason = "the textarea is named on the canvas's claim (`EditorSlot`) and listens through the registration's `Listener`; it goes when the registration becomes the window feature's (ADR-0151 §10)" },
     { from = "text::web", to = "platforms::web::window", exit = "ADR-0151", since = "2026-10-22", reason = "the textarea's focus is synced through the web window's `FocusSync`; it goes when the window becomes a feature directory (ADR-0151 §10)" },
     { from = "text::windows", to = "platforms::windows::platform", exit = "ADR-0151", since = "2026-10-22", reason = "TSF names its window by `WindowRef` and reads the window's context (its scale, where the connection is kept) through `with_window_context`; it goes when the window context becomes the window feature's (ADR-0151 §10)" },
+    { from = "drag::windows", to = "platforms::windows::platform", exit = "ADR-0151", since = "2026-10-22", reason = "the OLE drop target and drag source reach their window through `WindowRef` and its context (`drop_target`, `pointer_registry`, callbacks), widened to `pub(crate)` for it; it goes when the window becomes a feature directory and its handle moves where drag may name it (ADR-0151 §10)" },
+    { from = "drag::windows", to = "platforms::windows::events", exit = "ADR-0151", since = "2026-10-22", reason = "the OLE drag reads the mouse buttons' virtual keys from the input file's `MOUSE_BUTTONS`, widened to `pub(crate)` for it; it goes when input becomes a feature directory (ADR-0151 §10)" },
+    { from = "drag::web", to = "platforms::web::events", exit = "ADR-0151", since = "2026-10-22", reason = "the HTML drag answers its events and reads their position through the input file's `answer` and `pointer_position`, widened to `pub(crate)` for it; it goes when input becomes a feature directory (ADR-0151 §10)" },
+    { from = "drag::web", to = "platforms::web::registration", exit = "ADR-0151", since = "2026-10-22", reason = "the HTML drag listens through the canvas window's `Registration`, widened to `pub(crate)` for it; it goes when the window becomes a feature directory (ADR-0151 §10)" },
+    { from = "haptics::windows", to = "platforms::windows::platform", exit = "ADR-0151", since = "2026-10-22", reason = "the pen actuator reaches its window through `WindowRef`, widened to `pub(crate)` for it; it goes when the window becomes a feature directory and its handle moves where haptics may name it (ADR-0151 §10)" },
 ]

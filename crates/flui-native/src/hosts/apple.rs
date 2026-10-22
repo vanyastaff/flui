@@ -3,6 +3,12 @@
 
 use std::sync::Arc;
 
+#[cfg(all(target_os = "macos", feature = "a11y"))]
+use crate::accessibility::apple::MacosAccessibility;
+#[cfg(target_os = "ios")]
+use crate::clipboard::apple::IOSClipboard;
+#[cfg(target_os = "macos")]
+use crate::clipboard::apple::MacOSClipboard;
 #[cfg(target_os = "macos")]
 use crate::config::WindowConfiguration;
 #[cfg(target_os = "ios")]
@@ -10,6 +16,10 @@ use crate::display::apple::ios::IosDisplays;
 #[cfg(target_os = "macos")]
 use crate::display::apple::macos::MacosDisplays;
 use crate::error::PlatformError;
+#[cfg(target_os = "ios")]
+use crate::haptics::apple::IOSHaptics;
+#[cfg(target_os = "macos")]
+use crate::haptics::apple::MacHaptics;
 use crate::host::{Absent, Host, position};
 #[cfg(target_os = "macos")]
 use crate::lifecycle::apple::macos::SystemNoticeSources;
@@ -28,11 +38,9 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
-use crate::platforms::ios::{IOSClipboard, IOSHaptics, IOSSystemChrome, IOSWindow};
-#[cfg(all(target_os = "macos", feature = "a11y"))]
-use crate::platforms::macos::MacosAccessibility;
+use crate::platforms::ios::{IOSSystemChrome, IOSWindow};
 #[cfg(target_os = "macos")]
-use crate::platforms::macos::{MacHaptics, MacOSClipboard, MacOSWindow};
+use crate::platforms::macos::MacOSWindow;
 #[cfg(target_os = "ios")]
 use crate::preferences::apple::ios::IOSPreferences;
 #[cfg(target_os = "macos")]
@@ -77,7 +85,7 @@ impl Host for Apple {
     type Text = Absent<position::Text>;
 
     // The AppKit bridge exists with the `a11y` feature; UIKit windows hand out
-    // no accessibility.
+    // no accessibility yet.
     #[cfg(all(target_os = "macos", feature = "a11y"))]
     type Accessibility = MacosAccessibility;
     #[cfg(not(all(target_os = "macos", feature = "a11y")))]

@@ -57,9 +57,9 @@ pub struct WinitWindow {
     /// This window's AT-SPI announcement, created with the window so a
     /// screen reader that attaches at any later point finds it on the bus.
     /// Construction succeeds (and stays inert) with no session bus at all —
-    /// see [`UnixAccessibility::new`](crate::platforms::linux::UnixAccessibility::new).
+    /// see [`UnixAccessibility::new`](crate::accessibility::linux::UnixAccessibility::new).
     #[cfg(all(target_os = "linux", feature = "a11y"))]
-    accessibility: Arc<crate::platforms::linux::UnixAccessibility>,
+    accessibility: Arc<crate::accessibility::linux::UnixAccessibility>,
     /// The Settings portal's `color-scheme` as last delivered to this window.
     /// winit reports no theme on X11, nor on Wayland unless the app overrode
     /// it, so the portal is the Linux source.
@@ -227,7 +227,7 @@ impl WinitWindow {
             reported_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::owner::handlers::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
-            accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
+            accessibility: Arc::new(crate::accessibility::linux::UnixAccessibility::new()),
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,

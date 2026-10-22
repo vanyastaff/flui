@@ -82,7 +82,7 @@ use flui_platform::{
 };
 
 use crate::owner::watch::Watch;
-use crate::platforms::ios::{IOSClipboard, IOSWindow, LifecycleObservation};
+use crate::platforms::ios::{IOSWindow, LifecycleObservation};
 use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::UIScreen;
@@ -237,7 +237,6 @@ pub struct IOSLoop {
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
-    pub(crate) clipboard: Arc<IOSClipboard>,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -308,7 +307,6 @@ impl IOSLoop {
             identity,
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
-            clipboard: Arc::new(IOSClipboard::new()),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(),

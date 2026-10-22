@@ -14,12 +14,12 @@
 //!   level on, found by name when the platform is built;
 //! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
-//! Window, input, drag and haptics stay in `platforms::android`; the loop
-//! reaches them there. The displays, the text input, the preferences and the
-//! lifecycle are their features': the loop holds what they made through the
-//! hooks the host's table fills (`AndroidHost`), and the view serves several
-//! features, so what it hands a feature's state is named by the table, not by
-//! the view.
+//! Window, input and haptics stay in `platforms::android`; the loop reaches
+//! them there. The displays, the text input, the preferences, the lifecycle,
+//! the clipboard and drag and drop are their features': the loop holds what
+//! they made through the hooks the host's table fills (`AndroidHost`), and the
+//! view serves several features, so what it hands a feature's state is named
+//! by the table, not by the view.
 
 #[cfg(target_os = "android")]
 pub(crate) mod activity;
@@ -47,7 +47,7 @@ mod hooks {
     use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 
     use super::activity_callbacks::ActivityCallbacks;
-    use super::java_view::InputMethod;
+    use super::java_view::{InputMethod, JavaView, ViewTransfer};
     use super::ndk::SymbolSource;
     use crate::error::PlatformError;
     use crate::owner::notices::NoticeChannel;
@@ -57,10 +57,11 @@ mod hooks {
     use crate::shared::os_version::android::AndroidApi;
 
     /// What an Android host's table names for its owner thread (ADR-0151
-    /// §10): the displays, the preference source, the notice channel and the
-    /// meaning of the Activity's callbacks the loop holds, and the features'
-    /// objects `FluiView` hands what it reports. The owner reaches them
-    /// through the hooks and names no feature.
+    /// §10): the displays, the preference source, the notice channel, the
+    /// meaning of the Activity's callbacks, the clipboard and the
+    /// drag-and-drop transport the loop holds, and the features' objects
+    /// `FluiView` hands what it reports. The owner reaches them through the
+    /// hooks and names no feature.
     pub(crate) trait AndroidHost: 'static {
         /// What answers the input method's calls through a new view, one per
         /// view.
@@ -75,6 +76,16 @@ mod hooks {
             library: Arc<dyn SymbolSource>,
             owner: Weak<OwnerSignal>,
         ) -> Arc<dyn HostDisplays>;
+
+        /// The clipboard, made once per loop: the loop holds it and answers
+        /// the table's clipboard position from it.
+        fn clipboard() -> Arc<dyn flui_platform::Clipboard>;
+
+        /// The drag-and-drop transport of `view`, `FluiView`'s Rust side,
+        /// made as the view starts: the view hands it the drag events its
+        /// Java side reports, and the loop answers the table's drag position
+        /// from it.
+        fn transfer(view: Weak<JavaView>) -> Arc<dyn ViewTransfer>;
 
         /// The system preference source of `app`'s Activity at `api`, for the
         /// table's preference position; `signal` wakes the owner when a read

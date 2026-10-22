@@ -7,8 +7,6 @@
 // their own.
 #![expect(unsafe_code)]
 
-mod clipboard;
-mod data_transfer;
 pub(crate) mod events;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux_unreported;
@@ -16,6 +14,4 @@ mod positions;
 pub(crate) mod window;
 pub(crate) mod window_plan;
 
-pub use clipboard::ArboardClipboard;
-pub use data_transfer::WinitDataTransfer;
 pub use window::WinitWindow;

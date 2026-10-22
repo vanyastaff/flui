@@ -119,7 +119,7 @@ priority = 90
 # back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match
 # the filter too and are cheap to serialize). nextest runs each test in its own
 # process, so the in-process lock every clipboard session takes (`SessionLock`
-# in `src/shared/clipboard_lock.rs`, which covers plain `cargo test`) cannot
+# in `src/clipboard/lock.rs`, which covers plain `cargo test`) cannot
 # keep two of them apart here: one test's write would land between another's
 # write and read. The group runs them one at a time; everything else stays parallel.
 [[profile.default.overrides]]

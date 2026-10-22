@@ -19,7 +19,8 @@
 //! - ✅ Event loop integration
 //! - ✅ raw-window-handle for wgpu/Metal
 //! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
-//! - ✅ `NSPasteboard` clipboard, routed through the owner lane (`clipboard.rs`)
+//! - ✅ `NSPasteboard` clipboard, routed through the owner lane
+//!   (`clipboard/apple/macos.rs`)
 //! - ✅ IME composition via an `NSTextInputClient` conformance
 //!   (`crate::text::apple::macos`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
 //!   `keyDown:` is a gate, so one press reaches the application exactly once —
@@ -62,12 +63,8 @@
 // the module boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-#[cfg(feature = "a11y")]
-mod accessibility;
-mod clipboard;
 mod display_pass;
 mod events;
-mod haptics;
 mod liquid_glass;
 mod positions;
 pub(crate) mod view;
@@ -75,10 +72,6 @@ pub(crate) mod window;
 mod window_ext;
 mod window_tiling;
 
-#[cfg(feature = "a11y")]
-pub use accessibility::MacosAccessibility;
-pub use clipboard::MacOSClipboard;
-pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};

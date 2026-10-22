@@ -229,10 +229,11 @@ pub(crate) struct WindowContext {
     /// The window's registered OLE drop target; `None` when registration
     /// failed (the window then takes no drags) or after `WM_DESTROY`
     /// revoked it.
-    pub(super) drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
-    /// The platform's OLE transfer, which the window's drop target serves;
-    /// the window class's drop-target hook registers it from here.
-    pub(super) drag: Arc<super::drag::OleTransfer>,
+    pub(crate) drop_target:
+        RefCell<Option<windows_core::ComObject<crate::drag::windows::WindowDropTarget>>>,
+    /// The platform's drag-and-drop transport, which the window's drop target
+    /// serves; the window class's drop-target hook registers it from here.
+    pub(crate) drag: Arc<dyn crate::owner::windows::HostDrag>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -698,7 +699,7 @@ impl WindowProc {
 
                         // A drag over the window leaves it, and OLE no
                         // longer offers it one.
-                        super::drag::revoke_target(hwnd, &ctx.drop_target);
+                        crate::drag::windows::revoke_target(hwnd, &ctx.drop_target);
 
                         // Fire per-window on_close callback (FnOnce)
                         ctx.callbacks.dispatch_close();
