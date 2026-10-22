@@ -823,9 +823,9 @@ graph LR
   запускает для цикла, возвращается как `owner::watch::Watch` (`#[must_use]`), и цикл держит его до
   остановки, так что раскрутка не пропускает остановку: экранные уведомления AppKit и UIKit,
   слушатели браузера, обратный вызов частоты Android (`HostDisplays::observe` вместо
-  `watch_refresh_rate` и `stop_watching`; часы снимаются на потоке looper в конце цикла) и поток
+  `watch_refresh_rate` и `stop_watching`; наблюдение снимается на потоке looper в конце цикла) и поток
   соединения Linux под winit (`observe` вместо `stop()`; каскад `cfg` при остановке
-  `owner/winit.rs` ушёл). macOS держит часы в `NativeOwner<Watch>` (`owner/apple/native_owner.rs`,
+  `owner/winit.rs` ушёл). macOS держит наблюдение в `NativeOwner<Watch>` (`owner/apple/native_owner.rs`,
   был `owner/apple/ios/native_owner.rs`, теперь общий для обоих циклов): значение отпускается на
   главном потоке, где бы цикл ни упал, и `SAFETY` у `Send`/`Sync` `MacOSLoop` это называет.
   (2) headless — переделка вынужденная: на `main` цикл держал `HeadlessDisplays` из
@@ -905,20 +905,33 @@ graph LR
   (`platforms::linux::display::x11::tests::a_randr_reconfiguration_on_a_real_server_is_published`,
   `x11/tests.rs:164`, «the wake read the server again», left 1, right 0) — на ветке то же сообщение
   в той же строке.
-  Устройства. Galaxy S21 (Android 15, проба `flui create --template counter --local`): первый
-  снимок — `flui_native::display::android::source`, «revision=1 id=1 width=1080 height=2400
-  scale_factor=2.8125 refresh_period_us=8333»; с временно поднятым до `info` логом последующих
-  ревизий (правка не закоммичена): адаптивная частота 120 → 60 → 120 Гц (ревизии 2, 3: 16666 и
-  8333 мкс), поворот в ландшафт — ревизия 4, 2400×1080, id 1 тот же, обратно — ревизия 6,
-  1080×2400; Back — `Destroy`, «Android platform event loop finished»; `FATAL`, ANR и паник нет;
-  `accelerometer_rotation` и `user_rotation` восстановлены (1 и 0), снимок экрана с устройства
-  удалён. Web (панель браузера, проба с `platform/display` @ `1dd51754c`): окно 896×545 при dpr 1 →
-  600×500 при dpr 2 — страница переложена, холст 600×500, ошибок в консоли нет, как на `main` @
-  `0f52e4e32`; живая смена dpr не масштабирует буфер холста и на `main` (заведено отдельно, не эта
-  задача); перезагрузка при dpr 2 даёт 1200×1000. Не запускалось: `web_browser` и DOM-тесты
-  `tests/wasm32` — нужен ChromeDriver под Chrome 155, его здесь нет; `cross-typecheck` (нет `zig`;
-  job в CI); смена масштаба или разрешения на Windows — системная настройка, её не меняли, опора —
-  тесты; Mac и iPhone — в очереди vanyastaff/flui#1840.
+  Слияние `origin/main` @ `f4af625af` (фон холста по pixel ratio и фича `text`), merge-коммитом:
+  `features` = `display` и `text`, один ключ `retiring`, исключения обеих фич (11); один
+  `AndroidHost` с `input_method` и `displays`; таблицы Apple и winit берут текст из `text`, дисплеи —
+  из `display`; поведение фона холста не тронуто, только тип дисплеев окна
+  (`Arc<dyn HostDisplays>`). После слияния: `cargo fmt --check`; clippy `-p flui-native -p
+  flui-app --all-targets -D warnings` с `winit-backend` и без, Android, macOS (и с
+  `winit-backend,a11y`), iOS; nextest `-p flui-native` — 237 (1 пропущен), с `winit-backend` — 265;
+  `wasm-check`; `wasm-test` проходит, среди его тестов
+  `web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize`; `module-dag` (267
+  модулей, 2 фичи с 19 файлами платформ, 11 исключений) и самотест, `globals` и самотест,
+  `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`; WSL — clippy с
+  `winit-backend,a11y` и без, nextest headless — 171, под xvfb — 257 из 258 (тот же тест RandR).
+  Устройства. Galaxy S21 (Android 15, проба `flui create --template counter --local`, собрана со
+  слитой ветки; лог последующих ревизий и обратного вызова частоты временно поднят до `info`, правка
+  не закоммичена): обратный вызов частоты зарегистрирован через `Watch` и сообщает 8333333 →
+  16666666 → 8333333 нс; ревизии снимка 1–3 — 1080×2400 с периодом 8333, 16666 и 8333 мкс, поворот
+  в ландшафт — ревизия 4, 2400×1080, id 1 тот же, обратно — ревизия 5, 1080×2400; Back — «Destroy —
+  shutting down», «Android platform event loop finished», предупреждения «refresh-rate callback
+  outlived its thread» нет (наблюдение снято на потоке looper); `FATAL`, ANR и паник нет;
+  `accelerometer_rotation` и `user_rotation` восстановлены (1 и 0). Web (панель браузера, проба с
+  `platform/display` @ `1dd51754c`): окно 896×545 при dpr 1 → 600×500 при dpr 2 — страница
+  переложена, холст 600×500, ошибок в консоли нет, как на `main` @ `0f52e4e32`; живая смена dpr не
+  масштабировала буфер холста и на том `main` — это чинит слитый #1859, его тест проходит выше;
+  перезагрузка при dpr 2 давала 1200×1000. Не запускалось: `web_browser` — нужен ChromeDriver под
+  Chrome 155, его здесь нет; `cross-typecheck` (нет `zig`; job в CI); смена масштаба или
+  разрешения на Windows — системная настройка, её не меняли, опора — тесты; Mac и iPhone — в
+  очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
