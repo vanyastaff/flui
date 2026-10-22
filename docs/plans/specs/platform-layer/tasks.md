@@ -898,13 +898,13 @@ graph LR
   `winit-backend,a11y`), iOS lib (`DOCS_RS=1`); `module-dag` и самотест, `globals` и самотест,
   `file-length`, `markers`, `testing`, `docs-paths`, `checks`, `doc-strict`, `workspace`, `reach`.
   WSL Ubuntu 24.04: clippy `-p flui-native -p flui-app --all-targets` с `winit-backend,a11y` и без;
-  nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 170; с `winit-backend` под xvfb — 256 из 257,
-  падает `a_randr_reconfiguration_on_a_real_server_is_published`. База: `git archive 0f52e4e32`
-  (`main` до ветки), в WSL `xvfb-run -a cargo nextest run -p flui-native --features winit-backend
-  --locked` — те же 256 из 257 и тот же тест
-  (`platforms::linux::display::x11::tests::a_randr_reconfiguration_on_a_real_server_is_published`,
-  `x11/tests.rs:164`, «the wake read the server again», left 1, right 0) — на ветке то же сообщение
-  в той же строке.
+  nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 170. Под xvfb
+  `a_randr_reconfiguration_on_a_real_server_is_published` падал в WSL и на ветке, и на `main` @
+  `0f52e4e32` («the wake read the server again», left 1,
+  right 0) — артефакт WSLg: его `WAYLAND_DISPLAY` направлял источник дисплеев к компоновщику
+  WSLg, а не к Xvfb. С `WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` убранными, как на раннере CI, и
+  командой CI (`FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest
+  run -p flui-native --locked --all-features --no-fail-fast`) набор проходит без падений.
   Слияние `origin/main` @ `f4af625af` (фон холста по pixel ratio и фича `text`), merge-коммитом:
   `features` = `display` и `text`, один ключ `retiring`, исключения обеих фич (11); один
   `AndroidHost` с `input_method` и `displays`; таблицы Apple и winit берут текст из `text`, дисплеи —
@@ -916,7 +916,8 @@ graph LR
   `web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize`; `module-dag` (267
   модулей, 2 фичи с 19 файлами платформ, 11 исключений) и самотест, `globals` и самотест,
   `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`; WSL — clippy с
-  `winit-backend,a11y` и без, nextest headless — 171, под xvfb — 257 из 258 (тот же тест RandR).
+  `winit-backend,a11y` и без, nextest headless — 171; полный набор командой CI без
+  `WAYLAND_DISPLAY` — без падений, 20 прогонов подряд (и столько же на `main` @ `f4af625af`).
   Устройства. Galaxy S21 (Android 15, проба `flui create --template counter --local`, собрана со
   слитой ветки; лог последующих ревизий и обратного вызова частоты временно поднят до `info`, правка
   не закоммичена): обратный вызов частоты зарегистрирован через `Watch` и сообщает 8333333 →
