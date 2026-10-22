@@ -46,9 +46,14 @@ trait depends on `flui-platform` instead.
   named, dated exception whose `reason` says what removes it: the winit host's
   displays on Linux reading `display::linux` (until the native Linux host,
   ADR-0151 §11), and edges between the window's file and another feature's of
-  one platform (a window that builds another feature's window-level object, a
-  window that decodes with another feature's rule, a feature that reaches the
-  window's context, the features that share one AppKit or UIKit view).
+  one platform. Each of those goes one of three ways: a window that builds
+  another feature's window-level object gets it through the host table; a
+  feature that reaches into the window, or whose state of a window the window
+  keeps, keeps that state itself, keyed by the window's identity and set up
+  and dropped by its own window hooks; a window that reads a display,
+  preference or lifecycle fact with another feature's code gets the fact
+  through an owner hook. The features that share one AppKit or UIKit view
+  keep theirs until that view is an owner multiplexer they join.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
