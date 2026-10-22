@@ -379,11 +379,14 @@ trait depends on `flui-platform` instead.
     `owner::apple::ios::{SceneWindow, SceneWindows, SceneConsumer,
     SceneInstallation}` (a scene's window, made and driven by the scene
     delegate; the application's handler of `IOSSceneEvent`s, which carry the
-    window's installation, adapted by the window feature; what the loop
-    watches of an installation); `owner::android::ActivityWindow` (the
-    Activity's one window); `owner::winit::{LoopWindow, LoopWindows}` (the
-    loop numbers, registers and finishes each window, `LoopWindows::build`
-    only builds it from a `WindowSeed`); and `owner::headless::TrackedWindows`.
+    window's installation, adapted by the window feature, whose accepted
+    connection returns what the loop watches of that installation, so a
+    connection cannot leave the loop with nothing to publish or roll back);
+    `owner::android::ActivityWindow` (the Activity's one window);
+    `owner::winit::{LoopWindow, LoopWindows}` (the loop numbers, registers
+    and finishes each window, `LoopWindows::build` only builds it from a
+    `WindowSeed`, and `LoopWindows::take_unreported` names the X11 windows
+    the loop reads again); and `owner::headless::TrackedWindows`.
   - The Win32 window-thread affinity rules (`owner::hwnd_affinity`) are
     owner machinery: the owner control and the loop apply them as the
     window does; they sit beside the Win32 loop, under `cfg(any(windows,
@@ -395,12 +398,15 @@ trait depends on `flui-platform` instead.
   - What a window file still names of another feature, and what another
     feature's code names of the window, are the edges
     `[package.metadata.flui.modules] exceptions` lists: into `platforms/`,
-    and between the text and window files of one platform (a window builds
-    its text input and captures its text sizing; the text input reaches the
-    window that holds it). Each goes when that feature keeps its own
-    per-window state, keyed by the window's identity, set up by its window
-    hook's `created` and dropped when the window goes, and no longer reaches
-    the window's context.
+    into the accessibility, haptics and drag files, and between the text and
+    window files of one platform (a window builds its text input and
+    captures its text sizing; the text input reaches the window that holds
+    it). A window that builds or keeps another feature's object of a
+    window-level position keeps the edge until those positions reach the
+    window through the host table. The others go when that feature keeps its
+    own per-window state, keyed by the window's identity, set up by its
+    window hook's `created` and dropped when the window goes, and no longer
+    reaches the window's context.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
