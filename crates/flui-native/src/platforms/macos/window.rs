@@ -48,7 +48,8 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use super::{display::MacosDisplays, view};
+use super::view;
+use crate::display::apple::macos::MacosDisplays;
 use crate::{
     config::WindowConfiguration, owner::OpenWindowError, owner::handlers::WindowCallbacks,
     shared::window_state::WindowStateCell,
@@ -510,7 +511,10 @@ impl MacOSWindow {
                         cocoa_frame(at, size, height)
                     }
                     // Without a position the top-left corner stays where it is.
-                    _ => cocoa_frame_keeping_top(super::display::bounds_of(current), size),
+                    _ => cocoa_frame_keeping_top(
+                        crate::display::apple::macos::bounds_of(current),
+                        size,
+                    ),
                 };
                 let _: () = msg_send![
                     ns_window,
@@ -2409,8 +2413,9 @@ impl MacOSWindow {
                 };
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 let mode = mode_of(flags);
-                let position = primary_screen_height()
-                    .and_then(|height| top_left_of_frame(super::display::bounds_of(frame), height));
+                let position = primary_screen_height().and_then(|height| {
+                    top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                });
                 WindowState::new(
                     WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
                     Size::new(content.size.width, content.size.height),
@@ -2463,7 +2468,7 @@ impl MacOSWindow {
                 let frame: NSRect = msg_send![self.ns_window, frame];
                 WindowGeometry::new(
                     primary_screen_height().and_then(|height| {
-                        top_left_of_frame(super::display::bounds_of(frame), height)
+                        top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
                     }),
                     Size::new(frame.size.width, frame.size.height),
                 )

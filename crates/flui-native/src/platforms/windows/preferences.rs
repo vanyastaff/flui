@@ -46,7 +46,7 @@ struct Invalidation {
     pending: AtomicBool,
     signal: Weak<OwnerSignal>,
     /// The monitors a display message invalidates.
-    displays: Arc<super::display::WindowsDisplays>,
+    displays: Arc<crate::display::windows::WindowsDisplays>,
 }
 
 impl Invalidation {
@@ -149,7 +149,7 @@ impl PreferenceSource {
     /// changes, and invalidates `displays` when the displays do.
     pub(crate) fn new(
         signal: &Arc<OwnerSignal>,
-        displays: &Arc<super::display::WindowsDisplays>,
+        displays: &Arc<crate::display::windows::WindowsDisplays>,
     ) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.

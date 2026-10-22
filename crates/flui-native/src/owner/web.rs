@@ -33,9 +33,8 @@ use crate::{
 };
 use flui_platform::{WindowEvent, WindowId};
 
-use crate::platforms::web::{
-    DisplayObservers, PageObservers, WebClipboard, WebDisplays, WebPreferences, WebTransfer,
-};
+use crate::display::web::{DisplayObservers, WebDisplays};
+use crate::platforms::web::{PageObservers, WebClipboard, WebPreferences, WebTransfer};
 use executor::WebExecutor;
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure

@@ -93,7 +93,7 @@ pub(crate) struct OwnerControlContext {
     window_hooks: super::WindowHooks,
     /// Where system notices go; see [`SystemNotices`].
     notices: Arc<SystemNotices>,
-    displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+    displays: Arc<crate::display::windows::WindowsDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -131,7 +131,7 @@ pub(crate) struct OwnerShares {
     pub(crate) notices: Arc<SystemNotices>,
     /// The platform's monitors; a window invalidates them on a DPI change and
     /// names its display through them.
-    pub(crate) displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+    pub(crate) displays: Arc<crate::display::windows::WindowsDisplays>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(crate) exit_policy: ExitPolicyRequest,
@@ -206,7 +206,7 @@ impl OwnerControl {
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
         drag: Arc<crate::platforms::windows::drag::OleTransfer>,
-        displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+        displays: Arc<crate::display::windows::WindowsDisplays>,
         notices: Arc<SystemNotices>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {

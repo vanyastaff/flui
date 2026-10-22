@@ -203,7 +203,7 @@ fn hosted_receiver() -> (
         accepting: AtomicBool::new(true),
         pending: AtomicBool::new(false),
         signal: Weak::new(),
-        displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+        displays: Arc::new(crate::display::windows::WindowsDisplays::new()),
     });
     let receiver = Receiver::new([
         Rc::new(PreferenceBroadcasts(invalidation)) as Rc<dyn Subscriber>,
@@ -290,7 +290,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
         accepting: AtomicBool::new(true),
         pending: AtomicBool::new(false),
         signal: Arc::downgrade(&signal),
-        displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+        displays: Arc::new(crate::display::windows::WindowsDisplays::new()),
     });
     let receiver = Receiver::new([
         Rc::new(PreferenceBroadcasts(Arc::clone(&invalidation))) as Rc<dyn Subscriber>
@@ -351,7 +351,7 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
 /// while a successor still wakes.
 fn a_delegate_that_outlives_its_source_is_inert() {
     let (signal, wakes) = counting_signal();
-    let displays = Arc::new(crate::platforms::windows::display::WindowsDisplays::new());
+    let displays = Arc::new(crate::display::windows::WindowsDisplays::new());
     let source = PreferenceSource::new(&signal, &displays).expect("native source");
     // What each WinRT delegate captures.
     let kept = Arc::clone(&source.invalidation);

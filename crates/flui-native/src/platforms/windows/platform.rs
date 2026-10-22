@@ -30,11 +30,11 @@ use windows::Win32::{
 };
 
 use super::{
-    display::WindowsDisplays,
     events::{get_x_lparam, get_y_lparam},
     text_services::TextServices,
     window::{NativeMode, WindowsWindow},
 };
+use crate::display::windows::WindowsDisplays;
 use crate::owner::call_point::{Field, call};
 use crate::owner::windows::{
     WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
@@ -59,10 +59,6 @@ use keystroke_queue::{
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
 mod preference_retry_tests;
-
-#[cfg(test)]
-#[path = "platform/display_message_tests.rs"]
-mod display_message_tests;
 
 /// One window as an object that outlives its borrow of the window names it:
 /// the handle and the identity of the context created with it. The OS
@@ -1175,7 +1171,7 @@ impl WindowProc {
                     // the monitor is checked once the move has landed.
                     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
                     if let Some(ctx) = ctx {
-                        let monitor = super::display::nearest_monitor(hwnd);
+                        let monitor = crate::display::windows::source::nearest_monitor(hwnd);
                         if ctx.last_monitor.replace(monitor) != monitor {
                             ctx.callbacks.dispatch_display_changed();
                         }

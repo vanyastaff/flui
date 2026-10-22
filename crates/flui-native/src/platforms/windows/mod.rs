@@ -16,7 +16,6 @@ mod accessibility;
 mod appearance;
 mod clipboard;
 mod direct_manipulation;
-pub(crate) mod display;
 pub(crate) mod drag;
 mod events;
 mod haptics;
@@ -37,7 +36,7 @@ pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
 // The types the Windows host's table names: public where they are defined (a
 // table names only public types), and nameable only inside the crate.
-pub(crate) use display::WindowsDisplays;
+pub(crate) use crate::display::windows::WindowsDisplays;
 pub(crate) use drag::OleTransfer;
 pub(crate) use haptics::WindowsHaptics;
 pub(crate) use host_events::HostEvents;

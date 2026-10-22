@@ -68,7 +68,7 @@ pub struct AndroidWindow {
     /// The night mode last reported to `on_appearance_changed`, which
     /// `appearance` returns.
     appearance: Arc<Mutex<WindowAppearance>>,
-    displays: Arc<super::display::AndroidDisplays>,
+    displays: Arc<crate::display::android::AndroidDisplays>,
     /// The last refresh-rate request, applied again to every native window that
     /// replaces the one it was made on.
     frame_rate_hint: Arc<Mutex<FrameRateHint>>,
@@ -91,7 +91,7 @@ impl AndroidWindow {
         activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::owner::signal::OwnerSignal>,
         java_view: Arc<JavaView>,
-        displays: Arc<super::display::AndroidDisplays>,
+        displays: Arc<crate::display::android::AndroidDisplays>,
         api: AndroidApi,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
@@ -411,7 +411,7 @@ pub(crate) struct ActivityFlags {
 /// display with no frame, title or position of its own.
 fn sample_state(
     app: &AndroidApp,
-    displays: &super::display::AndroidDisplays,
+    displays: &crate::display::android::AndroidDisplays,
     activity: &ActivityFlags,
 ) -> WindowState {
     let (width, height) = native_extent(app);

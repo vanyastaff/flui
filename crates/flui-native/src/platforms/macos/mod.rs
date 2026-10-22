@@ -65,7 +65,6 @@
 #[cfg(feature = "a11y")]
 mod accessibility;
 mod clipboard;
-pub(super) mod display;
 mod display_pass;
 mod events;
 mod haptics;
@@ -80,10 +79,10 @@ mod window;
 mod window_ext;
 mod window_tiling;
 
+pub(crate) use crate::display::apple::macos::{MacosDisplays, ScreenObserver};
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
-pub(crate) use display::{MacosDisplays, ScreenObserver};
 pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub(crate) use preferences::{PreferenceObservers, PreferenceSource};

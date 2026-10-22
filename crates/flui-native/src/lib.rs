@@ -167,6 +167,7 @@
 #![deny(missing_docs)]
 
 pub mod config;
+mod display;
 pub mod error;
 mod text_sizing;
 pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};

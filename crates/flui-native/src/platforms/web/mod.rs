@@ -19,11 +19,8 @@ compile_error!(
 );
 
 mod clipboard;
-mod display;
-mod display_events;
 mod drag;
 mod events;
-mod features;
 mod haptics;
 mod page_events;
 mod preferences;
@@ -32,8 +29,6 @@ mod text_input;
 mod window;
 
 pub(crate) use clipboard::WebClipboard;
-pub(crate) use display::WebDisplays;
-pub(crate) use display_events::DisplayObservers;
 pub(crate) use drag::WebTransfer;
 pub(crate) use haptics::WebHaptics;
 pub(crate) use page_events::PageObservers;

@@ -583,7 +583,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 .expect("live owner signal");
             let source = crate::platforms::windows::preferences::PreferenceSource::new(
                 &signal,
-                &Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+                &Arc::new(crate::display::windows::WindowsDisplays::new()),
             )
             .expect("native source construction");
             assert!(

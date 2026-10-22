@@ -6,16 +6,20 @@
 //! - `java_view`: `FluiView`, the Java side, and the queue of what it
 //!   reported since the loop's last turn (ADR-0247);
 //! - [`ndk`]: the API level and the NDK functions that exist only from a given
-//!   level on, found by name when the platform is built.
+//!   level on, found by name when the platform is built;
+//! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
-//! Window, input, text, display, drag, haptics and preferences stay in
-//! `platforms::android`; the loop reaches them there.
+//! Window, input, text, drag, haptics and preferences stay in
+//! `platforms::android`; the loop reaches them there. The displays are the
+//! `display` feature's, which the loop holds through the hook the host's table
+//! fills.
 
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]
 mod looper;
 pub(crate) mod ndk;
+pub(crate) mod poll;
 
 #[cfg(target_os = "android")]
 pub(crate) use looper::AndroidLoop;

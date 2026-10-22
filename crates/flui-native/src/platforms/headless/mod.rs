@@ -1,6 +1,5 @@
 //! Headless platform implementation for testing
 
-mod display;
 mod drag;
 mod platform;
 
@@ -8,8 +7,8 @@ mod window_policy;
 
 pub use drag::HeadlessDragAndDrop;
 
-pub(crate) use display::HeadlessDisplays;
-pub use display::{DisplayChange, DisplayChangeError, DisplaySpec};
+pub(crate) use crate::display::headless::HeadlessDisplays;
+pub use crate::display::headless::{DisplayChange, DisplayChangeError, DisplaySpec};
 pub(crate) use drag::DragDouble;
 pub use platform::{
     FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDisplayControls,

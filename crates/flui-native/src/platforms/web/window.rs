@@ -21,10 +21,8 @@ use flui_platform::{
     WindowMode, WindowOptions, WindowState,
 };
 
-use super::{
-    display::WebDisplays,
-    registration::{CanvasClaim, Registration, effective_focus},
-};
+use super::registration::{CanvasClaim, Registration, effective_focus};
+use crate::display::web::WebDisplays;
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {

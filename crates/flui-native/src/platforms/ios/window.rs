@@ -40,15 +40,15 @@ use flui_platform::{
     WindowState,
 };
 
-use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
 use super::status_bar::FluiViewController;
-use crate::owner::apple::ios::NativeOwner;
-use crate::owner::handlers::WindowCallbacks;
-use crate::shared::apple_display_identity::change_screen;
-use crate::shared::display_link_rate::{
+use crate::display::apple::change_screen;
+use crate::display::apple::ios::{IosDisplays, ScreenIdentity};
+use crate::display::apple::link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
 };
+use crate::owner::apple::ios::NativeOwner;
+use crate::owner::handlers::WindowCallbacks;
 use crate::shared::os_version::Since;
 use crate::shared::window_state::WindowStateCell;
 use flui_platform::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};

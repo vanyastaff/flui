@@ -225,8 +225,8 @@ mod tests {
         use flui_foundation::geometry::Size;
         use flui_platform::{WindowGeometry, WindowState};
 
-        use super::super::display_source::DisplaySource;
         use super::super::window_state::WindowStateCell;
+        use crate::display::source::DisplaySource;
 
         let displays = Arc::new(DisplaySource::new());
         displays

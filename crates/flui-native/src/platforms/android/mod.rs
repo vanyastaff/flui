@@ -6,7 +6,6 @@
 //! Activity through it.
 
 mod clipboard;
-mod display;
 pub(crate) mod drag;
 mod gesture_exclusion;
 mod haptics;
@@ -19,8 +18,8 @@ mod text_input;
 pub(crate) mod text_sizing;
 pub mod window;
 
+pub(crate) use crate::display::android::AndroidDisplays;
 pub use clipboard::MockClipboard;
-pub(crate) use display::AndroidDisplays;
 pub(crate) use drag::AndroidTransfer;
 pub(crate) use haptics::AndroidHaptics;
 pub(crate) use input::AndroidInputState;

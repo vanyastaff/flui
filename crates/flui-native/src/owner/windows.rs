@@ -58,8 +58,9 @@ use windows::{
     core::{PCWSTR, w},
 };
 
+use crate::display::windows::WindowsDisplays;
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
-use crate::platforms::windows::{display::WindowsDisplays, platform::WindowMap};
+use crate::platforms::windows::platform::WindowMap;
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
     owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers, platform::Platform,

@@ -24,8 +24,8 @@ use winit::{
 
 #[cfg(target_os = "linux")]
 use super::super::linux::x11_window_probe::X11WindowProbe;
-use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell};
+use crate::display::winit::WinitDisplaySource;
 use crate::host_window::HostWindow;
 use crate::owner::winit::control::ControlSender;
 use crate::shared::window_state::{WindowStateCell, mode_of};

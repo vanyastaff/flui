@@ -22,8 +22,8 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInpu
 use flui_platform::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
-use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
+use crate::display::headless::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use crate::host::{self, Host};
 use crate::owner::call_point::{Field, call, install};
 use crate::owner::headless::{HeadlessLoop, HeadlessState, consult_exit_policy, emit_window_event};

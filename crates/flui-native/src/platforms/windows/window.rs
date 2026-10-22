@@ -79,7 +79,7 @@ pub struct WindowsWindow {
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
     /// The platform's monitors, by which this window names its display.
-    displays: Arc<super::display::WindowsDisplays>,
+    displays: Arc<crate::display::windows::WindowsDisplays>,
 
     /// The published window state (ADR-0237), shared with the window's
     /// owner-thread context, which refreshes it from the window messages.
@@ -484,7 +484,7 @@ impl WindowsWindow {
     /// fullscreen, the rectangle it returns to (screen coordinates).
     fn create_native(
         options: &WindowOptions,
-        displays: &super::display::WindowsDisplays,
+        displays: &crate::display::windows::WindowsDisplays,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
@@ -567,7 +567,7 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
-        displays: Arc<super::display::WindowsDisplays>,
+        displays: Arc<crate::display::windows::WindowsDisplays>,
         notices: Arc<crate::shared::system_notice::SystemNotices>,
         config: crate::config::WindowConfiguration,
         identity: crate::owner::windows::WindowIdentity,

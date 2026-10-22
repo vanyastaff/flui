@@ -1,12 +1,12 @@
 //! The web host: a canvas in the browser page, on the browser's own event loop.
 
+use crate::display::web::WebDisplays;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
 use crate::owner::web::WebLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
-    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebPreferences, WebTextInput,
-    WebTransfer, WebWindow,
+    PageObservers, WebClipboard, WebHaptics, WebPreferences, WebTextInput, WebTransfer, WebWindow,
 };
 use crate::storage::UserDataDirs;
 

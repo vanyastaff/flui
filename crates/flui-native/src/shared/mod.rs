@@ -38,11 +38,6 @@ pub mod android_drag;
 pub mod android_ime;
 // Rule module; consumers: the Android and web backends' text input.
 #[doc(hidden)]
-pub mod ime_text;
-// Rule module; consumer: the Android backend.
-#[cfg(any(target_os = "android", test))]
-pub(crate) mod android_display;
-#[doc(hidden)]
 pub mod android_keys;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_lifecycle;
@@ -50,6 +45,8 @@ pub(crate) mod android_lifecycle;
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;
+#[doc(hidden)]
+pub mod ime_text;
 // Rule module; consumer: the Android preference source.
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_contrast;
@@ -71,22 +68,6 @@ pub(crate) mod platform_floor;
 // The running OS version of each environment and the gates above its floor (ADR-0244).
 #[cfg(any(windows, target_os = "android", target_os = "ios", test))]
 pub(crate) mod os_version;
-// The id registry and last snapshot every native display source keeps.
-#[cfg(any(
-    windows,
-    target_os = "android",
-    target_os = "ios",
-    target_os = "macos",
-    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
-    target_arch = "wasm32",
-    test
-))]
-pub(crate) mod display_source;
-// The keys the macOS and iOS display sources give a screen, the iOS version
-// check and frame-rate request, and the period a display link publishes; `test`
-// keeps these pure rules checked on every host.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
-pub(crate) mod apple_display_identity;
 // What the AppKit window reports and is asked, as pure rules; `test` keeps them
 // checked on every host.
 #[cfg(any(target_os = "macos", test))]
@@ -95,8 +76,6 @@ pub(crate) mod appkit_window_geometry;
 pub(crate) mod appkit_window_mode;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod dispatch_memory_pressure;
-#[cfg(any(target_os = "ios", test))]
-pub(crate) mod display_link_rate;
 pub mod events;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
@@ -157,14 +136,6 @@ pub mod html_drag_drop;
 // Rule module; consumer: the web backend's text input.
 #[doc(hidden)]
 pub mod web_text;
-// The macOS source turns its current-mode rate into a snapshot period here;
-// `test` keeps the rule checked on every host.
-#[cfg(any(target_os = "macos", test))]
-pub(crate) mod display_period;
-// The Windows display source reads rates and resolves monitors by these rules;
-// `test` keeps them checked on every host.
-#[cfg(any(windows, test))]
-pub(crate) mod windows_display;
 // The Win32 backend turns window limits, system messages and the low-memory
 // event into notices by these rules; `test` keeps them checked on every host.
 #[cfg(any(windows, test))]
@@ -173,17 +144,6 @@ pub(crate) mod windows_host_messages;
 pub(crate) mod windows_memory_watch;
 #[cfg(any(windows, test))]
 pub(crate) mod windows_window_limits;
-// The browser's display rules: the refresh estimate from animation-frame
-// timestamps, the pixel-ratio query, screen identity and feature detection. The
-// Web backend consumes them; `test` keeps the rules checked on every host.
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) mod dppx_query;
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) mod refresh_estimate;
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) mod screen_identity;
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) mod web_feature;
 // UIKit consumes this acknowledgement and `flui-app` names it; its transport
 // contract runs on every host.
 pub mod window_installation;
