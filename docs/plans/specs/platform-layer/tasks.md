@@ -534,6 +534,99 @@ graph LR
   дефект до LY26, не исправленный здесь: в `SystemNotices::dispatch` уведомление из другого потока
   между выходом из цикла и сбросом `delivering` ждёт следующего уведомления — чинится отдельной
   задачей вне серии.
+- [x] **LY27** — ветка `platform/owner-loops`. Цикл каждой платформы — модуль `owner/` (тела
+  перенесены без правок, кроме путей, `use` и видимости; `git mv`, где файл переезжает целиком;
+  публичные пути не изменились, changelog не нужен). Windows: `windows/platform.rs` разделён —
+  цикл сообщений, `WindowsLoop`, `WindowIdentity`, класс окна и его сырая процедура → `owner/windows.rs`
+  (1 431 строка), контекст окна, шлюзы `with_window_context`/`teardown_route` и тело процедуры
+  остаются в `platforms/windows/platform.rs` (1 659) до LY28; `platform/{wake_deadline,
+  modal_frame_tests}.rs`, `modal_loop.rs`, `com_apartment.rs` → `owner/windows/`;
+  `owner_control.rs` и `owner_control/wake.rs` → `owner/windows/control.rs`, `control/wake.rs`;
+  `preferences/receiver.rs` → `owner/windows/broadcast.rs`; `util.rs` удалён: класс и курсор — в
+  `owner/windows.rs`, `get_x/y_lparam` — в `events.rs`, `hiword` — в `platform.rs`, пересчёт в
+  device-пиксели и `USER_DEFAULT_SCREEN_DPI` — в `window_placement.rs`, `SIZE_*` читаются из
+  `shared::visibility`, шесть мёртвых функций удалены. Apple: `owner/apple.rs` (корень),
+  `macos/platform.rs` → `owner/apple/macos.rs` (454) и `macos/{loop_control,owner_lane,wake_pump}.rs`
+  → `owner/apple/macos/`, `ios/platform.rs` → `owner/apple/ios.rs` (1 307) и
+  `ios/{native_owner,scene,executor}.rs` → `owner/apple/ios/`; реализации позиций, которые лежали в
+  файлах цикла (окно, дисплеи, предпочтения macOS; окно, дисплеи, буфер обмена, предпочтения iOS),
+  — в `platforms/{macos,ios}/positions.rs`, как у winit (иначе `macos/window.rs` превысил бы 3 000);
+  `IOSSceneEvent`, `IOSSceneSessionId`, `IOSSceneAttachmentId`, `IOSExecutor` реэкспортирует
+  `platforms::ios`. Android: `android/mod.rs` → `owner/android/looper.rs` (1 198; новый
+  `platforms/android/mod.rs` — корень фич, 29 строк), `java_view.rs` → `owner/android/java_view.rs`,
+  `shared/android_ndk.rs` → `owner/android/ndk.rs`; `owner::android` собирается под
+  `cfg(any(target_os = "android", test))`, чтобы тесты `ndk` шли на хосте; `MockClipboard` —
+  `platforms/android/clipboard.rs`. Путь `include_bytes!` не изменился (глубина каталога та же),
+  `android_dex.rs` теперь называет встраивающий файл (`EMBEDDER`) и требует, чтобы единственный
+  `include_bytes!` в нём вёл к `android/classes.dex`. Web: `web/platform.rs` → `owner/web.rs` (409),
+  `listener.rs`, `executor.rs` → `owner/web/`. winit: `winit/platform.rs` → `owner/winit.rs` (2 764
+  production-строки из 2 997), `control.rs` и `platform/real_loop_tests.rs` → `owner/winit/`;
+  `platform/positions.rs` и `platform/linux_notices.rs` (фичи) → `platforms/winit/`. headless: ходы
+  владельца (`HeadlessLoop`, `HeadlessState`, `TestExecutor`, `HeadlessOwnerTurns`,
+  `HeadlessExitReevaluation`, `HeadlessDeferredWindowOpens`, отложенные хуки владельца, три ручки
+  `HostPlatform`) → `owner/headless.rs` (773); двойники фич остаются в `headless/platform.rs` (1 735).
+  `redraw_poll.rs` → `owner/redraw_poll.rs`. Трейты-хуки: (1) `owner::windows::WindowMessages: Sync`
+  — `fn created(&self, &CreatedWindow)` и `unsafe fn message(&self, HWND, u32, WPARAM, LPARAM) ->
+  Option<LRESULT>` (оба с пустым умолчанием); сырая процедура держит границу паники, предлагает
+  сообщение хукам по порядку, неотвеченное уходит в `DefWindowProcW`. Реализуют
+  `platforms::windows::WindowProc` (прежнее тело процедуры, отвечает на всё: окно, ввод, текст,
+  drag, lifecycle; LY28–LY33 делят его по фичам) и `platforms::windows::Touchpad` (`created`
+  создаёт viewport DirectManipulation — прежде прямой вызов из `install_native`, порядок
+  создания тот же: TSF, drop target, viewport, показ). Регистрирует `hosts/windows.rs`:
+  `const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad]` → `WindowsLoop::with_config(config,
+  hooks)`; хранятся в `static CLASS_HOOKS: OnceLock<WindowHooks>` (класс Win32 и его процедура — на
+  процесс; запись `globals`, класс `immutable`); класс регистрирует только цикл, а `with_config`
+  ставит хуки раньше, так что `expect` в процедуре недостижим. (2) `owner::windows::broadcast::Subscriber` — `attach`, `detach`
+  (пустые по умолчанию) и `message(&self, HWND, u32, WPARAM, LPARAM) -> Option<LRESULT>`; приёмник
+  отвечает сам на `WM_NCCREATE`/`WM_NCDESTROY`/`WM_CLOSE`, остальное говорит подписчикам по порядку,
+  пока один не ответит, держа их `Rc<[…]>`, а не заём контекста. Реализуют `Invalidation`
+  предпочтений (`WM_SETTINGCHANGE` с `SPI_SETWORKAREA`, `WM_DISPLAYCHANGE`: предпочтения и
+  дисплеи) и `HostEvents` lifecycle; подключает владелец приёмника — `PreferenceSource::with_host`
+  (тот же источник winit на Windows строит без lifecycle), lifecycle передаёт ему
+  `owner/windows/control.rs`; не `hosts/windows.rs`: подписчики — объекты контекста владельца, а не
+  типы таблицы. Что `owner/` ещё называет по имени (строка хука не требует): состояние фич,
+  которое держит цикл, пока фича его не заберёт (LY28–LY33) — у Win32 `WindowMap`/`WindowsWindow`,
+  `WindowsDisplays`, `OleTransfer`, `PreferenceSource`, `HostEvents` в контексте владельца;
+  процедура окна владельца диспетчирует `START_DRAG`/`MODAL_FRAME` drag по имени;
+  `redraw_deadline_windows` и `modal_loop` (`impl WindowContext`) читают контекст окна; Apple —
+  окна, дисплеи, предпочтения, наблюдатели и источники уведомлений macOS, `IOSWindow` (сцены),
+  `IosDisplays`, `IOSPreferences`, `IOSClipboard`; Android — окно, ввод, текст, дисплеи,
+  предпочтения, память, drag, а `java_view` (мультиплексор колбэков `FluiView`) — drag и
+  `preferences::with_activity`; Web — буфер обмена, дисплеи, предпочтения, drag, наблюдатели;
+  winit — окна, перевод ввода, источники дисплеев и предпочтений (в т. ч. Win32 и macOS),
+  `linux_notices`; headless — `MockWindow`, `create_mock_window`, `DragDouble`, `HeadlessDisplays`.
+  Решения: (1) `owner/<os>` — корень и подмодули, а не один файл: переносы остаются
+  переименованиями, `owner/windows` и `owner/winit` укладываются в 3 000; (2) `globals`: место
+  трамплина — платформа, её каталог в `platforms/` или модуль в `owner/` (группа `apple` раскрыта в
+  `macos`/`ios`), по-прежнему один на платформу; ADR-0097 исправлен, самотест — новые строки
+  `trampoline_limits`; (3) `Receiver::new(first, then)` сохраняет вызовы тестов приёмника;
+  (4) `WindowsLoop::new` удалён: таблица строит цикл через `with_config`; (5) маркеры `US2`/`US3`
+  headless удалены вместе с записью allowlist. Записи `globals` перекодированы (9) и одна новая
+  (`owner::windows::CLASS_HOOKS`), итого 56. Тесты: `modal_frame_tests` без правок,
+  `wake_deadline` и `real_loop_tests` — только пути (и doc модуля последнего); сверх путей —
+  приведение `as Rc<dyn Subscriber>` в `hosted_receiver` и импорты `Platform`, `PlatformError`,
+  `WM_QUIT` в `preference_retry_tests`/`display_message_tests` (их давал `use super::*` из старого
+  `platform.rs`); `tests/android_exit_path.rs` читает `owner/android/looper.rs`; conformance и
+  трассы Windows не тронуты. Ревью (отдельный агент, старые и новые тела построчно): тело
+  процедуры совпадает побайтно (1 034 строки), приёмник — по каждому сообщению; найдены и
+  исправлены группа `apple` в правиле трамплина и регистрация хуков отдельно от цикла. Проверки на
+  Windows (после rebase на `origin/main` @ `0fdbd53ae`): clippy `-p flui-native -p flui-app -p
+  flui-testing --all-targets -D warnings` и `-p flui-native --all-targets --features
+  winit-backend,a11y`; nextest `-p flui-native -p flui-app` — 275 (2 пропущены; +2 — тесты
+  `system_notice` с main), с `winit-backend` — 257; `wasm-check`, `wasm-test` (49 утверждений);
+  clippy Android (`-p flui-native -p flui-app --all-targets`), macOS lib (и с `winit-backend,a11y`),
+  iOS lib (`DOCS_RS=1`); `android-dex` (те же байты, встраивание проверено), `doc-strict`,
+  `checks`, `module-dag` (251 модуль, 1 base) и самотест (52), `globals` (56) и самотест (15),
+  `file-length`, `markers`, `workspace`, `reach`; nextest `-p xtask` — 45; rustdoc
+  `--document-private-items` с `winit-backend,a11y`. WSL Ubuntu 24.04: clippy `winit-backend,a11y` и
+  без фич (`-p flui-native -p flui-app`); nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 170; с
+  `winit-backend` под xvfb — 256 из 257, падает `a_randr_reconfiguration_on_a_real_server_is_published`
+  (как на базе); `cargo test --features winit-backend` под xvfb — lib 188 из 198: 9 тестов
+  реального цикла winit/X11 и RandR падают, когда идут в одном процессе (winit даёт один цикл на
+  процесс), так же на базе (архив `019ecee7b`: 186 из 196), по одному и под nextest проходят;
+  остальные бинари и doctest'ы зелёные; `linux_preferences` — 16. Не запускалось:
+  `cross-typecheck` локально (нет `zig`; его job — в CI), Mac и iPhone, устройство Android (ввод
+  без изменения результата — по строке задачи; перенос не трогал JNI-пути).
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
