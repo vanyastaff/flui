@@ -1575,6 +1575,130 @@ graph LR
   `flui-app` под macOS и iOS (сборочный скрипт `psm` требует C-компилятора Apple и `xcrun`); Mac и
   iPhone: перенос чтения версии iOS в `AppleVersion::read`, публичные имена macOS и iOS от корня и
   тесты реального цикла на macOS (там они `ignore`) проверены только сборкой.
+- [x] **LY35** — ветка `platform/duplicates`, на `main` @ `fc8f8ebaa` (LY34; начата на вершине LY34
+  `dbbb8d7d9` и перенесена после его слияния, дерево то же). Слияния дублей внутри моделей фич;
+  публичных путей не меняет (changelog не нужен), `flui-app` не тронут.
+  Режим окна. Одно правило — `window::state::mode_of(ModeFlags)` (свёрнуто, затем полноэкранно,
+  затем развёрнуто); `ModeFlags { minimized, fullscreen, maximized }` — что оконная система говорит
+  об окне. Ушли `mode_of` AppKit (`window/apple/geometry.rs`), `window_mode` X11
+  (`window/linux/x11.rs`) и `NativeMode::public()` Win32; каждый читает свой отчёт во флаги, и только:
+  winit — три запроса как есть; X11 — `mode::mode_flags(wm_state, net)` (`WM_STATE` решает
+  свёрнутость, `_NET_WM_STATE_HIDDEN` — только без него, развёрнуто — по обеим осям); AppKit —
+  `WindowFlags::mode_flags()` (зум — только у окна, меняющего размер); Win32 — `NativeMode::flags()`.
+  `NativeMode` переехал из `proc.rs` в чистую половину `window::windows::mode` (встроенный модуль
+  `mod.rs`, `forbid(unsafe_code)`, вне Windows — для тестов, с `allow(dead_code, reason)`), чтобы
+  чтение Win32 шло на Linux. Расхождение копий: AppKit ставил полноэкранность выше свёрнутости
+  (строка `FMZR` → `Fullscreen` в `flags_become_a_mode`), остальные — свёрнутость выше. Порядок один —
+  у `mode_of`; закреплённое поведение AppKit сохранено его чтением флагов: `isMiniaturized` считается
+  только вне полноэкранного режима (AppKit не сворачивает полноэкранное окно, а сначала выходит из
+  него — так строит запросы и `steps_to`); строка `FMZR` не правлена. winit на macOS для тех же
+  фактов давал `Minimized` и даёт; AppKit такого сочетания не сообщает.
+  Видимость. Одно правило — `window::visibility::ReportedVisibility`: рантайм слышит ответ, только
+  когда он меняется. Его держат окна winit (`Mutex`; ответ читается под замком, как раньше), Win32
+  (`Cell` в `Visibility`), AppKit (в состоянии окна) и Web (`VisibilitySync`; проверка приёма —
+  до правила, как раньше); ушли `visibility_edge` и три сравнения `replace(..) != visible`. Правила
+  одной платформы ушли из модели в её файл: `WM_SIZE`, `WM_SHOWWINDOW` и стиль создания —
+  `window::windows::surface` (`initial_visibility`, `size_visibility`, `show_window_visibility`,
+  `SIZE_*`, `WS_VISIBLE_STYLE_BIT`; три теста перенесены с именами), бит
+  `NSWindowOcclusionStateVisible` — `window::apple::geometry::mode::occlusion_state_is_visible`
+  (тест `appkit_occlusion_reports_the_visible_bit`; часть прежнего теста про фронт — в таблицу
+  модели). Android (`publish_activity_fact`, факт lifecycle) и headless (`simulate_visibility`,
+  двойник) фильтра не имели и не получили.
+  Период обновления. Один конструктор — `display::source::Refresh` (`Hertz(f64)`,
+  `HertzRatio { numerator, denominator }`, `Millihertz(i64)`, `Interval(f64)` в секундах) и
+  `Refresh::period()`: одна проверка (конечное, больше нуля), затем конструкторы контракта (1 мс…1 с).
+  Один издатель — `display::source::MeasuredPeriod`: измерение заменяет опубликованный период, только
+  выходя из полосы (доля опубликованного), первое публикуется всегда. Ушли
+  `display::android::sample::refresh_period`, модуль `display::apple::period`
+  (`core_graphics_refresh_period`), `refresh_period_for_screen` (macOS читает
+  `refresh_of_screen -> Option<Refresh>`), `refresh_period` Wayland (вызов на месте),
+  `display::windows::sample::{rational_refresh_period, frequency_period}` — их место заняло одно
+  правило Windows над конструктором, `display_period(target_rate, mode_frequency)` (рациональная
+  частота пути, иначе `dmDisplayFrequency`, читаемая только тогда; её 0 и 1 — «по умолчанию
+  оборудования»), — и `mode_refresh_period` X11 (не в строке; теперь `mode_refresh -> Option<Refresh>`).
+  Ссылка дисплея iOS (`LinkPeriod::observe`) и оценка браузера (`RefreshEstimator`) строят период через
+  `Refresh::Interval` и публикуют через `MeasuredPeriod`; полосы прежние (5 % и 3 %), у браузера
+  сверх полосы остаются согласие последних интервалов и устойчивость. Отступления от строки:
+  `ScreenPeriods::period_of` период не строит, а выбирает, чей опубликованный период несёт экран
+  (первого живого окна), — это учёт iOS, он остался, а строитель `link_rate` (`LinkPeriod::observe`)
+  переведён; `refresh_estimate` остался как оценщик (усечённое среднее, выбросы), ушли его построение
+  периода и полоса. `Refresh` — под `cfg_attr(not(test), allow(dead_code, reason))`: каждая платформа
+  сообщает в одной единице, и цель собирает лишь варианты своих платформ; у `MeasuredPeriod::published`
+  свой `cfg` (его читает только браузер). headless (`DisplaySpec::with_refresh_period(Duration)`)
+  остался на `TryFrom<Duration>` контракта: это период, заданный тестом, не отчёт ОС. Расхождений копии
+  не имели — все шли через конструкторы контракта, и одна проверка отвергает то же; полоса браузера
+  теперь считается в секундах, а не в миллисекундах (округление расходится лишь на самой границе
+  полосы, тесты её не задевают); 1 Гц из `dmDisplayFrequency` неизвестен только у Windows, сохранено.
+  `Location` клавиши. Одна таблица — `input::keys::LOCATIONS`: номер W3C UI Events
+  (`KeyboardEvent.location`, он же дискриминант `keyboard_types::Location`) и коды клавиш этого места;
+  `location_of_number` читают DOM (`input/web.rs`) и адаптер keyboard-types (winit, Android),
+  `location_for_code` — Win32 и AppKit, а посторонний `WM_CHAR` Win32 —
+  `location_for_code(Code::Unidentified)` вместо литерала `Standard`. Ушли `match` адаптера (4 ветви),
+  `match` веба (4) и литерал Win32; `location_for_code` стал поиском по таблице. Расхождений нет:
+  неизвестный номер DOM — `Standard`, как было; у keyboard-types неизвестных нет.
+  Шаг колеса. Одно правило — `input::scroll::wheel_step(unit, x: WheelAmount, y: WheelAmount) ->
+  Result<ScrollDelta, InputValueError>` с `WheelAmount::{offset, content}` (`WheelDirection`):
+  количества платформы в выбранной ею единице, каждая ось поворачивается в направление FLUI. Ушли
+  `from_win32_wheel`, `from_win32_hwheel` и `from_web`; потребители — Win32 (`ContactRegistry::wheel`
+  с `WHEEL_DETENT`), Web (новая чистая половина `input::web::wheel::step`: `deltaMode` → единица),
+  winit (`scroll_step`, был `wheel_step`; `ScrollStep { delta, precision }`), Android
+  (`AxisPolicy::delta`) и AppKit (не в строке, то же правило). Расхождения: (1) неконечное значение —
+  winit и AppKit давали нулевой шаг в единице события, Web и Android отбрасывали событие, у Win32 его
+  не бывает (`i16`): правило отвечает ошибкой, и каждый потребитель решает, как раньше; (2) ось без
+  движения — Win32 и Web давали `+0.0`, а winit, AppKit, Android (`-x` от нуля) и вертикальное колесо
+  Win32 с нулевым расстоянием — `-0.0`: правило поворачивает вычитанием из нуля, ось без движения
+  везде `+0.0` (так закрепляет запись `win32_sent_mouse_and_wheel`: `Detents(0, -1)`,
+  `Detents(1, 0)`), прочие значения те же бит в бит.
+  Тесты — по одной таблице `mapping` на правило, в модели, и каждая идёт через пути всех потребителей,
+  что собираются на хосте: `window::state::mapping::every_window_system_decides_the_mode_alike`
+  (8 строк × winit, X11, AppKit, Win32), `window::visibility::mapping::every_change_is_reported_once`,
+  `display::source::mapping::every_display_source_reads_a_cadence_alike` (11 каденций × Android
+  через `RawDisplay::info`, CoreGraphics, Windows через `display_period`, Wayland и RandR, ссылка
+  дисплея через `LinkPeriod::observe`, браузер через `RefreshEstimator`),
+  `a_measured_period_is_published_outside_its_band` и `macos_shim_keeps_the_period_it_reports_today`
+  (перенесён из удалённого `display::apple::period` с именем, его цитирует ARCHITECTURE.md),
+  `input::keys::mapping::every_backend_reads_a_key_at_one_location` (7 клавиш × скан-код Win32,
+  код AppKit, номер DOM, адаптер keyboard-types при `winit-backend`),
+  `input::scroll::mapping::every_backend_steps_a_turn_alike` (6 поворотов × Win32, DOM, Android,
+  winit при `winit-backend`; сравнение бит в бит) и `a_turn_that_is_not_finite_steps_nothing`. В них
+  слиты `window_mode_precedence` и строки `android_refresh_value_table` (ушла из `android_display_table`);
+  `windows_zero_or_one_hz_is_unknown` и `rational_refresh_converts_exactly` идут через `display_period`
+  (добавлен откат пути без частоты на частоту режима). Мутации — каждая таблица падает, когда
+  потребитель расходится: `NativeMode::flags` без «свёрнуто из полноэкранного» — «Win32: minimized from
+  fullscreen»; X11 без полноэкранности при развёрнутости — «X11: fullscreen that kept its maximized
+  flag»; `report`, всегда отвечающий `Some`, — «an unchanged visible window»; `LinkPeriod`, строящий
+  период как герцы, — «display link: 60 Hz is None»; Android и winit с прежним `-x` — «a notch down
+  stepped … x: -0.0»; адаптер, не читающий место, — «winit and Android: the left Shift». Потребители,
+  чей путь — только FFI (CoreGraphics, клавиатура и колесо Web, посторонний `WM_CHAR`, окна для
+  видимости), зовут правило напрямую; разойтись они могут лишь новым кодом в обход правила, который
+  ловит `rg` по сигнатурам (R4.7). Записи нативных трасс и conformance не тронуты и проходят.
+  `module-dag`: исключений 33, новых нет (`window::apple::ios` → `display::apple` остаётся: окно iOS
+  называет `LinkPeriod` и `change_screen`); `globals` — 56, без изменений. Документы: ARCHITECTURE.md
+  ядра называет одно правило каждой пары (окно, ввод, дисплеи) и таблицы `mapping`, раздел периода
+  macOS — `refresh_of_screen` и `Refresh::Hertz`.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-native -p flui-app --all-targets` с
+  `winit-backend,a11y` и без; nextest `-p flui-native -p flui-app` — 309 (2 пропущены), с
+  `winit-backend,a11y` — 342 (2); clippy Android `--all-targets`, macOS lib (и с `winit-backend,a11y`),
+  iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51 (45 у `flui-native`);
+  `module-dag` (293 модуля, 10 фич с 77 файлами платформ, 3 base, 323 ребра, 33 исключения) и
+  самотест (54), `globals` (56) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`,
+  `doc-strict`, `workspace` (28 крейтов, 229 рёбер), `reach`, `checks` (с `android-dex` и taplo).
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-native -p flui-app
+  --all-targets` (и с `winit-backend,a11y`); nextest `FLUI_HEADLESS=1` под xvfb с
+  `winit-backend,a11y` `-p flui-native -p flui-app` — 328 (1 пропущен), `--all-features` под xvfb
+  (команда CI) — 284, без признаков (`FLUI_HEADLESS=1`) — 204; rustdoc `-D warnings
+  --document-private-items` с `winit-backend,a11y` и без. Galaxy S21, 2026-10-22, Android 15: проба
+  `flui create --template counter`, собрана с ветки; лог обратного вызова частоты и последующих ревизий
+  снимка временно поднят до `info` (правка не закоммичена): обратный вызов сообщает 8333333 →
+  16666666 → 8333333 → 16666666 → 8333333 → 16666666 → 8333333 нс (адаптивная частота при простое и
+  касаниях), ревизии снимка 1–7 — 1080×2400 с периодом попеременно 8333 и 16666 мкс; Back — «Destroy —
+  shutting down», «Android platform event loop finished», предупреждения «outlived its thread» нет;
+  `FATAL`, паник и ANR нет; настройки устройства не менялись, проба удалена. Браузер — у
+  координатора: колесо (знак и единица `deltaMode` строк и пикселей, ось без движения), место клавиш
+  (левый и правый Shift, цифры клавиатуры), видимость (скрытая вкладка — одно сообщение на смену),
+  оценка частоты (период публикуется и не дрожит). Не запускалось: `cross-typecheck` (нет `zig`; job в
+  CI), `web_browser` (нет ChromeDriver); Mac и iPhone — в очереди vanyastaff/flui#1840 (чтение флагов
+  и бита перекрытия AppKit, шаг колеса AppKit, период CoreGraphics, `LinkPeriod` iOS) — только сборкой.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
