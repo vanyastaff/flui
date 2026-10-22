@@ -61,9 +61,10 @@ impl Invalidation {
 }
 
 /// The preference source's part of the system's broadcasts: setting changes,
-/// which mark the preferences stale and wake the owner. It shares the
-/// source's admission, so once the source is gone a receiver that outlives it
-/// marks nothing pending and wakes nobody.
+/// which mark the preferences stale and wake the owner. It only observes, so
+/// every other subscriber hears the same message. It shares the source's
+/// admission, so once the source is gone a receiver that outlives it marks
+/// nothing pending and wakes nobody.
 pub(crate) struct PreferenceBroadcasts(Arc<Invalidation>);
 
 impl Subscriber for PreferenceBroadcasts {
@@ -76,10 +77,8 @@ impl Subscriber for PreferenceBroadcasts {
     ) -> Option<LRESULT> {
         if message == WM_SETTINGCHANGE {
             self.0.notify();
-            Some(LRESULT(0))
-        } else {
-            None
         }
+        None
     }
 }
 

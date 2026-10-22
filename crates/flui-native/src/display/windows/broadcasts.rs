@@ -20,8 +20,9 @@ use crate::owner::windows::broadcast::Subscriber;
 /// stale and wakes the owner, which samples them on its next turn; nothing is
 /// sampled inside the message, which can arrive inside a COM call of ours.
 ///
-/// A work-area change is not answered: the preferences hear the same
-/// `WM_SETTINGCHANGE`, so the host lists this subscriber before them.
+/// It only observes: Windows reads no result from either notification, so
+/// the subscriber answers neither and every subscriber after it hears the
+/// same message, whatever order the host lists them in.
 ///
 /// It admits wakes of its own accord until the receiver detaches it, so a
 /// message the receiver still hears while it is destroyed, or in a window the
@@ -72,15 +73,11 @@ impl Subscriber for DisplayBroadcasts {
         wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Option<LRESULT> {
-        if message == WM_DISPLAYCHANGE {
+        let work_area = message == WM_SETTINGCHANGE && wparam.0 == SPI_SETWORKAREA.0 as usize;
+        if message == WM_DISPLAYCHANGE || work_area {
             self.notify();
-            Some(LRESULT(0))
-        } else if message == WM_SETTINGCHANGE && wparam.0 == SPI_SETWORKAREA.0 as usize {
-            self.notify();
-            None
-        } else {
-            None
         }
+        None
     }
 }
 
@@ -122,11 +119,11 @@ mod tests {
         displays.sample_count() > before
     }
 
-    /// What the subscriber answers, and whom it wakes: a display change is
-    /// answered, a work-area change is passed on to the preferences, any other
-    /// setting is not the displays'; once detached, it still marks the monitors
-    /// stale but wakes nobody. The owner's turn runs after each wake, so the
-    /// next one is posted again.
+    /// Whom the subscriber wakes: a display change and a work-area change mark
+    /// the monitors stale and wake the owner, any other setting is not the
+    /// displays'; once detached, it still marks the monitors stale but wakes
+    /// nobody. It answers none of them. The owner's turn runs after each wake,
+    /// so the next one is posted again.
     #[test]
     fn display_broadcasts_mark_the_monitors_stale_and_wake_until_detached() {
         let (signal, wakes) = counting_signal();
@@ -136,11 +133,7 @@ mod tests {
             Receiver::new([Rc::clone(&subscriber) as Rc<dyn Subscriber>]).expect("a receiver");
         displays.snapshot().expect("the first sample");
 
-        assert_eq!(
-            receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0),
-            0,
-            "a display change is answered"
-        );
+        receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
         assert!(samples_again(&displays), "a display change marked nothing");
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         signal.drive();
@@ -162,12 +155,13 @@ mod tests {
 
         let receiver_window = receiver.hwnd_for_test();
         drop(receiver);
-        subscriber.message(
+        let answer = subscriber.message(
             receiver_window,
             WM_DISPLAYCHANGE,
             windows::Win32::Foundation::WPARAM(32),
             windows::Win32::Foundation::LPARAM(0),
         );
+        assert_eq!(answer, None, "the subscriber answered a display change");
         assert!(
             samples_again(&displays),
             "a detached subscriber still marks the monitors"
