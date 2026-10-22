@@ -668,3 +668,65 @@ exceptions = [
     { from = "window::headless", to = "drag::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window takes its drag source double from the drag state (`HeadlessDragSource::of`); it goes when the window-level positions reach the window through the host table, and the window hands out the drag source its table names instead of taking one" },
     { from = "window::headless", to = "text::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window hands out the text input double; it goes when the window-level positions reach the window through the host table, and the window hands out the text input its table names instead of keeping one" },
 ]
+
+
+# No public path of the core host names an OS binding, AccessKit or tokio, on
+# any target it builds a host for (ADR-0151 §8, checked by `cargo xtask
+# api-closure`): the windows and their OS handles are crate-private, a raw
+# handle leaves through `raw-window-handle`, and an OS's extras are extensions
+# of `HostWindow` over FLUI types. The accessibility trait the windows
+# implement is `flui-semantics`', whose methods name AccessKit's tree.
+[package.metadata.flui.api-closure]
+deny = [
+    "accesskit",
+    "accesskit_consumer",
+    "accesskit_macos",
+    "accesskit_unix",
+    "accesskit_windows",
+    "android_activity",
+    "arboard",
+    "block2",
+    "core_foundation",
+    "core_graphics",
+    "dispatch",
+    "dispatch2",
+    "jni",
+    "jni_sys",
+    "js_sys",
+    "libc",
+    "ndk",
+    "ndk_sys",
+    "objc2",
+    "objc2_app_kit",
+    "objc2_core_foundation",
+    "objc2_core_haptics",
+    "objc2_foundation",
+    "objc2_quartz_core",
+    "objc2_ui_kit",
+    "rustix",
+    "tokio",
+    "ui_events_winit",
+    "wasm_bindgen",
+    "wayland_client",
+    "wayland_protocols",
+    "web_sys",
+    "windows",
+    "windows_core",
+    "winit",
+    "x11rb",
+    "zbus",
+]
+# The Activity is the system's, handed only to the application's
+# `android_main`: the composition root passes it on through this one entry, as
+# the facade's `run_app_android` takes it.
+entries = [{ item = "flui_native::android_platform", crate = "android_activity" }]
+# Each target the core builds a host for, with the features that add public
+# items there.
+targets = [
+    { target = "x86_64-unknown-linux-gnu", all-features = true },
+    { target = "x86_64-pc-windows-msvc", all-features = true },
+    { target = "aarch64-apple-darwin", all-features = true },
+    { target = "aarch64-apple-ios" },
+    { target = "aarch64-linux-android" },
+    { target = "wasm32-unknown-unknown" },
+]
