@@ -439,10 +439,11 @@ pub(crate) trait LoopWindows: Send + Sync {
         options: WindowOptions,
     ) -> Result<Arc<dyn LoopWindow>, OpenWindowError>;
 
-    /// Reads again the windows whose state the window manager changed without
-    /// a winit event.
+    /// The X11 ids of the windows whose state the window manager changed
+    /// without a winit event since the last call, which the loop reads again;
+    /// empty when no window manager is watched.
     #[cfg(target_os = "linux")]
-    fn refresh_unreported(&self, owner: &WinitLoop);
+    fn take_unreported(&self) -> Vec<u32>;
 }
 
 impl std::fmt::Debug for WinitLoop {
@@ -625,6 +626,28 @@ impl WinitLoop {
     {
         let mut state = self.state.lock();
         f(&mut state)
+    }
+
+    /// Read again the windows whose mode the X11 window manager changed, so
+    /// `on_state_changed` follows a minimize or a maximize that winit reports
+    /// no event for. Each window publishes with the state lock released.
+    #[cfg(target_os = "linux")]
+    fn refresh_unreported(&self) {
+        let changed = self.windows.take_unreported();
+        if changed.is_empty() {
+            return;
+        }
+        let windows: Vec<_> = self.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| window.x11_id().is_some_and(|id| changed.contains(&id)))
+                .cloned()
+                .collect()
+        });
+        for window in windows {
+            window.refresh_state();
+        }
     }
 
     /// Create and run the event loop for `platform`, the
@@ -2045,7 +2068,7 @@ impl WinitApp {
         #[cfg(target_os = "linux")]
         self.deliver_host_notices();
         #[cfg(target_os = "linux")]
-        self.platform.windows.refresh_unreported(&self.platform);
+        self.platform.refresh_unreported();
         #[cfg(test)]
         self.platform.run_turn_read_hook_for_test();
         if let Some(turn) = turn

@@ -1072,28 +1072,12 @@ impl LoopWindows for WinitWindows {
         Ok(window)
     }
 
-    /// Sample again the windows whose mode properties the X11 window manager
-    /// changed, so `on_state_changed` follows a minimize or a maximize that
-    /// winit reports no event for.
+    /// The windows whose mode properties the X11 window manager changed.
     #[cfg(target_os = "linux")]
-    fn refresh_unreported(&self, owner: &WinitLoop) {
-        let Some(Some(view)) = self.window_manager.get() else {
-            return;
-        };
-        let changed = view.take_changed();
-        if changed.is_empty() {
-            return;
-        }
-        let windows: Vec<_> = owner.with_state(|state| {
-            state
-                .windows
-                .values()
-                .filter(|window| window.x11_id().is_some_and(|id| changed.contains(&id)))
-                .cloned()
-                .collect()
-        });
-        for window in windows {
-            window.refresh_state();
+    fn take_unreported(&self) -> Vec<u32> {
+        match self.window_manager.get() {
+            Some(Some(view)) => view.take_changed(),
+            _ => Vec::new(),
         }
     }
 }
