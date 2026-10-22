@@ -291,10 +291,11 @@ pub trait PlatformWindow: Send + Sync {
     ///   the scheduler's `on_frame_scheduled` hook and handed to async wakers,
     ///   so it fires on whatever thread completed the future. No test pins
     ///   it.
-    /// - `flui_app`'s AccessKit activation listener — **conditional**, and so
-    ///   not reachable in a default build: it exists only under the non-default
-    ///   `a11y` feature, and fires only once an assistive technology attaches to
-    ///   the adapter's own thread. No test pins this one.
+    /// - `flui_runtime`'s AccessKit activation listener — **conditional**: every
+    ///   Win32, AppKit and Linux winit window has an adapter, but the listener
+    ///   fires only once an assistive technology attaches, on the thread the
+    ///   adapter calls it from (AT-SPI's is the adapter's own). No test pins
+    ///   this one.
     fn request_redraw(&self);
 
     /// Tell the backend a frame is about to be presented for this window —

@@ -316,9 +316,21 @@ trait depends on `flui-platform` instead.
   file is a module's tests, the mechanism of one OS object
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
-  iOS, accessibility on Android, iOS and the Web (and everywhere without
-  `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
+  iOS, accessibility on Android, iOS and the Web and under winit off Linux,
+  haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
+
+  Accessibility has no Cargo feature (ADR-0151 §15, as amended).
+  `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
+  their OS, and every Win32 and AppKit window builds its adapter. The Linux
+  adapter comes with the Linux host: while that host is winit, `accesskit_unix`
+  rides `winit-backend` beside the `zbus` the host needs for the Settings
+  portal and logind (`flui-app` turns `winit-backend` on for every Linux
+  build), and `accessibility::{bridge, linux}` compile under
+  `all(target_os = "linux", feature = "winit-backend")`, written once, in
+  `accessibility/mod.rs`. The native Wayland and X11 host makes
+  `accesskit_unix` and `zbus` unconditional Linux dependencies and that gate
+  `target_os = "linux"`.
 
   The window still makes the accessibility adapter and the actuator it hands
   out by naming the feature's platform file, as the Android and headless

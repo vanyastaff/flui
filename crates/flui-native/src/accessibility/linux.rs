@@ -4,12 +4,13 @@
 //! which exposes an AccessKit tree over AT-SPI (the D-Bus protocol Orca and
 //! every other Linux screen reader speak).
 //!
-//! # Why this is feature-gated
+//! # Where it builds
 //!
 //! `accesskit_unix` brings ~66 crates (zbus, atspi, an async executor). AT-SPI
-//! *is* D-Bus, so there is no lighter path — but an application that does not
-//! want a screen-reader bridge should not link a D-Bus stack. The `a11y`
-//! feature is therefore off by default.
+//! *is* D-Bus, so there is no lighter path, and the Linux host reads the
+//! Settings portal and logind over D-Bus anyway. The adapter therefore builds
+//! wherever that host does, with `winit-backend`, and has no feature of its
+//! own.
 //!
 //! # Nothing async reaches the frame path
 //!

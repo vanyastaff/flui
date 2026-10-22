@@ -1098,7 +1098,7 @@ restore it.
 workspace Cargo target and in target-specific dependency declarations. It
 selects packages directly with `--all-targets`, including their tests,
 examples and benches; indirect dependency compilation does not cover those
-targets. Required target features and declared `testing`/`a11y` features are
+targets. Required target features and a declared `testing` feature are
 enabled together. `--all-features` additionally compiles every feature of the
 selected packages. CI runs both configurations: all-features alone can hide
 disabled-feature branches. This is not an exhaustive optional-feature matrix or a

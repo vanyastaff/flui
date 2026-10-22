@@ -230,7 +230,6 @@ pub struct MacOSWindow {
     /// value is constructed *before* its content view exists (the view
     /// holds a `Weak` back-reference to the window's callbacks); the
     /// constructor fills it immediately after installing the view.
-    #[cfg(feature = "a11y")]
     accessibility: std::sync::OnceLock<Arc<crate::accessibility::apple::MacosAccessibility>>,
 
     /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
@@ -706,7 +705,6 @@ impl MacOSWindow {
                 config,
                 owner,
                 owner_is_main,
-                #[cfg(feature = "a11y")]
                 accessibility: std::sync::OnceLock::new(),
                 wake_pump: std::sync::OnceLock::new(),
                 text_input: std::sync::OnceLock::new(),
@@ -728,16 +726,13 @@ impl MacOSWindow {
             // adapter cannot outlive the view; and window construction runs
             // on the main thread (AppKit affinity, asserted by this whole
             // `unsafe` block's contract).
-            #[cfg(feature = "a11y")]
-            {
-                let bridge = crate::accessibility::apple::MacosAccessibility::new(
-                    content_view.cast::<std::ffi::c_void>(),
-                );
-                window
-                    .accessibility
-                    .set(Arc::new(bridge))
-                    .expect("BUG: the accessibility slot was created empty in this constructor and nothing else can fill it");
-            }
+            let bridge = crate::accessibility::apple::MacosAccessibility::new(
+                content_view.cast::<std::ffi::c_void>(),
+            );
+            window
+                .accessibility
+                .set(Arc::new(bridge))
+                .expect("BUG: the accessibility slot was created empty in this constructor and nothing else can fill it");
 
             // Enable mouse tracking for mouse moved events
             view::enable_mouse_tracking(content_view);
@@ -1093,7 +1088,6 @@ impl crate::host_window::HostWindow for MacOSWindow {
     /// composition root's accessibility wire discovers. Without this
     /// override the trait default (`None`) leaves every real macOS window
     /// silently invisible to VoiceOver.
-    #[cfg(feature = "a11y")]
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         self.accessibility
             .get()
@@ -1761,7 +1755,6 @@ impl Clone for MacOSWindow {
             // The clone shares the same window, so it shares the same
             // NSAccessibility bridge — one subclass per content view,
             // never two (`OnceLock<Arc<_>>` clones the shared handle).
-            #[cfg(feature = "a11y")]
             accessibility: self.accessibility.clone(),
             // A clone shares the window, so it arms the same platform pump —
             // a redraw asked for through any handle must schedule the wake
@@ -1845,7 +1838,6 @@ impl Drop for MacOSWindow {
         // retained native tail, never release AppKit objects on a worker.
         let owner = self.owner;
         let ns_window = OwnerLaneId(self.ns_window);
-        #[cfg(feature = "a11y")]
         let a11y = self.accessibility.get().cloned(); // Option<Arc<...>>, Send
         let teardown = move || unsafe {
             // SAFETY: the tail runs on the owner thread, directly or under its
@@ -1854,7 +1846,6 @@ impl Drop for MacOSWindow {
             // owner-affine. `shutdown()` runs before the release in the same
             // block, preserving accesskit's documented precondition (unhook
             // the dynamic subclass while the content view is still alive).
-            #[cfg(feature = "a11y")]
             if let Some(a11y) = a11y {
                 // A bridge failure must not skip the native window's balancing
                 // release. Keep it inside its own cleanup boundary.

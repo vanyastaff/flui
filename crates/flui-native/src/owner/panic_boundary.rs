@@ -34,7 +34,7 @@
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
@@ -50,7 +50,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
     target_os = "ios",
     target_os = "android",
     all(target_os = "linux", any(feature = "wayland", feature = "x11")),
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 #[must_use]
@@ -64,7 +64,7 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &st
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 pub(crate) enum AfterPanic<A, R> {
@@ -107,7 +107,7 @@ pub(crate) enum AfterPanic<A, R> {
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 pub(crate) fn os_entry<A, R>(
@@ -139,7 +139,7 @@ where
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'static str) -> ! {
@@ -196,7 +196,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
-    all(target_os = "linux", feature = "a11y", feature = "winit-backend"),
+    all(target_os = "linux", feature = "winit-backend"),
     test
 ))]
 fn contained<R>(
@@ -224,10 +224,7 @@ fn contained<R>(
 /// Keep an owner-affine resource whose final owner was dropped on another thread.
 /// Retention precedes diagnostics: a subscriber panic must not retire the resource
 /// on the wrong thread, including while the caller is already unwinding.
-#[cfg(any(
-    all(feature = "a11y", any(target_os = "windows", target_os = "macos")),
-    test
-))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
     std::mem::forget(resource);
     contain_owner_callback(report);

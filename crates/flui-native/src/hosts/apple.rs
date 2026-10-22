@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-#[cfg(all(target_os = "macos", feature = "a11y"))]
+#[cfg(target_os = "macos")]
 use crate::accessibility::apple::MacosAccessibility;
 #[cfg(target_os = "ios")]
 use crate::clipboard::apple::IOSClipboard;
@@ -84,11 +84,10 @@ impl Host for Apple {
     #[cfg(target_os = "ios")]
     type Text = Absent<position::Text>;
 
-    // The AppKit bridge exists with the `a11y` feature; UIKit windows hand out
-    // no accessibility yet.
-    #[cfg(all(target_os = "macos", feature = "a11y"))]
+    // UIKit windows hand out no accessibility yet.
+    #[cfg(target_os = "macos")]
     type Accessibility = MacosAccessibility;
-    #[cfg(not(all(target_os = "macos", feature = "a11y")))]
+    #[cfg(target_os = "ios")]
     type Accessibility = Absent<position::Accessibility>;
 
     #[cfg(target_os = "macos")]

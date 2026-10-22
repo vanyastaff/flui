@@ -46,15 +46,6 @@ android = []
 ios = []
 web = []
 
-# === Native accessibility ===
-# Forwards `flui-native`'s `a11y`: the per-OS AccessKit adapters
-# (NSAccessibility, UIA, AT-SPI) that hand the semantics tree to an
-# assistive technology. Off by default because the AT-SPI adapter brings a
-# D-Bus stack with it; the facade's own `a11y` feature turns it on for a
-# consumer. Without it the semantics tree is built for the framework's own
-# use (tests, `A11yTree`) but no screen reader can see it.
-a11y = ["flui-native/a11y"]
-
 # === Debug Features ===
 # Honest note (verified 2026-08-04): also no-op selectors — zero
 # `feature = "debug-overlay"` / `feature = "performance-overlay"` references

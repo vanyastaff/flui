@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, and entries 31–40 renumbered 30–39; previously minor: a bullet on entry 15, an Android touch held through Home; previously minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -72,10 +72,9 @@ request.
 
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
-- Desktop is off by default and untested with a screen reader.
+- Desktop is always on but untested with a screen reader.
 - AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
 - When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
-- The desktop adapters sit behind the `a11y` feature.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
@@ -452,6 +451,7 @@ request.
 | 2026-10-20 | minor | Entries 32–38 join from the quality-bar research: live resize unaudited and unscheduled, no present-mode, queue-depth, VRR or tearing control, launch handoff on mobile and the Web, quality-bar partials with no entry, power-aware pacing, the locale edge, accessibility bridge fidelity; entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30 gain a bullet each (client queries and session survival, the locale rows, entitlement manifests, secrets in diagnostics, timestamp conversion, and the corrections to the presentation-feedback, HDR and activation evidence) |
 | 2026-10-21 | minor | Entries 39–41 join: add-to-app embedding, gamepad and D-pad, rotary input |
 | 2026-10-21 | minor | Entry 23 closes: Android preferences arrive through `FluiView`'s setting, contrast and inset callbacks, and the Galaxy S21 loop made no turn in 10 s idle, resumed or behind Home; entries 24–41 become 23–40. Entry 14 becomes "System preferences missing or never run" |
+| 2026-10-22 | minor | Entry 2: the desktop accessibility adapters are always on (no `a11y` feature; AT-SPI comes with the Linux host), still unrun with a screen reader |
 | 2026-10-22 | minor | Entry 30 closes: `cargo xtask panic-boundary` holds every OS entry into the core host (169: extern fns, Objective-C and COM methods, AccessKit handlers, blocks, delegates and GCD work items) to one call of `owner::panic_boundary::os_entry`; the AppKit, UIKit, Win32 and Android entries it found unguarded go through it now (the Apple ones type-checked only, [#1840](https://github.com/vanyastaff/flui/issues/1840)); entries 31–40 become 30–39 |
 
 </details>
