@@ -513,9 +513,12 @@ graph LR
   `file-length`, `markers`, `workspace`, `reach`. WSL Ubuntu 24.04: clippy `winit-backend,a11y` и
   без фич (`-p flui-native -p flui-app`); nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 168; с
   `winit-backend` под xvfb — 254 из 255: `a_randr_reconfiguration_on_a_real_server_is_published`
-  падает и на базе (RandR в xvfb этого окружения); `linux_preferences` — 16. Не запускалось:
-  Android, macOS и iOS — только проверка типов, их места покрыты общей точкой и её тестами; Dev
-  Android (выход по системе) — устройства в этой сессии нет.
+  падает и на базе (RandR в xvfb этого окружения); `linux_preferences` — 16. Galaxy S21 (Android
+  15, проба `flui create --local`): выход по системе (Back завершает Activity) — `Destroy`, цикл
+  завершён, службы приложения остановлены за ~40 мс, без ANR и паники; повторный запуск в том же
+  процессе — новый `android_main`, `MediaQuery` приходит. Предупреждение `close_this_window:
+  dispatch refused` при этом выходе было и до LY26 (та же проба на дереве LY22). macOS и iOS —
+  только проверка типов, их места покрыты общей точкой и её тестами.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
