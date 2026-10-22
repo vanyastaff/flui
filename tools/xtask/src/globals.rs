@@ -467,7 +467,8 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
 /// module under [`OWNER`], which a platform word of the crate's
 /// `[package.metadata.flui.modules]` names (`owner/winit.rs` and what is under
 /// `owner/winit/`); below a group's module the child the group lists is the
-/// platform (`owner/apple/ios.rs` is iOS's, as `platforms/ios/` is).
+/// platform (`owner/apple/ios.rs` is iOS's, as `platforms/ios/` is), and the
+/// group's own module, which its children share, is no platform's.
 fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
     if krate.name == HOST {
         return Some(format!("the host ({HOST})"));
@@ -494,8 +495,11 @@ fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
         if !listed(&modules["platforms"], word) {
             return None;
         }
+        let children = &modules["groups"][word];
         match names.next() {
-            Some(child) if listed(&modules["groups"][word], child) => Some(child.to_owned()),
+            Some(child) if listed(children, child) => Some(child.to_owned()),
+            // A group's own module is what its children share: no platform's.
+            _ if children.is_array() => None,
             _ => Some(word.to_owned()),
         }
     };

@@ -449,20 +449,26 @@ fn trampoline_limits() {
 
     // one per platform, its module of `owner/` named by the crate's platform
     // words, below a group's module by the child the group lists; a base
-    // module of `owner/` is no platform's, and a platform's owner module
-    // shares its slot with its backend directory
-    let names = ["IOS", "MAC", "WINIT", "SLOT", "IOS_TWIN", "WINIT_TWIN"];
-    let [ios, mac, winit, slot, ios_twin, winit_twin] = names.map(cell);
+    // module of `owner/` and a group's own module are no platform's, and a
+    // platform's owner module shares its slot with its backend directory
+    let names = [
+        "IOS",
+        "MAC",
+        "WINIT",
+        "SLOT",
+        "IOS_TWIN",
+        "WINIT_TWIN",
+        "APPLE",
+    ];
+    let [ios, mac, winit, slot, ios_twin, winit_twin, apple] = names.map(cell);
+    let apple = format!("mod ios; mod macos; {apple}");
     let files = [
         ("crates/flui-native/src/lib.rs", "mod owner; mod platforms;"),
         (
             "crates/flui-native/src/owner/mod.rs",
             "mod apple; mod slot; mod winit;",
         ),
-        (
-            "crates/flui-native/src/owner/apple.rs",
-            "mod ios; mod macos;",
-        ),
+        ("crates/flui-native/src/owner/apple.rs", apple.as_str()),
         ("crates/flui-native/src/owner/apple/ios.rs", ios.as_str()),
         ("crates/flui-native/src/owner/apple/macos.rs", mac.as_str()),
         ("crates/flui-native/src/owner/winit.rs", winit.as_str()),
@@ -483,6 +489,7 @@ fn trampoline_limits() {
     let mut platform = krate(
         PLATFORM,
         &json!([
+            trampoline("owner::apple::APPLE"),
             trampoline("owner::apple::ios::IOS"),
             trampoline("owner::apple::macos::MAC"),
             trampoline("owner::slot::SLOT"),
@@ -501,6 +508,11 @@ fn trampoline_limits() {
     assert_eq!(
         found,
         [
+            (
+                PLATFORM.to_owned(),
+                "owner::apple::APPLE".to_owned(),
+                PLACEMENT
+            ),
             (
                 PLATFORM.to_owned(),
                 "owner::slot::SLOT".to_owned(),

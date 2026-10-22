@@ -165,6 +165,20 @@ fn embedded_path(file: &str, source: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Why `source`, the text of the backend file `embedder`, does not ship the
+/// checked-in dex: its one `include_bytes!` names another file, or it has
+/// none or more than one. `None` when it embeds [`DEX`].
+fn embedding_failure(embedder: &str, source: &str) -> Option<String> {
+    let embedded = embedded_path(embedder, source);
+    (embedded.as_deref() != Some(DEX)).then(|| match embedded {
+        Some(other) => format!(
+            "{embedder} embeds {other}, not {DEX}; the backend would ship another dex than the \
+             one checked here"
+        ),
+        None => format!("{embedder} does not embed {DEX} with one `include_bytes!`"),
+    })
+}
+
 fn read_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     java_files(&root.join(SOURCES))?
         .into_iter()
@@ -208,13 +222,7 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
     let dex = std::fs::read(root.join(DEX)).with_context(|| format!("reading {DEX}"))?;
     let embedder = std::fs::read_to_string(root.join(EMBEDDER))
         .with_context(|| format!("reading {EMBEDDER}"))?;
-    let mut failures = Vec::new();
-    if embedded_path(EMBEDDER, &embedder).as_deref() != Some(DEX) {
-        failures.push(format!(
-            "{EMBEDDER} does not embed {DEX} with one `include_bytes!`; the backend would ship \
-             another dex than the one checked here"
-        ));
-    }
+    let mut failures: Vec<String> = embedding_failure(EMBEDDER, &embedder).into_iter().collect();
     if record.sources != digest {
         failures.push(format!(
             "the Java sources under {SOURCES} changed since the dex was built; \
@@ -457,6 +465,31 @@ mod tests {
         );
     }
 
+    fn a_backend_that_embeds_another_dex_fails() {
+        let embedding = |path: &str| format!("const DEX: &[u8] = include_bytes!(\"{path}\");");
+        assert_eq!(
+            embedding_failure(EMBEDDER, &embedding("../../../android/classes.dex")),
+            None,
+            "the checked-in dex"
+        );
+        let other = embedding_failure(EMBEDDER, &embedding("../../../android/stale/classes.dex"))
+            .expect("another dex fails");
+        assert!(
+            other.contains("crates/flui-native/android/stale/classes.dex"),
+            "the failure names what the backend embeds: {other}"
+        );
+        assert!(
+            embedding_failure(EMBEDDER, "const DEX: &[u8] = &[];").is_some(),
+            "no embedding fails"
+        );
+        let real = std::fs::read_to_string(repo_root().join(EMBEDDER)).expect("the embedder");
+        assert_eq!(
+            embedding_failure(EMBEDDER, &real),
+            None,
+            "the backend embeds the checked-in dex"
+        );
+    }
+
     fn the_checked_in_dex_matches_its_sources() {
         let args = AndroidDexArgs {
             write: false,
@@ -478,6 +511,10 @@ mod tests {
                 (
                     "the_embedded_path_resolves_against_the_embedding_file",
                     the_embedded_path_resolves_against_the_embedding_file as fn(),
+                ),
+                (
+                    "a_backend_that_embeds_another_dex_fails",
+                    a_backend_that_embeds_another_dex_fails as fn(),
                 ),
                 (
                     "the_checked_in_dex_matches_its_sources",
