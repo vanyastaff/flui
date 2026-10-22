@@ -58,9 +58,8 @@ use crate::error::PlatformError;
 use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
-use crate::platforms::ios::os_version;
-use crate::shared::os_version::Since;
-use crate::shared::os_version::apple::AppleVersion;
+use crate::version::gate::Since;
+use crate::version::gate::apple::AppleVersion;
 use flui_platform::WindowId;
 
 type RetainedScreen = Retained<UIScreen>;
@@ -94,7 +93,7 @@ impl IosDisplays {
     pub(crate) fn new(marker: MainThreadMarker) -> Self {
         Self {
             source: DisplaySource::new(),
-            version: os_version::read(),
+            version: AppleVersion::read(),
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
             link_periods: Mutex::new(ScreenPeriods::new()),
         }

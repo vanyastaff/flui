@@ -1036,7 +1036,7 @@ pub(crate) mod scroll {
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::pointer::{ScrollDelta, ScrollUnit};
 
-    use crate::shared::os_version::android::{AndroidApi, ScaledScrollFactor};
+    use crate::version::gate::android::{AndroidApi, ScaledScrollFactor};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum FactorApi {
@@ -1209,7 +1209,7 @@ use crate::{
     input::assembly::NativeCancel,
     input::keys::adapter::keyboard_input,
     owner::android::{ActivityInput, AndroidLoop},
-    shared::os_version::android::AndroidApi,
+    version::gate::android::AndroidApi,
 };
 #[cfg(target_os = "android")]
 use flui_platform::PlatformInput;
@@ -1792,7 +1792,7 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
 #[cfg(target_os = "android")]
 fn scroll_factors(
     app: &android_activity::AndroidApp,
-    api: crate::shared::os_version::android::AndroidApi,
+    api: crate::version::gate::android::AndroidApi,
 ) -> Result<scroll::PixelFactors, flui_platform::PreferenceQueryError> {
     use crate::owner::android::activity::with_activity;
     use flui_foundation::geometry::DevicePixelRatio;

@@ -7,7 +7,7 @@
 //! window procedure applies when the theme changes.
 //!
 //! ```rust,ignore
-//! use flui_native::platforms::windows::{WindowsBackdrop, WindowsWindowExt};
+//! use flui_native::{WindowsBackdrop, WindowsWindowExt};
 //!
 //! window.set_backdrop(WindowsBackdrop::Mica);
 //! window.enable_snap_layouts();

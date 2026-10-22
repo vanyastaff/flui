@@ -459,11 +459,11 @@ winit-backend = [
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero
-# `feature = "web"` references in this crate's src. `platforms::web` is
-# gated by `#[cfg(target_arch = "wasm32")]` on the actual compile target
-# (`src/platforms/mod.rs`), not by this flag; enabling or disabling it
-# changes nothing observable. Kept as a forward-compatible name for
-# downstream `Cargo.toml`s, mirroring `desktop`.
+# `feature = "web"` references in this crate's src. The web host and each
+# feature's `web` file are gated by `#[cfg(target_arch = "wasm32")]` on the
+# actual compile target (`src/hosts/mod.rs`), not by this flag; enabling or
+# disabling it changes nothing observable. Kept as a forward-compatible name
+# for downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
 
 # Linux display server protocols: each connects to its compositor to read the
@@ -597,9 +597,10 @@ globals = [
 
 [package.metadata.flui.modules]
 # Import directions between the core host's modules (ADR-0151 §10), checked by
-# `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
-# feature directory and `version` join `features` and `base` when the
-# change that creates them lands.
+# `cargo xtask module-dag`: nothing names `hosts`, which names everything; the
+# owner thread and the OS versions name no feature. `storage` is crate-level
+# like `host.rs`: the vocabulary of the storage position, which the loops
+# name.
 features = [
     "display",
     "text",
@@ -614,16 +615,12 @@ features = [
 ]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
-base = ["owner"]
+base = ["owner", "version"]
 hosts = "hosts"
-# `platforms/` is taken apart into the features (ADR-0151 §10): a feature
-# reaches a module under it only through an exception below, each naming in
-# `reason` the move that removes it.
-retiring = ["platforms"]
 # The one edge between platform files of one feature (the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
-# winit), each edge from a feature into `platforms/`, and each between the
-# window's and another feature's files of one platform. A window that builds
+# winit), and each between the window's and another feature's files of one
+# platform. A window that builds
 # or keeps another feature's object of a window-level position (its
 # accessibility, haptics, drag source) keeps the edge until those positions
 # reach the window through the host table. A window that decodes a message
@@ -634,7 +631,6 @@ retiring = ["platforms"]
 # them until that view is an owner multiplexer they join through hooks.
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
-    { from = "display::apple::ios", to = "platforms::ios::os_version", exit = "ADR-0151", since = "2026-10-22", reason = "the iOS display source reads the OS version through `platforms::ios::os_version::read`, widened to `pub(crate)` for it; it goes when the version gates become `version/` (ADR-0151 §10)" },
     { from = "text::android", to = "window::android", exit = "ADR-0151", since = "2026-10-22", reason = "the work the input method's calls hand the owner finds the window's field on the Android window that holds it; it goes when the text feature keeps the field itself, keyed by window identity" },
     { from = "text::apple::macos", to = "input::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the `NSTextInputClient` methods, added to the AppKit content view's class, read the view's context (`get_context`) and send keys down its key path (`dispatch_input_event`); it goes when the content view is an owner multiplexer that the input, the text input and the window join through hooks, each keeping its own state of a window keyed by the window's identity (ADR-0151 §10)" },
     { from = "input::apple::macos", to = "text::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the AppKit content view's class, which takes the input, adds the `NSTextInputClient` methods and keeps the text input's state in its context; it goes when the content view is an owner multiplexer that the input, the text input and the window join through hooks, each keeping its own state of a window keyed by the window's identity (ADR-0151 §10)" },
@@ -664,7 +660,6 @@ exceptions = [
     { from = "window::winit", to = "accessibility::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit window builds its AT-SPI bridge on Linux; it goes when the window-level positions reach the window through the host table, and the window hands out the accessibility object its table names instead of building one" },
     { from = "window::winit", to = "text::winit", exit = "ADR-0151", since = "2026-10-22", reason = "the winit window builds its text input over the winit window; it goes when the window-level positions reach the window through the host table, and the window hands out the text input its table names instead of building one" },
     { from = "window::headless", to = "display::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window places itself on the laid-out displays (`LaidOutDisplays`) and refuses a move to a display the platform does not hold (`DisplayChangeError`); it goes when the window reads the displays through the headless loop's display hook, as the other windows do" },
-    { from = "window::headless", to = "platforms::headless::platform", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window offers the text-store host the platform's factory builds (`TextStoreHostFactory`); it goes when the text feature builds the store host" },
     { from = "window::headless", to = "accessibility::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window hands out the accessibility double (`FakeAccessibility`); it goes when the window-level positions reach the window through the host table, and the window hands out the accessibility object its table names instead of building one" },
     { from = "window::headless", to = "drag::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window takes its drag source double from the drag state (`HeadlessDragSource::of`); it goes when the window-level positions reach the window through the host table, and the window hands out the drag source its table names instead of taking one" },
     { from = "window::headless", to = "text::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window hands out the text input double; it goes when the window-level positions reach the window through the host table, and the window hands out the text input its table names instead of keeping one" },

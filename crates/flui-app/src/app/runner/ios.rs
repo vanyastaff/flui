@@ -27,7 +27,7 @@
 //! the two-layer model.
 
 use flui_native::HostWindow;
-use flui_native::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
+use flui_native::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
 use std::sync::Arc;
 

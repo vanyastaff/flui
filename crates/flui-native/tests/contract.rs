@@ -166,7 +166,7 @@ fn test_window_lifecycle_contract() {
 #[cfg(target_os = "windows")]
 mod native_windows {
     use flui_foundation::geometry::Size;
-    use flui_native::platforms::windows::WindowsWindow;
+    use flui_native::WindowsWindow;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
     use flui_platform::{DispatchEventResult, WindowOptions};
     use std::{

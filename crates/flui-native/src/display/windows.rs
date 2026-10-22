@@ -278,7 +278,7 @@ pub(crate) mod source {
     };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
-    use crate::shared::os_version::windows::WindowsBuild;
+    use crate::version::gate::windows::WindowsBuild;
 
     /// One platform instance's monitors: the last sample, and whether anything has
     /// invalidated it since (both kept by the [`DisplaySource`]).

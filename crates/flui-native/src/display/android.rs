@@ -276,7 +276,7 @@ pub(crate) mod source {
     };
     use crate::owner::signal::OwnerSignal;
     use crate::owner::watch::Watch;
-    use crate::shared::os_version::android::{AndroidApi, ContextDisplay};
+    use crate::version::gate::android::{AndroidApi, ContextDisplay};
     use flui_platform::PreferenceQueryError;
 
     /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`.

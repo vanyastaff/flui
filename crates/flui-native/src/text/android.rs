@@ -430,8 +430,8 @@ mod input {
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::shared::os_version::Since;
-    use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
+    use crate::version::gate::Since;
+    use crate::version::gate::android::{AndroidApi, StylusHandwriting};
 
     use crate::owner::android::ActivityWindow;
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};

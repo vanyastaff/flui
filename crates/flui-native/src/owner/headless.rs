@@ -26,7 +26,6 @@ use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
-use crate::platforms::headless::TextStoreHostFactory;
 use crate::{
     error::PlatformError,
     host_window::HostWindow,
@@ -49,6 +48,13 @@ use flui_platform::{DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
 /// (`owner/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+
+/// Builds the text-store host a headless window offers
+/// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)).
+/// Shared with every window, so `Send + Sync`; what it builds is owner-thread
+/// state.
+pub(crate) type TextStoreHostFactory =
+    Arc<dyn Fn() -> std::rc::Rc<dyn flui_platform::text_store::TextStoreHost> + Send + Sync>;
 
 /// What the headless host's table names for its loop (ADR-0151 §10): the
 /// displays a platform has before a test lays out its own, the channel its
@@ -215,7 +221,7 @@ pub(crate) struct HeadlessState {
     /// The displays this platform reports, which the table lays out
     /// ([`HeadlessHost::displays`]); replaced by
     /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
-    /// [`HeadlessDisplayControls`](crate::platforms::headless::HeadlessDisplayControls).
+    /// [`HeadlessDisplayControls`](crate::HeadlessDisplayControls).
     pub(crate) displays: DisplaySnapshot,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
@@ -224,10 +230,10 @@ pub(crate) struct HeadlessState {
     /// had answered with a block.
     pub(crate) session_end_releases: usize,
     /// What `Platform::preferences` reports: unknown until
-    /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::platforms::headless::HeadlessPreferences::set).
+    /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
     pub(crate) preferences: flui_platform::SystemPreferences,
     /// The failure the next `Platform::preferences` read reports instead of a
-    /// value ([`HeadlessPreferences::fail_next_read`](crate::platforms::headless::HeadlessPreferences::fail_next_read)).
+    /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
     pub(crate) preference_failure: Option<String>,
 }
 

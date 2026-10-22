@@ -30,10 +30,9 @@ use crate::owner::android::{ActivityFlags, ActivityWindow, AndroidLoop};
 use crate::owner::handlers::CallbackWindow;
 use crate::{
     input::availability::AndroidInputApis, owner::OpenWindowError,
-    owner::handlers::WindowCallbacks, owner::slot::OwnerSlot,
-    shared::os_version::android::AndroidApi, shared::os_version::android::DragSource,
-    shared::os_version::android::GestureExclusion, shared::os_version::android::TouchpadGestures,
-    window::state::WindowStateCell,
+    owner::handlers::WindowCallbacks, owner::slot::OwnerSlot, version::gate::android::AndroidApi,
+    version::gate::android::DragSource, version::gate::android::GestureExclusion,
+    version::gate::android::TouchpadGestures, window::state::WindowStateCell,
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -808,7 +807,7 @@ mod safe_area {
     use flui_foundation::geometry::{EdgeInsets, Size};
     use jni::{JValue, jni_sig, jni_str};
 
-    use crate::shared::os_version::android::{AndroidApi, DisplayCutout, InsetsByType};
+    use crate::version::gate::android::{AndroidApi, DisplayCutout, InsetsByType};
 
     #[derive(Clone, Copy)]
     pub(super) struct Sample {
@@ -1094,7 +1093,7 @@ pub(crate) mod system_chrome {
 
     use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
-    use crate::shared::os_version::android::{AndroidApi, InsetsController};
+    use crate::version::gate::android::{AndroidApi, InsetsController};
 
     /// `WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS`.
     const APPEARANCE_LIGHT_STATUS_BARS: i32 = 0x8;

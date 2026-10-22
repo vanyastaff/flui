@@ -5,7 +5,7 @@
 //! [`MacOSLoop`] is the loop of the macOS host's table. It tracks the open
 //! windows as [`CallbackWindow`]s, the window feature's, without naming them
 //! ([`WindowRegistry`]); the clipboard and the other features keep their code
-//! under `platforms::macos` and reach the owner thread through what this
+//! in their own directories and reach the owner thread through what this
 //! module re-exports. The loop holds the displays, the preference source, the
 //! notice channel and the notice sources through the hooks the table makes
 //! ([`MacosHost`]), and is the table's displays, preference and lifecycle

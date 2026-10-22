@@ -38,8 +38,8 @@ use parking_lot::Mutex;
 
 use super::EditorState;
 use crate::owner::signal::OwnerSignal;
-use crate::shared::os_version::Since;
-use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
+use crate::version::gate::Since;
+use crate::version::gate::android::{AndroidApi, InMemoryDex};
 
 use super::ActivityWindow;
 use crate::owner::android::activity::with_activity;

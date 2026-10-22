@@ -357,8 +357,8 @@ use crate::{
     owner::android::java_view::{JavaView, ViewEvent, ViewTransfer},
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
-    shared::os_version::Since,
-    shared::os_version::android::{AndroidApi, DragSource},
+    version::gate::Since,
+    version::gate::android::{AndroidApi, DragSource},
 };
 #[cfg(target_os = "android")]
 use clip::{
