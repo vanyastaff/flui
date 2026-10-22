@@ -51,9 +51,9 @@ impl Host for Apple {
     type Window = IOSWindow;
 
     #[cfg(target_os = "macos")]
-    type Displays = MacosDisplays;
+    type Displays = MacOSLoop;
     #[cfg(target_os = "ios")]
-    type Displays = IosDisplays;
+    type Displays = IOSLoop;
 
     #[cfg(target_os = "macos")]
     type Input = MacOSLoop;

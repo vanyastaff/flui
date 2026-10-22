@@ -728,7 +728,7 @@ impl WindowsWindow {
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
                 identity,
                 displays: Arc::clone(&displays),
-                last_monitor: std::cell::Cell::new(0),
+                last_monitor: std::cell::Cell::new(None),
                 appearance: std::cell::Cell::new(appearance),
                 chrome_follows_system: std::cell::Cell::new(true),
             });

@@ -55,8 +55,7 @@ use super::link_rate::{
 use super::{SameObject, ScreenLedger};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
-use crate::owner::apple::IOSLoop;
-use crate::owner::apple::ios::{NativeOwner, ScreenIdentity};
+use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
 use crate::platforms::ios::os_version;
@@ -98,80 +97,6 @@ impl IosDisplays {
             version: os_version::read(),
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
             link_periods: Mutex::new(ScreenPeriods::new()),
-        }
-    }
-
-    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
-    /// again. Any thread: this is one atomic store.
-    pub(crate) fn invalidate(&self) {
-        self.source.invalidate();
-    }
-
-    /// How a display link on a screen that sustains `maximum_frames_per_second`
-    /// is asked to run, on the version this platform runs on.
-    pub(crate) fn frame_rate_preference(
-        &self,
-        maximum_frames_per_second: i64,
-    ) -> FrameRatePreference {
-        frame_rate_preference(self.version, maximum_frames_per_second)
-    }
-
-    /// The displays now: the last sample while nothing has invalidated it,
-    /// otherwise a fresh one.
-    pub(crate) fn snapshot(
-        &self,
-        marker: MainThreadMarker,
-    ) -> Result<DisplaySnapshot, PlatformError> {
-        self.source.snapshot_with(|| Ok(self.read(marker)))
-    }
-
-    /// The identity of `screen`, retaining it.
-    ///
-    /// A screen `UIScreen.screens` does not list is not numbered: it answers no
-    /// identity and records a miss, so the snapshot is read again once per
-    /// revision and a later call may find the screen listed. A screen the
-    /// published snapshot does not hold yet records a miss too.
-    pub(crate) fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity {
-        let screen = screen.retain();
-        let held = self.screens.get(marker).borrow().number_if_held(&screen);
-        let number = if held.is_some() {
-            held
-        } else {
-            let listed = UIScreen::screens(marker);
-            if !listed
-                .iter()
-                .any(|screen_in_list| screen_in_list.same_object(&screen))
-            {
-                // The address stands only for "this missed object" in the
-                // once-per-revision ledger; it names no display.
-                self.source
-                    .note_miss(Retained::as_ptr(&screen).addr() as u64);
-                return ScreenIdentity::default();
-            }
-            self.screens.get(marker).borrow_mut().number_of(&screen)
-        };
-        let id = number.and_then(|number| self.source.mint(&DisplayKey::IosScreen(number)));
-        if let Some(id) = id
-            && self.source.published().get(id).is_none()
-        {
-            self.source.note_miss(id.get());
-        }
-        ScreenIdentity { id, number }
-    }
-
-    /// Record the period `window`'s display link measured on screen `number`,
-    /// and mark the snapshot stale.
-    pub(crate) fn report_link_period(&self, number: u64, window: WindowId, period: RefreshPeriod) {
-        self.link_periods.lock().report(number, window, period);
-        self.invalidate();
-    }
-
-    /// Forget `window`'s period on screen `number`: its link is gone. Other
-    /// windows' periods on the screen stay.
-    pub(crate) fn forget_link_period(&self, number: u64, window: WindowId) {
-        let forgot = self.link_periods.lock().forget(number, window);
-        if forgot {
-            self.invalidate();
         }
     }
 
@@ -250,7 +175,7 @@ impl ScreenObserver {
                         return;
                     }
                     if let Some(displays) = displays.upgrade() {
-                        displays.invalidate();
+                        displays.source.invalidate();
                     }
                     if let Some(signal) = signal.upgrade() {
                         let _ = signal.wake();
@@ -309,41 +234,70 @@ impl Drop for ScreenObserver {
     }
 }
 
-impl crate::host::Displays<IOSLoop> for IosDisplays {
-    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "UIKit display sampling must run on the main thread".into(),
-        })?;
-        owner.displays.snapshot(marker)
-    }
-}
-
 impl crate::owner::apple::ios::HostDisplays for IosDisplays {
+    /// The last sample while nothing has invalidated it, otherwise a fresh one.
     fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
-        IosDisplays::snapshot(self, marker)
+        self.source.snapshot_with(|| Ok(self.read(marker)))
     }
 
+    /// One atomic store, so any thread may call it.
     fn invalidate(&self) {
-        IosDisplays::invalidate(self);
+        self.source.invalidate();
     }
 
+    /// A screen `UIScreen.screens` does not list is not numbered: it answers no
+    /// identity and records a miss, so the snapshot is read again once per
+    /// revision and a later call may find the screen listed. A screen the
+    /// published snapshot does not hold yet records a miss too.
     fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity {
-        IosDisplays::identify(self, marker, screen)
+        let screen = screen.retain();
+        let held = self.screens.get(marker).borrow().number_if_held(&screen);
+        let number = if held.is_some() {
+            held
+        } else {
+            let listed = UIScreen::screens(marker);
+            if !listed
+                .iter()
+                .any(|screen_in_list| screen_in_list.same_object(&screen))
+            {
+                // The address stands only for "this missed object" in the
+                // once-per-revision ledger; it names no display.
+                self.source
+                    .note_miss(Retained::as_ptr(&screen).addr() as u64);
+                return ScreenIdentity::default();
+            }
+            self.screens.get(marker).borrow_mut().number_of(&screen)
+        };
+        let id = number.and_then(|number| self.source.mint(&DisplayKey::IosScreen(number)));
+        if let Some(id) = id
+            && self.source.published().get(id).is_none()
+        {
+            self.source.note_miss(id.get());
+        }
+        ScreenIdentity {
+            id,
+            number: number.map(ScreenNumber),
+        }
     }
 
-    fn report_link_period(&self, number: u64, window: WindowId, period: RefreshPeriod) {
-        IosDisplays::report_link_period(self, number, window, period);
+    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod) {
+        self.link_periods.lock().report(number.0, window, period);
+        self.source.invalidate();
     }
 
-    fn forget_link_period(&self, number: u64, window: WindowId) {
-        IosDisplays::forget_link_period(self, number, window);
+    /// Other windows' periods on the screen stay.
+    fn forget_link_period(&self, number: ScreenNumber, window: WindowId) {
+        let forgot = self.link_periods.lock().forget(number.0, window);
+        if forgot {
+            self.source.invalidate();
+        }
     }
 
     /// A frame-rate range on iOS 15 and later, `preferredFramesPerSecond`
     /// before it.
     fn request_frame_rate(&self, link: &CADisplayLink, screen: &UIScreen) {
         let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
-        match self.frame_rate_preference(maximum) {
+        match frame_rate_preference(self.version, maximum) {
             FrameRatePreference::Range(property, range) => {
                 set_frame_rate_range(link, property, range);
             }

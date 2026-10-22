@@ -119,9 +119,9 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// The display `hwnd` is on, from the last sample; never samples.
     fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId>;
 
-    /// The handle of the monitor nearest `hwnd`, `0` for none: what a window
+    /// The handle of the monitor nearest `hwnd`, `None` for none: what a window
     /// compares to learn that a move took it to another monitor.
-    fn nearest_monitor(&self, hwnd: HWND) -> isize;
+    fn nearest_monitor(&self, hwnd: HWND) -> Option<std::num::NonZeroIsize>;
 
     /// How many times the monitors were read.
     #[cfg(test)]
@@ -1403,6 +1403,15 @@ impl host::Services for WindowsLoop {
     fn compositor_name(&self) -> &'static str {
         // Nothing reads it; the name leaves `Platform` with the other services.
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the displays the table
+/// made ([`WindowsHost::displays`]), so the position and the hook name one
+/// object.
+impl host::Displays<WindowsLoop> for WindowsLoop {
+    fn snapshot(owner: &WindowsLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
     }
 }
 

@@ -39,6 +39,7 @@ mod hooks {
     use super::ndk::SymbolSource;
     use crate::error::PlatformError;
     use crate::owner::signal::OwnerSignal;
+    use crate::owner::watch::Watch;
     use crate::shared::os_version::android::AndroidApi;
 
     /// What the Android host's table names for its owner thread (ADR-0151
@@ -82,12 +83,9 @@ mod hooks {
         /// this system has the request.
         fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint);
 
-        /// Watch the refresh rate where the system reports it; on the thread
-        /// whose looper runs the app.
-        fn watch_refresh_rate(&self);
-
-        /// Stop watching the refresh rate; on the thread that started it,
-        /// before the platform goes away.
-        fn stop_watching(&self);
+        /// Watch the refresh rate where the system reports it, on the thread
+        /// whose looper runs the app, until the watch is dropped on that
+        /// thread.
+        fn observe(&self) -> Watch;
     }
 }

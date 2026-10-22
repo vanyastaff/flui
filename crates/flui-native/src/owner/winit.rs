@@ -167,27 +167,37 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// changed, so the owner is woken to sample it again.
     fn resample(&self, event_loop: &ActiveEventLoop, signal: Option<&Arc<OwnerSignal>>) -> bool;
 
-    /// The source's part of the system's broadcasts, which the receiver the
-    /// loop builds on resume tells it before the preferences.
+    /// The source's part of the system's broadcasts, a subscriber of the
+    /// receiver the loop builds on resume; on Windows the displays are told of
+    /// a change through it, not through a watch of their own.
     #[cfg(windows)]
     fn broadcasts(
         self: Arc<Self>,
         signal: &Arc<OwnerSignal>,
     ) -> std::rc::Rc<dyn super::windows::broadcast::Subscriber>;
 
-    /// Mark the source stale and wake the owner when AppKit reports a change
-    /// of screen parameters, until the watch is dropped.
-    #[cfg(target_os = "macos")]
+    /// The source's observation of what changes the displays (AppKit's
+    /// screen-parameters notification, the compositor's display thread),
+    /// which marks the source stale and wakes the owner behind `signal` until
+    /// the watch is dropped.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> super::watch::Watch;
 
     /// Whether the windows open on a Wayland compositor.
     #[cfg(target_os = "linux")]
     fn is_wayland(&self) -> bool;
+}
 
-    /// End the source's observation of the compositor; it reads no more
-    /// changes.
-    #[cfg(target_os = "linux")]
-    fn stop(&self);
+/// The displays position is the loop's: the native source the table made
+/// ([`WinitHost::displays`]), kept between calls and read again only after an
+/// event marked it stale, since the host asks on every owner wake. It needs no
+/// event loop, so it answers before `Platform::run`; on Linux that first
+/// answer is read once on a connection that then closes, and the display
+/// thread takes over when the loop resumes.
+impl host::Displays<WinitLoop> for WinitLoop {
+    fn snapshot(owner: &WinitLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
+    }
 }
 
 /// Convert a tracked physical cursor position to logical pixels.
@@ -509,13 +519,13 @@ impl WinitLoop {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(windows)]
-            preference_broadcasts: None,
+            broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
-            #[cfg(target_os = "macos")]
-            screen_observer: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            display_watch: None,
             on_ready: Some(on_ready),
             control: receiver,
             quit_notified: false,
@@ -929,7 +939,7 @@ pub(crate) struct WinitApp {
     /// The hidden top-level window that tells the displays and the preference
     /// source the system's display and setting broadcasts; owner-thread only.
     #[cfg(windows)]
-    preference_broadcasts: Option<super::windows::broadcast::Receiver>,
+    broadcasts: Option<super::windows::broadcast::Receiver>,
     #[cfg(target_os = "macos")]
     preference_source: Option<Arc<crate::platforms::macos::PreferenceSource>>,
     /// Wakes the owner when AppKit reports a preference change; owner-thread only.
@@ -941,9 +951,11 @@ pub(crate) struct WinitApp {
     /// owner-thread only.
     #[cfg(target_os = "linux")]
     pub(crate) host_notices: Option<crate::platforms::linux::host_notices::HostNoticeSource>,
-    /// Marks the screens stale when AppKit reports a change; owner-thread only.
-    #[cfg(target_os = "macos")]
-    screen_observer: Option<super::watch::Watch>,
+    /// The displays' observation of what changes them, started on resume and
+    /// ended when dropped; owner-thread only. On Windows the displays hear the
+    /// receiver in `broadcasts` instead.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    display_watch: Option<super::watch::Watch>,
     pub(crate) platform: Arc<WinitLoop>,
     /// The platform over `platform` that `on_ready`'s owner capability wraps.
     owner_platform: Arc<dyn Platform>,
@@ -1181,8 +1193,8 @@ impl ApplicationHandler for WinitApp {
         // Sample the monitors now: a platform that resumes after a monitor
         // change must not keep the list from the previous resume.
         self.platform.resample_displays(event_loop);
-        #[cfg(target_os = "macos")]
-        self.observe_screens();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        self.observe_displays();
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         if let Err(error) = self.initialize_preferences() {
             self.bootstrap_error = Some(error.into());
@@ -1764,15 +1776,15 @@ impl WinitApp {
         }
     }
 
-    /// Start marking the screens stale when AppKit reports a change.
-    #[cfg(target_os = "macos")]
-    fn observe_screens(&mut self) {
-        if self.screen_observer.is_some() {
+    /// Start the displays' observation of what changes them, once.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn observe_displays(&mut self) {
+        if self.display_watch.is_some() {
             return;
         }
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
-            self.screen_observer = Some(Arc::clone(&self.platform.displays).observe(&signal));
+            self.display_watch = Some(Arc::clone(&self.platform.displays).observe(&signal));
         }
     }
 
@@ -1795,32 +1807,57 @@ impl WinitApp {
 
     #[cfg(windows)]
     fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
-        let signal = self.platform.owner_signal.lock().clone();
-        if self.preference_source.is_none()
-            && let Some(signal) = &signal
-        {
-            self.preference_source =
-                Some(crate::platforms::windows::preferences::PreferenceSource::new(signal)?);
+        self.initialize_preferences_with(
+            crate::platforms::windows::preferences::PreferenceSource::new,
+        )
+    }
+
+    /// [`Self::initialize_preferences`] with the source `open` makes. The
+    /// system's broadcasts reach the displays and the source through a
+    /// receiver of their own (winit has no lifecycle subscriber on Windows),
+    /// built from the subscribers that exist: a source that cannot open costs
+    /// the preferences, never the displays' notifications, and its failure is
+    /// reported once the receiver stands. A source that opens later joins a
+    /// receiver built anew.
+    #[cfg(windows)]
+    fn initialize_preferences_with(
+        &mut self,
+        open: impl FnOnce(
+            &Arc<OwnerSignal>,
+        ) -> Result<
+            crate::platforms::windows::preferences::PreferenceSource,
+            PlatformError,
+        >,
+    ) -> Result<(), PlatformError> {
+        use super::windows::broadcast::{Receiver, Subscriber};
+        use std::rc::Rc;
+
+        let Some(signal) = self.platform.owner_signal.lock().clone() else {
+            return Ok(());
+        };
+        // Whether a source opened now, or why it could not.
+        let opened = if self.preference_source.is_some() {
+            Ok(false)
+        } else {
+            open(&signal).map(|source| {
+                self.preference_source = Some(source);
+                true
+            })
+        };
+        if self.broadcasts.is_none() || matches!(opened, Ok(true)) {
+            let mut subscribers: Vec<Rc<dyn Subscriber>> =
+                vec![Arc::clone(&self.platform.displays).broadcasts(&signal)];
+            if let Some(source) = &self.preference_source {
+                subscribers.push(Rc::new(source.broadcasts()));
+            }
+            // The receiver it replaces retires after its successor stands.
+            let receiver =
+                Receiver::new(subscribers).map_err(|error| PlatformError::Preferences {
+                    message: error.to_string(),
+                })?;
+            self.broadcasts = Some(receiver);
         }
-        // The system's broadcasts reach the displays and the source through a
-        // receiver of their own, in the Win32 host's order: winit has no
-        // lifecycle subscriber on Windows.
-        if self.preference_broadcasts.is_none()
-            && let Some(source) = &self.preference_source
-            && let Some(signal) = &signal
-        {
-            let subscribers: [std::rc::Rc<dyn super::windows::broadcast::Subscriber>; 2] = [
-                Arc::clone(&self.platform.displays).broadcasts(signal),
-                std::rc::Rc::new(source.broadcasts()),
-            ];
-            self.preference_broadcasts = Some(
-                super::windows::broadcast::Receiver::new(subscribers).map_err(|error| {
-                    PlatformError::Preferences {
-                        message: error.to_string(),
-                    }
-                })?,
-            );
-        }
+        opened?;
         self.refresh_preferences();
         Ok(())
     }
@@ -2333,8 +2370,8 @@ impl WinitApp {
         let preference_source = self.preference_source.take();
         #[cfg(target_os = "macos")]
         let preference_observers = self.preference_observers.take();
-        #[cfg(target_os = "macos")]
-        let screen_observer = self.screen_observer.take();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let display_watch = self.display_watch.take();
         #[cfg(target_os = "linux")]
         let host_notices = self.host_notices.take();
         let signal = self.platform.owner_signal.lock().clone();
@@ -2343,10 +2380,8 @@ impl WinitApp {
         }
         // Admission is closed, so a change a display source still reports
         // wakes nobody; now its observation can end.
-        #[cfg(target_os = "linux")]
-        self.platform.displays.stop();
-        #[cfg(target_os = "macos")]
-        drop(screen_observer);
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        drop(display_watch);
         #[cfg(target_os = "macos")]
         drop(preference_observers);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -2354,7 +2389,7 @@ impl WinitApp {
         // After the source, which closes its admission as it drops: a broadcast
         // the receiver still hears while it is destroyed wakes nobody.
         #[cfg(windows)]
-        drop(self.preference_broadcasts.take());
+        drop(self.broadcasts.take());
         #[cfg(target_os = "linux")]
         drop(host_notices);
         self.release_open_window_callbacks();
@@ -2408,11 +2443,9 @@ impl WinitApp {
             let source = self.preference_source.take();
             drop(source);
             #[cfg(windows)]
-            drop(self.preference_broadcasts.take());
-            #[cfg(target_os = "linux")]
-            self.platform.displays.stop();
-            #[cfg(target_os = "macos")]
-            drop(self.screen_observer.take());
+            drop(self.broadcasts.take());
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            drop(self.display_watch.take());
         }
         self.control.stop_accepting();
         self.reject_pending_commands();
@@ -2997,13 +3030,13 @@ mod tests {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(windows)]
-            preference_broadcasts: None,
+            broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
-            #[cfg(target_os = "macos")]
-            screen_observer: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            display_watch: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,
@@ -3029,6 +3062,60 @@ mod tests {
         let second_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
         assert!(second_finish.is_ok(), "owner close is idempotent");
         assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+    }
+
+    /// A preference source that cannot open costs the preferences, not the
+    /// displays: the receiver stands with the displays' subscriber alone, a
+    /// display change reaches them, and the failure is still reported.
+    #[cfg(windows)]
+    #[test]
+    fn a_display_change_reaches_the_displays_when_the_preferences_cannot_open() {
+        use windows::Win32::UI::WindowsAndMessaging::WM_DISPLAYCHANGE;
+
+        let host = Arc::new(WinitPlatform::new());
+        let platform = host.shared_owner();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let signal = crate::owner::signal::OwnerSignal::new({
+            let wakes = Arc::clone(&wakes);
+            Arc::new(move || {
+                wakes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        });
+        signal.start().expect("the owner signal starts");
+        *platform.owner_signal.lock() = Some(Arc::clone(&signal));
+        let (_sender, receiver) = control_lane(Arc::new(|| {}));
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            owner_platform: host,
+            preference_source: None,
+            broadcasts: None,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+            self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
+        };
+
+        let opened = app.initialize_preferences_with(|_| {
+            Err(crate::PlatformError::Preferences {
+                message: "the preference source could not open".into(),
+            })
+        });
+        assert!(opened.is_err(), "the preference failure was not reported");
+        assert!(app.preference_source.is_none());
+        let broadcasts = app
+            .broadcasts
+            .as_ref()
+            .expect("the displays' receiver stands without the preferences");
+        broadcasts.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            1,
+            "the display change did not reach the displays"
+        );
     }
 
     /// A Wayland window dragged to an output of the same scale raises no winit

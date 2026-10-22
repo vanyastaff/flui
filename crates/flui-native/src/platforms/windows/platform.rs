@@ -129,9 +129,9 @@ pub(crate) struct WindowContext {
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The platform's monitors: a DPI change invalidates their snapshot.
     pub displays: Arc<dyn HostDisplays>,
-    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
+    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `None`
     /// before the first message; a change raises `on_display_changed`.
-    pub last_monitor: std::cell::Cell<isize>,
+    pub last_monitor: std::cell::Cell<Option<std::num::NonZeroIsize>>,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,

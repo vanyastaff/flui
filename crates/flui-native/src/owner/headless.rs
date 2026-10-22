@@ -45,6 +45,13 @@ pub(crate) trait HeadlessHost: 'static {
     fn displays() -> DisplaySnapshot;
 }
 
+/// The displays position is the loop's: the snapshot it holds.
+impl host::Displays<HeadlessLoop> for HeadlessLoop {
+    fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(owner.with_state(|state| state.displays.clone()))
+    }
+}
+
 /// The headless host's loop: the state every position of its table reads.
 ///
 /// The headless host creates no real windows or graphics contexts; it serves

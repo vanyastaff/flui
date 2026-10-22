@@ -48,8 +48,5 @@ pub(crate) mod linux;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
+#[cfg(all(feature = "winit-backend", target_os = "linux"))]
 pub(crate) mod winit;

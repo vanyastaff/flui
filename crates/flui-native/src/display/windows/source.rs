@@ -38,6 +38,8 @@
 // own `// SAFETY:` comment stating the invariant that makes it sound.
 #![expect(unsafe_code)]
 
+use std::num::NonZeroIsize;
+
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
 use parking_lot::Mutex;
@@ -86,38 +88,58 @@ impl std::fmt::Debug for WindowsDisplays {
 
 impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
     fn mark_stale(&self) {
-        self.invalidate();
-    }
-}
-
-impl crate::host::Displays<crate::owner::windows::WindowsLoop> for WindowsDisplays {
-    fn snapshot(
-        owner: &crate::owner::windows::WindowsLoop,
-    ) -> Result<DisplaySnapshot, PlatformError> {
-        owner.displays.snapshot()
+        self.source.invalidate();
     }
 }
 
 impl crate::owner::windows::HostDisplays for WindowsDisplays {
+    /// The last sample, or a fresh one when none was taken or something
+    /// invalidated it; a revision space that is used up is retried on the next
+    /// call.
     fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        WindowsDisplays::snapshot(self)
+        self.source.snapshot_with_aux(
+            || Ok(self.sample()),
+            |monitors| *self.monitors.lock() = monitors,
+        )
     }
 
+    /// Touches one flag and nothing else, so a window procedure or a foreign
+    /// thread may call it at any point.
     fn invalidate(&self) {
-        WindowsDisplays::invalidate(self);
+        self.source.invalidate();
     }
 
+    /// The one the window's nearest monitor is in the last sample, by native
+    /// key.
+    ///
+    /// Reads the last sample and never takes one: the host derives window
+    /// displays from a snapshot it has accepted, and a sample here would publish
+    /// a newer revision mid-derivation. `None` for a window with no monitor, a
+    /// monitor the sample lacks (a monitor plugged in since), or an output with
+    /// no id. A monitor the sample lacks invalidates the snapshot once per
+    /// revision, so the next owner turn samples it and the repeated miss costs
+    /// nothing.
     fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId> {
-        WindowsDisplays::display_of_window(self, hwnd)
+        let nearest = crate::owner::windows::HostDisplays::nearest_monitor(self, hwnd)?.get();
+        resolve_display(
+            nearest,
+            &self.monitors.lock(),
+            || self.source.note_miss(nearest.cast_unsigned() as u64),
+            |key| self.source.mint(key),
+        )
     }
 
-    fn nearest_monitor(&self, hwnd: HWND) -> isize {
-        nearest_monitor(hwnd)
+    fn nearest_monitor(&self, hwnd: HWND) -> Option<NonZeroIsize> {
+        // SAFETY: `MonitorFromWindow` takes the handle by value and dereferences
+        // nothing; a destroyed or foreign handle yields a handle or null, never a
+        // fault.
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        NonZeroIsize::new(monitor.0 as isize)
     }
 
     #[cfg(test)]
     fn sample_count(&self) -> usize {
-        WindowsDisplays::sample_count(self)
+        self.samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -127,13 +149,12 @@ impl crate::owner::windows::HostDisplays for WindowsDisplays {
 /// target, reads the refresh period from `QueryDisplayConfig` and names a
 /// window's display by `MonitorFromWindow`. winit's own monitor list is not
 /// read. The source is invalidated by `WM_DISPLAYCHANGE` and work-area changes
-/// on the loop's broadcast receiver (created on resume with the preference
-/// source) and sampled again where winit reports a move, a scale change or a
-/// resume.
+/// on the loop's broadcast receiver (created on resume) and sampled again where
+/// winit reports a move, a scale change or a resume.
 #[cfg(feature = "winit-backend")]
 impl crate::owner::winit::HostDisplays for WindowsDisplays {
     fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        WindowsDisplays::snapshot(self)
+        crate::owner::windows::HostDisplays::snapshot(self)
     }
 
     /// The display `window` is on, by the monitor nearest its native window.
@@ -143,19 +164,24 @@ impl crate::owner::winit::HostDisplays for WindowsDisplays {
         let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
             return None;
         };
-        self.display_of_window(HWND(handle.hwnd.get() as *mut _))
+        crate::owner::windows::HostDisplays::display_of_window(
+            self,
+            HWND(handle.hwnd.get() as *mut _),
+        )
     }
 
-    /// Sample the monitors now, which needs no event loop: whether the
-    /// snapshot changed. A revision that cannot advance keeps the previous
-    /// sample.
+    /// Sample the monitors now, which needs neither the event loop nor the
+    /// signal: whether the snapshot differs from the one the last sample
+    /// published. A revision that cannot advance keeps the previous sample.
     fn resample(
         &self,
         _event_loop: &winit::event_loop::ActiveEventLoop,
         _signal: Option<&std::sync::Arc<crate::owner::signal::OwnerSignal>>,
     ) -> bool {
-        match self.resample_changed() {
-            Ok(changed) => changed,
+        let before = self.source.published().revision();
+        self.source.invalidate();
+        match crate::owner::windows::HostDisplays::snapshot(self) {
+            Ok(snapshot) => snapshot.revision() != before,
             Err(error) => {
                 tracing::warn!(%error, "display revisions exhausted; keeping the last snapshot");
                 false
@@ -182,66 +208,6 @@ impl WindowsDisplays {
             #[cfg(test)]
             samples: std::sync::atomic::AtomicUsize::new(0),
         }
-    }
-
-    /// Record that the displays may have changed. Touches one flag and nothing
-    /// else, so a window procedure or a foreign thread may call it at any point;
-    /// the next [`snapshot`](Self::snapshot) samples again.
-    pub(crate) fn invalidate(&self) {
-        self.source.invalidate();
-    }
-
-    /// The snapshot: the last sample, or a fresh one when none was taken or
-    /// something invalidated it.
-    ///
-    /// # Errors
-    /// [`PlatformError::Displays`] when the snapshot revision space is used up;
-    /// the next call samples again.
-    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.source.snapshot_with_aux(
-            || Ok(self.sample()),
-            |monitors| *self.monitors.lock() = monitors,
-        )
-    }
-
-    /// Sample now and report whether the snapshot differs from the one the last
-    /// sample published.
-    ///
-    /// # Errors
-    /// As [`snapshot`](Self::snapshot).
-    #[cfg(feature = "winit-backend")]
-    pub(crate) fn resample_changed(&self) -> Result<bool, PlatformError> {
-        let before = self.source.published().revision();
-        self.invalidate();
-        Ok(self.snapshot()?.revision() != before)
-    }
-
-    /// The display `hwnd` is on: the one the window's nearest monitor is in the
-    /// last sample, by native key.
-    ///
-    /// Reads the last sample and never takes one: the host derives window
-    /// displays from a snapshot it has accepted, and a sample here would publish
-    /// a newer revision mid-derivation. `None` for a window with no monitor, a
-    /// monitor the sample lacks (a monitor plugged in since), or an output with
-    /// no id. A monitor the sample lacks invalidates the snapshot once per
-    /// revision, so the next owner turn samples it and the repeated miss costs
-    /// nothing.
-    pub(crate) fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId> {
-        let nearest = nearest_monitor(hwnd);
-        if nearest == 0 {
-            return None;
-        }
-        resolve_display(
-            nearest,
-            &self.monitors.lock(),
-            || self.source.note_miss(nearest.cast_unsigned() as u64),
-            |key| self.source.mint(key),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sample_count(&self) -> usize {
-        self.samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Read the monitors now: their displays, and the handles that resolve
@@ -299,15 +265,6 @@ impl WindowsDisplays {
         }
         (displays, sampled)
     }
-}
-
-/// The handle of the monitor nearest `hwnd`, `0` for none.
-fn nearest_monitor(hwnd: HWND) -> isize {
-    // SAFETY: `MonitorFromWindow` takes the handle by value and dereferences
-    // nothing; a destroyed or foreign handle yields a handle or null, never a
-    // fault.
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    monitor.0 as isize
 }
 
 /// The `dmDisplayFrequency` of the current mode of the adapter output

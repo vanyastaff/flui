@@ -57,7 +57,13 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
-#[cfg(any(target_os = "macos", target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
 pub(crate) mod watch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;

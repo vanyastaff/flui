@@ -601,7 +601,7 @@ impl host::Loop for AndroidLoop {
         let mut next_preference_sample = Some(web_time::Instant::now());
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
-        self.displays.watch_refresh_rate();
+        let refresh_rate = self.displays.observe();
 
         let mut on_ready = Some(on_ready);
         self.activity.resumed.store(false, Ordering::SeqCst);
@@ -973,7 +973,7 @@ impl host::Loop for AndroidLoop {
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Unregister the choreographer callback on the thread it was registered
         // on, before its data can be freed with the loop.
-        self.displays.stop_watching();
+        drop(refresh_rate);
         self.owner_signal.close();
 
         // The loop's one exit, reached by its three returning routes: a
@@ -1127,6 +1127,23 @@ impl host::Services for AndroidLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the displays the table
+/// made ([`AndroidHost::displays`]).
+impl host::Displays<AndroidLoop> for AndroidLoop {
+    fn snapshot(owner: &AndroidLoop) -> Result<flui_platform::DisplaySnapshot, PlatformError> {
+        let snapshot = owner.displays.snapshot(&owner.app)?;
+        if owner.displays.take_max_rate_change() {
+            // A `High` hint skipped while the display's highest rate was
+            // unknown (or sent with an older one) is asked again.
+            let window = owner.window.lock().clone();
+            if let Some(window) = window {
+                window.apply_frame_rate_hint();
+            }
+        }
+        Ok(snapshot)
     }
 }
 

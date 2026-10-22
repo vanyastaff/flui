@@ -429,6 +429,14 @@ impl host::Services for WebLoop {
     }
 }
 
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`WebHost::displays`]).
+impl host::Displays<WebLoop> for WebLoop {
+    fn snapshot(owner: &WebLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner.displays.snapshot()
+    }
+}
+
 impl host::Input<WebLoop> for WebLoop {
     fn keyboard_layout(_: &WebLoop) -> String {
         "en-US".to_string()

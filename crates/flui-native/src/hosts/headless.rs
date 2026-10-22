@@ -2,7 +2,7 @@
 
 use flui_platform::{InMemoryClipboard, haptics::FakeHaptics};
 
-use crate::display::headless::{DisplaySpec, HeadlessDisplays};
+use crate::display::headless::{DisplaySpec, laid_out};
 use crate::host::Host;
 use crate::owner::headless::{HeadlessHost, HeadlessLoop};
 use crate::platform::HostPlatform;
@@ -21,7 +21,7 @@ impl Host for Headless {
 
     type Loop = HeadlessLoop;
     type Window = MockWindow;
-    type Displays = HeadlessDisplays;
+    type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
     type Text = FakeTextInput;
     type Accessibility = FakeAccessibility;
@@ -37,7 +37,7 @@ impl Host for Headless {
 impl HeadlessHost for Headless {
     /// One display, 1920 by 1080 at scale 1.
     fn displays() -> flui_platform::DisplaySnapshot {
-        HeadlessDisplays::laid_out(vec![DisplaySpec::default()])
+        laid_out(vec![DisplaySpec::default()])
     }
 }
 

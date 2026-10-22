@@ -36,11 +36,10 @@
 //! independent; no OS background execution entitlement is implied.
 
 mod executor;
-mod native_owner;
 mod scene;
 
+pub(crate) use super::NativeOwner;
 pub use executor::IOSExecutor;
-pub(crate) use native_owner::NativeOwner;
 use scene::SceneHandler;
 pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};
 
@@ -93,6 +92,12 @@ pub(crate) trait IosHost: 'static {
     fn displays(marker: MainThreadMarker) -> Arc<dyn HostDisplays>;
 }
 
+/// The number the iOS display source gives a `UIScreen` it retains: it keys
+/// the screen's display and the link periods windows measure on it, and is
+/// never given to another screen while the platform lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ScreenNumber(pub(crate) u64);
+
 /// The screen a window is on, as the display source names it: the display's
 /// id, and the number the source keys the screen by. The default names no
 /// screen, which a window detached from its scene has.
@@ -100,8 +105,9 @@ pub(crate) trait IosHost: 'static {
 pub(crate) struct ScreenIdentity {
     /// The display, once the snapshot can hold it.
     pub(crate) id: Option<DisplayId>,
-    /// The source's number for the screen, which keys its link periods.
-    pub(crate) number: Option<u64>,
+    /// The source's number for the screen; `None` once the numbers are used
+    /// up.
+    pub(crate) number: Option<ScreenNumber>,
 }
 
 /// The host's screens as the loop and the windows it opens reach them, which
@@ -124,10 +130,10 @@ pub(crate) trait HostDisplays: Send + Sync {
 
     /// Record the period `window`'s display link measured on screen `number`,
     /// and mark the snapshot stale.
-    fn report_link_period(&self, number: u64, window: WindowId, period: RefreshPeriod);
+    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod);
 
     /// Forget `window`'s period on screen `number`: its link is gone.
-    fn forget_link_period(&self, number: u64, window: WindowId);
+    fn forget_link_period(&self, number: ScreenNumber, window: WindowId);
 
     /// Ask `link` to run at the best rate `screen` sustains on the version the
     /// platform runs on.
@@ -604,6 +610,17 @@ impl host::Services for IOSLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`IosHost::displays`]), on the main thread.
+impl host::Displays<IOSLoop> for IOSLoop {
+    fn snapshot(owner: &IOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        owner.displays.snapshot(marker)
     }
 }
 

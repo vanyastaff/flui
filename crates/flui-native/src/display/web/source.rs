@@ -68,8 +68,6 @@ use super::refresh_estimate::RefreshEstimator;
 use super::screen_identity::RetainedScreens;
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
-use crate::host;
-use crate::owner::web::WebLoop;
 
 /// The Web platform's display state: identities, the estimator and the cached
 /// snapshot. Shared by the platform, its window and the browser listeners.
@@ -99,23 +97,30 @@ struct State {
     screen_ratio: Option<f64>,
 }
 
-impl host::Displays<WebLoop> for WebDisplays {
-    fn snapshot(owner: &WebLoop) -> Result<DisplaySnapshot, PlatformError> {
-        owner.displays.snapshot()
-    }
-}
-
 impl crate::owner::web::HostDisplays for WebDisplays {
+    /// The cached snapshot, sampled from the browser when an event invalidated
+    /// it.
     fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        WebDisplays::snapshot(self)
+        self.source.snapshot_with(|| {
+            let mut state = self.state.lock();
+            self.sample(&mut state)
+        })
     }
 
+    /// The id is a product of sampling: it follows the cached snapshot.
     fn current_display(&self) -> Option<DisplayId> {
-        WebDisplays::current_display(self)
+        crate::owner::web::HostDisplays::snapshot(self).ok()?;
+        self.state.lock().current
     }
 
+    /// A new published period marks the snapshot stale.
     fn frame(&self, timestamp_ms: f64) -> bool {
-        WebDisplays::frame(self, timestamp_ms)
+        let mut state = self.state.lock();
+        if state.estimator.frame(timestamp_ms).is_none() {
+            return false;
+        }
+        self.source.invalidate();
+        true
     }
 
     fn observe(
@@ -139,34 +144,6 @@ impl WebDisplays {
                 screen_ratio: None,
             }),
         })
-    }
-
-    /// The cached snapshot, sampled from the browser when an event invalidated
-    /// it.
-    pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.source.snapshot_with(|| {
-            let mut state = self.state.lock();
-            self.sample(&mut state)
-        })
-    }
-
-    /// The display the window is on; `None` when the platform has no id for it.
-    pub(crate) fn current_display(&self) -> Option<DisplayId> {
-        // The id is a product of sampling: it follows the cached snapshot.
-        self.snapshot().ok()?;
-        self.state.lock().current
-    }
-
-    /// Feed one animation-frame timestamp (milliseconds). `true` when the
-    /// published period changed, so the snapshot must be taken again and the
-    /// owner woken.
-    pub(crate) fn frame(&self, timestamp_ms: f64) -> bool {
-        let mut state = self.state.lock();
-        if state.estimator.frame(timestamp_ms).is_none() {
-            return false;
-        }
-        self.source.invalidate();
-        true
     }
 
     /// The cadence may have changed (the tab became visible, the page changed

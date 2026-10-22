@@ -49,11 +49,11 @@ use parking_lot::Mutex;
 use super::sample::{RawDisplay, max_refresh_hz, requested_frame_rate};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
-use crate::owner::android::AndroidLoop;
 use crate::owner::android::ndk::{
     AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
 };
 use crate::owner::signal::OwnerSignal;
+use crate::owner::watch::Watch;
 use crate::shared::os_version::android::{AndroidApi, ContextDisplay};
 use flui_platform::PreferenceQueryError;
 
@@ -92,8 +92,8 @@ impl Invalidator {
 ///
 /// Dropping it takes the callback down *before* the data it points at is freed,
 /// so a late call cannot reach freed memory. It is dropped on the thread that
-/// registered it, whose looper delivers the callback, by
-/// [`AndroidDisplays::stop_watching`].
+/// registered it, whose looper delivers the callback, when the loop drops the
+/// watch `observe` returned.
 struct Registration {
     watch: RefreshRateWatch,
     choreographer: NonNull<AChoreographer>,
@@ -101,16 +101,6 @@ struct Registration {
     data: *const Invalidator,
     thread: ThreadId,
 }
-
-#[expect(
-    unsafe_code,
-    reason = "a registration crosses threads inside the platform"
-)]
-// SAFETY: the raw pointers are used only in `Drop`, which unregisters on the
-// thread that registered (checked against `thread`) and otherwise leaks the
-// data instead of freeing what the callback may still reach; `data` points at
-// an `Arc<Invalidator>` whose referent is `Send + Sync`.
-unsafe impl Send for Registration {}
 
 impl Drop for Registration {
     #[expect(
@@ -127,7 +117,7 @@ impl Drop for Registration {
         }
         // SAFETY: `choreographer` is this thread's instance, which lives as long
         // as the thread; the callback and data are the pair registered in
-        // `watch_refresh_rate`, and `unregister` is the NDK function of that name.
+        // `observe`, and `unregister` is the NDK function of that name.
         unsafe {
             (self.watch.unregister.get())(
                 self.choreographer.as_ptr(),
@@ -170,7 +160,6 @@ pub struct AndroidDisplays {
     /// Set when a sample found another highest rate for the Activity's display,
     /// until the window has asked again with it.
     max_rate_changed: AtomicBool,
-    watch: Mutex<Option<Registration>>,
 }
 
 impl std::fmt::Debug for AndroidDisplays {
@@ -197,19 +186,20 @@ impl AndroidDisplays {
             library,
             activity: Mutex::new(None),
             max_rate_changed: AtomicBool::new(false),
-            watch: Mutex::new(None),
         }
     }
+}
 
+impl crate::owner::android::HostDisplays for AndroidDisplays {
     /// The display state may have changed (configuration change, resume): read
     /// it again at the next owner turn, which this asks for.
-    pub(crate) fn invalidate(&self) {
+    fn invalidate(&self) {
         self.invalidator.raise();
     }
 
     /// The snapshot: the kept one while nothing announced a change, a fresh
     /// sample otherwise.
-    pub(crate) fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError> {
+    fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError> {
         let before = self.source.published().revision();
         let mut missing_activity = None;
         let snapshot = self.source.snapshot_with(|| {
@@ -261,21 +251,21 @@ impl AndroidDisplays {
     }
 
     /// The display the Activity was on at the last sample.
-    pub(crate) fn activity_display(&self) -> Option<DisplayId> {
+    fn activity_display(&self) -> Option<DisplayId> {
         self.activity.lock().map(|activity| activity.id)
     }
 
     /// Whether the highest rate of the Activity's display changed since this was
     /// last asked; reading clears it. A hint the window skipped for want of the
     /// rate is then asked again.
-    pub(crate) fn take_max_rate_change(&self) -> bool {
+    fn take_max_rate_change(&self) -> bool {
         self.max_rate_changed.swap(false, Ordering::AcqRel)
     }
 
     /// Ask the system for the refresh rate `hint` names on `window`, if this
     /// system has the request (API 30).
     #[expect(unsafe_code, reason = "calls ANativeWindow_setFrameRate")]
-    pub(crate) fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint) {
+    fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint) {
         let Some(set_frame_rate) = &self.set_frame_rate else {
             return;
         };
@@ -307,20 +297,17 @@ impl AndroidDisplays {
     }
 
     /// Register for the choreographer's refresh-rate callback, on API 30 and
-    /// later. Call on the thread whose looper runs the app (the callback is
-    /// delivered there).
+    /// later, on the calling thread, whose looper delivers it. The watch takes
+    /// the callback down when dropped, on the thread that registered it; an
+    /// unwind out of the loop drops it as well.
     #[expect(unsafe_code, reason = "registers a choreographer callback")]
-    pub(crate) fn watch_refresh_rate(&self) {
-        let mut watch = self.watch.lock();
-        if watch.is_some() {
-            return;
-        }
+    fn observe(&self) -> Watch {
         let Some(functions) = RefreshRateWatch::resolve(&self.library, self.api) else {
             tracing::debug!(
                 api = %self.api,
                 "Android: no refresh-rate callback; the rate is read on configuration changes and resume"
             );
-            return;
+            return Watch::new(());
         };
         // SAFETY: `AChoreographer_getInstance` takes nothing and returns this
         // thread's instance, or null without a looper.
@@ -329,7 +316,7 @@ impl AndroidDisplays {
             tracing::warn!(
                 "Android: no choreographer on the app thread; refresh rate changes are not watched"
             );
-            return;
+            return Watch::new(());
         };
         let data = Arc::into_raw(Arc::clone(&self.invalidator));
         // SAFETY: the callback and data are the pair `Registration::drop`
@@ -342,64 +329,12 @@ impl AndroidDisplays {
                 data.cast_mut().cast(),
             );
         }
-        *watch = Some(Registration {
+        Watch::new(Registration {
             watch: functions,
             choreographer,
             data,
             thread: std::thread::current().id(),
-        });
-    }
-
-    /// Take the refresh-rate callback down. Call on the thread that registered
-    /// it, before the platform goes away.
-    pub(crate) fn stop_watching(&self) {
-        let registration = self.watch.lock().take();
-        drop(registration);
-    }
-}
-
-impl crate::owner::android::HostDisplays for AndroidDisplays {
-    fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError> {
-        AndroidDisplays::snapshot(self, app)
-    }
-
-    fn invalidate(&self) {
-        AndroidDisplays::invalidate(self);
-    }
-
-    fn activity_display(&self) -> Option<DisplayId> {
-        AndroidDisplays::activity_display(self)
-    }
-
-    fn take_max_rate_change(&self) -> bool {
-        AndroidDisplays::take_max_rate_change(self)
-    }
-
-    fn request_frame_rate(&self, window: &NativeWindow, hint: FrameRateHint) {
-        AndroidDisplays::request_frame_rate(self, window, hint);
-    }
-
-    fn watch_refresh_rate(&self) {
-        AndroidDisplays::watch_refresh_rate(self);
-    }
-
-    fn stop_watching(&self) {
-        AndroidDisplays::stop_watching(self);
-    }
-}
-
-impl crate::host::Displays<AndroidLoop> for AndroidDisplays {
-    fn snapshot(owner: &AndroidLoop) -> Result<DisplaySnapshot, PlatformError> {
-        let snapshot = owner.displays.snapshot(&owner.app)?;
-        if owner.displays.take_max_rate_change() {
-            // A `High` hint skipped while the display's highest rate was
-            // unknown (or sent with an older one) is asked again.
-            let window = owner.window.lock().clone();
-            if let Some(window) = window {
-                window.apply_frame_rate_hint();
-            }
-        }
-        Ok(snapshot)
+        })
     }
 }
 

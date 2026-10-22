@@ -261,7 +261,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                     .expect("live native source");
                 let receiver = self
                     .inner
-                    .preference_broadcasts
+                    .broadcasts
                     .as_ref()
                     .expect("live broadcast receiver");
                 receiver.send_with_for_test(
@@ -369,11 +369,11 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         owner_platform: host.clone(),
         preference_source: None,
         #[cfg(windows)]
-        preference_broadcasts: None,
+        broadcasts: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
-        #[cfg(target_os = "macos")]
-        screen_observer: None,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        display_watch: None,
         on_ready: Some(Box::new(move |owner| {
             let mut lines = 0_u32;
             let mut characters = 0_u32;
@@ -676,11 +676,11 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         owner_platform: host.clone(),
         preference_source: None,
         #[cfg(windows)]
-        preference_broadcasts: None,
+        broadcasts: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
-        #[cfg(target_os = "macos")]
-        screen_observer: None,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        display_watch: None,
         on_ready: Some(Box::new(move |owner| {
             assert!(matches!(
                 owner.preferences(),
@@ -904,13 +904,13 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
         #[cfg(windows)]
-        preference_broadcasts: None,
+        broadcasts: None,
         #[cfg(target_os = "macos")]
         preference_observers: None,
         #[cfg(target_os = "linux")]
         host_notices: None,
-        #[cfg(target_os = "macos")]
-        screen_observer: None,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        display_watch: None,
         on_ready: None,
         control: receiver,
         quit_notified: false,
@@ -1215,13 +1215,13 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(windows)]
-            preference_broadcasts: None,
+            broadcasts: None,
             #[cfg(target_os = "macos")]
             preference_observers: None,
             #[cfg(target_os = "linux")]
             host_notices: None,
-            #[cfg(target_os = "macos")]
-            screen_observer: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            display_watch: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,
@@ -1484,6 +1484,7 @@ mod x11_window {
             owner_platform: host,
             preference_source: None,
             host_notices: None,
+            display_watch: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,
@@ -2004,6 +2005,7 @@ mod wayland_window {
             owner_platform: host,
             preference_source: None,
             host_notices: None,
+            display_watch: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,

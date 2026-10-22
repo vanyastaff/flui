@@ -76,6 +76,7 @@ use crate::{
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
+    owner::apple::NativeOwner,
     owner::call_point::{Field, install},
     owner::handlers::PlatformHandlers,
     owner::signal::OwnerSignal,
@@ -130,7 +131,7 @@ pub struct MacOSLoop {
 
     /// Marks `displays` stale and wakes the owner when AppKit reports a
     /// change of screen parameters; removed when the platform is dropped.
-    _screen_observer: Watch,
+    _screen_observer: NativeOwner<Watch>,
 
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
@@ -166,11 +167,15 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 }
 
 // SAFETY: the NSApplication pointer is a process-wide singleton only messaged
-// from the main thread (AppKit convention); all other fields are
-// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to
-// be shareable.
+// from the main thread (AppKit convention); the screen observer is a
+// `NativeOwner`, which only the main thread reads and which releases its value
+// there wherever the loop is dropped; the preference observers hold
+// notification-centre tokens, which any thread may remove; every other field
+// is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper
+// to be shareable.
 unsafe impl Send for MacOSLoop {}
-// SAFETY: see `Send` above — interior mutability is Mutex-guarded and the raw
+// SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
+// screen observer is reached only through a main-thread marker, and the raw
 // pointer is main-thread-affine by AppKit convention.
 unsafe impl Sync for MacOSLoop {}
 
@@ -257,7 +262,10 @@ impl MacOSLoop {
             let (preferences, preference_observers) =
                 PreferenceSource::new(&loop_control.owner_signal);
             let displays = H::displays();
-            let screen_observer = Arc::clone(&displays).observe(&loop_control.owner_signal);
+            let screen_observer = NativeOwner::new(
+                Arc::clone(&displays).observe(&loop_control.owner_signal),
+                mtm,
+            );
             let notices = Arc::new(SystemNotices::default());
             notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
             let platform = Self {
@@ -440,6 +448,21 @@ impl host::Services for MacOSLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the screens the table
+/// made ([`MacosHost::displays`]), on the AppKit main thread.
+impl host::Displays<MacOSLoop> for MacOSLoop {
+    fn snapshot(owner: &MacOSLoop) -> Result<DisplaySnapshot, PlatformError> {
+        owner
+            .affinity
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        owner.displays.snapshot(mtm)
     }
 }
 

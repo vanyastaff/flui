@@ -21,7 +21,7 @@ impl Host for Web {
 
     type Loop = WebLoop;
     type Window = WebWindow;
-    type Displays = WebDisplays;
+    type Displays = WebLoop;
     type Input = WebLoop;
     type Text = WebTextInput;
     type Accessibility = Absent<position::Accessibility>;

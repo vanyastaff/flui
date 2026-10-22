@@ -9,7 +9,6 @@ use crate::display::apple::macos::MacosDisplays;
 use crate::display::windows::WindowsDisplays;
 #[cfg(target_os = "linux")]
 use crate::display::winit::WinitDisplaySource;
-use crate::display::winit::WinitDisplays;
 use crate::host::{Absent, Host, position};
 use crate::owner::winit::{HostDisplays, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
@@ -32,7 +31,7 @@ impl Host for Winit {
 
     type Loop = WinitLoop;
     type Window = WinitWindow;
-    type Displays = WinitDisplays;
+    type Displays = WinitLoop;
     type Input = WinitLoop;
     type Text = WinitTextInput;
     // The AT-SPI bridge exists on Linux with the `a11y` feature.

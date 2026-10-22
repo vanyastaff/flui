@@ -16,8 +16,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::error::PlatformError;
-use crate::host::{self, Host};
+use crate::host::Host;
 use crate::owner::headless::{HeadlessLoop, HeadlessState};
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
@@ -106,49 +105,36 @@ pub enum DisplayChangeError {
     RevisionExhausted(#[from] DisplayRevisionExhausted),
 }
 
-/// The headless host's displays position: the snapshot its loop holds, laid
-/// out from the specs a test names ([`laid_out`](Self::laid_out)) and changed
-/// as a test says ([`LaidOutDisplays::apply`]).
-#[derive(Debug)]
-pub struct HeadlessDisplays;
-
-impl host::Displays<HeadlessLoop> for HeadlessDisplays {
-    fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
-        Ok(owner.with_state(|state| state.displays.clone()))
-    }
-}
-
-impl HeadlessDisplays {
-    /// The snapshot of `specs`, laid out left to right with the first
-    /// primary. The registry that issues their ids is only needed while the
-    /// specs are turned into displays, so it is not kept.
-    pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
-        let registry = DisplayRegistry::new();
-        let mut next_x = 0;
-        let displays = specs
-            .into_iter()
-            .enumerate()
-            .map(|(index, spec)| {
-                let id = registry
-                    .mint(&DisplayKey::Injected(index as u64))
-                    .expect("BUG: a fresh registry has ids for the displays a test names");
-                let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
-                next_x = next_x.saturating_add(spec.size.width);
-                let mut info = DisplayInfo::new(id, spec.name, bounds, spec.scale_factor)
-                    .with_primary(index == 0);
-                if let Some(period) = spec.refresh_period {
-                    info = info.with_refresh_period(period);
-                }
-                if let Some(key) = spec.persistent_key {
-                    info = info.with_persistent_key(key);
-                }
-                info
-            })
-            .collect();
-        DisplaySnapshot::empty()
-            .successor(displays)
-            .expect("BUG: revision 0 has a successor")
-    }
+/// The snapshot of `specs`, laid out left to right with the first primary: the
+/// displays the headless loop holds, which a test changes through
+/// [`LaidOutDisplays::apply`]. The registry that issues their ids is only
+/// needed while the specs are turned into displays, so it is not kept.
+pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
+    let registry = DisplayRegistry::new();
+    let mut next_x = 0;
+    let displays = specs
+        .into_iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let id = registry
+                .mint(&DisplayKey::Injected(index as u64))
+                .expect("BUG: a fresh registry has ids for the displays a test names");
+            let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
+            next_x = next_x.saturating_add(spec.size.width);
+            let mut info =
+                DisplayInfo::new(id, spec.name, bounds, spec.scale_factor).with_primary(index == 0);
+            if let Some(period) = spec.refresh_period {
+                info = info.with_refresh_period(period);
+            }
+            if let Some(key) = spec.persistent_key {
+                info = info.with_persistent_key(key);
+            }
+            info
+        })
+        .collect();
+    DisplaySnapshot::empty()
+        .successor(displays)
+        .expect("BUG: revision 0 has a successor")
 }
 
 /// What the headless doubles ask of the snapshot a test laid out, and how a
@@ -226,7 +212,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
         self.owner()
-            .with_state(|state| state.displays = HeadlessDisplays::laid_out(displays));
+            .with_state(|state| state.displays = laid_out(displays));
         self
     }
 

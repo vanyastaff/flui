@@ -8,7 +8,9 @@ use std::any::Any;
 ///
 /// The loop decides when a watch ends (when it stops, or when it is dropped)
 /// without knowing what is watched: the feature's hook hands the observer back
-/// as a `Watch`, and the loop keeps it.
+/// as a `Watch`, and the loop keeps it. An unwind drops it too, so no stop is
+/// skipped.
+#[must_use = "a watch stops when dropped: keep it for as long as the observation should last"]
 pub(crate) struct Watch {
     /// Held for its `Drop`, which ends the watch.
     _watch: Box<dyn Any>,

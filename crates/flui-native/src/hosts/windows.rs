@@ -29,7 +29,7 @@ impl Host for Windows {
 
     type Loop = WindowsLoop;
     type Window = WindowsWindow;
-    type Displays = WindowsDisplays;
+    type Displays = WindowsLoop;
     type Input = WindowsLoop;
     type Text = TextServices;
     #[cfg(feature = "a11y")]
@@ -50,9 +50,10 @@ impl WindowsHost for Windows {
     /// of each window created.
     const WINDOW_HOOKS: WindowHooks = &[&WindowProc, &Touchpad];
 
-    /// The displays (display and work-area changes), then the preferences
-    /// (setting changes, the work area among them, which the displays pass
-    /// on), then the lifecycle (session, power, lock and memory).
+    /// The displays (display and work-area changes) and the preferences
+    /// (setting changes) only observe, so their order carries no meaning; the
+    /// lifecycle (session, power, lock and memory) answers the session-end
+    /// query and the power broadcast, which nothing else hears.
     fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         vec![
             Rc::new(DisplayBroadcasts::new(owner.displays, owner.signal)),

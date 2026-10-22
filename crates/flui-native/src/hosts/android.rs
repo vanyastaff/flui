@@ -26,7 +26,7 @@ impl Host for Android {
 
     type Loop = AndroidLoop;
     type Window = AndroidWindow;
-    type Displays = AndroidDisplays;
+    type Displays = AndroidLoop;
     type Input = AndroidInputState;
     type Text = AndroidTextInput;
     type Accessibility = Absent<position::Accessibility>;
