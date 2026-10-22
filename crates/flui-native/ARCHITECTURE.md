@@ -73,7 +73,7 @@ trait depends on `flui-platform` instead.
   hosts' tables name these loops. A multiplexer of the operating system that
   serves several features dispatches through a hook declared beside it, which
   each feature's file implements and the host's table names: on Windows the
-  table implements `owner::windows::WindowsHost`, whose `WINDOW_HOOKS` and
+  table implements `owner::windows::WindowsHost`, whose `window_class` and
   `broadcast_subscribers` list, in order, what the owner dispatches to. A
   loop keeps a feature's state the same way: each `owner` module declares one
   host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
@@ -82,13 +82,17 @@ trait depends on `flui-platform` instead.
   loop, and the loop is the table's position for that feature, so the table
   cannot name one type and build another (the displays, the preferences and
   the lifecycle below).
-  - FLUI's window class has `window_proc::<H>` as its procedure, so the hook
-    set is a type: the procedure holds the panic boundary and offers each
-    message to `H::WINDOW_HOOKS` in order — the first `Some` ends the
-    dispatch, `None` passes it on, and a message no hook answers goes to
-    `DefWindowProcW`. A created window is announced to the same hooks in order
-    (`window_created`, through the owner's state, `OwnerShares::window_hooks`)
-    as a `CreatedWindow` that carries its `WindowIdentity`; after each hook
+  - FLUI's window class has `window_proc::<H>` as its procedure. Win32 calls
+    it with a window's handle and no pointer of FLUI's, so it finds the hooks
+    of `H`'s class on its thread (`owner::windows::window_class`, the Win32
+    trampoline ADR-0097 grants: `WindowsHost::window_class` makes the hooks
+    once per owner thread, as instances that may keep state); it holds the
+    panic boundary and offers each message to them in order — the first
+    `Some` ends the dispatch, `None` passes it on, and a message no hook
+    answers goes to `DefWindowProcW`. A created window is announced to the
+    same hooks in order (`window_created`, through the owner's state,
+    `OwnerShares::window_hooks`) as a `CreatedWindow` that carries its
+    `WindowIdentity` and its DPI; after each hook
     the window must still be the one created, or no later hook hears of it and
     its open fails (`WindowGone`). Windows holds the class once per process,
     so the class registration records its host and a loop for another host is
@@ -104,38 +108,41 @@ trait depends on `flui-platform` instead.
     focus, paint, the cursor, the title, the modal size-move and menu loops
     with their deadline timer, the session and setting changes, the frame and
     fullscreen requests posted to it and the keyboard's system-menu command),
-    the input procedure (`input::windows::InputMessages`: mouse, pointer,
-    wheel, keyboard, characters and the keyboard layout), the drop target
+    the input (`input::windows::InputWindows`: mouse, pointer, wheel,
+    keyboard, characters and the keyboard layout, and the precision
+    touchpad's hit test and pacing timer, with the DirectManipulation
+    viewport it gives each new window) and the drop target
     (`drag::windows::DropTargetRegistration`, which only hears each window
     created and registers it with the transport its context holds, the
-    loop's `HostDrag`) and the precision touchpad
-    (`input::windows::direct_manipulation::Touchpad`: its hit test and pacing
-    timer, and the DirectManipulation viewport its `created` gives each new
-    window). The reference a hook is handed a window by,
+    loop's `HostDrag`). The reference a hook is handed a window by,
     `owner::windows::WindowRef` (the handle and the identity of its context),
     is the owner's; the window feature reaches the context through it
     (`WindowRef::with_context`), and the window's own procedure borrows it for
     its own messages only.
-  - A feature keeps its own state of a window: `WindowRef::attach` keeps one
-    `Rc` of each type in a property of the native window, which the class's
-    procedure drops after `WM_NCDESTROY`, and `attached` finds it on the
-    window's thread, by `WindowRef` (checked against the window's identity)
-    or by the handle a message names. The hooks hear the window's steps
+  - A hook keeps what it needs of a window in itself, keyed by the window's
+    identity: made when the window is announced, dropped when it is destroyed
+    (`WindowMessages::destroyed`, which the window's procedure announces at
+    `WM_DESTROY`) or at `WM_NCDESTROY` for one whose destruction was not
+    announced. No pointer of FLUI's goes into a property of the window, which
+    another process may write, and a message, step or read for a window a
+    hook does not hold finds nothing. The hooks hear the window's steps
     (`WindowMessages::step`, a `WindowStep`: its size, minimizing, focus
-    loss, paint, modal size-and-move loop, scale and setting changes, and a
-    key the application let through) and its destruction
-    (`WindowMessages::destroyed`), which the window's procedure announces in
-    hook order where it handles them. The input makes its `InputWindow` (the
-    message clock, the pointer registry, the touchpad's viewport, the hover,
-    the modifiers, the dead keys and a pending surrogate) when the window is
-    created and attaches it, with the part the window, drag and drop and
-    haptics read (`input::WindowInput`); a keydown the application lets
-    through is a step, which the window answers with its own keys, the
-    fullscreen hotkey. Tests: `a_window_message_reaches_the_hooks_in_order`,
+    loss, paint, modal size-and-move loop, DPI and setting changes, and a key
+    the application let through), which the window's procedure announces in
+    hook order where it handles them. The input's state of a window (its
+    message clock, pointer registry, touchpad viewport, hover, modifiers,
+    dead keys and a pending surrogate) is its own; what the window, drag and
+    drop and haptics read of it the owner names (`WindowInputs`: the hover,
+    the modifiers, the kind of a press, a pen in range), read-only, through
+    the class on their thread (`owner::windows::window_inputs`). A keydown
+    the application lets through is a step, which the window answers with its
+    own keys, the fullscreen hotkey. Tests:
+    `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
-    `a_window_step_and_its_destruction_reach_every_hook_in_order`,
-    `a_windows_input_lives_as_long_as_its_window`,
-    `a_second_host_is_refused_the_window_class`, and
+    `a_second_host_is_refused_the_window_class`,
+    `two_windows_keep_their_own_input`,
+    `a_windows_input_is_gone_once_it_is_destroyed`,
+    `a_window_the_input_never_saw_has_no_input`, and
     `hosts::windows::tests::the_window_hooks_answer_disjoint_messages`, which
     fails if two of the table's hooks list one message, timer or system
     command.
@@ -192,10 +199,14 @@ trait depends on `flui-platform` instead.
   (`HostDrag`: the owner window's `OwnerMessages`, a window's drag source and
   drop target), `WebHost::clipboard`, `WebHost::drag` (`HostDrag`: the
   canvas's drags, registered into the canvas's registration,
-  `CanvasRegistration`, which the window implements, and `CanvasDrag`) and
-  `WebHost::input` (`HostInput`: the canvas's pointers, keys, wheel and
-  gestures, registered into the same registration, which answer the key
-  route the window hands its text input, `CanvasKeys`),
+  `CanvasRegistration`, which the window implements: listeners and timers
+  that run only while it accepts, which a feature reads read-only
+  (`Accepting`), what a feature ends as it retires (`on_retire`: the input
+  releases the pointers it captured), pointer custody and the focus area;
+  and `CanvasDrag`) and `WebHost::input` (`HostInput`: the canvas's
+  pointers, keys, wheel and gestures, registered into the same
+  registration, which answer the key route the window hands its text input,
+  `CanvasKeys`),
   `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`) and
   `WinitHost::input` (`LoopInput`: the session's pointers and keys as the
   loop's events and turns bring them), `AndroidHost::clipboard`,
@@ -269,10 +280,10 @@ trait depends on `flui-platform` instead.
   table. The Win32 drag transport and actuator name a window by
   `owner::windows::WindowRef`, the owner's vocabulary, and reach its context
   through the window's `WindowRef::with_context`, except what they read of the
-  window's input (the contact kind, the buttons held, the pen), which is the
-  input's `WindowInput` attached to the window. The Web drag answers its
-  events and reads their position as the input does, through the owner's
-  `owner::web::event`.
+  window's input (the kind of a press, the pen in range), which the input
+  answers read-only (`owner::windows::WindowInputs`). The Web drag answers
+  its events and reads their position as the input does, through the
+  owner's `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
   model is `display::source`, the id registry and last snapshot every native
   source keeps; beside it is one file per platform: `windows.rs` (the
@@ -440,23 +451,25 @@ trait depends on `flui-platform` instead.
     joined through hooks.
 - **The input is a feature directory, `input/` (ADR-0151 §10).** Its model
   is what the platforms share: `assembly` (the pointer registry every backend
-  assembles its contacts through, the decoder of native readings, and the
-  `native-capture` journal), `availability` (each backend's input
-  capabilities table), `keys` (the Win32 virtual keys and the mouse buttons'
-  codes, and the `adapter` from `ui-events` key results that Android and
-  winit share), `scroll`, `event_timestamp_ns` (public at the crate root) and
-  `WindowInput` (what the Win32 window, drag and drop and haptics read of a
-  window's input). Beside it, one file per platform: `windows/` (`mod.rs`,
-  `InputMessages` and the window's `InputWindow`; `raw.rs`, the messages
-  decoded; `direct_manipulation.rs`, the `Touchpad` hook over one OS object,
-  with its pure `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`,
-  the AppKit content view's class and its events; `ios`, the touches),
-  `android.rs` (the pure `keys`, `motion` and `scroll`; `AndroidInput`),
-  `web.rs` (the pure `keys` and `pinch`; `events`, `WebInput`), `winit.rs`
-  (`NativePointerState`) and `headless.rs` (the simulated devices). A loop
-  holds its input through a hook (`InputMessages` and `Touchpad` in
-  `WINDOW_HOOKS`, `ActivityInput`, `HostInput`, `LoopInput`,
-  `SimulatedDevices`), and the table's input position names the loop
+  assembles its contacts through, the decoder of native readings, a
+  touchpad viewport's readings, and the `native-capture` journal; it names
+  no platform file and forbids `unsafe`), `availability` (each backend's
+  input capabilities table), `keys` (the Win32 virtual keys and the mouse
+  buttons' codes, `MouseButtonCodes`, and the `adapter` from `ui-events` key
+  results that Android and winit share), `scroll` and `event_timestamp_ns`
+  (public at the crate root). Beside it, one file per platform, each pure
+  half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
+  class's input hook, which keeps each window's `InputWindow` keyed by its
+  identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
+  touchpad's DirectManipulation viewport, one OS object, with its pure
+  `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`, the AppKit
+  content view's class and its events; `ios`, the touches), `android.rs`
+  (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
+  pure `keys` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
+  and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
+  holds its input through a hook (`InputWindows` in the window class,
+  `ActivityInput`, `HostInput`, `LoopInput`, `SimulatedDevices`), and the
+  table's input position names the loop
   (`type Input = <Os>Loop`), whose `host::Input` (the keyboard layout and its
   change) the input file implements. The modules the tables in `tests/` decode
   with are public and hidden from the documentation (`assembly`,
@@ -1687,8 +1700,8 @@ per-platform and exposes it, so nothing here re-derives it.
 
 This asymmetry between backends is deliberate, not inconsistent: the rule is
 "delegate to an audited bridge when one exists for this native surface," not
-"every backend must look the same." `input/apple/keys/tests.rs`'s
-`cross_backend_physical_key_agreement` test cross-checks a curated set of
+"every backend must look the same." `tests/backend_conformance.rs`'s
+`physical_keys_agree_across_backends` cross-checks a curated set of
 physical keys against both hand-written tables so the two authored
 translations and the delegated one cannot silently drift apart.
 
@@ -1762,12 +1775,12 @@ production delegation) — read it for context, not as the source of a fact;
 figures cited in this entry are measured directly against this repository
 and `ui-events-winit`'s own source, not against the survey.
 
-**Replacement coverage:** `input/apple/keys/tests.rs`'s
+**Replacement coverage:** `input/winit.rs`'s
 `keyboard_conversion_tests` module (`every_winit_keycode_maps_to_a_canonical_code`
 over all 194 winit 0.30.13 `KeyCode` variants — length- and
 duplicate-checked against the winit source) and
-`cross_backend_physical_key_agreement` (winit vs. Win32 vs. AppKit on a
-shared physical-key set). Before this change, `convert_physical_key`'s hand
+`tests/backend_conformance.rs`'s `physical_keys_agree_across_backends`
+(winit vs. Win32 vs. AppKit on a shared physical-key set). Before this change, `convert_physical_key`'s hand
 table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code` (the
 count measured at issue #1092's baseline) and `convert_winit_key` mapped 37 of 306
 `NamedKey` variants to `Key`, falling through to `Unidentified` for the rest
