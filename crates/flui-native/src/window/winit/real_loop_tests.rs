@@ -1,6 +1,7 @@
 //! Tests that drive a REAL winit `EventLoop` with the winit host's windows:
 //! a window the loop unwinds when its requester walks away, a window closed
-//! from another thread, and a window on a Wayland compositor.
+//! from another thread, the AT-SPI bridge a Linux window hands out, and a
+//! window on a Wayland compositor.
 //!
 //! Every test here runs `event_loop.run_app` on an ordinary test thread, over
 //! the winit host's platform, with the loop's test support
@@ -504,6 +505,50 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     );
     let kept = kept_window.lock().take();
     drop(kept);
+}
+
+/// A winit window on Linux hands out its AT-SPI bridge with no feature beyond
+/// the host's own (ADR-0151 §15): the composition root reads the bridge once,
+/// and a window without one is invisible to Orca however its widgets are
+/// labelled.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_winit_window_hands_out_its_at_spi_bridge() {
+    let host = Arc::new(WinitPlatform::new());
+    let platform = host.shared_owner();
+    let event_loop = build_test_event_loop();
+    install_test_owner_signal(&platform, &event_loop);
+    let (control, lane) = install_control_lane(&platform, &event_loop);
+
+    let platform_for_worker = Arc::clone(&platform);
+    let worker = thread::spawn(move || {
+        // Caught, so the quit below always unparks `run_app`.
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            wait_for_running(&platform_for_worker);
+            let handle = control
+                .request_open_window(options("accessibility"))
+                .expect("lane accepts the request");
+            let ClaimOutcome::Delivered(window) = handle.wait() else {
+                panic!("the owner delivers the window to its only claimant");
+            };
+            window
+                .expect("window creation succeeds")
+                .accessibility()
+                .is_some()
+        }));
+        control.request_quit_for_test();
+        outcome.unwrap_or_else(|payload| resume_unwind(payload))
+    });
+
+    let mut app = WinitApp::for_test(Arc::clone(&platform), host, lane, None);
+    event_loop
+        .run_app(&mut app)
+        .expect("event loop runs to completion");
+    let bridged = worker.join().expect("worker thread does not panic");
+    assert!(
+        bridged,
+        "a winit window on Linux hands out its AT-SPI bridge"
+    );
 }
 
 /// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;
