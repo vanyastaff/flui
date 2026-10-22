@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    CreateWindowExW, DestroyWindow, HWND_MESSAGE, IsWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
     WM_GETTEXTLENGTH,
 };
 use windows::core::w;
@@ -13,8 +13,8 @@ use windows::core::w;
 use super::broadcast::Subscriber;
 use super::control::OwnerObjects;
 use super::{
-    CreatedWindow, WindowHooks, WindowMessages, WindowsHost, WindowsLoop, dispatch_window_message,
-    window_created,
+    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
+    WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
@@ -137,13 +137,10 @@ fn a_window_message_reaches_the_hooks_in_order() {
         "a message no hook answers gets the default procedure's answer"
     );
 
-    window_created(
-        TestHost::WINDOW_HOOKS,
-        &CreatedWindow {
-            hwnd,
-            client_size: (0, 0),
-            apartment: None,
-        },
+    assert_eq!(
+        window_created(TestHost::WINDOW_HOOKS, &created(hwnd), || true),
+        Ok(()),
+        "a window that lives through its hooks is announced to all of them"
     );
     assert_eq!(
         HEARD.with(RefCell::take),
@@ -153,6 +150,69 @@ fn a_window_message_reaches_the_hooks_in_order() {
 
     // SAFETY: the window this test created on this thread.
     unsafe { DestroyWindow(hwnd) }.expect("the test window is destroyed");
+}
+
+/// `hwnd` as the hooks are told of it, under an identity of the test's own.
+fn created(hwnd: HWND) -> CreatedWindow {
+    CreatedWindow {
+        hwnd,
+        identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
+        client_size: (0, 0),
+        apartment: None,
+    }
+}
+
+/// A hook whose `created` destroys the window, as a message one dispatches
+/// can.
+struct Destroys;
+
+impl WindowMessages for Destroys {
+    fn created(&self, window: &CreatedWindow) {
+        hear("destroys created");
+        // SAFETY: the test's own window, on the thread that created it.
+        unsafe { DestroyWindow(window.hwnd) }.expect("the hook destroys the window");
+    }
+}
+
+/// A window that a hook destroyed is announced to no later hook: none of them
+/// runs on the dead handle, and the announcement answers `WindowGone`, which
+/// fails the window's open.
+#[test]
+fn a_window_a_hook_destroyed_is_announced_to_no_later_hook() {
+    const HOOKS: WindowHooks = &[&First, &Destroys, &Second];
+    // SAFETY: a message-only window of a system class, created on this
+    // thread; the class name and title are static literals.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!("flui"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a message-only window");
+    HEARD.with(|heard| heard.borrow_mut().clear());
+
+    // SAFETY: `IsWindow` takes any handle and dereferences nothing.
+    let alive = || unsafe { IsWindow(Some(hwnd)) }.as_bool();
+    assert_eq!(
+        window_created(HOOKS, &created(hwnd), alive),
+        Err(WindowGone),
+        "the announcement reports the window gone"
+    );
+    assert_eq!(
+        HEARD.with(RefCell::take),
+        ["first created", "destroys created"],
+        "no hook after the one that destroyed the window learns of it"
+    );
 }
 
 /// A broadcast subscriber that records what it hears and answers the messages

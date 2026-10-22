@@ -51,10 +51,10 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
   `windows` crate enabled (`crates/flui-native/Cargo.toml:89-105`).
 - **macOS.** `NSTextInputClient` is a pull protocol too, and the backend already implements the
   query half with nothing to answer from: `attributedSubstringForProposedRange:actualRange:` returns
-  `nil` (`crates/flui-native/src/platforms/macos/text_input.rs:435`) and
+  `nil` (`crates/flui-native/src/text/apple/macos.rs:447`) and
   `characterIndexForPoint:` returns `NSNotFound` because "this view owns no text"
-  (`text_input.rs:505-514`). `selectedRange` answers `{NSNotFound, 0}` outside a composition
-  (`text_input.rs:402`). Reconversion and the Services menu cannot work while the view has no
+  (`macos.rs:517-526`). `selectedRange` answers `{NSNotFound, 0}` outside a composition
+  (`macos.rs:414`). Reconversion and the Services menu cannot work while the view has no
   document to read.
 - **Android.** `InputConnection` asks for text before and after the cursor, deletes surrounding
   text and sets composing regions.
@@ -62,7 +62,7 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
 The framework side has the document but no store surface: `TextEditingController` holds an
 `Arc<Mutex<ControllerInner>>` (`crates/flui-widgets/src/text/controller.rs:263`) whose offsets are
 UTF-8 bytes (`controller.rs:34`), while macOS already converts UTF-16 `NSRange`s at the boundary
-(`crates/flui-native/src/platforms/macos/text_input.rs:133-136`). The session owner is
+(`crates/flui-native/src/text/apple/macos.rs:142-145`). The session owner is
 `flui_interaction::TextInputOwner`, which imports the platform trait directly
 (`crates/flui-interaction/src/text_input/mod.rs:27`) and routes events through
 `ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`text_input.rs:39`).

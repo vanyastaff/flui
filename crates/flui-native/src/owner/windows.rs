@@ -130,18 +130,36 @@ pub(crate) trait WindowMessages {
 pub(crate) struct CreatedWindow {
     /// The window.
     pub(crate) hwnd: HWND,
+    /// The identity of the context the window was created with: a hook names
+    /// the window by it, never by the handle alone.
+    pub(crate) identity: WindowIdentity,
     /// Its client size in device pixels.
     pub(crate) client_size: (i32, i32),
     /// The owner thread's COM apartment, when the window was opened with it.
     pub(crate) apartment: Option<Rc<ComApartment>>,
 }
 
-/// Announces `window`, which FLUI's class just created, to every one of
-/// `hooks`: the host's, which the owner's state hands every window it opens.
-pub(crate) fn window_created(hooks: WindowHooks, window: &CreatedWindow) {
+/// The window a hook was told of is gone: a message the hook dispatched
+/// destroyed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WindowGone;
+
+/// Announces `window`, which FLUI's class just created, to `hooks` in order:
+/// the host's, which the owner's state hands every window it opens. After each
+/// hook, `alive` says whether the window is still the one created; once it is
+/// not, no later hook hears of it, and the window is [`WindowGone`].
+pub(crate) fn window_created(
+    hooks: WindowHooks,
+    window: &CreatedWindow,
+    alive: impl Fn() -> bool,
+) -> Result<(), WindowGone> {
     for hook in hooks {
         hook.created(window);
+        if !alive() {
+            return Err(WindowGone);
+        }
     }
+    Ok(())
 }
 
 /// Offers one message of a window of FLUI's class to `H`'s hooks, in order; a

@@ -50,7 +50,7 @@ pub struct AndroidWindow {
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
-    text_sizing: Arc<super::text_sizing::Acquisition>,
+    text_sizing: Arc<crate::text::android::sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
     /// The exclusion rectangles last handed to the decor view, as projected.
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
@@ -60,7 +60,7 @@ pub struct AndroidWindow {
     /// source (ADR-0247).
     java_view: Arc<JavaView>,
     /// The window's text input, on the owner thread only.
-    text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
+    text_input: Arc<OwnerSlot<Rc<crate::text::android::AndroidTextInput>>>,
     drag_source: Arc<super::drag::AndroidDragSource>,
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
     /// The platform's API level, for the safe-area gates.
@@ -98,7 +98,7 @@ impl AndroidWindow {
         callbacks.set_input_capabilities(input_capabilities(api, java_view.is_ready()));
         let text_input = Arc::new(OwnerSlot::new());
         if text_input
-            .replace(super::text_input::AndroidTextInput::new(
+            .replace(crate::text::android::AndroidTextInput::new(
                 Arc::clone(&java_view),
                 api,
             ))
@@ -135,7 +135,7 @@ impl AndroidWindow {
             owner: std::thread::current().id(),
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
-            text_sizing: super::text_sizing::Acquisition::new(),
+            text_sizing: crate::text::android::sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
             input_regions: Arc::default(),
             java_view,
@@ -181,7 +181,7 @@ impl AndroidWindow {
     }
 
     /// The window's text input; `None` off the owner thread.
-    pub(crate) fn text_input(&self) -> Option<Rc<super::text_input::AndroidTextInput>> {
+    pub(crate) fn text_input(&self) -> Option<Rc<crate::text::android::AndroidTextInput>> {
         let input = self.text_input.take()?;
         let shared = Rc::clone(&input);
         let _ = self.text_input.restore(input);
@@ -462,8 +462,10 @@ impl crate::host_window::HostWindow for AndroidWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        use crate::text::{TextInput as _, WindowTextInput};
         self.text_input()
-            .map(|input| input as Rc<dyn flui_platform::text_store::TextStoreHost>)
+            .and_then(|input| input.window_text_input())
+            .and_then(WindowTextInput::store_host)
     }
 }
 

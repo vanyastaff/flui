@@ -1,65 +1,12 @@
-//! The decidable half of the web backend's text input (`shared::web_text`):
-//! which keys belong to the input method, and the one edit between two
-//! versions of a hidden textarea's text. The DOM side runs in Chrome
-//! (`tests/web_browser.rs`).
+//! The mirror of a focused field that the Android and web hosts keep
+//! (`text::ime`): the one edit between two versions of its text, a protected
+//! field's text, and the scalars a character-bounds request covers.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_native::shared::ime_text::{PROTECTED_UNIT, document_text, scalar_spans};
-use flui_native::shared::web_text::{
-    IME_PROCESS_KEY_CODE, TextDiff, diff, input_mode, key_composition,
-};
-use flui_platform::keyboard::ImeComposition;
-use flui_platform::text_store::{
-    InMemoryTextStore, LockGrant, LockTiming, TextInputPurpose, TextStore,
-};
-
-const ESCAPE: u32 = 27;
-
-/// Escape that cancels a composition is the input method's however the
-/// browser reports it: Chromium marks it composing, WebKit sends it after
-/// `compositionend` with only the input method's key code, and a surface
-/// that still composes claims it whatever the event says.
-fn a_key_of_the_input_method_is_marked_composing() {
-    let rows = [
-        (
-            "chromium, mid-composition",
-            true,
-            ESCAPE,
-            false,
-            ImeComposition::Active,
-        ),
-        (
-            "webkit, after compositionend",
-            false,
-            IME_PROCESS_KEY_CODE,
-            false,
-            ImeComposition::Active,
-        ),
-        (
-            "the surface composes",
-            false,
-            ESCAPE,
-            true,
-            ImeComposition::Active,
-        ),
-        (
-            "no composition",
-            false,
-            ESCAPE,
-            false,
-            ImeComposition::Inactive,
-        ),
-    ];
-    for (case, is_composing, key_code, host, expected) in rows {
-        assert_eq!(
-            key_composition(is_composing, key_code, host),
-            expected,
-            "{case}"
-        );
-    }
-}
+use super::{PROTECTED_UNIT, TextDiff, diff, document_text, scalar_spans};
+use flui_platform::text_store::{InMemoryTextStore, LockGrant, LockTiming, TextStore};
 
 fn units(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
@@ -143,32 +90,11 @@ fn character_bounds_follow_scalars() {
     );
 }
 
-/// The purpose a field was built with picks the virtual keyboard the browser
-/// shows; free text and a purpose this backend has no keyboard for get plain
-/// text.
-fn the_purpose_picks_the_input_mode() {
-    let rows = [
-        (TextInputPurpose::Text, "text"),
-        (TextInputPurpose::Email, "email"),
-        (TextInputPurpose::Url, "url"),
-        (TextInputPurpose::Phone, "tel"),
-        (TextInputPurpose::Number, "numeric"),
-        (TextInputPurpose::Search, "search"),
-    ];
-    for (purpose, expected) in rows {
-        assert_eq!(input_mode(purpose), expected, "{purpose:?}");
-    }
-}
-
 #[test]
-fn web_text_table() {
-    super::run_table(
-        "web_text_table",
+fn mirror_text_table() {
+    crate::table_test::run_table(
+        "mirror_text_table",
         &[
-            (
-                "a_key_of_the_input_method_is_marked_composing",
-                a_key_of_the_input_method_is_marked_composing,
-            ),
             (
                 "a_textarea_change_is_one_edit",
                 a_textarea_change_is_one_edit,
@@ -180,10 +106,6 @@ fn web_text_table() {
             (
                 "character_bounds_follow_scalars",
                 character_bounds_follow_scalars,
-            ),
-            (
-                "the_purpose_picks_the_input_mode",
-                the_purpose_picks_the_input_mode,
             ),
         ],
     );

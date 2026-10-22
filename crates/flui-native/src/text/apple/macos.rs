@@ -39,6 +39,15 @@
 //!
 //! [`WindowState`]: flui_platform::WindowState
 
+// The `NSTextInputClient` methods are Objective-C callbacks the view's class
+// gets at registration: direct objc calls have no safe wrapper. Every
+// `unsafe` block carries its own `// SAFETY:` comment.
+#![expect(unsafe_code)]
+// `objc2::runtime::Protocol`, which the view's class adopts the protocol
+// through, is the deprecated name of `AnyProtocol`, as in the rest of the
+// AppKit host.
+#![expect(deprecated)]
+
 use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
@@ -46,8 +55,8 @@ use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger}
 use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 
-use super::view::{ViewContext, get_context as get_view_context};
-use super::window::route_on_owner;
+use crate::platforms::macos::view::{ViewContext, get_context as get_view_context};
+use crate::platforms::macos::window::route_on_owner;
 use flui_platform::PlatformTextInput;
 
 // ============================================================================
@@ -62,14 +71,14 @@ use flui_platform::PlatformTextInput;
 /// [`MacOSTextInput`] body, and `get_context` hands out a *shared* reference to
 /// the context, so the mutability has to be inside it.
 #[derive(Debug, Default)]
-pub(super) struct TextInputState {
+pub(crate) struct TextInputState {
     /// Whether `keyDown:` takes the input-context route. `false` until a
     /// presentation attaches a text input, and the reason a window with no
     /// text input behaves exactly as it did before this module existed.
-    pub(super) ime_allowed: bool,
+    pub(crate) ime_allowed: bool,
 
     /// The in-progress composition text, empty when nothing is marked.
-    pub(super) marked_text: String,
+    pub(crate) marked_text: String,
 
     /// The range this view reports for `marked_text` (UTF-16 units, the
     /// `NSRange` convention). `(0, utf16_len(marked_text))` while composing:
@@ -77,24 +86,24 @@ pub(super) struct TextInputState {
     /// buffer — so the composition is reported as starting at the view's own
     /// origin, which is what an input method needs to place its candidates and
     /// what `replacementRange:` from AppKit is relative to.
-    pub(super) marked_range: (usize, usize),
+    pub(crate) marked_range: (usize, usize),
 
     /// The selection *within* the composition, as `setMarkedText:` delivered it
     /// (UTF-16 units) — the caret's own position, narrower than the marked
     /// range above.
-    pub(super) selected_range: (usize, usize),
+    pub(crate) selected_range: (usize, usize),
 
     /// The candidate-window rectangle from
     /// [`PlatformTextInput::set_ime_cursor_area`], in the framework's logical
     /// window coordinates (top-left origin) as the trait specifies.
-    pub(super) cursor_area: Option<Bounds<f64>>,
+    pub(crate) cursor_area: Option<Bounds<f64>>,
 
     /// The `NSResponder` `keyDown:` `NSEvent*` currently inside
     /// `interpretKeyEvents:`, as a `usize` (0 when none). Non-zero only for the
     /// duration of that call, so `doCommandBySelector:` — which the input
     /// context invokes *during* it — can hand the same event back to the
     /// keyboard path when the input method declines it.
-    pub(super) pending_key_event: usize,
+    pub(crate) pending_key_event: usize,
 }
 
 impl TextInputState {
@@ -122,7 +131,7 @@ impl TextInputState {
     /// is not composing leaves the release on the ordinary path, which is where
     /// a typed Latin character's release happens after a commit empties
     /// [`Self::marked_text`].
-    pub(super) fn reports_key_release(&self) -> bool {
+    pub(crate) fn reports_key_release(&self) -> bool {
         !self.ime_allowed || self.marked_text.is_empty()
     }
 }
@@ -165,7 +174,7 @@ fn byte_offset_of_utf16_boundary(text: &str, units: usize) -> Option<usize> {
 /// end of `text` or either end falls inside a surrogate pair — a range no byte
 /// offset can express, and one the caller must not round to a nearby boundary
 /// (a guessed caret is worse than none: the client hides it).
-pub(super) fn utf16_range_to_byte_range(
+pub(crate) fn utf16_range_to_byte_range(
     text: &str,
     location: usize,
     length: usize,
@@ -247,7 +256,10 @@ unsafe fn insert_text_argument_string(string: *mut AnyObject) -> Option<String> 
 /// event is ordered against pointer and keyboard events exactly as they are
 /// ordered against each other.
 fn emit_ime(ctx: &ViewContext, event: ImeEvent) {
-    super::view::dispatch_input_event(ctx, flui_platform::PlatformInput::Ime(event));
+    crate::platforms::macos::view::dispatch_input_event(
+        ctx,
+        flui_platform::PlatformInput::Ime(event),
+    );
 }
 
 /// The empty rect AppKit is answered with when no cursor area has been set.
@@ -537,7 +549,11 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
             tracing::trace!("doCommandBySelector: outside a pending key press; command dropped");
             return;
         }
-        super::view::handle_input_event(this, sel!(keyDown:), pending_key_event as *mut AnyObject);
+        crate::platforms::macos::view::handle_input_event(
+            this,
+            sel!(keyDown:),
+            pending_key_event as *mut AnyObject,
+        );
     }
 }
 
@@ -552,7 +568,7 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
 /// applies to, and every function pointer below must keep matching its
 /// selector's Objective-C signature — the signatures are fixed by
 /// `NSTextInputClient`'s own declaration in AppKit.
-pub(super) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
+pub(crate) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
     // Conformance, not just the methods: AppKit's `NSTextInputContext` asks
     // `conformsToProtocol:` before it will route a key event through the input
     // method at all, so a class with these methods and no protocol is never
@@ -674,7 +690,7 @@ unsafe impl Send for MacOSTextInput {}
 unsafe impl Sync for MacOSTextInput {}
 
 impl MacOSTextInput {
-    pub(super) fn new(
+    pub(crate) fn new(
         view: *mut AnyObject,
         closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
         owner: &'static dispatch::Queue,
@@ -709,7 +725,7 @@ impl MacOSTextInput {
             // dispatched onto the lane under the reentrancy guard — before the
             // view is touched. `with_view_context` checks the class before
             // reading the context ivar.
-            unsafe { super::view::with_view_context(this.view, body) }
+            unsafe { crate::platforms::macos::view::with_view_context(this.view, body) }
         })
     }
 }
@@ -755,7 +771,13 @@ impl PlatformTextInput for MacOSTextInput {
     }
 }
 
-impl crate::host::Text for MacOSTextInput {}
+impl crate::text::TextInput for std::sync::Arc<MacOSTextInput> {
+    fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
+        Some(crate::text::WindowTextInput::Ime(
+            std::sync::Arc::clone(self) as std::sync::Arc<dyn PlatformTextInput>,
+        ))
+    }
+}
 
 impl std::fmt::Debug for MacOSTextInput {
     // Hand-written for the same reason `MacOSWindow`'s is: the NSView pointer

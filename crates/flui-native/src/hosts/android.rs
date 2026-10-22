@@ -4,12 +4,14 @@
 use android_activity::AndroidApp;
 
 use crate::host::{Absent, Host, position};
-use crate::owner::android::AndroidLoop;
+use crate::owner::android::java_view::InputMethod;
+use crate::owner::android::{AndroidHost, AndroidLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTextInput,
-    AndroidTransfer, AndroidWindow, MockClipboard,
+    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer,
+    AndroidWindow, MockClipboard,
 };
+use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
 /// The Android host's table.
 #[derive(Debug)]
@@ -22,7 +24,7 @@ impl Host for Android {
     type Window = AndroidWindow;
     type Displays = AndroidDisplays;
     type Input = AndroidInputState;
-    type Text = AndroidTextInput;
+    type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = MockClipboard;
     type Drag = AndroidTransfer;
@@ -31,6 +33,13 @@ impl Host for Android {
     type Lifecycle = AndroidLoop;
     type Chrome = AndroidSystemChrome;
     type Storage = AndroidLoop;
+}
+
+impl AndroidHost for Android {
+    /// The text feature's answer to the input method's calls.
+    fn input_method() -> Box<dyn InputMethod> {
+        Box::new(ViewInputMethod::default())
+    }
 }
 
 /// Android platform implementation using `android-activity`
@@ -57,6 +66,6 @@ impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new(app))
+        Self::from_loop(AndroidLoop::new::<Android>(app))
     }
 }

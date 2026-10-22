@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Point;
-use flui_native::shared::android_ime;
 use flui_native::shared::haptic_degradation::{
     AndroidHapticsApi, AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform,
     WebVibration, android_feedback, android_pattern, ios_feedback, ios_pattern, macos_feedback,
@@ -34,7 +33,8 @@ use flui_native::shared::pointer_assembly::{
     NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
     ScrollReading, decode,
 };
-use flui_native::shared::web_text::key_composition;
+use flui_native::text::android::keys as android_keys;
+use flui_native::text::web::ime::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;
@@ -668,7 +668,7 @@ impl SharedAssembly {
                 // (WebKit after `compositionend`, and every Android key).
                 let host_composing = !self.faulty(Fault::ComposingKeyFromEventOnly);
                 let composing = if self.profile.keys == Some(KeyDecoder::Android) {
-                    android_ime::key_composition(host_composing)
+                    android_keys::key_composition(host_composing)
                 } else {
                     key_composition(false, ESCAPE_KEY_CODE, host_composing)
                 };

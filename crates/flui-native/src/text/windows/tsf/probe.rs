@@ -56,7 +56,7 @@ use windows_core::{BOOL, GUID, PWSTR};
 
 use super::TextServices;
 use crate::platform::Platform;
-use crate::shared::text_geometry::range_rect_to_screen;
+use crate::text::windows::geometry::range_rect_to_screen;
 use flui_platform::WindowOptions;
 
 /// Microsoft IME ja-JP: its TIP class and profile.
@@ -421,7 +421,7 @@ fn text_services_probe() {
     let window = platform.open_window(options).expect("window");
     let hwnd = window
         .as_any()
-        .downcast_ref::<super::super::WindowsWindow>()
+        .downcast_ref::<crate::platforms::windows::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
     println!("PROBE foreground: {}", bring_to_front(hwnd));
@@ -447,13 +447,13 @@ fn text_services_probe() {
         use crate::host_window::{HostWindow as _, OwnerThreadToken};
         window
             .as_any()
-            .downcast_ref::<super::super::WindowsWindow>()
+            .downcast_ref::<crate::platforms::windows::WindowsWindow>()
             .expect("Win32 window")
             .text_store_host(OwnerThreadToken::new())
             .expect("(1) the window offers its text-store host")
     };
     let services: Rc<TextServices> =
-        super::super::platform::with_window_context(hwnd, "probe", |context| {
+        crate::platforms::windows::platform::with_window_context(hwnd, "probe", |context| {
             context.text_services.borrow().clone()
         })
         .flatten()
@@ -777,10 +777,11 @@ fn activate_profile(
 
 /// The window's scale and client origin.
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
-    let scale =
-        super::super::platform::with_window_context(hwnd, "probe", |c| c.scale_factor.get())
-            .and_then(DevicePixelRatio::new)
-            .unwrap_or_default();
+    let scale = crate::platforms::windows::platform::with_window_context(hwnd, "probe", |c| {
+        c.scale_factor.get()
+    })
+    .and_then(DevicePixelRatio::new)
+    .unwrap_or_default();
     let mut origin = POINT::default();
     // SAFETY: a live local.
     let _ = unsafe { ClientToScreen(hwnd, &raw mut origin) };
@@ -797,7 +798,7 @@ struct ScreenCapture {
 }
 
 impl ScreenCapture {
-    fn grab(field: crate::shared::text_geometry::ScreenRect) -> Self {
+    fn grab(field: crate::text::windows::geometry::ScreenRect) -> Self {
         use windows::Win32::Graphics::Gdi::{
             BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
             DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY,

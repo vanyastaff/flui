@@ -32,13 +32,13 @@ use windows::Win32::{
 use super::{
     display::WindowsDisplays,
     events::{get_x_lparam, get_y_lparam},
-    text_services::TextServices,
     window::{NativeMode, WindowsWindow},
 };
 use crate::owner::call_point::{Field, call};
 use crate::owner::windows::{
     WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
 };
+use crate::text::windows::TextServices;
 use crate::{
     config::WindowConfiguration, owner::handlers::PlatformHandlers,
     owner::handlers::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
@@ -70,26 +70,26 @@ mod display_message_tests;
 /// [`Self::with_context`] reaches only the context this window was created
 /// with. Plain values, so an `Arc`-shared object can hold one on any thread.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct WindowRef {
+pub(crate) struct WindowRef {
     hwnd: isize,
     identity: WindowIdentity,
 }
 
 impl WindowRef {
-    pub(super) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
+    pub(crate) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
         Self {
             hwnd: hwnd.0 as isize,
             identity,
         }
     }
 
-    pub(super) fn hwnd(self) -> HWND {
+    pub(crate) fn hwnd(self) -> HWND {
         HWND(self.hwnd as *mut core::ffi::c_void)
     }
 
     /// [`with_window_context`] for this window only: `None` off its owner
     /// thread, after it closed, or when its handle now names another window.
-    pub(super) fn with_context<R>(
+    pub(crate) fn with_context<R>(
         self,
         op: &'static str,
         f: impl FnOnce(&WindowContext) -> R,
@@ -238,6 +238,9 @@ pub(crate) struct WindowContext {
     /// failed (the window then takes no drags) or after `WM_DESTROY`
     /// revoked it.
     pub(super) drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
+    /// The platform's OLE transfer, which the window's drop target serves;
+    /// the window class's drop-target hook registers it from here.
+    pub(super) drag: Arc<super::drag::OleTransfer>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -327,8 +330,8 @@ impl WindowContext {
         PublishHold(&self.publish_hold)
     }
 
-    /// The window moved on the screen or changed DPI: the focused field's
-    /// input method follows it.
+    /// The window changed DPI: once the new scale is applied, the focused
+    /// field's input method follows it (a move reaches TSF through its class hook).
     pub(super) fn text_layout_moved(&self) {
         let services = self.text_services.borrow().clone();
         if let Some(services) = services {
@@ -834,7 +837,6 @@ impl WindowProc {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
                         ctx.resume_touchpad();
-                        ctx.text_layout_moved();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1141,7 +1143,6 @@ impl WindowProc {
                             );
                         });
                         ctx.publish_window_state(hwnd);
-                        ctx.text_layout_moved();
                     }
 
                     LRESULT(0)

@@ -35,7 +35,7 @@ pub struct WebWindow {
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     drag: RefCell<Option<super::drag::CanvasDrag>>,
-    text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
+    text: RefCell<Option<Rc<crate::text::web::WebTextInput>>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<WebDisplays>,
     /// The published window state (ADR-0237).
@@ -454,7 +454,7 @@ impl Drop for WebWindow {
     }
 }
 
-pub(super) struct FocusSync {
+pub(crate) struct FocusSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
@@ -463,7 +463,7 @@ pub(super) struct FocusSync {
 }
 
 impl FocusSync {
-    pub(super) fn sync(&self) {
+    pub(crate) fn sync(&self) {
         let focused = effective_focus(&self.canvas);
         if self.observed.replace(focused) == focused {
             return;
@@ -640,10 +640,12 @@ impl crate::host_window::HostWindow for WebWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        use crate::text::{TextInput, WindowTextInput};
         self.text
             .borrow()
             .as_ref()
-            .map(|text| Rc::clone(text) as Rc<dyn flui_platform::text_store::TextStoreHost>)
+            .and_then(TextInput::window_text_input)
+            .and_then(WindowTextInput::store_host)
     }
 }
 

@@ -2,10 +2,8 @@
 //! host: a text range's logical rect as the physical screen rect an input
 //! method places its windows against.
 
+use super::{ScreenRect, ScreenRectError, range_rect_to_screen, screen_point_to_client};
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point, Size};
-use flui_native::shared::text_geometry::{
-    ScreenRect, ScreenRectError, range_rect_to_screen, screen_point_to_client,
-};
 
 fn ratio(value: f64) -> DevicePixelRatio {
     DevicePixelRatio::new(value).expect("a positive, finite test scale")

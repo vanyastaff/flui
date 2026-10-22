@@ -17,6 +17,12 @@
 //! needs answered at once (a drag's acceptance, a drop's result, the input
 //! method's reads) comes from state the owner published earlier: the drop
 //! feedback the target cached, and the mirror of the focused field.
+//!
+//! The view serves several features and names none of the text feature's
+//! types: the input method's calls go to an [`InputMethod`], which the host's
+//! table hands the view ([`AndroidHost`](super::AndroidHost)), and what it
+//! makes of them reaches the window as work the owner runs
+//! ([`ViewEvent::RunOnWindow`]).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,13 +36,13 @@ use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 use parking_lot::Mutex;
 
+use super::EditorState;
 use crate::owner::signal::OwnerSignal;
-use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
-use crate::platforms::android::AndroidTransfer;
 use crate::platforms::android::preferences::with_activity;
+use crate::platforms::android::{AndroidTransfer, AndroidWindow};
 
 /// The view's classes, compiled from `android/java` (see the module doc).
 const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
@@ -48,17 +54,10 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 pub(crate) enum ViewEvent {
     /// The view's installation finished, whether or not it worked.
     Installed,
-    /// One input method edit of the focused field.
-    Ime(ImeEdit),
-    /// `performEditorAction(action)`, at `uptime_ms` on the event clock.
-    EditorAction {
-        /// The `EditorInfo.IME_ACTION_*` the input method performed.
-        action: i32,
-        /// `SystemClock.uptimeMillis()` when it did.
-        uptime_ms: i64,
-    },
-    /// `requestCursorUpdates` with this mode.
-    CursorUpdates(i32),
+    /// What a feature made of a report on the Java main thread, run on the
+    /// owner against the window, in order with the rest; dropped with no
+    /// window.
+    RunOnWindow(WindowWork),
     /// A drag over the view.
     Drag(DragDropEvent),
     /// The drag this view started ended; `result` is whether a target took it.
@@ -71,6 +70,51 @@ pub(crate) enum ViewEvent {
     SettingsChanged,
     /// The window insets the view received changed.
     InsetsChanged,
+}
+
+/// Work a feature hands the owner to run against the window.
+pub(crate) type WindowWork = Box<dyn FnOnce(&AndroidWindow) + Send>;
+
+/// The input method's calls through `FluiView`, which the text feature answers.
+///
+/// The input method reads and edits the view's copy of the focused field on
+/// the Java main thread and never waits for the owner; the owner publishes the
+/// field to the view, and the view reports what the input method made of it.
+/// Each call below but [`Self::hold`] and [`Self::pen_down`] comes from a
+/// native method of the view, on the Java main thread under no lock of the
+/// view, and answers what the view applies and queues.
+pub(crate) trait InputMethod: Send + Sync {
+    /// The view now holds `text`, which the owner published as `generation`:
+    /// the reports that follow are made against it. On the owner thread.
+    fn hold(&self, generation: u32, text: &str);
+
+    /// `nativeImeState`: what the view holds after an input method edit made
+    /// on the publication `generation` names; `None` when it changed nothing.
+    fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply>;
+
+    /// `nativeImeAction`: the input method performed its editor action
+    /// (`EditorInfo.IME_ACTION_*`) at `uptime_ms` on the event clock.
+    fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply;
+
+    /// `nativeImeCursorUpdates`: `requestCursorUpdates` with this mode.
+    fn cursor_updates(&self, mode: i32) -> InputMethodReply;
+
+    /// A pen tip touched `window` down at `at` (logical pixels), on the owner
+    /// thread: inside the focused field, the input method's handwriting may
+    /// take the stroke. Android's own initiation sees only the stylus events
+    /// native code leaves unhandled.
+    fn pen_down(&self, window: &AndroidWindow, at: flui_foundation::geometry::Point<f64>);
+}
+
+/// What the text feature made of one of the input method's calls through the
+/// view: the view applies it on the Java main thread and queues the work.
+pub(crate) struct InputMethodReply {
+    /// Whether the input method composes now; `None` when the call does not
+    /// say.
+    pub(crate) composing: Option<bool>,
+    /// What the owner then runs against the window, in order with the view's
+    /// other reports.
+    pub(crate) work: WindowWork,
 }
 
 /// Where the view is in its life.
@@ -87,8 +131,6 @@ enum Install {
 
 struct State {
     install: Install,
-    /// The field text the view holds, which each report is diffed against.
-    mirror: Mirror,
     /// What the view reported, oldest first.
     events: VecDeque<ViewEvent>,
     /// The `Box<Weak<JavaView>>` the view holds as its handle, freed on the
@@ -103,6 +145,8 @@ pub(crate) struct JavaView {
     api: AndroidApi,
     signal: Weak<OwnerSignal>,
     transfer: Arc<AndroidTransfer>,
+    /// What answers the input method's calls through the view.
+    input_method: Box<dyn InputMethod>,
     state: Mutex<State>,
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
@@ -119,15 +163,20 @@ impl std::fmt::Debug for JavaView {
 
 impl JavaView {
     /// The bridge, with the view's installation posted to the Java main thread.
-    pub(super) fn start(app: AndroidApp, signal: Weak<OwnerSignal>, api: AndroidApi) -> Arc<Self> {
+    pub(super) fn start(
+        app: AndroidApp,
+        signal: Weak<OwnerSignal>,
+        api: AndroidApi,
+        input_method: Box<dyn InputMethod>,
+    ) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
             app,
             api,
             signal,
             transfer: Arc::new(AndroidTransfer::new(this.clone())),
+            input_method,
             state: Mutex::new(State {
                 install: Install::Pending,
-                mirror: Mirror::default(),
                 events: VecDeque::new(),
                 handle: None,
             }),
@@ -185,9 +234,17 @@ impl JavaView {
         self.push_event(ViewEvent::Drag(event));
     }
 
-    /// The view now holds `snapshot`: later reports are diffed against it.
-    pub(crate) fn install_mirror(&self, snapshot: &Snapshot) {
-        self.state.lock().mirror.install(snapshot);
+    /// What answers the input method's calls through the view.
+    pub(crate) fn input_method(&self) -> &dyn InputMethod {
+        &*self.input_method
+    }
+
+    /// Apply what the input method's call made of it and queue its work.
+    fn reply(&self, reply: InputMethodReply) {
+        if let Some(composing) = reply.composing {
+            self.set_composing(composing);
+        }
+        self.push_event(ViewEvent::RunOnWindow(reply.work));
     }
 
     /// Run `call` with the view on the Java main thread, if it is installed
@@ -323,15 +380,6 @@ impl JavaView {
                 free_handle(handle as *mut Weak<JavaView>);
             }
         }));
-    }
-
-    /// The view's report of its mirror: the edit it makes, queued for the owner.
-    fn report(&self, generation: u32, state: &EditorState) {
-        let edit = self.state.lock().mirror.report(generation, state);
-        if let Some(edit) = edit {
-            self.set_composing(edit.composes());
-            self.push_event(ViewEvent::Ime(edit));
-        }
     }
 }
 
@@ -687,7 +735,9 @@ extern "system" fn native_ime_state<'local>(
             composition_start,
             composition_end,
         };
-        view.report(generation.cast_unsigned(), &state);
+        if let Some(reply) = view.input_method.edited(generation.cast_unsigned(), state) {
+            view.reply(reply);
+        }
     });
 }
 
@@ -700,7 +750,7 @@ extern "system" fn native_ime_action<'local>(
 ) {
     contained(|| {
         if let Some(view) = bridge(handle) {
-            view.push_event(ViewEvent::EditorAction { action, uptime_ms });
+            view.reply(view.input_method.editor_action(action, uptime_ms));
         }
     });
 }
@@ -713,7 +763,7 @@ extern "system" fn native_ime_cursor_updates<'local>(
 ) {
     contained(|| {
         if let Some(view) = bridge(handle) {
-            view.push_event(ViewEvent::CursorUpdates(mode));
+            view.reply(view.input_method.cursor_updates(mode));
         }
     });
 }

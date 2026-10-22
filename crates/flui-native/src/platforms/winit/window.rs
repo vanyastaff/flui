@@ -14,7 +14,7 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{
@@ -139,40 +139,6 @@ pub(crate) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
     match window.display_handle().map(|display| display.as_raw()) {
         Ok(raw_window_handle::RawDisplayHandle::Wayland(_)) => WindowShell::Wayland,
         _ => WindowShell::Desktop,
-    }
-}
-
-/// [`PlatformTextInput`] for a winit window.
-///
-/// A thin wrapper around `Arc<winit::window::Window>` rather than an impl
-/// directly on `WinitWindow`: `PlatformWindow::text_input` hands back an
-/// `Arc<dyn PlatformTextInput>` from `&self`. Cloning the exact inner
-/// `Arc<Window>` gives the capability independent ownership without cloning
-/// or forwarding the platform-window object itself.
-pub struct WinitTextInput {
-    window: Arc<Window>,
-}
-
-impl std::fmt::Debug for WinitTextInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WinitTextInput").finish_non_exhaustive()
-    }
-}
-
-impl crate::host::Text for WinitTextInput {}
-
-impl PlatformTextInput for WinitTextInput {
-    fn set_ime_allowed(&self, allowed: bool) {
-        self.window.set_ime_allowed(allowed);
-    }
-
-    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
-        use winit::dpi::{LogicalPosition, LogicalSize};
-
-        self.window.set_ime_cursor_area(
-            LogicalPosition::new(area.origin.x, area.origin.y),
-            LogicalSize::new(area.size.width, area.size.height),
-        );
     }
 }
 
@@ -896,9 +862,12 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        Some(Arc::new(WinitTextInput {
-            window: Arc::clone(&self.window),
-        }))
+        use crate::text::{TextInput as _, WindowTextInput};
+        Arc::new(crate::text::winit::WinitTextInput::new(Arc::clone(
+            &self.window,
+        )))
+        .window_text_input()
+        .and_then(WindowTextInput::ime)
     }
 
     fn as_any(&self) -> &dyn Any {

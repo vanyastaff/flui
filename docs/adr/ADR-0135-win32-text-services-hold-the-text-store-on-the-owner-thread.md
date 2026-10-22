@@ -5,6 +5,12 @@
   (`WindowsWindow::text_store_host`); the other production backends answer `None` (a headless
   window offers one only when a test asks).
 - **Date:** 2026-10-06
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §10: TSF lives in `crates/flui-native/src/text/windows/tsf/`, §6's geometry is the pure
+  `geometry` module of `text/windows/mod.rs`, and the text feature's hook on FLUI's window class
+  activates a window's connection once its context is installed and tells it the window moved;
+  the teardown stays in the window procedure, between the close callbacks and the context's
+  retirement (§3).
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
 - **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract),
@@ -97,9 +103,9 @@ composition must still end somewhere.
    explicit `SetFocus`; a document is never closed under its own COM entry. Each COM entry catches
    panics; a `BUG:` panic inside the adapter poisons the document, and after three the window
    falls back to `WM_CHAR`.
-6. **Geometry and lock translation are pure functions** in `flui_native::shared`, with no
-   `windows` type, tested on every host: `text_geometry::range_rect_to_screen` with outward
-   rounding, and, once written, the ACP flag and error translation beside it.
+6. **Geometry and lock translation are pure functions** in `text::windows::geometry`, with no
+   `windows` type, tested on every host: `range_rect_to_screen` with outward rounding, and, once
+   written, the ACP flag and error translation beside it.
 7. **No IMM32.**
 
 ## Alternatives considered
@@ -155,7 +161,7 @@ composition must still end somewhere.
   `runner_bootstrap_matrix`'s
   `presentation_window_hands_a_pull_window_s_host_to_its_presentation` and `flui-widgets`
   `focus_gain_and_loss_reach_the_store_host` (§2, §4).
-- `flui-native` `text_services::tests::the_text_services_answer_a_completion_for_its_store`,
+- `flui-native` `text::windows::tsf::tests::the_text_services_answer_a_completion_for_its_store`,
   Windows only, against the real TSF in a hidden window: a completion queued behind a COM entry
   commits its store in place after a shutdown or without a document, and a store the host does
   not serve, or any store after shutdown, is refused (§1, §3); a teardown whose observer
@@ -165,7 +171,7 @@ composition must still end somewhere.
   protection change reaches TSF as a new context, ending a composition TSF holds in the old one
   first (committing it in place when TSF refuses) (§4, §5); a window destroyed inside a TSF
   call shuts its text services down when that call returns (§3).
-- `flui-native` `text_services::tests::a_window_offers_its_text_services_as_its_host`,
+- `flui-native` `text::windows::tsf::tests::a_window_offers_its_text_services_as_its_host`,
   Windows only: a real `WindowsWindow` offers its own text services as its host, a focused store
   gets a TSF document of the window, and after `WM_DESTROY` the host answers `Unavailable` (§3).
 - The Win32 text services' opt-in probe,
