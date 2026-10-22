@@ -1,6 +1,6 @@
 # ADR-0213: Input availability comes from handles; `InputCapabilities` covers only what has no handle
 
-- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/shared/input_availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
+- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/input/availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
@@ -68,7 +68,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    gestures and outgoing drags on X11).
 2. **Implemented is not present.** `Availability` states what the backend implements. Whether a
    matching device is attached is a separate answer, `present()`, taken from the backend's
-   `DeviceRegistry` (`flui-native/src/shared/`), the same registry that assigns `DeviceId`s,
+   `DeviceRegistry` (`flui-native/src/input/assembly/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
 3. **Snapshot, then changes, as events.** Every backend computes an initial

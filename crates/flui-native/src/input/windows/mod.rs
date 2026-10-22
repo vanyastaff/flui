@@ -3,10 +3,10 @@
 //! characters, the keyboard layout), their decoding (`raw`) and the precision
 //! touchpad (`direct_manipulation`).
 //!
-//! [`InputMessages`] is the hook the Windows host registers on the class
-//! beside the window's own and the precision touchpad's ([`Touchpad`]); each
+//! `InputMessages` is the hook the Windows host registers on the class
+//! beside the window's own and the precision touchpad's (`Touchpad`); each
 //! message reaches one of them. What the input keeps of a window is its own
-//! ([`InputWindow`]): the hook makes it when the class announces the window
+//! (`InputWindow`): the hook makes it when the class announces the window
 //! and keeps it with the window (`WindowRef::attach`), and the steps of the
 //! window's own procedure the input follows (its size, focus, paint and
 //! scale, the modal size-and-move loop, a setting change, its destruction)

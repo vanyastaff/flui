@@ -104,20 +104,37 @@ trait depends on `flui-platform` instead.
     focus, paint, the cursor, the title, the modal size-move and menu loops
     with their deadline timer, the session and setting changes, the frame and
     fullscreen requests posted to it and the keyboard's system-menu command),
-    the input procedure (`platforms::windows::InputMessages`: mouse, pointer,
-    wheel, keyboard, characters and the keyboard layout, until the input
-    feature takes it; a keydown the application lets through asks the window
-    for its own keys, the fullscreen hotkey), the drop target
+    the input procedure (`input::windows::InputMessages`: mouse, pointer,
+    wheel, keyboard, characters and the keyboard layout), the drop target
     (`drag::windows::DropTargetRegistration`, which only hears each window
     created and registers it with the transport its context holds, the
-    loop's `HostDrag`) and the precision touchpad (its hit test and pacing
+    loop's `HostDrag`) and the precision touchpad
+    (`input::windows::direct_manipulation::Touchpad`: its hit test and pacing
     timer, and the DirectManipulation viewport its `created` gives each new
-    window). Each borrows the window's context for its own message only. The
-    reference a hook is handed a window by, `owner::windows::WindowRef` (the
-    handle and the identity of its context), is the owner's; the window
-    feature reaches the context through it (`WindowRef::with_context`). Tests:
-    `a_window_message_reaches_the_hooks_in_order`,
+    window). The reference a hook is handed a window by,
+    `owner::windows::WindowRef` (the handle and the identity of its context),
+    is the owner's; the window feature reaches the context through it
+    (`WindowRef::with_context`), and the window's own procedure borrows it for
+    its own messages only.
+  - A feature keeps its own state of a window: `WindowRef::attach` keeps one
+    `Rc` of each type in a property of the native window, which the class's
+    procedure drops after `WM_NCDESTROY`, and `attached` finds it on the
+    window's thread, by `WindowRef` (checked against the window's identity)
+    or by the handle a message names. The hooks hear the window's steps
+    (`WindowMessages::step`, a `WindowStep`: its size, minimizing, focus
+    loss, paint, modal size-and-move loop, scale and setting changes, and a
+    key the application let through) and its destruction
+    (`WindowMessages::destroyed`), which the window's procedure announces in
+    hook order where it handles them. The input makes its `InputWindow` (the
+    message clock, the pointer registry, the touchpad's viewport, the hover,
+    the modifiers, the dead keys and a pending surrogate) when the window is
+    created and attaches it, with the part the window, drag and drop and
+    haptics read (`input::WindowInput`); a keydown the application lets
+    through is a step, which the window answers with its own keys, the
+    fullscreen hotkey. Tests: `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
+    `a_window_step_and_its_destruction_reach_every_hook_in_order`,
+    `a_windows_input_lives_as_long_as_its_window`,
     `a_second_host_is_refused_the_window_class`, and
     `hosts::windows::tests::the_window_hooks_answer_disjoint_messages`, which
     fails if two of the table's hooks list one message, timer or system
@@ -162,26 +179,34 @@ trait depends on `flui-platform` instead.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
   what the loop holds (the displays, the preference source, the notice
-  channel, what the Activity's callbacks mean, the clipboard and the
-  drag-and-drop transport: `displays`, `preferences`, `notices`, `activity`,
-  `clipboard`, `transfer`) and names the features' objects `FluiView` hands
-  its reports: the text feature's `InputMethod` (`input_method`), which
-  answers the input method's calls through the view, and the transport, to
-  which the view hands its drag events.
+  channel, what the Activity's callbacks mean, the input, the clipboard and
+  the drag-and-drop transport: `displays`, `preferences`, `notices`,
+  `activity`, `input`, `clipboard`, `transfer`) and names the features'
+  objects `FluiView` hands its reports: the text feature's `InputMethod`
+  (`input_method`), which answers the input method's calls through the view,
+  and the transport, to which the view hands its drag events.
 
   A loop keeps a feature's object in a field typed by a hook trait declared
   beside the loop, which says what the loop and the windows it opens ask of
   the object, and the owner's host trait makes it: `WindowsHost::drag`
   (`HostDrag`: the owner window's `OwnerMessages`, a window's drag source and
-  drop target), `WebHost::clipboard` and `WebHost::drag` (`HostDrag`: a
-  canvas's listeners, `CanvasListeners`, which the window's registration
-  implements, and `CanvasDrag`), `WinitHost::clipboard` and
-  `WinitHost::drag` (`FileDrops`), `AndroidHost::clipboard` and
-  `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`). The table
-  names the loop as such a position (`type Drag = WindowsLoop`, as it names
-  the loop for the displays, the preferences and the lifecycle), and the loop
-  answers it from that field, so a table cannot name one type and build
-  another. The headless loop holds the simulated system's drag state
+  drop target), `WebHost::clipboard`, `WebHost::drag` (`HostDrag`: the
+  canvas's drags, registered into the canvas's registration,
+  `CanvasRegistration`, which the window implements, and `CanvasDrag`) and
+  `WebHost::input` (`HostInput`: the canvas's pointers, keys, wheel and
+  gestures, registered into the same registration, which answer the key
+  route the window hands its text input, `CanvasKeys`),
+  `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`) and
+  `WinitHost::input` (`LoopInput`: the session's pointers and keys as the
+  loop's events and turns bring them), `AndroidHost::clipboard`,
+  `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`) and
+  `AndroidHost::input` (`ActivityInput`: the native queue's motion and key
+  events and the scroll factors), and `HeadlessHost::devices`
+  (`SimulatedDevices`: the devices a test attaches). The table names the
+  loop as such a position (`type Drag = WindowsLoop`, `type Input =
+  AndroidLoop`, as it names the loop for the displays, the preferences and
+  the lifecycle), and the loop answers it from that field, so a table cannot
+  name one type and build another. The headless loop holds the simulated system's drag state
   (`owner::headless::OsDrags`) as it holds the rest of that system;
   `drag::headless` is the data-transfer source, a window's drag source and the
   test's side over it. A position whose object is made per call (the Win32,
@@ -207,12 +232,12 @@ trait depends on `flui-platform` instead.
   other features' models, never another platform's module; `owner/` names no
   feature's item; each edge into a module under `platforms/`, or into another
   feature's platform file, is a named exception that goes when that module
-  becomes a feature's or the feature keeps its own per-window state. The key
-  rules the backend conformance table in `tests/` decodes with (`text::android::keys`,
-  `text::web::ime`) are built on every target and public, hidden from the
-  documentation; the other pure halves are built for their target and for
-  tests on every host. Tests of the model and the pure halves sit beside
-  them (`text::ime::tests`, `text::android::ime::tests`,
+  becomes a feature's or the feature keeps its own per-window state. The
+  pure halves are built for their target and for tests on every host; which
+  key belongs to the input method is the input feature's
+  (`input::android::keys`, `input::web::keys`), and a window's text input
+  tells it whether the field composes. Tests of the model and the pure
+  halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
   `text::web::ime::tests`, `text::windows::geometry::tests`).
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
@@ -243,9 +268,11 @@ trait depends on `flui-platform` instead.
   that goes when the window-level positions reach the window through the
   table. The Win32 drag transport and actuator name a window by
   `owner::windows::WindowRef`, the owner's vocabulary, and reach its context
-  through the window's `WindowRef::with_context`; the Web drag answers through
-  the input file's `answer`, an exception into the `retiring` `platforms`
-  that goes with the input's directory.
+  through the window's `WindowRef::with_context`, except what they read of the
+  window's input (the contact kind, the buttons held, the pen), which is the
+  input's `WindowInput` attached to the window. The Web drag answers its
+  events and reads their position as the input does, through the owner's
+  `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
   model is `display::source`, the id registry and last snapshot every native
   source keeps; beside it is one file per platform: `windows.rs` (the
@@ -344,7 +371,7 @@ trait depends on `flui-platform` instead.
     Activity every feature uses is `owner::android::activity::with_activity`,
     and the observer on an AppKit notification centre the macOS sources
     register through is `owner::apple::macos::observation`; Android's scroll
-    factors are input's (`platforms::android::input`).
+    factors are input's (`input::android`).
 - **The window feature is `window/`, and a loop holds its windows without
   naming them (ADR-0151 §10).** The model is what two or more platforms share:
   the published state (`window::state`), the hidden-surface rules of the Win32
@@ -402,11 +429,44 @@ trait depends on `flui-platform` instead.
     window files of one platform (a window builds its text input and
     captures its text sizing; the text input reaches the window that holds
     it). A window that builds or keeps another feature's object of a
-    window-level position keeps the edge until those positions reach the
-    window through the host table. The others go when that feature keeps its
-    own per-window state, keyed by the window's identity, set up by its
-    window hook's `created` and dropped when the window goes, and no longer
-    reaches the window's context.
+    window-level position (its accessibility, haptics, drag source, text
+    input) keeps the edge until those positions reach the window through the
+    host table. The others go when that feature keeps its own per-window
+    state, keyed by the window's identity, set up by its window hook's
+    `created` and dropped when the window goes, and no longer reaches the
+    window's context, as the Win32 input does. The features that add methods
+    to one AppKit or UIKit view class (the input, the text input, the window's
+    drawing) keep the edges between them until that class is the owner's,
+    joined through hooks.
+- **The input is a feature directory, `input/` (ADR-0151 §10).** Its model
+  is what the platforms share: `assembly` (the pointer registry every backend
+  assembles its contacts through, the decoder of native readings, and the
+  `native-capture` journal), `availability` (each backend's input
+  capabilities table), `keys` (the Win32 virtual keys and the mouse buttons'
+  codes, and the `adapter` from `ui-events` key results that Android and
+  winit share), `scroll`, `event_timestamp_ns` (public at the crate root) and
+  `WindowInput` (what the Win32 window, drag and drop and haptics read of a
+  window's input). Beside it, one file per platform: `windows/` (`mod.rs`,
+  `InputMessages` and the window's `InputWindow`; `raw.rs`, the messages
+  decoded; `direct_manipulation.rs`, the `Touchpad` hook over one OS object,
+  with its pure `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`,
+  the AppKit content view's class and its events; `ios`, the touches),
+  `android.rs` (the pure `keys`, `motion` and `scroll`; `AndroidInput`),
+  `web.rs` (the pure `keys` and `pinch`; `events`, `WebInput`), `winit.rs`
+  (`NativePointerState`) and `headless.rs` (the simulated devices). A loop
+  holds its input through a hook (`InputMessages` and `Touchpad` in
+  `WINDOW_HOOKS`, `ActivityInput`, `HostInput`, `LoopInput`,
+  `SimulatedDevices`), and the table's input position names the loop
+  (`type Input = <Os>Loop`), whose `host::Input` (the keyboard layout and its
+  change) the input file implements. The modules the tables in `tests/` decode
+  with are public and hidden from the documentation (`assembly`,
+  `availability`, `keys`, `apple::keys`, `android::keys`, `web::keys`,
+  `windows::direct_manipulation::manipulation`): the native recordings
+  replay through the registry, and the allocation count of
+  `pointer_assembly_allocates_nothing_per_event` needs a binary of its own,
+  whose global allocator counts every allocation, so neither can reach a
+  `pub(crate)` module; the other pure halves (`android::motion`,
+  `web::pinch`) are `pub(crate)` and tested beside them.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -849,7 +909,7 @@ pointer input handled, so a FLUI page still never scrolls under its canvas,
 while an embedder whose callback declines lets the page scroll.
 
 A trackpad pinch reaches Chromium and Firefox pages as Control-held wheel
-events and WebKit pages as `gesture*` events (`shared::web_pinch`). A
+events and WebKit pages as `gesture*` events (`input::web::pinch`). A
 Control-held sequence is classified by its first event (a pixel `deltaY` with
 no `deltaX` that is a whole number neither of CSS pixels nor of device pixels
 is a pinch, anything else a scroll: a mouse detent at a page zoom is
@@ -965,7 +1025,7 @@ A key the input method processes is the input method's: it reaches the window
 marked `ImeComposition::Active` when its event composes, when it carries the
 input method's key code 229 (WebKit dispatches the key that ends a composition
 after `compositionend`, with `isComposing` false), or while the surface
-composes (`text::web::ime::key_composition`). No shortcut, focus traversal
+composes (`input::web::keys::key_composition`). No shortcut, focus traversal
 or drag cancellation takes such a key, and its default stays the input
 method's, so Escape cancels the composition first. A key the application
 handles has its default prevented, so the browser does not also type it into
@@ -973,10 +1033,13 @@ the surface.
 
 The textarea belongs to the canvas's focus area: it is named on the canvas's
 claim (`EditorSlot`), focus moving between the two is not a window focus
-change, its keys reach the window through the canvas's `KeyRoute`, focusing
-the canvas forwards focus to it, and detaching gives focus back to the canvas.
+change, its keys reach the window through the canvas's key route
+(`CanvasKeys`), focusing the canvas forwards focus to it, and detaching gives
+focus back to the canvas.
 
-`web_text_table` and `mirror_text_table` pin the rules in Linux CI, and the conformance table's
+`the_purpose_picks_the_input_mode`,
+`a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin
+the rules in Linux CI, and the conformance table's
 `a_key_during_composition_is_the_input_methods` holds them for the web
 profile. In headless Chrome, `an_edit_context_serves_the_focused_field`,
 `escape_while_the_field_composes_is_the_input_methods` and
@@ -1598,7 +1661,7 @@ into FLUI's owned keyboard vocabulary (`Code`, `Key`,
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
 
-**Choice:** the winit backend's `platforms/winit/events.rs::keyboard_event`
+**Choice:** the winit backend's `keyboard_event` (`input/winit.rs`)
 converts the whole `winit::event::KeyEvent` (code, logical key, location,
 down/up state, `repeat`, and modifiers) through
 `ui_events_winit::keyboard::from_winit_keyboard_event` (crates.io
@@ -1607,8 +1670,8 @@ hand-assembling any `KeyboardEvent` field itself; `owner/winit.rs`'s
 `ModifiersChanged` handler stores winit's raw `ModifiersState` rather than a
 pre-converted `keyboard_types::Modifiers`, and each read site (pointer paths
 and the keyboard path alike) converts through the crate's
-`from_winit_modifier_state` at the point of use. The Win32 (`shared/keys.rs`)
-and AppKit (`shared/keys_macos.rs`) backends keep their own hand-written
+`from_winit_modifier_state` at the point of use. The Win32 (`input/keys.rs`)
+and AppKit (`input/apple.rs`, `keys`) backends keep their own hand-written
 `Code`/`Key` tables, because no equivalent bridge crate exists for
 `WM_KEYDOWN` scancodes or `NSEvent.keyCode` — those two native id spaces are
 FLUI-specific translation work with no upstream crate to delegate to.
@@ -1624,13 +1687,13 @@ per-platform and exposes it, so nothing here re-derives it.
 
 This asymmetry between backends is deliberate, not inconsistent: the rule is
 "delegate to an audited bridge when one exists for this native surface," not
-"every backend must look the same." `platforms/winit/events/keyboard_tests.rs`'s
+"every backend must look the same." `input/apple/keys/tests.rs`'s
 `cross_backend_physical_key_agreement` test cross-checks a curated set of
 physical keys against both hand-written tables so the two authored
 translations and the delegated one cannot silently drift apart.
 
 The Winit and Android ecosystem mappings remain boundary dependencies:
-`shared::keyboard_adapter` converts their results to owned `KeyEvent` values.
+`input::keys::adapter` converts their results to owned `KeyEvent` values.
 Win32 and AppKit tables return owned enums directly, and Web parses the DOM's
 W3C spellings against the generated owned tables. No pointer event uses the
 keyboard adapter. `keyboard_adapter_contract` preserves all named/physical
@@ -1699,7 +1762,7 @@ production delegation) — read it for context, not as the source of a fact;
 figures cited in this entry are measured directly against this repository
 and `ui-events-winit`'s own source, not against the survey.
 
-**Replacement coverage:** `platforms/winit/events/keyboard_tests.rs`'s
+**Replacement coverage:** `input/apple/keys/tests.rs`'s
 `keyboard_conversion_tests` module (`every_winit_keycode_maps_to_a_canonical_code`
 over all 194 winit 0.30.13 `KeyCode` variants — length- and
 duplicate-checked against the winit source) and
@@ -2808,7 +2871,7 @@ processes on one directory are left to the dated native run.
 
 ### Every backend assembles pointers through one registry
 
-Backends copy each native event into a plain `shared::pointer_assembly::NativeReading`
+Backends copy each native event into a plain `input::assembly::NativeReading`
 (no `windows::*`, `objc2`, JNI or DOM type) and `decode` it against a
 `ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
 label and contact label, except the backend's reserved contact (a mouse on
@@ -2838,7 +2901,7 @@ press sequence stays on the contact for a native drag start. Decoding allocates
 nothing per event once contacts are open; a coalesced batch allocates the
 vocabulary's sample buffer.
 
-`pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
+`pointer_assembly_contracts` in `input::assembly::tests` pins label reuse after
 Up, primary admission, the mouse cursor's identity and cancellation, the
 reserved contact across devices (`the_reserved_contact_is_one_cursor_across_devices`), the pen
 contact rule, a lifted pen's hover until its leave, an entered touch's leave at its end, the originating reading, device hot-plug, identity exhaustion, click
@@ -2860,7 +2923,7 @@ its focal point, which every `Update` refreshes (ADR-0217 §4;
 
 ### The winit translation makes up for what winit reports alike on every session
 
-`platforms/winit/events.rs` decides what winit's shared shapes hide
+`input/winit.rs` decides what winit's shared shapes hide
 (`session_quirks_translate_to_one_grammar`):
 
 - A winit device id is labelled per kind of input (cursor, touch, trackpad
@@ -2887,12 +2950,12 @@ its focal point, which every `Update` refreshes (ADR-0217 §4;
 
 ### Android motion events decode through a cfg-free translation
 
-`platforms/android/input.rs` only copies each `MotionEvent` out of the NDK
-into plain facts (`shared::android_motion::Motion`: source, action, buttons,
+`input/android.rs` only copies each `MotionEvent` out of the NDK
+into plain facts (`input::android::motion::Motion`: source, action, buttons,
 and each pointer's tool, axes and history) and discovers its device's motion
-ranges through Java; `shared::android_motion::AndroidMotion` turns the facts
+ranges through Java; `input::android::motion::AndroidMotion` turns the facts
 into readings, so Linux CI runs what the device runs
-(`android_motion_translation` in `tests/android_motion.rs`). Two decisions are
+(`android_motion_translation` in `input::android::motion::tests`). Two decisions are
 the translation's own:
 
 - Android ends a hover with `ACTION_HOVER_EXIT` at the instant a pen or a
@@ -2953,7 +3016,7 @@ backend graph. The header declares every device label its rows read, with the
 kinds they read it as, and the reader refuses a row that names another.
 
 Recordings are captured in debug builds with the `native-capture` feature:
-`shared::pointer_assembly::capture::capture` installs a sink on a thread, and
+`input::assembly::capture::capture` installs a sink on a thread, and
 every registry created there while it is installed — a backend window's
 included — reports each call before acting on it. A registry reports to the
 capture installed when it was created, identified by session rather than by
@@ -3024,7 +3087,7 @@ release and replacement.
 ### A window's input waits behind its capability snapshot
 
 `WindowCallbacks` owns the ADR-0213 §3 feed: a backend sets the initial
-`InputCapabilities` (its availability table from `shared::input_availability`
+`InputCapabilities` (its availability table from `input::availability`
 with the presence its device registry reports) when it builds the window, and
 `set_input_callback` commits the registration before delivering that snapshot,
 then the input held while no snapshot had been delivered. Input admitted before
@@ -3142,7 +3205,7 @@ inertia or a pinch. Each Win32 window owns a manual-update
 DirectManipulation viewport over its client area, created beside its text
 services from the platform's COM apartment; a window whose viewport does not
 initialise reports `precise_scroll` and `trackpad_gestures` `Unavailable`
-(`input_availability::windows`), otherwise `Native`. The system offers a
+(`input::availability::windows`), otherwise `Native`. The system offers a
 contact in `DM_POINTERHITTEST` to the window under it; only a `PT_TOUCHPAD`
 pointer is handed to the viewport, so touch and pen stay raw `WM_POINTER`
 contacts. The viewport's handler only appends a plain `ViewportReading`
@@ -3156,7 +3219,7 @@ nested pump appends behind what the outer pump has not delivered yet, so the
 outermost delivery keeps decode order (a nested `Changed` never overtakes the
 outer one, a cancellation never precedes the steps it ends).
 
-`shared::direct_manipulation` is the cfg-free decoder, replayed from a
+`input::windows::direct_manipulation::manipulation` is the cfg-free decoder, replayed from a
 checked-in recording on Linux CI. A manipulation is a pan or a pinch, decided
 by whichever passes its slop first (2 device pixels of translation, 2% of
 scale), since a pinch's centroid drift is not a scroll. A pan is phased

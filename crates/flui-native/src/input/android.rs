@@ -1,5 +1,5 @@
 //! The Android host's input: `MotionEvent`s copied into plain facts for the
-//! translation in [`motion`], and `KeyEvent`s into the owned keyboard
+//! translation in `motion`, and `KeyEvent`s into the owned keyboard
 //! vocabulary.
 //!
 //! - [`keys`]: the decidable half of the key translation; built on every

@@ -160,7 +160,7 @@ and zero packets remain `Unknown`. Both retain their signed line unit and actual
 hover source. An integral packet alone cannot identify a notched device.
 
 Winit's complete keyboard-event mapping and Android's native keycode tables remain in
-their maintained ecosystem adapters. `flui-native`'s private `shared::keyboard_adapter`
+their maintained ecosystem adapters. `flui-native`'s private `input::keys::adapter`
 converts those results to owned key events without leaking upstream types through Stable
 signatures. Win32 and AppKit key tables return owned enums directly; Web resolves DOM W3C
 spellings against the generated owned tables. The dependency retention is deliberate:

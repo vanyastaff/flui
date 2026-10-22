@@ -7,16 +7,18 @@
 //! (touch and pen contacts are never offered: they stay raw `WM_POINTER`
 //! contacts), the viewport reports statuses and content transforms from its
 //! event handler, and the window's pump (`InputWindow::pump_touchpad`)
-//! turns them into input with the shared [`TouchpadAssembler`].
+//! turns them into input with the shared
+//! [`TouchpadAssembler`](manipulation::TouchpadAssembler).
 //!
 //! # Pumping
 //!
 //! A manual-update viewport only runs when asked: `IDirectManipulationUpdateManager::Update`
 //! processes the contacts seen since the last call and delivers the handler
 //! callbacks, synchronously, on the calling thread. The handler only appends a
-//! [`ViewportReading`] to a queue; the pump drains it after `Update` returned,
-//! so no user code runs inside a COM callback, and no `RefCell` borrow of the
-//! window's touchpad is held across a COM call or user code.
+//! [`ViewportReading`](manipulation::ViewportReading) to a queue; the pump
+//! drains it after `Update` returned, so no user code runs inside a COM
+//! callback, and no `RefCell` borrow of the window's touchpad is held across a
+//! COM call or user code.
 //!
 //! Delivery is ordered through the window's outbox: an input callback may run
 //! a nested message loop (a dialog, a menu) whose `WM_TIMER` or `WM_PAINT`

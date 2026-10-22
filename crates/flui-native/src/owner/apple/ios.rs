@@ -28,7 +28,7 @@
 //!
 //! The surface edges are what let the presentation drop and rebuild its
 //! `CAMetalLayer`-backed surface around a suspension, which is the same
-//! contract Android's `Pause`/`InitWindow` pair carries (`platforms/android`
+//! contract Android's `Pause`/`InitWindow` pair carries (`owner::android::looper`
 //! module doc, "Surface Lifecycle").
 //!
 //! # Frame source

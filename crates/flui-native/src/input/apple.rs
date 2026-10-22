@@ -21,7 +21,7 @@ pub mod keys {
     //! Like [`super::keys`] (the Win32 twin this module's shape follows), it is
     //! deliberately free of `cfg` gates and platform types so the tables compile
     //! — and their tests execute — on any host, even though the AppKit caller
-    //! (`platforms/macos/events.rs`) itself is only ever clippy-linted in CI,
+    //! (`macos::events`) itself is only ever clippy-linted in CI,
     //! never linked or run.
     //!
     //! # References

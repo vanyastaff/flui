@@ -4,7 +4,7 @@
 //! the code stands: `Native` is delivered by the OS path, `Emulated` is
 //! synthesized from other input, `Unavailable` has no path. Presence is not
 //! here: a backend adds the device kinds attached now from its
-//! [`DeviceRegistry`](super::pointer_assembly::DeviceRegistry) with
+//! [`DeviceRegistry`](super::assembly::DeviceRegistry) with
 //! [`InputCapabilities::with_present`]. The functions are cfg-free so Linux CI
 //! runs every backend's table.
 

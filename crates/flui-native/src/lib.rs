@@ -221,9 +221,8 @@ pub mod storage;
 #[cfg(test)]
 mod table_test;
 pub mod task;
-// Reachable for the text position's trait, which bounds a host's table, and
-// for the backend conformance table, which decodes a composing key with the
-// Android and web rules; not an embedding API.
+// Reachable for the text position's trait, which bounds a host's table; not
+// an embedding API.
 #[doc(hidden)]
 pub mod text;
 pub use text::sizing::{
