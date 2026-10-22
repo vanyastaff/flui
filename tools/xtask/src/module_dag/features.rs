@@ -15,10 +15,6 @@
 //!   everything under it, or, below a group (`apple`), a child the group lists
 //!   (`macos`) and everything under it; the group module itself is a platform
 //!   node of its own, what the children share;
-//! - a `retiring` module is a top-level module the layout is taking apart
-//!   (`platforms`, whose code moves into the features): unchecked as a source,
-//!   and each module under it is a node of its own, which a feature names only
-//!   through a dated exception, so every such edge is listed until it goes;
 //! - any other top-level module is crate-level: unchecked as a source, free as
 //!   a target.
 //!
@@ -41,14 +37,7 @@ mod planted;
 pub(super) use planted::{EXPECTED, PLANTED};
 
 /// The keys of the feature axis; `hosts` is required beside them.
-pub(super) const KEYS: [&str; 6] = [
-    "features",
-    "platforms",
-    "groups",
-    "base",
-    "hosts",
-    "retiring",
-];
+pub(super) const KEYS: [&str; 5] = ["features", "platforms", "groups", "base", "hosts"];
 
 /// `features` and the keys beside it.
 #[derive(Debug)]
@@ -64,8 +53,6 @@ pub(super) struct FeatureAxis {
     base: Vec<String>,
     /// The module that picks and wires a host.
     hosts: String,
-    /// The top-level modules the layout is taking apart.
-    retiring: Vec<String>,
 }
 
 impl FeatureAxis {
@@ -109,7 +96,6 @@ impl FeatureAxis {
             groups,
             base: list("base")?,
             hosts,
-            retiring: list("retiring")?,
         })
     }
 }
@@ -123,8 +109,6 @@ enum Node {
     Base(String),
     /// A top-level module of none of the roles.
     Crate(String),
-    /// A module under a retiring top-level module, by its whole path.
-    Retiring(String),
     /// A feature's model.
     Model(String),
     /// A platform file of a feature, or the group module `platform` opens
@@ -139,11 +123,9 @@ enum Node {
 impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Hosts(name)
-            | Self::Base(name)
-            | Self::Crate(name)
-            | Self::Retiring(name)
-            | Self::Model(name) => f.write_str(name),
+            Self::Hosts(name) | Self::Base(name) | Self::Crate(name) | Self::Model(name) => {
+                f.write_str(name)
+            }
             Self::Platform {
                 feature,
                 platform,
@@ -170,9 +152,6 @@ impl FeatureAxis {
         }
         if self.base.contains(top) {
             return Node::Base(top.clone());
-        }
-        if self.retiring.contains(top) {
-            return Node::Retiring(module.join("::"));
         }
         if !self.features.contains(top) {
             return Node::Crate(top.clone());
@@ -207,8 +186,6 @@ pub(super) enum Rule {
     ForeignPlatform,
     /// A platform file names no other platform's file.
     OtherPlatform,
-    /// A feature names a retiring module only through an exception.
-    Retiring,
 }
 
 impl Rule {
@@ -219,7 +196,6 @@ impl Rule {
             Self::Base => "base names a feature",
             Self::ForeignPlatform => "names another feature's platform file",
             Self::OtherPlatform => "names another platform's file",
-            Self::Retiring => "names a retiring module",
         }
     }
 }
@@ -233,10 +209,6 @@ impl fmt::Display for Rule {
                 "a feature names another feature's model, never its platform files"
             }
             Self::OtherPlatform => "a platform file names no other platform's file",
-            Self::Retiring => {
-                "a feature names a module the layout is taking apart only through a named \
-                 exception"
-            }
         })
     }
 }
@@ -247,7 +219,6 @@ fn rule(from: &Node, to: &Node) -> Option<Rule> {
         (Node::Hosts(_), _) => None,
         (_, Node::Hosts(_)) => Some(Rule::Hosts),
         (Node::Base(_), Node::Model(_) | Node::Platform { .. }) => Some(Rule::Base),
-        (Node::Model(_) | Node::Platform { .. }, Node::Retiring(_)) => Some(Rule::Retiring),
         (
             Node::Model(feature) | Node::Platform { feature, .. },
             Node::Platform { feature: other, .. },
@@ -376,7 +347,6 @@ fn declared_names(
         .iter()
         .chain(&spec.base)
         .chain(std::iter::once(&spec.hosts))
-        .chain(&spec.retiring)
         .chain(&declaration.transparent);
     for name in declared {
         if !seen.insert(name.as_str()) {

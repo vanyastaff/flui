@@ -410,47 +410,11 @@ fn trampoline_limits() {
         [(HOST.to_owned(), "TWO".to_owned(), SECOND_TRAMPOLINE)]
     );
 
-    // one per backend directory; `shared/` is not a backend
-    let (win, mac, shared) = (cell("WIN"), cell("MAC"), cell("SHARED"));
-    let files = [
-        (
-            "crates/flui-native/src/lib.rs",
-            "mod platforms; mod shared;",
-        ),
-        (
-            "crates/flui-native/src/platforms/mod.rs",
-            "mod windows; mod macos;",
-        ),
-        (
-            "crates/flui-native/src/platforms/windows/mod.rs",
-            win.as_str(),
-        ),
-        ("crates/flui-native/src/platforms/macos.rs", "mod queue;"),
-        (
-            "crates/flui-native/src/platforms/macos/queue.rs",
-            mac.as_str(),
-        ),
-        ("crates/flui-native/src/shared.rs", shared.as_str()),
-    ];
-    assert_eq!(
-        problems(
-            &files,
-            &[krate(
-                PLATFORM,
-                &json!([
-                    trampoline("platforms::macos::queue::MAC"),
-                    trampoline("platforms::windows::WIN"),
-                    trampoline("shared::SHARED"),
-                ])
-            )]
-        ),
-        [(PLATFORM.to_owned(), "shared::SHARED".to_owned(), PLACEMENT)]
-    );
-
     // one per platform, its module of `owner/` named by the crate's platform
     // words, below a group's module by the child the group lists; a base
-    // module of `owner/` and a group's own module are no platform's, and a
-    // platform's owner module shares its slot with its backend directory
+    // module of `owner/`, a group's own module and a feature's platform file
+    // are no platform's, and a platform's loop module and its submodules share
+    // one slot
     let names = [
         "IOS",
         "MAC",
@@ -459,46 +423,49 @@ fn trampoline_limits() {
         "IOS_TWIN",
         "WINIT_TWIN",
         "APPLE",
+        "FEATURE",
     ];
-    let [ios, mac, winit, slot, ios_twin, winit_twin, apple] = names.map(cell);
+    let [ios, mac, winit, slot, ios_twin, winit_twin, apple, feature] = names.map(cell);
     let apple = format!("mod ios; mod macos; {apple}");
+    let ios = format!("mod scene; {ios}");
+    let winit = format!("mod control; {winit}");
     let files = [
-        ("crates/flui-native/src/lib.rs", "mod owner; mod platforms;"),
+        ("crates/flui-native/src/lib.rs", "mod owner; mod window;"),
         (
             "crates/flui-native/src/owner/mod.rs",
             "mod apple; mod slot; mod winit;",
         ),
         ("crates/flui-native/src/owner/apple.rs", apple.as_str()),
         ("crates/flui-native/src/owner/apple/ios.rs", ios.as_str()),
-        ("crates/flui-native/src/owner/apple/macos.rs", mac.as_str()),
-        ("crates/flui-native/src/owner/winit.rs", winit.as_str()),
-        ("crates/flui-native/src/owner/slot.rs", slot.as_str()),
         (
-            "crates/flui-native/src/platforms/mod.rs",
-            "mod ios; mod winit;",
-        ),
-        (
-            "crates/flui-native/src/platforms/ios/mod.rs",
+            "crates/flui-native/src/owner/apple/ios/scene.rs",
             ios_twin.as_str(),
         ),
+        ("crates/flui-native/src/owner/apple/macos.rs", mac.as_str()),
+        ("crates/flui-native/src/owner/winit.rs", winit.as_str()),
         (
-            "crates/flui-native/src/platforms/winit/mod.rs",
+            "crates/flui-native/src/owner/winit/control.rs",
             winit_twin.as_str(),
         ),
+        ("crates/flui-native/src/owner/slot.rs", slot.as_str()),
+        ("crates/flui-native/src/window/mod.rs", "mod winit;"),
+        ("crates/flui-native/src/window/winit.rs", feature.as_str()),
     ];
     let mut platform = krate(
         PLATFORM,
         &json!([
             trampoline("owner::apple::APPLE"),
             trampoline("owner::apple::ios::IOS"),
+            trampoline("owner::apple::ios::scene::IOS_TWIN"),
             trampoline("owner::apple::macos::MAC"),
             trampoline("owner::slot::SLOT"),
             trampoline("owner::winit::WINIT"),
-            trampoline("platforms::ios::IOS_TWIN"),
-            trampoline("platforms::winit::WINIT_TWIN"),
+            trampoline("owner::winit::control::WINIT_TWIN"),
+            trampoline("window::winit::FEATURE"),
         ]),
     );
     platform.flui["modules"] = json!({
+        "features": ["window"],
         "platforms": ["apple", "winit"],
         "groups": { "apple": ["macos", "ios"] },
         "hosts": "hosts",
@@ -515,18 +482,23 @@ fn trampoline_limits() {
             ),
             (
                 PLATFORM.to_owned(),
+                "owner::apple::ios::scene::IOS_TWIN".to_owned(),
+                SECOND_TRAMPOLINE
+            ),
+            (
+                PLATFORM.to_owned(),
                 "owner::slot::SLOT".to_owned(),
                 PLACEMENT
             ),
             (
                 PLATFORM.to_owned(),
-                "platforms::ios::IOS_TWIN".to_owned(),
+                "owner::winit::control::WINIT_TWIN".to_owned(),
                 SECOND_TRAMPOLINE
             ),
             (
                 PLATFORM.to_owned(),
-                "platforms::winit::WINIT_TWIN".to_owned(),
-                SECOND_TRAMPOLINE
+                "window::winit::FEATURE".to_owned(),
+                PLACEMENT
             ),
         ]
     );
