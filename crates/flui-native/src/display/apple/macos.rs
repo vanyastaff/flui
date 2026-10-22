@@ -40,9 +40,9 @@ use objc2_foundation::{
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
-use super::device_bounds_of_screen;
 use super::period::core_graphics_refresh_period;
-use super::{macos_display_key, macos_display_persistent_key};
+use super::screen::device_bounds_of_screen;
+use super::screen::{macos_display_key, macos_display_persistent_key};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::signal::OwnerSignal;

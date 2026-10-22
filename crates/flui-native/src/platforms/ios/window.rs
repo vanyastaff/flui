@@ -42,8 +42,8 @@ use flui_platform::{
 
 use super::events::TouchInputState;
 use super::status_bar::FluiViewController;
-use crate::display::apple::change_screen;
 use crate::display::apple::link_rate::LinkPeriod;
+use crate::display::apple::screen::change_screen;
 use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity};
 use crate::owner::handlers::WindowCallbacks;
 use crate::shared::window_state::WindowStateCell;

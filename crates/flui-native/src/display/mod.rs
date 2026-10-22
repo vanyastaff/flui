@@ -14,16 +14,21 @@
 //! - `web`: the browser's screens, pixel ratio and animation-frame cadence;
 //! - `linux`: the outputs of a Wayland compositor or an X server, read on a
 //!   connection of its own;
-//! - `winit`: the winit host's source, which is the native one of the
-//!   operating system it runs on, never winit's monitor list (ADR-0236);
+//! - `winit`: the winit host's source on Linux, over `linux`; on Windows and
+//!   macOS the winit host reads `windows` and `apple`, and never winit's
+//!   monitor list (ADR-0236);
 //! - `headless`: the displays a test lays out and changes.
 //!
 //! A loop holds its platform's displays through the hook its `owner` module
 //! declares, which the host's table fills; nothing in `owner` names this
 //! module.
 //!
-//! The pure part of each platform file (keys, periods, estimates) is a module
-//! under `cfg(any(<os>, test))`, so the Linux CI host runs its tests.
+//! The halves of a platform file are inline modules. The pure one (keys,
+//! periods, estimates) is `cfg(any(<os>, test))` with `forbid(unsafe_code)`,
+//! so the Linux CI host runs its tests; the one that calls the operating system
+//! is `cfg(<os>)`. A platform file has a child file only for a mechanism of one
+//! operating-system object, for a split the 3 000-line limit forces (`linux`),
+//! or for a module's tests.
 
 // The id registry and last snapshot every native display source keeps.
 #[cfg(any(

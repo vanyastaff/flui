@@ -52,7 +52,7 @@ use super::link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, ScreenPeriods,
     frame_rate_preference,
 };
-use super::{SameObject, ScreenLedger};
+use super::screen::{SameObject, ScreenLedger};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
