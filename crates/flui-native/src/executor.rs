@@ -116,8 +116,11 @@ impl BackgroundExecutor {
         self.runtime().block_on(future)
     }
 
-    /// Get a handle to the underlying async runtime
-    pub fn handle(&self) -> &tokio::runtime::Handle {
+    /// The runtime the Linux sources spawn their D-Bus watches on. Not
+    /// public: no public path of the core host names a tokio type
+    /// (ADR-0151 §8).
+    #[cfg(all(target_os = "linux", feature = "winit-backend"))]
+    pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
         self.runtime().handle()
     }
 }

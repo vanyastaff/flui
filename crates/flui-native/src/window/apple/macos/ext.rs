@@ -1,12 +1,16 @@
 //! macOS-specific window extensions: [`MacOSWindowExt`], the AppKit features
-//! beyond the cross-platform window — the Liquid Glass material, tiling,
-//! collection behavior and level — and its implementation for the window.
+//! beyond the cross-platform window — tiling, tabs, collection behavior and
+//! level — on any window a host hands out, and what each asks of the AppKit
+//! window. The window's Liquid Glass backdrop is crate-private
+//! (`window::apple::liquid_glass`).
 //!
 //! ```rust,ignore
-//! use flui_native::MacOSWindowExt;
+//! use flui_native::{HostWindow, MacOSWindowExt, TilingConfiguration};
 //!
-//! window.set_liquid_glass(LiquidGlassMaterial::Standard);
-//! window.enable_tiling(TilingConfiguration::new());
+//! fn arrange(window: &dyn HostWindow) {
+//!     // `None`: the window is not an AppKit window, and nothing was asked of it.
+//!     let _ = window.enable_tiling(TilingConfiguration::new());
+//! }
 //! ```
 
 use std::sync::atomic::Ordering;
@@ -18,7 +22,8 @@ use objc2_app_kit::NSWindowStyleMask;
 use objc2_foundation::NSRect;
 
 use super::{BObjC, MacOSWindow, NIL, NO, ObjcId, YES, route_on_owner};
-use crate::window::apple::liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial};
+use crate::host_window::HostWindow;
+use crate::window::apple::liquid_glass::LiquidGlassConfig;
 use tiling::TilingConfiguration;
 
 // ============================================================================
@@ -28,41 +33,17 @@ use tiling::TilingConfiguration;
 /// macOS-specific window extensions.
 ///
 /// This trait provides access to macOS-specific features that are not part
-/// of the cross-platform `Window` trait.
+/// of the cross-platform window contract. It is implemented for every
+/// [`HostWindow`]: a window of another host (headless, winit) is not an AppKit
+/// window, and every method answers `None` for it and asks nothing of it
+/// (ADR-0151 §8). For an AppKit window it answers `Some`.
 ///
 /// # Platform Availability
 ///
-/// - **Liquid Glass Materials:** macOS 14.0+ (Sonoma), full support in macOS
-///   26+ (Tahoe)
 /// - **Window Tiling:** macOS 15.0+ (Sequoia)
 /// - **Tabbed Windows:** macOS 10.12+ (Sierra)
 /// - **Full Screen Transitions:** macOS 10.7+ (Lion)
-#[cfg(target_os = "macos")]
 pub trait MacOSWindowExt {
-    /// Apply Liquid Glass material effect to the window.
-    ///
-    /// Liquid Glass is macOS Tahoe 26's new translucent material system.
-    ///
-    /// # Platform Requirements
-    ///
-    /// - macOS 14.0+ for basic vibrancy effects
-    /// - macOS 26.0+ (Tahoe) for full Liquid Glass materials
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// window.set_liquid_glass(LiquidGlassMaterial::Standard);
-    /// ```
-    fn set_liquid_glass(&mut self, material: LiquidGlassMaterial);
-
-    /// Apply custom Liquid Glass configuration.
-    ///
-    /// Allows fine-tuning blur radius, tint color, and blending mode.
-    fn set_liquid_glass_config(&mut self, config: LiquidGlassConfig);
-
-    /// Remove Liquid Glass effect and restore opaque window.
-    fn clear_liquid_glass(&mut self);
-
     /// Enable window tiling with the specified configuration.
     ///
     /// Window tiling allows the window to suggest tile layouts for multi-window
@@ -75,7 +56,7 @@ pub trait MacOSWindowExt {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flui_native::macos::{TilingConfiguration, TilePosition};
+    /// use flui_native::{TilePosition, TilingConfiguration};
     ///
     /// let config = TilingConfiguration::new()
     ///     .with_primary_position(TilePosition::Left)
@@ -83,13 +64,13 @@ pub trait MacOSWindowExt {
     ///
     /// window.enable_tiling(config);
     /// ```
-    fn enable_tiling(&mut self, config: TilingConfiguration);
+    fn enable_tiling(&self, config: TilingConfiguration) -> Option<()>;
 
     /// Disable window tiling.
-    fn disable_tiling(&mut self);
+    fn disable_tiling(&self) -> Option<()>;
 
     /// Check if window tiling is enabled.
-    fn is_tiling_enabled(&self) -> bool;
+    fn is_tiling_enabled(&self) -> Option<bool>;
 
     /// Enable tabbed window mode.
     ///
@@ -99,25 +80,25 @@ pub trait MacOSWindowExt {
     /// # Platform Requirements
     ///
     /// - macOS 10.12+ (Sierra)
-    fn enable_tabbing(&mut self);
+    fn enable_tabbing(&self) -> Option<()>;
 
     /// Disable tabbed window mode.
-    fn disable_tabbing(&mut self);
+    fn disable_tabbing(&self) -> Option<()>;
 
     /// Add this window to a tab group with another window.
     ///
     /// Borrows the other window rather than accepting a numeric window ID: both
-    /// wrappers keep their native objects alive through the join. Returns `true`
-    /// after AppKit receives the join, or `false` if either window is closed,
-    /// the target uses another backend, the windows are the same, or their
-    /// owner lanes are not the same AppKit main lane.
+    /// wrappers keep their native objects alive through the join. Answers
+    /// `Some(true)` after AppKit receives the join, and `Some(false)` if either
+    /// window is closed, the other is not an AppKit window, the windows are the
+    /// same, or their owner lanes are not the same AppKit main lane.
     ///
     /// Numeric IDs cannot establish that ownership:
     ///
     /// ```compile_fail,E0308
     /// use flui_native::{HostWindow, MacOSWindowExt};
     ///
-    /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
+    /// fn join(window: &dyn HostWindow, other: &dyn HostWindow) -> Option<bool> {
     ///     window.add_tab_to_window(1)
     /// }
     /// ```
@@ -125,11 +106,11 @@ pub trait MacOSWindowExt {
     /// ```no_run
     /// use flui_native::{HostWindow, MacOSWindowExt};
     ///
-    /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
+    /// fn join(window: &dyn HostWindow, other: &dyn HostWindow) -> Option<bool> {
     ///     window.add_tab_to_window(other)
     /// }
     /// ```
-    fn add_tab_to_window(&mut self, other: &dyn crate::host_window::HostWindow) -> bool;
+    fn add_tab_to_window(&self, other: &dyn HostWindow) -> Option<bool>;
 
     /// Toggle native fullscreen mode with macOS animation.
     ///
@@ -139,47 +120,109 @@ pub trait MacOSWindowExt {
     /// # Platform Requirements
     ///
     /// - macOS 10.7+ (Lion)
-    fn toggle_native_fullscreen(&mut self);
+    fn toggle_native_fullscreen(&self) -> Option<()>;
 
     /// Set the window level (z-ordering).
     ///
     /// Controls whether the window floats above other windows, appears as a
     /// modal, etc.
-    fn set_window_level(&mut self, level: MacOSWindowLevel);
+    fn set_window_level(&self, level: MacOSWindowLevel) -> Option<()>;
 
     /// Get the window level.
-    fn window_level(&self) -> MacOSWindowLevel;
+    fn window_level(&self) -> Option<MacOSWindowLevel>;
 
     /// Set the window's collection behavior.
     ///
     /// Controls how the window behaves with Spaces, Exposé, and fullscreen
     /// modes.
-    fn set_collection_behavior(&mut self, behavior: MacOSCollectionBehavior);
+    fn set_collection_behavior(&self, behavior: MacOSCollectionBehavior) -> Option<()>;
 
     /// Enable/disable window shadow.
-    fn set_has_shadow(&mut self, has_shadow: bool);
+    fn set_has_shadow(&self, has_shadow: bool) -> Option<()>;
 
     /// Set window alpha (transparency).
     ///
     /// # Parameters
     ///
     /// - `alpha`: 0.0 (fully transparent) to 1.0 (fully opaque)
-    fn set_alpha(&mut self, alpha: f64);
+    fn set_alpha(&self, alpha: f64) -> Option<()>;
 
     /// Get the window's backing scale factor (1.0 or 2.0 for Retina).
-    fn backing_scale_factor(&self) -> f64;
+    fn backing_scale_factor(&self) -> Option<f64>;
 
     /// Convert point from backing (pixel) coordinates to window coordinates.
-    fn convert_point_from_backing(
-        &self,
-        point: flui_foundation::geometry::Point<f64>,
-    ) -> flui_foundation::geometry::Point<f64>;
+    fn convert_point_from_backing(&self, point: Point<f64>) -> Option<Point<f64>>;
 
     /// Convert point from window coordinates to backing (pixel) coordinates.
-    fn convert_point_to_backing(
-        &self,
-        point: flui_foundation::geometry::Point<f64>,
-    ) -> flui_foundation::geometry::Point<f64>;
+    fn convert_point_to_backing(&self, point: Point<f64>) -> Option<Point<f64>>;
+}
+
+/// `window` as an AppKit window: `None` for a window of another host.
+fn appkit(window: &dyn HostWindow) -> Option<&MacOSWindow> {
+    window.as_any().downcast_ref()
+}
+
+impl MacOSWindowExt for dyn HostWindow + '_ {
+    fn enable_tiling(&self, config: TilingConfiguration) -> Option<()> {
+        appkit(self).map(|_| MacOSWindow::enable_tiling(&config))
+    }
+
+    fn disable_tiling(&self) -> Option<()> {
+        appkit(self).map(|_| MacOSWindow::disable_tiling())
+    }
+
+    fn is_tiling_enabled(&self) -> Option<bool> {
+        appkit(self).map(|_| MacOSWindow::is_tiling_enabled())
+    }
+
+    fn enable_tabbing(&self) -> Option<()> {
+        appkit(self).map(MacOSWindow::enable_tabbing)
+    }
+
+    fn disable_tabbing(&self) -> Option<()> {
+        appkit(self).map(MacOSWindow::disable_tabbing)
+    }
+
+    fn add_tab_to_window(&self, other: &dyn HostWindow) -> Option<bool> {
+        let window = appkit(self)?;
+        Some(appkit(other).is_some_and(|other| window.add_tab_to_window(other)))
+    }
+
+    fn toggle_native_fullscreen(&self) -> Option<()> {
+        appkit(self).map(MacOSWindow::toggle_native_fullscreen)
+    }
+
+    fn set_window_level(&self, level: MacOSWindowLevel) -> Option<()> {
+        appkit(self).map(|window| window.set_window_level(level))
+    }
+
+    fn window_level(&self) -> Option<MacOSWindowLevel> {
+        appkit(self).map(MacOSWindow::window_level)
+    }
+
+    fn set_collection_behavior(&self, behavior: MacOSCollectionBehavior) -> Option<()> {
+        appkit(self).map(|window| window.set_collection_behavior(behavior))
+    }
+
+    fn set_has_shadow(&self, has_shadow: bool) -> Option<()> {
+        appkit(self).map(|window| window.set_has_shadow(has_shadow))
+    }
+
+    fn set_alpha(&self, alpha: f64) -> Option<()> {
+        appkit(self).map(|window| window.set_alpha(alpha))
+    }
+
+    fn backing_scale_factor(&self) -> Option<f64> {
+        appkit(self).map(MacOSWindow::backing_scale_factor)
+    }
+
+    fn convert_point_from_backing(&self, point: Point<f64>) -> Option<Point<f64>> {
+        appkit(self).map(|window| window.convert_point_from_backing(point))
+    }
+
+    fn convert_point_to_backing(&self, point: Point<f64>) -> Option<Point<f64>> {
+        appkit(self).map(|window| window.convert_point_to_backing(point))
+    }
 }
 
 // ============================================================================
@@ -300,24 +343,23 @@ impl MacOSCollectionBehavior {
 }
 
 // ============================================================================
-// Tests
+// What the extension asks of an AppKit window
 // ============================================================================
 
 /// `NSViewWidthSizable | NSViewHeightSizable`: a subview that tracks its
 /// superview's size.
 const AUTORESIZE_FILL: usize = (1 << 1) | (1 << 4);
 
-impl MacOSWindowExt for MacOSWindow {
-    fn set_liquid_glass(&mut self, material: LiquidGlassMaterial) {
-        // Create default config from material
-        let config = LiquidGlassConfig::from_material(material);
-        self.set_liquid_glass_config(config);
-    }
-
-    fn set_liquid_glass_config(&mut self, config: LiquidGlassConfig) {
+impl MacOSWindow {
+    /// Puts a Liquid Glass backdrop behind the window's content.
+    #[expect(
+        dead_code,
+        reason = "the window's backdrop material is set by the background material command (ADR-0254 §3), which applies this on macOS; no public path reaches it before then"
+    )]
+    pub(crate) fn set_liquid_glass_config(&self, config: LiquidGlassConfig) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and so is `this.view`, which its view
@@ -389,10 +431,16 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn clear_liquid_glass(&mut self) {
+    /// Takes the Liquid Glass backdrop away, putting the content back as the
+    /// window's content view.
+    #[expect(
+        dead_code,
+        reason = "the window's backdrop material is set by the background material command (ADR-0254 §3), which applies this on macOS; no public path reaches it before then"
+    )]
+    pub(crate) fn clear_liquid_glass(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and so
             // is `this.view`, which its view hierarchy holds; the view is
@@ -420,7 +468,7 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn enable_tiling(&mut self, config: TilingConfiguration) {
+    pub(crate) fn enable_tiling(config: &TilingConfiguration) {
         // Native tiling API requires macOS 15+; until adopted, the
         // configuration is recorded for observability only.
         tracing::info!(
@@ -431,19 +479,19 @@ impl MacOSWindowExt for MacOSWindow {
         );
     }
 
-    fn disable_tiling(&mut self) {
+    pub(crate) fn disable_tiling() {
         tracing::info!("Window tiling disabled");
     }
 
-    fn is_tiling_enabled(&self) -> bool {
+    pub(crate) fn is_tiling_enabled() -> bool {
         // Native tiling API requires macOS 15+; not yet adopted.
         false
     }
 
-    fn enable_tabbing(&mut self) {
+    pub(crate) fn enable_tabbing(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -460,10 +508,10 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn disable_tabbing(&mut self) {
+    pub(crate) fn disable_tabbing(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -479,10 +527,7 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn add_tab_to_window(&mut self, other: &dyn crate::host_window::HostWindow) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
+    pub(crate) fn add_tab_to_window(&self, other: &MacOSWindow) -> bool {
         if !self.owner_is_main
             || !other.owner_is_main
             || !std::ptr::eq(self.owner, other.owner)
@@ -492,7 +537,7 @@ impl MacOSWindowExt for MacOSWindow {
         }
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: both borrowed wrappers own live NSWindows, constructed
             // with releasedWhenClosed:NO. The checks above establish one main
@@ -512,10 +557,10 @@ impl MacOSWindowExt for MacOSWindow {
         })
     }
 
-    fn toggle_native_fullscreen(&mut self) {
+    pub(crate) fn toggle_native_fullscreen(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -529,10 +574,10 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn set_window_level(&mut self, level: MacOSWindowLevel) {
+    pub(crate) fn set_window_level(&self, level: MacOSWindowLevel) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -547,7 +592,7 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn window_level(&self) -> MacOSWindowLevel {
+    pub(crate) fn window_level(&self) -> MacOSWindowLevel {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         route_on_owner(owner, owner_is_main, || unsafe {
@@ -570,10 +615,10 @@ impl MacOSWindowExt for MacOSWindow {
         })
     }
 
-    fn set_collection_behavior(&mut self, behavior: MacOSCollectionBehavior) {
+    pub(crate) fn set_collection_behavior(&self, behavior: MacOSCollectionBehavior) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -587,10 +632,10 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn set_has_shadow(&mut self, has_shadow: bool) {
+    pub(crate) fn set_has_shadow(&self, has_shadow: bool) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -605,10 +650,10 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn set_alpha(&mut self, alpha: f64) {
+    pub(crate) fn set_alpha(&self, alpha: f64) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
-        let this = &*self;
+        let this = self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
@@ -623,17 +668,17 @@ impl MacOSWindowExt for MacOSWindow {
         });
     }
 
-    fn backing_scale_factor(&self) -> f64 {
+    pub(crate) fn backing_scale_factor(&self) -> f64 {
         let state = self.state.lock();
         state.scale_factor
     }
 
-    fn convert_point_from_backing(&self, point: Point<f64>) -> Point<f64> {
+    pub(crate) fn convert_point_from_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
         Point::new(point.x / scale, point.y / scale)
     }
 
-    fn convert_point_to_backing(&self, point: Point<f64>) -> Point<f64> {
+    pub(crate) fn convert_point_to_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
         Point::new(point.x * scale, point.y * scale)
     }

@@ -9,7 +9,7 @@
 //! - `windows`: UI Automation (`accesskit_windows`);
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
 //! - `linux`: AT-SPI (`accesskit_unix`), which the winit host uses;
-//! - `headless`: `FakeAccessibility`, which records what was published.
+//! - `headless`: `FakeAccessibility`, which counts what was published while active.
 //!
 //! The adapters exist with the `a11y` feature. Android, iOS and the Web have
 //! none yet: their tables name `Absent<Accessibility>`. Linux has no host but

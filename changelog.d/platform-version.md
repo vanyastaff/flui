@@ -1,13 +1,11 @@
 ### Changed
 
-- **`flui-native`**: each native host's window and its extensions are named at the crate
-  root: `flui_native::{WindowsWindow, WindowsWindowExt, WindowsBackdrop, WindowsTheme,
-  WindowCornerPreference, TaskbarProgressState}` and the `flui_native::win32` module on
-  Windows; `flui_native::{MacOSWindow, MacOSWindowExt, MacOSWindowLevel,
-  MacOSCollectionBehavior, TilePosition, TilingConfiguration, TilingError, TilingLayout,
-  TilingState, LiquidGlassConfig, LiquidGlassMaterial, BlendingMode}` on macOS;
-  `flui_native::{IOSWindow, IOSSceneEvent, IOSSceneSessionId, IOSSceneAttachmentId,
-  IOSExecutor}` on iOS; `flui_native::WinitWindow` with `winit-backend`.
+- **`flui-native`**: each native host's window extensions and scene events are named at the
+  crate root: `flui_native::{WindowsWindowExt, WindowsBackdrop, WindowsTheme,
+  WindowCornerPreference, TaskbarProgressState}` on Windows; `flui_native::{MacOSWindowExt,
+  MacOSWindowLevel, MacOSCollectionBehavior, TilePosition, TilingConfiguration, TilingError,
+  TilingLayout, TilingState}` on macOS; `flui_native::{IOSSceneEvent, IOSSceneSessionId,
+  IOSSceneAttachmentId}` on iOS. The windows themselves are not public (see Removed).
 
 ### Removed
 

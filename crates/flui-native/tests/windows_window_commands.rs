@@ -1,7 +1,8 @@
 //! The Win32 window against the real operating system: it opens hidden and is
 //! shown in the mode it opened in, every command lands in the next snapshot,
 //! the size limits hold, and a state the system changes under the window
-//! reaches the snapshot.
+//! reaches the snapshot. The Windows extension answers for these windows and
+//! no other host's.
 //!
 //! Each case opens its own platform and window. Windows that are shown appear
 //! on the desktop for the length of a case.
@@ -19,7 +20,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
-use flui_native::{HostWindow, Platform as _, WindowsPlatform, WindowsWindow};
+use flui_native::{
+    HostWindow, Platform as _, TaskbarProgressState, WindowCornerPreference, WindowsBackdrop,
+    WindowsPlatform, WindowsWindowExt,
+};
 use flui_platform::{
     DispatchEventResult, SizeConstraints, WindowCommand, WindowCommandError, WindowGeometry,
     WindowMode, WindowOptions, WindowReveal, WindowState,
@@ -72,11 +76,7 @@ fn open(platform: &WindowsPlatform, options: WindowOptions) -> Arc<dyn HostWindo
 }
 
 fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
-    window
-        .as_any()
-        .downcast_ref::<WindowsWindow>()
-        .expect("the Win32 backend")
-        .hwnd()
+    crate::win32_handle(window.as_ref())
 }
 
 fn shown(window: &Arc<dyn HostWindow>) -> bool {
@@ -1109,6 +1109,41 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
 }
 
+/// The Windows extension reaches a Win32 window and no other: on a window of
+/// the headless host every method answers `None`, asks nothing of it, and
+/// does not panic.
+fn the_windows_extension_answers_only_for_a_win32_window() {
+    let headless = flui_native::headless_platform();
+    let foreign = headless
+        .open_window(hidden())
+        .expect("a headless window opens");
+    assert_eq!(foreign.backdrop(), None);
+    assert_eq!(foreign.set_backdrop(WindowsBackdrop::Mica), None);
+    assert_eq!(
+        foreign.set_corner_preference(WindowCornerPreference::Round),
+        None
+    );
+    assert_eq!(foreign.is_dark_mode(), None);
+    assert_eq!(foreign.dpi(), None);
+    assert_eq!(foreign.convert_point_to_device(Point::new(1.0, 1.0)), None);
+    assert_eq!(
+        foreign.set_taskbar_progress(TaskbarProgressState::Normal, 50),
+        None
+    );
+
+    let platform = platform();
+    let window = open(&platform, hidden());
+    assert!(
+        window.dpi().is_some_and(|dpi| dpi > 0),
+        "a Win32 window answers with its DPI"
+    );
+    assert_eq!(
+        window.set_corner_preference(WindowCornerPreference::Round),
+        Some(())
+    );
+    assert!(window.backdrop().is_some());
+}
+
 #[test]
 fn native_window_commands() {
     let cases: &[(&str, fn())] = &[
@@ -1312,6 +1347,10 @@ fn native_window_commands() {
         (
             "a_locked_session_or_a_cloak_hides_a_shown_window",
             a_locked_session_or_a_cloak_hides_a_shown_window,
+        ),
+        (
+            "the_windows_extension_answers_only_for_a_win32_window",
+            the_windows_extension_answers_only_for_a_win32_window,
         ),
     ];
     crate::run_table("native_window_commands", cases);

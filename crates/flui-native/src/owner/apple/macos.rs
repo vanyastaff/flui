@@ -92,9 +92,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSScreen};
 use parking_lot::Mutex;
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::handlers::CallbackWindow;
-use crate::platform::HostPlatform;
 use crate::{
     error::PlatformError,
     executor::BackgroundExecutor,
@@ -317,18 +316,6 @@ impl MacOSLoop {
             platform.affinity.bind_current();
             Ok(platform)
         }
-    }
-
-    pub(crate) fn app(&self) -> &Retained<NSApplication> {
-        &self.app
-    }
-}
-
-/// What the macOS platform offers beyond [`Platform`].
-impl<H: Host<Loop = MacOSLoop>> HostPlatform<H> {
-    /// Get the NSApplication instance
-    pub fn app(&self) -> &Retained<NSApplication> {
-        self.owner().app()
     }
 }
 

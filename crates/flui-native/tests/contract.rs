@@ -166,7 +166,6 @@ fn test_window_lifecycle_contract() {
 #[cfg(target_os = "windows")]
 mod native_windows {
     use flui_foundation::geometry::Size;
-    use flui_native::WindowsWindow;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
     use flui_platform::{DispatchEventResult, WindowOptions};
     use std::{
@@ -602,11 +601,7 @@ mod native_windows {
         use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let hints = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&hints);
         window.on_display_changed(Box::new(move || {
@@ -638,11 +633,7 @@ mod native_windows {
     fn moves_within_one_monitor_raise_no_display_hint() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let hints = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&hints);
         window.on_display_changed(Box::new(move || {
@@ -1068,11 +1059,7 @@ mod native_windows {
                 else {
                     panic!("Win32 on-ready window was deferred");
                 };
-                let hwnd = window
-                    .as_any()
-                    .downcast_ref::<WindowsWindow>()
-                    .expect("Win32 backend")
-                    .hwnd();
+                let hwnd = hwnd_of(&window);
                 // SAFETY: the live wrapper owns this HWND on its creating
                 // thread; the paint it sends runs synchronously here.
                 let _ = unsafe { UpdateWindow(hwnd) };
@@ -1196,11 +1183,7 @@ mod native_windows {
                 else {
                     panic!("Win32 on-ready window was deferred");
                 };
-                let hwnd = window
-                    .as_any()
-                    .downcast_ref::<WindowsWindow>()
-                    .expect("Win32 backend")
-                    .hwnd();
+                let hwnd = hwnd_of(&window);
                 if minimized {
                     // SAFETY: the live wrapper owns this HWND, minimized on
                     // its creating thread.
@@ -1324,11 +1307,7 @@ mod native_windows {
                 }
                 let first = first.expect("first native window");
                 for window in &windows {
-                    let hwnd = window
-                        .as_any()
-                        .downcast_ref::<WindowsWindow>()
-                        .expect("Win32 backend")
-                        .hwnd();
+                    let hwnd = hwnd_of(window);
                     // SAFETY: the live wrapper owns this HWND on its creating
                     // thread; the paint it sends runs synchronously here.
                     let _ = unsafe { UpdateWindow(hwnd) };
@@ -1494,11 +1473,7 @@ mod native_windows {
         let original_weak = Arc::downgrade(&window);
         let replacement = Arc::new(Mutex::new(None::<Arc<dyn HostWindow>>));
         let replacement_closes = Arc::new(AtomicUsize::new(0));
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let close_count = Arc::new(AtomicUsize::new(0));
         let close_observations = Arc::clone(&close_count);
         window.on_close(Box::new(move || {
@@ -1794,11 +1769,7 @@ mod native_windows {
     fn dead_key_reports_dead(case: DeadKeyCase) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let keys = Arc::new(Mutex::new(Vec::<(
             flui_platform::keyboard::KeyState,
             flui_platform::keyboard::Key,
@@ -2083,11 +2054,7 @@ mod native_windows {
     fn menu_key_keeps_next_character(key: &'static str) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let closes = Arc::new(AtomicUsize::new(0));
         let close_observations = Arc::clone(&closes);
         window.on_close(Box::new(move || {
@@ -2225,11 +2192,7 @@ mod native_windows {
     fn alt_space_system_char(consume: bool, pump: bool) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let keydowns = Arc::new(AtomicUsize::new(0));
         let keydown_observations = Arc::clone(&keydowns);
         let pumped = Arc::new(Mutex::new(Vec::new()));
@@ -2347,11 +2310,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let weak = Arc::downgrade(&window);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         drop(window);
         assert!(
             weak.strong_count() > 0,
@@ -2385,21 +2344,13 @@ mod native_windows {
     fn move_callback_observes_full_native_coordinates() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.on_state_changed(Box::new(move || {
             let window = weak.upgrade().expect("live moved window");
-            let hwnd = window
-                .as_any()
-                .downcast_ref::<WindowsWindow>()
-                .expect("Win32 backend")
-                .hwnd();
+            let hwnd = hwnd_of(&window);
             let mut rect = windows::Win32::Foundation::RECT::default();
             // SAFETY: the upgraded wrapper owns this HWND on the callback's
             // creating thread; rect is a live correctly sized out-parameter.
@@ -2454,11 +2405,7 @@ mod native_windows {
     fn shift_character_reaches_native_key_dispatch() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let observed = Arc::new(Mutex::new(Vec::new()));
         let keys = observed.clone();
         window.on_input(Box::new(move |event| {
@@ -2595,11 +2542,7 @@ mod native_windows {
 
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let destroyed = Arc::new(Mutex::new(Vec::new()));
         let traced_before_release = Arc::new(Mutex::new(None));
         let surface = SurfaceRelease {
@@ -2723,11 +2666,7 @@ mod native_windows {
 
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let reported: WindowAppearance = window.appearance();
         let dark = Brightness::from(reported).is_dark();
         assert_eq!(
@@ -2784,22 +2723,14 @@ mod native_windows {
     fn resize_callback_preserves_large_native_dimensions() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(&window);
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
         window.on_resize(Box::new(move |metrics| {
             let (size, scale) = (metrics.logical(), metrics.scale().get());
             let window = weak.upgrade().expect("live resize window");
-            let hwnd = window
-                .as_any()
-                .downcast_ref::<WindowsWindow>()
-                .expect("Win32 backend")
-                .hwnd();
+            let hwnd = hwnd_of(&window);
             let mut client = RECT::default();
             // SAFETY: the live wrapper owns this HWND on its creating thread;
             // client is a correctly sized, initialized native out-parameter.
@@ -2918,12 +2849,8 @@ mod native_windows {
     fn hidden_popup_is_natively_hidden() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);
-        let native = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend");
         // SAFETY: the live wrapper owns this HWND, queried on its creating thread.
-        assert!(!unsafe { IsWindowVisible(native.hwnd()) }.as_bool());
+        assert!(!unsafe { IsWindowVisible(hwnd_of(&window)) }.as_bool());
         assert!(!window.is_visible());
         window.close();
     }
@@ -2933,11 +2860,7 @@ mod native_windows {
     const MK_SHIFT: usize = 0x0004;
 
     fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
-        window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd()
+        crate::win32_handle(window.as_ref())
     }
 
     /// Every pointer event `window` delivers, in order.
@@ -5077,11 +5000,7 @@ mod native_windows {
         reason = "posting a native close to an owned Win32 window"
     )]
     fn post_close(window: &Arc<dyn HostWindow>) {
-        let hwnd = window
-            .as_any()
-            .downcast_ref::<WindowsWindow>()
-            .expect("Win32 backend")
-            .hwnd();
+        let hwnd = hwnd_of(window);
         // SAFETY: the platform still tracks this live HWND; WM_CLOSE carries
         // no message data and the post dereferences no caller memory.
         unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }

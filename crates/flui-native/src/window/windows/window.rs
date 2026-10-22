@@ -715,7 +715,7 @@ impl WindowsWindow {
     }
 
     /// Get the native HWND handle
-    pub fn hwnd(&self) -> HWND {
+    pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
 

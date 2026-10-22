@@ -78,6 +78,28 @@ trait depends on `flui-platform` instead.
   whose loop it is. The executor, the application path, URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
+  The Android host has no public platform name: it starts over the Activity
+  the system hands only to `android_main`, through `android_platform(app)`.
+- **No public path names an OS type (ADR-0151 §8).** The crate's public API,
+  hidden items included, names no OS binding (`windows`, `objc2` and its
+  frameworks, `android-activity`, `ndk`, `jni`, `web-sys`, `winit`, …),
+  AccessKit or tokio, on any target it builds a host for: `cargo xtask
+  api-closure` documents it for Linux, Windows and macOS with every feature
+  and for iOS, Android and wasm32, and reads each build's JSON against the
+  `deny` list of `[package.metadata.flui.api-closure]`. The windows a host
+  builds are crate-private: the platform hands out `Arc<dyn HostWindow>`, a
+  raw window or display handle leaves through `raw-window-handle`, and what
+  one OS offers beyond the window contract is an extension trait implemented
+  for `dyn HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) over
+  `HostWindow::as_any`, which answers `None` for another host's window and
+  asks nothing of it. Two things name a denied crate by design: the entry
+  `android_platform(app)`, which takes the Activity (the manifest's
+  `entries`), and the implementations of `flui-semantics`'
+  `PlatformAccessibility`, whose methods name AccessKit's tree as that trait
+  does. Tests in `tests/` read a window's `HWND` the way an embedder does,
+  through `raw-window-handle` (`win32_handle` in `tests/main.rs`); the
+  extension's answers are pinned by
+  `the_windows_extension_answers_only_for_a_win32_window`.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
@@ -435,7 +457,8 @@ trait depends on `flui-platform` instead.
   naming them (ADR-0151 §10).** The model is what two or more platforms share:
   the published state (`window::state`), the hidden-surface rules of the Win32
   and AppKit windows (`window::visibility`), the desktop window configuration
-  (`window::config`, public as `flui_native::config`) and the acknowledgement
+  (`window::config`, crate-private: its windows open with F11 as the
+  fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`). Each platform's
@@ -597,7 +620,7 @@ trait depends on `flui-platform` instead.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  `PlatformWindow` body and extension command on `MacOSWindow`
   re-enters the owner lane through `route_on_owner`, so a call from any thread
   is marshaled onto the window's owner lane before any AppKit message is sent.
   Two carve-outs: the class-E raw-handle accessors
@@ -2729,8 +2752,9 @@ behavior: Android execution remains unavailable on this host.
 
 ### AppKit tab joins borrow live windows
 
-`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and returns whether
-AppKit received the join. A numeric ID cannot establish ownership of an
+`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and answers whether
+AppKit received the join (`None` when the receiving window is not an AppKit
+window). A numeric ID cannot establish ownership of an
 Objective-C object. The backend rejects a different backend, different owner
 lanes, non-main lanes, closed windows and joining a window to itself before
 messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
@@ -2738,9 +2762,9 @@ with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
 join on their shared main owner lane. No state or registry mutex spans that call.
 
 The method's public compile-fail doctest rejects numeric IDs, and its compiling
-example pins the borrowed-window signature and boolean result. These compiler
-checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
-execution remains unverified on the Windows audit host.
+example pins the borrowed-window signature and its `Option<bool>` answer. These
+compiler checks do not prove native tab grouping or close/reentry behavior.
+AppKit runtime execution remains unverified on the Windows audit host.
 
 ### Win32 observations and closed-window tracking
 

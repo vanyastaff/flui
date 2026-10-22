@@ -3,8 +3,10 @@
 //! Each file implements [`Host`](crate::host::Host) for its platform, naming
 //! the type that fills every position or [`Absent`](crate::host::Absent), and
 //! builds the [`HostPlatform`](crate::HostPlatform) over that table. The
-//! public platform names are those platforms. Nothing in the crate names this
-//! module except the crate root, which picks a host.
+//! public platform names are those platforms; the Android host has none, since
+//! it starts only over the Activity `android_main` is handed, through the
+//! crate root's `android_platform`. Nothing in the crate names this module
+//! except the crate root, which picks a host.
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
@@ -21,8 +23,6 @@ pub(crate) mod windows;
 ))]
 pub(crate) mod winit;
 
-#[cfg(target_os = "android")]
-pub use android::AndroidPlatform;
 #[cfg(target_os = "ios")]
 pub use apple::IOSPlatform;
 #[cfg(target_os = "macos")]

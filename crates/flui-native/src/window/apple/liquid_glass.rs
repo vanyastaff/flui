@@ -12,6 +12,14 @@
 //! - macOS Tahoe 26 (Released September 15, 2025)
 //! - FINAL macOS version supporting Intel Macs
 //! - Design System: <https://developer.apple.com/design/human-interface-guidelines/materials>
+//!
+//! Crate-private (ADR-0151 §8): no public path names these types, and the
+//! window applies them only through `MacOSWindow::set_liquid_glass_config`.
+
+#![expect(
+    dead_code,
+    reason = "the window's backdrop material is set by the background material command (ADR-0254 §3), which applies these on macOS; no public path reaches them before then"
+)]
 
 /// Liquid Glass material variants introduced in macOS Tahoe 26
 ///

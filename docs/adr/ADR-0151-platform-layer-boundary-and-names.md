@@ -3,6 +3,9 @@
 - **Status:** Accepted (2026-10-20); not implemented: the renames, the moves, the gates and the
   layout land as separate changes, the renames first (section 12)
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
+  `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
+  a host for.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -446,7 +449,10 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 - OS types in the core host's public paths (`HWND` and the `win32` re-exports at
   `crates/flui-platform/src/platforms/windows/mod.rs:50-59`, `NSApplication`, `AndroidApp`,
   `HtmlCanvasElement`, `tokio::runtime::Handle`) become `pub(crate)`. Deeper control from outside goes through
-  capability crates and the host bridge (ADR-0152).
+  capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
+  the application's `android_main`, enters through one function of the core host,
+  `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands
+  back names it.
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 
@@ -743,6 +749,11 @@ directories). They add no area to it.
   request that touches a host or either rename.
 - Before the first publication: the API-closure gate of ADR-0089 §6 and `clippy::exhaustive_enums`
   on the contract, with every closed enum carrying its reason.
+- Section 8: `cargo xtask api-closure` documents `flui-native`, hidden items included, as each
+  target it builds a host for builds it (Linux, Windows and macOS with every feature; iOS, Android
+  and wasm32) and finds no crate of its manifest's `deny` list (the OS bindings, AccessKit, tokio)
+  in a public path. A method of `flui-semantics`' accessibility trait is that trait's signature,
+  and the Activity's entry is the list's one named item; an entry no build needs is a finding.
 - The `forbid(unsafe_code)` of a pure module holds under its parent's `expect(unsafe_code)`: a
   planted `unsafe` block in a pure module fails the build. This is unverified in the repository
   today and is proven when the first pure module lands. A planted host table that omits one

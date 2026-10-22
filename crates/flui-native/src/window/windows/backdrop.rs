@@ -3,14 +3,18 @@
 //! theme, and the light or dark chrome that follows the user's app theme.
 //!
 //! [`WindowsWindowExt`] is the extension trait a Windows application reaches
-//! these through; [`system_appearance`] and [`apply_chrome`] are what the
-//! window procedure applies when the theme changes.
+//! these through, on any window a host hands out; [`system_appearance`] and
+//! [`apply_chrome`] are what the window procedure applies when the theme
+//! changes.
 //!
 //! ```rust,ignore
-//! use flui_native::{WindowsBackdrop, WindowsWindowExt};
+//! use flui_native::{HostWindow, WindowsBackdrop, WindowsWindowExt};
 //!
-//! window.set_backdrop(WindowsBackdrop::Mica);
-//! window.enable_snap_layouts();
+//! fn decorate(window: &dyn HostWindow) {
+//!     // `None`: the window is not a Win32 window, and nothing was asked of it.
+//!     let _ = window.set_backdrop(WindowsBackdrop::Mica);
+//!     let _ = window.enable_snap_layouts();
+//! }
 //! ```
 
 use flui_foundation::geometry::Point;
@@ -27,6 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use super::WindowsWindow;
+use crate::host_window::HostWindow;
 
 // ============================================================================
 // Windows Window Extension Trait
@@ -35,7 +40,10 @@ use super::WindowsWindow;
 /// Windows-specific window extensions.
 ///
 /// This trait provides access to Windows-specific features that are not part
-/// of the cross-platform `Window` trait.
+/// of the cross-platform window contract. It is implemented for every
+/// [`HostWindow`]: a window of another host (headless, winit) is not a Win32
+/// window, and every method answers `None` for it and asks nothing of it
+/// (ADR-0151 §8). For a Win32 window it answers `Some`.
 ///
 /// # Platform Availability
 ///
@@ -44,7 +52,6 @@ use super::WindowsWindow;
 /// - **Rounded Corners:** Windows 11 Build 22000+
 /// - **DWM Composition:** Windows Vista+
 /// - **Taskbar Integration:** Windows 7+
-#[cfg(target_os = "windows")]
 pub trait WindowsWindowExt {
     /// Set the window backdrop material.
     ///
@@ -60,13 +67,13 @@ pub trait WindowsWindowExt {
     /// ```rust,ignore
     /// window.set_backdrop(WindowsBackdrop::Mica);
     /// ```
-    fn set_backdrop(&mut self, backdrop: WindowsBackdrop);
+    fn set_backdrop(&self, backdrop: WindowsBackdrop) -> Option<()>;
 
     /// Clear backdrop material and restore opaque window.
-    fn clear_backdrop(&mut self);
+    fn clear_backdrop(&self) -> Option<()>;
 
     /// Get the current backdrop material.
-    fn backdrop(&self) -> WindowsBackdrop;
+    fn backdrop(&self) -> Option<WindowsBackdrop>;
 
     /// Enable Snap Layouts integration.
     ///
@@ -82,13 +89,13 @@ pub trait WindowsWindowExt {
     /// ```rust,ignore
     /// window.enable_snap_layouts();
     /// ```
-    fn enable_snap_layouts(&mut self);
+    fn enable_snap_layouts(&self) -> Option<()>;
 
     /// Disable Snap Layouts integration.
-    fn disable_snap_layouts(&mut self);
+    fn disable_snap_layouts(&self) -> Option<()>;
 
     /// Check if Snap Layouts is enabled.
-    fn is_snap_layouts_enabled(&self) -> bool;
+    fn is_snap_layouts_enabled(&self) -> Option<bool>;
 
     /// Set window corner preference.
     ///
@@ -97,10 +104,10 @@ pub trait WindowsWindowExt {
     /// # Platform Requirements
     ///
     /// - Windows 11 Build 22000+
-    fn set_corner_preference(&mut self, preference: WindowCornerPreference);
+    fn set_corner_preference(&self, preference: WindowCornerPreference) -> Option<()>;
 
     /// Get the window corner preference.
-    fn corner_preference(&self) -> WindowCornerPreference;
+    fn corner_preference(&self) -> Option<WindowCornerPreference>;
 
     /// Enable DWM blur behind the window.
     ///
@@ -109,7 +116,7 @@ pub trait WindowsWindowExt {
     /// # Platform Requirements
     ///
     /// - Windows Vista+
-    fn enable_blur_behind(&mut self, enable: bool);
+    fn enable_blur_behind(&self, enable: bool) -> Option<()>;
 
     /// Set the window's taskbar progress state.
     ///
@@ -124,10 +131,10 @@ pub trait WindowsWindowExt {
     /// ```rust,ignore
     /// window.set_taskbar_progress(TaskbarProgressState::Normal, 50); // 50%
     /// ```
-    fn set_taskbar_progress(&mut self, state: TaskbarProgressState, progress: u32);
+    fn set_taskbar_progress(&self, state: TaskbarProgressState, progress: u32) -> Option<()>;
 
     /// Clear taskbar progress indication.
-    fn clear_taskbar_progress(&mut self);
+    fn clear_taskbar_progress(&self) -> Option<()>;
 
     /// Set whether the window should use immersive dark mode.
     ///
@@ -136,57 +143,146 @@ pub trait WindowsWindowExt {
     /// # Platform Requirements
     ///
     /// - Windows 10 Build 17763+ (October 2018 Update)
-    fn set_dark_mode(&mut self, dark_mode: bool);
+    fn set_dark_mode(&self, dark_mode: bool) -> Option<()>;
 
     /// Check if dark mode is enabled.
-    fn is_dark_mode(&self) -> bool;
+    fn is_dark_mode(&self) -> Option<bool>;
 
     /// Set the window's theme.
     ///
     /// Controls the appearance of window chrome and title bar.
-    fn set_theme(&mut self, theme: WindowsTheme);
+    fn set_theme(&self, theme: WindowsTheme) -> Option<()>;
 
     /// Get the current window theme.
-    fn theme(&self) -> WindowsTheme;
+    fn theme(&self) -> Option<WindowsTheme>;
 
     /// Enable/disable window drop shadow.
     ///
     /// # Platform Requirements
     ///
     /// - Windows XP+
-    fn set_has_shadow(&mut self, has_shadow: bool);
+    fn set_has_shadow(&self, has_shadow: bool) -> Option<()>;
 
     /// Set custom title bar color.
     ///
     /// # Platform Requirements
     ///
     /// - Windows 10 Build 17763+
-    fn set_title_bar_color(&mut self, color: Option<(u8, u8, u8)>);
+    fn set_title_bar_color(&self, color: Option<(u8, u8, u8)>) -> Option<()>;
 
     /// Set custom caption/border color.
     ///
     /// # Platform Requirements
     ///
     /// - Windows 11 Build 22000+
-    fn set_caption_color(&mut self, color: Option<(u8, u8, u8)>);
+    fn set_caption_color(&self, color: Option<(u8, u8, u8)>) -> Option<()>;
 
     /// Enable/disable window animations.
-    fn set_animations_enabled(&mut self, enabled: bool);
+    fn set_animations_enabled(&self, enabled: bool) -> Option<()>;
 
     /// Get the window's DPI.
-    fn dpi(&self) -> u32;
+    fn dpi(&self) -> Option<u32>;
 
     /// Convert point from device (pixel) coordinates to logical coordinates.
-    fn convert_point_from_device(
-        &self,
-        point: flui_foundation::geometry::Point<i32>,
-    ) -> flui_foundation::geometry::Point<f64>;
+    fn convert_point_from_device(&self, point: Point<i32>) -> Option<Point<f64>>;
 
     /// Convert point from logical coordinates to device (pixel) coordinates.
-    fn convert_point_to_device(
-        &self,
-        point: flui_foundation::geometry::Point<f64>,
-    ) -> flui_foundation::geometry::Point<i32>;
+    fn convert_point_to_device(&self, point: Point<f64>) -> Option<Point<i32>>;
+}
+
+/// `window` as a Win32 window: `None` for a window of another host.
+fn win32(window: &dyn HostWindow) -> Option<&WindowsWindow> {
+    window.as_any().downcast_ref()
+}
+
+impl WindowsWindowExt for dyn HostWindow + '_ {
+    fn set_backdrop(&self, backdrop: WindowsBackdrop) -> Option<()> {
+        win32(self).map(|window| window.set_backdrop(backdrop))
+    }
+
+    fn clear_backdrop(&self) -> Option<()> {
+        win32(self).map(WindowsWindow::clear_backdrop)
+    }
+
+    fn backdrop(&self) -> Option<WindowsBackdrop> {
+        win32(self).map(WindowsWindow::backdrop)
+    }
+
+    fn enable_snap_layouts(&self) -> Option<()> {
+        win32(self).map(WindowsWindow::enable_snap_layouts)
+    }
+
+    fn disable_snap_layouts(&self) -> Option<()> {
+        win32(self).map(WindowsWindow::disable_snap_layouts)
+    }
+
+    fn is_snap_layouts_enabled(&self) -> Option<bool> {
+        win32(self).map(WindowsWindow::is_snap_layouts_enabled)
+    }
+
+    fn set_corner_preference(&self, preference: WindowCornerPreference) -> Option<()> {
+        win32(self).map(|window| window.set_corner_preference(preference))
+    }
+
+    fn corner_preference(&self) -> Option<WindowCornerPreference> {
+        win32(self).map(WindowsWindow::corner_preference)
+    }
+
+    fn enable_blur_behind(&self, enable: bool) -> Option<()> {
+        win32(self).map(|window| window.enable_blur_behind(enable))
+    }
+
+    fn set_taskbar_progress(&self, state: TaskbarProgressState, progress: u32) -> Option<()> {
+        win32(self).map(|_| WindowsWindow::set_taskbar_progress(state, progress))
+    }
+
+    fn clear_taskbar_progress(&self) -> Option<()> {
+        win32(self).map(|_| WindowsWindow::clear_taskbar_progress())
+    }
+
+    fn set_dark_mode(&self, dark_mode: bool) -> Option<()> {
+        win32(self).map(|window| window.set_dark_mode(dark_mode))
+    }
+
+    fn is_dark_mode(&self) -> Option<bool> {
+        win32(self).map(WindowsWindow::is_dark_mode)
+    }
+
+    fn set_theme(&self, theme: WindowsTheme) -> Option<()> {
+        win32(self).map(|window| window.set_theme(theme))
+    }
+
+    fn theme(&self) -> Option<WindowsTheme> {
+        win32(self).map(WindowsWindow::theme)
+    }
+
+    fn set_has_shadow(&self, has_shadow: bool) -> Option<()> {
+        win32(self).map(|_| WindowsWindow::set_has_shadow(has_shadow))
+    }
+
+    fn set_title_bar_color(&self, color: Option<(u8, u8, u8)>) -> Option<()> {
+        win32(self).map(|window| window.set_title_bar_color(color))
+    }
+
+    fn set_caption_color(&self, color: Option<(u8, u8, u8)>) -> Option<()> {
+        win32(self).map(|window| window.set_caption_color(color))
+    }
+
+    fn set_animations_enabled(&self, enabled: bool) -> Option<()> {
+        win32(self).map(|_| WindowsWindow::set_animations_enabled(enabled))
+    }
+
+    fn dpi(&self) -> Option<u32> {
+        win32(self).map(WindowsWindow::dpi)
+    }
+
+    fn convert_point_from_device(&self, point: Point<i32>) -> Option<Point<f64>> {
+        win32(self).map(|window| window.convert_point_from_device(point))
+    }
+
+    fn convert_point_to_device(&self, point: Point<f64>) -> Option<Point<i32>> {
+        win32(self).map(|window| window.convert_point_to_device(point))
+    }
 }
 
 // ============================================================================
@@ -485,11 +581,11 @@ impl WindowsWindow {
 }
 
 // ============================================================================
-// Windows Window Extension Trait Implementation
+// What the extension asks of a Win32 window
 // ============================================================================
 
-impl WindowsWindowExt for WindowsWindow {
-    fn set_backdrop(&mut self, backdrop: WindowsBackdrop) {
+impl WindowsWindow {
+    pub(crate) fn set_backdrop(&self, backdrop: WindowsBackdrop) {
         // SAFETY: `backdrop_value` is `i32`, matching `DWMWA_SYSTEMBACKDROP_TYPE`'s
         // expected layout, satisfying `set_dwm_attribute`'s `# Safety` contract.
         unsafe {
@@ -504,11 +600,11 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn clear_backdrop(&mut self) {
+    pub(crate) fn clear_backdrop(&self) {
         self.set_backdrop(WindowsBackdrop::None);
     }
 
-    fn backdrop(&self) -> WindowsBackdrop {
+    pub(crate) fn backdrop(&self) -> WindowsBackdrop {
         // SAFETY: `i32` matches `DWMWA_SYSTEMBACKDROP_TYPE`'s expected
         // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
         unsafe {
@@ -522,7 +618,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn enable_snap_layouts(&mut self) {
+    pub(crate) fn enable_snap_layouts(&self) {
         // Snap Layouts are automatically enabled on Windows 11 if the window has
         // a standard maximize button. No explicit API call needed.
         // We just need to ensure WS_MAXIMIZEBOX is set
@@ -549,7 +645,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn disable_snap_layouts(&mut self) {
+    pub(crate) fn disable_snap_layouts(&self) {
         // Disable by removing WS_MAXIMIZEBOX
         //
         // SAFETY: see `enable_snap_layouts` above — same call shape.
@@ -573,7 +669,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn is_snap_layouts_enabled(&self) -> bool {
+    pub(crate) fn is_snap_layouts_enabled(&self) -> bool {
         // SAFETY: see `PlatformWindow::is_resizable` above — same call shape.
         unsafe {
             let style = GetWindowLongPtrW(self.hwnd(), GWL_STYLE) as u32;
@@ -581,7 +677,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn set_corner_preference(&mut self, preference: WindowCornerPreference) {
+    pub(crate) fn set_corner_preference(&self, preference: WindowCornerPreference) {
         // SAFETY: `corner_value` is `i32`, matching
         // `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected layout, satisfying
         // `set_dwm_attribute`'s `# Safety` contract.
@@ -598,7 +694,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn corner_preference(&self) -> WindowCornerPreference {
+    pub(crate) fn corner_preference(&self) -> WindowCornerPreference {
         // SAFETY: `i32` matches `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected
         // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
         unsafe {
@@ -612,7 +708,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn enable_blur_behind(&mut self, enable: bool) {
+    pub(crate) fn enable_blur_behind(&self, enable: bool) {
         use windows::Win32::Graphics::Dwm::{
             DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
         };
@@ -638,7 +734,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn set_taskbar_progress(&mut self, state: TaskbarProgressState, progress: u32) {
+    pub(crate) fn set_taskbar_progress(state: TaskbarProgressState, progress: u32) {
         // This requires ITaskbarList3 COM interface
         // For now, just log - full implementation would need COM integration
         tracing::debug!("Set taskbar progress: {:?} {}%", state, progress);
@@ -650,11 +746,11 @@ impl WindowsWindowExt for WindowsWindow {
         // 3. Call SetProgressValue(hwnd, progress, 100)
     }
 
-    fn clear_taskbar_progress(&mut self) {
-        self.set_taskbar_progress(TaskbarProgressState::NoProgress, 0);
+    pub(crate) fn clear_taskbar_progress() {
+        Self::set_taskbar_progress(TaskbarProgressState::NoProgress, 0);
     }
 
-    fn set_dark_mode(&mut self, dark_mode: bool) {
+    pub(crate) fn set_dark_mode(&self, dark_mode: bool) {
         // An explicit choice outlives later system theme changes.
         super::proc::with_window_context(self.hwnd(), "set_dark_mode", |ctx| {
             ctx.chrome_follows_system.set(false);
@@ -675,7 +771,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn is_dark_mode(&self) -> bool {
+    pub(crate) fn is_dark_mode(&self) -> bool {
         // SAFETY: `i32` matches `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected
         // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
         unsafe {
@@ -685,7 +781,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn set_theme(&mut self, theme: WindowsTheme) {
+    pub(crate) fn set_theme(&self, theme: WindowsTheme) {
         if let Some(dark_mode) = theme.to_dark_mode_value() {
             self.set_dark_mode(dark_mode);
         } else {
@@ -697,7 +793,7 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn theme(&self) -> WindowsTheme {
+    pub(crate) fn theme(&self) -> WindowsTheme {
         if self.is_dark_mode() {
             WindowsTheme::Dark
         } else {
@@ -705,14 +801,14 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn set_has_shadow(&mut self, has_shadow: bool) {
+    pub(crate) fn set_has_shadow(has_shadow: bool) {
         // Windows doesn't have a direct API to disable shadows
         // Shadows are controlled by DWM composition
         // We can try extended window styles, but this is limited
         tracing::debug!("set_has_shadow: {} (limited support)", has_shadow);
     }
 
-    fn set_title_bar_color(&mut self, color: Option<(u8, u8, u8)>) {
+    pub(crate) fn set_title_bar_color(&self, color: Option<(u8, u8, u8)>) {
         // SAFETY: both `colorref` and `default_color` are `u32`, matching
         // `DWMWA_CAPTION_COLOR`'s expected `COLORREF` layout, satisfying
         // `set_dwm_attribute`'s `# Safety` contract.
@@ -744,18 +840,18 @@ impl WindowsWindowExt for WindowsWindow {
         }
     }
 
-    fn set_caption_color(&mut self, color: Option<(u8, u8, u8)>) {
+    pub(crate) fn set_caption_color(&self, color: Option<(u8, u8, u8)>) {
         // Caption color is the same as title bar color in Windows 11
         self.set_title_bar_color(color);
     }
 
-    fn set_animations_enabled(&mut self, enabled: bool) {
+    pub(crate) fn set_animations_enabled(enabled: bool) {
         // Windows animations are typically controlled system-wide
         // Per-window animation control is limited
         tracing::debug!("set_animations_enabled: {} (system-wide setting)", enabled);
     }
 
-    fn dpi(&self) -> u32 {
+    pub(crate) fn dpi(&self) -> u32 {
         // SAFETY: `GetDpiForWindow` takes `self.hwnd()` by value, no pointer
         // arguments — a stale or invalid `hwnd` cannot cause UB here, it is
         // just an ordinary FFI call either way. NOT a "safe fallback",
@@ -768,12 +864,12 @@ impl WindowsWindowExt for WindowsWindow {
         unsafe { GetDpiForWindow(self.hwnd()) }
     }
 
-    fn convert_point_from_device(&self, point: Point<i32>) -> Point<f64> {
+    pub(crate) fn convert_point_from_device(&self, point: Point<i32>) -> Point<f64> {
         let scale = self.scale_factor();
         Point::new(point.x as f64 / scale, point.y as f64 / scale)
     }
 
-    fn convert_point_to_device(&self, point: Point<f64>) -> Point<i32> {
+    pub(crate) fn convert_point_to_device(&self, point: Point<f64>) -> Point<i32> {
         let scale = self.scale_factor();
         Point::new(
             (point.x * scale).round() as i32,

@@ -92,7 +92,7 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
-# (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
+# (`headless_platform`, `FakeTextInput`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.

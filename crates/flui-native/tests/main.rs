@@ -61,6 +61,19 @@ mod windows_host_events;
 #[cfg(target_os = "windows")]
 mod windows_window_commands;
 
+/// The Win32 handle of a window the Windows host opened, read the way an
+/// embedder reads it: through `raw-window-handle` (ADR-0089 §2), since the
+/// host's window type and its `HWND` are not public (ADR-0151 §8).
+#[cfg(target_os = "windows")]
+fn win32_handle(window: &dyn flui_native::HostWindow) -> windows::Win32::Foundation::HWND {
+    let handle = flui_platform::PlatformWindow::window_handle(window)
+        .expect("a live Win32 window has a handle");
+    let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        panic!("not a Win32 window");
+    };
+    windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void)
+}
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases
