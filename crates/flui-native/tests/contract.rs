@@ -120,7 +120,15 @@ fn test_window_lifecycle_contract() {
             window.request_redraw();
             tracing::info!("✓ request_redraw() executed without panic");
 
-            // Contract 9: Multiple window creation
+            // Contract 9: a desktop window is reachable by assistive
+            // technology in every build, with no feature to turn on
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            assert!(
+                window.accessibility().is_some(),
+                "a desktop window hands out its accessibility bridge"
+            );
+
+            // Contract 10: Multiple window creation
             let options2 = WindowOptions::default()
                 .with_title("Contract Test Window 2".to_string())
                 .with_size(Size::new(400.0, 300.0))

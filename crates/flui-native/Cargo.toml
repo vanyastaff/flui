@@ -21,9 +21,9 @@ autotests = false
 
 [dependencies]
 # The accessibility tree the `PlatformAccessibility` capability speaks. Data
-# model only -- the per-OS `accesskit_*` adapters are separate and
-# feature-gated. An already-translated `accesskit::TreeUpdate` is what crosses
-# the seam.
+# model only -- the per-OS `accesskit_*` adapters are separate, target-specific
+# dependencies below. An already-translated `accesskit::TreeUpdate` is what
+# crosses the seam.
 accesskit = { workspace = true }
 # `PlatformAccessibility` and its listener types, which the backends implement
 # and `HostWindow` hands out. The trait lives there so the
@@ -301,11 +301,11 @@ web-sys = { version = "0.3", features = [
 ] }
 console_error_panic_hook = "0.1"
 
-# AT-SPI bridge for Linux, behind the `a11y` feature. Off by default because it
-# brings the AT-SPI bridge and its async stack. The Settings portal
-# (`preferences::linux`) and logind (`lifecycle::linux`) also use D-Bus,
-# whether or not the screen-reader bridge is enabled; the host that reads them
-# (`winit-backend` today) brings `zbus`.
+# D-Bus on Linux: the Settings portal (`preferences::linux`), logind
+# (`lifecycle::linux`) and AT-SPI, the accessibility bridge
+# (`accessibility::linux`, through `accesskit_unix`). The Linux host, the winit
+# one today, brings `zbus` and the AT-SPI adapter with it (`winit-backend`), so
+# every Linux window is accessible with no feature of its own (ADR-0151 §15).
 [target.'cfg(target_os = "linux")'.dependencies]
 # The display source's protocol clients and descriptor primitives, behind the
 # `wayland` and `x11` features (`winit-backend` enables both on Linux).
@@ -412,19 +412,18 @@ objc2-core-haptics = { workspace = true, features = [
     "CHHapticDeviceCapability",
 ] }
 
-# UIA bridge for Windows, same `a11y` feature. Version cohort must match the
-# workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its `windows`
-# dependency (0.62) matches the backend's own, so no duplicate windows-rs
-# stack is linked.
+# UIA bridge for Windows, which every Win32 window builds. Version cohort must
+# match the workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its
+# `windows` dependency (0.62) matches the backend's own, so no duplicate
+# windows-rs stack is linked.
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
 version = "0.35.1"
-optional = true
 
-# NSAccessibility bridge for macOS, same `a11y` feature and the same 0.25
-# accesskit cohort. Uses the same objc2 binding family as the backend.
+# NSAccessibility bridge for macOS, which every AppKit window builds, in the
+# same 0.25 accesskit cohort. Uses the same objc2 binding family as the
+# backend.
 [target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
 version = "0.27.1"
-optional = true
 
 [features]
 default = ["desktop"]
@@ -433,18 +432,14 @@ default = ["desktop"]
 # The optional winit fallback belongs to `winit-backend` alone.
 desktop = []
 
-# Per-OS accessibility bridges (AT-SPI on Linux, UIA on Windows,
-# NSAccessibility on macOS) -- one feature, target-gated dependencies, so a
-# build only ever links its own OS's stack. Off by default: see the Linux
-# dependency note above for why the bridge remains an opt-in.
-a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
-
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
 winit-backend = [
     # The Settings portal and logind this host reads on Linux
-    # (`preferences::linux`, `lifecycle::linux`).
+    # (`preferences::linux`, `lifecycle::linux`), and the AT-SPI adapter its
+    # Linux windows hand out (`accessibility::linux`).
     "dep:zbus",
+    "dep:accesskit_unix",
     "dep:futures-util",
     "dep:winit",
     "dep:arboard",
@@ -508,6 +503,9 @@ wasm-bindgen-test.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libtest-mimic.workspace = true
+# The accessibility bridge's unit tests run through the AT-SPI adapter on Linux
+# without `winit-backend`, the feature that otherwise brings it.
+accesskit_unix = "0.24"
 
 # Main-thread winit ownership plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.

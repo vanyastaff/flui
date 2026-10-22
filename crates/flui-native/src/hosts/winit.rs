@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use flui_platform::Clipboard;
 
-#[cfg(all(target_os = "linux", feature = "a11y"))]
+#[cfg(target_os = "linux")]
 use crate::accessibility::linux::UnixAccessibility;
 use crate::clipboard::winit::ArboardClipboard;
 #[cfg(target_os = "macos")]
@@ -56,10 +56,11 @@ impl Host for Winit {
     type Displays = WinitLoop;
     type Input = WinitLoop;
     type Text = std::sync::Arc<WinitTextInput>;
-    // The AT-SPI bridge exists on Linux with the `a11y` feature.
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
+    // The AT-SPI bridge on Linux; winit windows on Windows and macOS hand out
+    // none.
+    #[cfg(target_os = "linux")]
     type Accessibility = UnixAccessibility;
-    #[cfg(not(all(target_os = "linux", feature = "a11y")))]
+    #[cfg(not(target_os = "linux"))]
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WinitLoop;
     type Drag = WinitLoop;

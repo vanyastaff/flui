@@ -4,7 +4,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[cfg(feature = "a11y")]
 use crate::accessibility::windows::WindowsAccessibility;
 use crate::clipboard::windows::WindowsClipboard;
 use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
@@ -41,10 +40,7 @@ impl Host for Windows {
     type Displays = WindowsLoop;
     type Input = WindowsLoop;
     type Text = Rc<TextServices>;
-    #[cfg(feature = "a11y")]
     type Accessibility = WindowsAccessibility;
-    #[cfg(not(feature = "a11y"))]
-    type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WindowsClipboard;
     type Drag = WindowsLoop;
     type Haptics = WindowsHaptics;

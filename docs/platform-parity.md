@@ -242,7 +242,7 @@ secrets).
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
 |:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
-| Tree and actions | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | The desktop adapters sit behind the `a11y` feature, off by default; the Web needs its own ARIA DOM (AccessKit has no web adapter). |
+| Tree and actions | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | The desktop adapters are built into every window, with no feature; none is checked with a screen reader; the Web needs its own ARIA DOM (AccessKit has no web adapter). |
 | Properties (value, hint, description, state) | ❔ | ❔ | ❔ | ❔ | ❌ | ❌ | ❌ | ❔ | Not audited on the desktop adapters; iOS, Android and the Web have no tree for a property to reach. |
 | Announcements and live regions | ❔ | ❔ | ❔ | ❔ | ❌ | ❌ | ❌ | ❔ | Announcements not audited; live regions, alerts and route changes need an announcement on each OS. |
 | Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Checked headless by `assert_gesture_alternatives` (ADR-0216); no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so assistive technology reaches them only through the controls. |
@@ -250,7 +250,7 @@ secrets).
 <details>
 <summary>Run evidence</summary>
 
-- **Tree and actions** — The desktop adapters sit behind the `a11y` feature, off by default; the runs read one control through UI Automation and AX, not a Narrator or VoiceOver session; the Web needs its own ARIA DOM (AccessKit has no web adapter)
+- **Tree and actions** — The desktop adapters are built into every window, with no feature (UI Automation on Win32, NSAccessibility on AppKit, AT-SPI with the winit host on Linux; winit windows on Windows and macOS have none); the runs read one control through UI Automation and AX, not a Narrator or VoiceOver session; the Web needs its own ARIA DOM (AccessKit has no web adapter)
 - **Properties (value, hint, description, state)** — Each part of a bridge can fail on its own: another framework's Linux bridge drops a field's `value` and `hint` while its tree and actions work ([flutter/flutter#194638](https://github.com/flutter/flutter/issues/194638)). A check with the real assistive technology per OS has to read role, name, value, hint and state, not one control's label.
 - **Announcements and live regions** — Announcements not audited. Another framework's Linux bridge produces no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)); its harness registers AT-SPI listeners and matches only strings that carry a nonce, so no other source can produce a hit.
 - **Gesture alternatives (custom actions, context menu, keys, controls)** — Behavioural widgets publish each gesture's intent as a custom action, keys and a visible control or a context menu (ADR-0216), checked headless by `assert_gesture_alternatives`; no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so on every platform assistive technology reaches them only through the controls; the Win32 and AppKit menu-key decoders pass the conformance row, no native run

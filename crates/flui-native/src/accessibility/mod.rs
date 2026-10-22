@@ -11,28 +11,22 @@
 //! - `linux`: AT-SPI (`accesskit_unix`), which the winit host uses;
 //! - `headless`: `FakeAccessibility`, which records what was published.
 //!
-//! The adapters exist with the `a11y` feature. Android, iOS and the Web have
-//! none yet: their tables name `Absent<Accessibility>`. Linux has no host but
-//! the winit one, so its adapter builds with `winit-backend`, and in tests,
-//! which exercise the bridge through it.
+//! The adapters have no feature: every window of a host that has one hands it
+//! out. Android, iOS and the Web have none yet: their tables name
+//! `Absent<Accessibility>`. Linux has no host but the winit one, so its
+//! adapter builds with `winit-backend`, and in tests, which exercise the
+//! bridge through it.
 
-#[cfg(all(target_os = "macos", feature = "a11y"))]
+#[cfg(target_os = "macos")]
 pub(crate) mod apple;
-#[cfg(all(
-    feature = "a11y",
-    any(
-        target_os = "windows",
-        target_os = "macos",
-        all(target_os = "linux", any(feature = "winit-backend", test))
-    )
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(target_os = "linux", any(feature = "winit-backend", test))
 ))]
 mod bridge;
 pub(crate) mod headless;
-#[cfg(all(
-    target_os = "linux",
-    feature = "a11y",
-    any(feature = "winit-backend", test)
-))]
+#[cfg(all(target_os = "linux", any(feature = "winit-backend", test)))]
 pub(crate) mod linux;
-#[cfg(all(windows, feature = "a11y"))]
+#[cfg(windows)]
 pub(crate) mod windows;

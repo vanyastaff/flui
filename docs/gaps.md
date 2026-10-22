@@ -73,10 +73,9 @@ request.
 
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
-- Desktop is off by default and untested with a screen reader.
+- Desktop is always on but untested with a screen reader.
 - AccessKit has iOS and Android adapters but none for the Web (it needs a parallel ARIA DOM).
 - When they are wired, the semantics identifier (ADR-0240) must reach Android's `viewIdResourceName`, iOS's `accessibilityIdentifier` and a `data-flui-id` DOM attribute, as it reaches `AutomationId`, `AXIdentifier` and AT-SPI's id through `author_id` on the desktop.
-- The desktop adapters sit behind the `a11y` feature.
 - The runs read one control, not a Narrator, VoiceOver or Orca session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
