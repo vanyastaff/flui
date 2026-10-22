@@ -1,90 +1,36 @@
 //! The display state every native backend keeps: the registry that issues its
 //! [`DisplayId`]s, the snapshot it last published, and the rules for when that
-//! snapshot is read from the OS again; and the refresh period's one
-//! constructor ([`Refresh`]) and one publisher of a measured period
-//! (`MeasuredPeriod`, on the platforms that measure one).
+//! snapshot is read from the OS again; and the one publisher of a measured
+//! refresh period (`MeasuredPeriod`, on the platforms that measure one).
+//!
+//! A refresh period is made by the contract's constructors alone
+//! (`RefreshPeriod::{from_hz, from_ratio, from_millihertz, from_secs_f64}`):
+//! each display source hands the value its platform reports straight to the
+//! one for its unit, and one check there refuses what describes no cadence.
 
-use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, RefreshPeriod,
-};
+use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot};
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 
-/// A display's refresh as a platform reports it, in the platform's unit.
-///
-/// [`period`](Self::period) is the one way a reported value becomes a
-/// [`RefreshPeriod`]: every display source hands its report here, and a
-/// value that describes no cadence is unknown, never a guess.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "each platform reports its refresh in one of these units, so a target builds only its own platforms' variants"
-    )
-)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Refresh {
-    /// A rate in hertz: Android's `Display.Mode.getRefreshRate`,
-    /// CoreGraphics' `CGDisplayModeGetRefreshRate`.
-    Hertz(f64),
-    /// A rate in hertz as `numerator / denominator`, kept exact:
-    /// `QueryDisplayConfig`'s `DISPLAYCONFIG_RATIONAL` (60000/1001 stays
-    /// 16.683 ms), and a whole rate over one.
-    HertzRatio { numerator: u32, denominator: u32 },
-    /// A rate in millihertz: Wayland's `wl_output.mode`, a RandR mode's dot
-    /// clock over its totals.
-    Millihertz(i64),
-    /// The time between two frames, in seconds: a display link's tick, the
-    /// interval a browser's frames are estimated at.
-    Interval(f64),
-}
-
-impl Refresh {
-    /// The period this describes; `None` for a value that is not finite or
-    /// not above zero (what a platform reports when it does not know:
-    /// CoreGraphics' 0, Wayland's 0 or less, a rational with a zero term)
-    /// and for a period outside 1 ms to 1 s.
-    pub(crate) fn period(self) -> Option<RefreshPeriod> {
-        if !self.is_finite_and_positive() {
-            return None;
-        }
-        match self {
-            Self::Hertz(hertz) => RefreshPeriod::from_hz(hertz).ok(),
-            Self::HertzRatio {
-                numerator,
-                denominator,
-            } => RefreshPeriod::from_ratio(numerator, denominator).ok(),
-            Self::Millihertz(millihertz) => RefreshPeriod::from_millihertz(millihertz).ok(),
-            Self::Interval(seconds) => std::time::Duration::try_from_secs_f64(seconds)
-                .ok()
-                .and_then(|interval| RefreshPeriod::try_from(interval).ok()),
-        }
-    }
-
-    /// The one check every report passes: a finite value above zero.
-    fn is_finite_and_positive(self) -> bool {
-        match self {
-            Self::Hertz(value) | Self::Interval(value) => value.is_finite() && value > 0.0,
-            Self::HertzRatio {
-                numerator,
-                denominator,
-            } => numerator > 0 && denominator > 0,
-            Self::Millihertz(millihertz) => millihertz > 0,
-        }
-    }
+/// Whether `value` lies more than `band` (a fraction of `reference`) away from
+/// `reference`: the one band rule of the measured refresh period, which the
+/// browser's estimate also judges its frames' agreement and stability by.
+#[cfg(any(target_os = "ios", target_arch = "wasm32", test))]
+pub(crate) fn outside_band(value: f64, reference: f64, band: f64) -> bool {
+    (value - reference).abs() > reference * band
 }
 
 /// The refresh period a display publishes from a cadence it measures (a
 /// display link's ticks, a browser's frames), and the one rule for
 /// publishing a new one: a measurement replaces the published period only
-/// when it lies more than its band (a fraction of the published period) away
-/// from it, so jitter inside the band publishes nothing; the first one is
-/// always published.
+/// when it lies outside its band (a fraction of the published period), so
+/// jitter inside the band publishes nothing; the first one is always
+/// published.
 #[cfg(any(target_os = "ios", target_arch = "wasm32", test))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MeasuredPeriod {
-    published: Option<RefreshPeriod>,
+    published: Option<flui_platform::RefreshPeriod>,
 }
 
 #[cfg(any(target_os = "ios", target_arch = "wasm32", test))]
@@ -92,25 +38,35 @@ impl MeasuredPeriod {
     /// The period published so far; `None` until a measurement is. The
     /// browser's estimate reads it back; a display link only publishes.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn published(self) -> Option<RefreshPeriod> {
+    pub(crate) fn published(self) -> Option<flui_platform::RefreshPeriod> {
         self.published
     }
 
     /// Whether `measured` lies outside `band` around the published period,
     /// and so would replace it; always, while none is published.
-    pub(crate) fn departs(self, measured: RefreshPeriod, band: f64) -> bool {
+    pub(crate) fn departs(self, measured: flui_platform::RefreshPeriod, band: f64) -> bool {
         self.published.is_none_or(|published| {
-            let published = published.get().as_secs_f64();
-            (measured.get().as_secs_f64() - published).abs() > published * band
+            outside_band(
+                measured.get().as_secs_f64(),
+                published.get().as_secs_f64(),
+                band,
+            )
         })
     }
 
-    /// Publish `measured`; answers it. A measurer that holds back what
-    /// departs from the band (the browser's, until its frames agree) asks
-    /// [`departs`](Self::departs) first.
-    pub(crate) fn publish(&mut self, measured: RefreshPeriod) -> RefreshPeriod {
+    /// Publish `measured` when it [`departs`](Self::departs) from `band`
+    /// around the published period: `Some` with it when the published period
+    /// changed, `None` when it stays.
+    pub(crate) fn offer(
+        &mut self,
+        measured: flui_platform::RefreshPeriod,
+        band: f64,
+    ) -> Option<flui_platform::RefreshPeriod> {
+        if !self.departs(measured, band) {
+            return None;
+        }
         self.published = Some(measured);
-        measured
+        Some(measured)
     }
 
     /// Forget the published period: the cadence is unknown until the next
@@ -414,31 +370,37 @@ impl MissLedger {
     }
 }
 
-/// The table of the refresh period's one constructor and publisher, which
-/// every display source is held to: one display's cadence, as each platform
-/// reports it, is the row's period, and a value that describes no cadence is
-/// no period anywhere.
+/// The table of the refresh period, which every display source is held to:
+/// one display's cadence, as each platform reports it and read by that
+/// platform's own source, is the row's period, and a value that describes no
+/// cadence is no period anywhere. The macOS source hands CoreGraphics' rate
+/// to `RefreshPeriod::from_hz` from its FFI half and has no column here.
 #[cfg(test)]
 mod mapping {
     use std::time::Duration;
 
+    use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
-    use super::Refresh;
+    use super::{MeasuredPeriod, outside_band};
     use crate::display::android::sample::RawDisplay;
     use crate::display::apple::link_rate::LinkPeriod;
+    use crate::display::linux::wayland_model::{OutputEvent, WaylandOutputs};
+    use crate::display::linux::x11_model::{
+        RandrCrtc, RandrMode, RandrMonitor, RandrOutput, RandrState,
+    };
     use crate::display::web::refresh_estimate::RefreshEstimator;
     use crate::display::windows::sample::display_period;
 
     /// One display's cadence as each platform reports it.
     struct Cadence {
         case: &'static str,
-        /// Hertz: Android's `Display.Mode`, CoreGraphics' mode rate.
+        /// Hertz: Android's `Display.Mode`.
         hertz: f64,
         /// Windows' `DISPLAYCONFIG_RATIONAL`; `None` where no `u32` pair says it.
         ratio: Option<(u32, u32)>,
-        /// Millihertz: Wayland's `wl_output.mode`, a RandR mode.
-        millihertz: Option<i64>,
+        /// Millihertz: Wayland's `wl_output.mode`, a RandR mode's rate.
+        millihertz: Option<i32>,
         /// Seconds between frames: a display link's tick, a browser's frames.
         interval: f64,
         /// The period, in nanoseconds; `None` for no cadence.
@@ -556,6 +518,71 @@ mod mapping {
             .refresh_period
     }
 
+    /// The period of a Wayland output whose current mode reports
+    /// `millihertz`.
+    fn wayland(millihertz: i32) -> Option<RefreshPeriod> {
+        const GLOBAL: u32 = 7;
+        let mut outputs = WaylandOutputs::default();
+        outputs.add(GLOBAL);
+        for event in [
+            OutputEvent::Geometry {
+                x: 0,
+                y: 0,
+                swaps_axes: false,
+                make: "Acme".into(),
+                model: "Panel".into(),
+            },
+            OutputEvent::Mode {
+                current: true,
+                width: 1920,
+                height: 1080,
+                refresh_millihertz: millihertz,
+            },
+            OutputEvent::Done,
+        ] {
+            outputs.apply(GLOBAL, event);
+        }
+        let views = outputs.views();
+        assert_eq!(views.len(), 1, "one output with a usable mode is listed");
+        views[0].refresh_period
+    }
+
+    /// The period of an X11 monitor whose CRTC runs a mode of `millihertz`:
+    /// a dot clock of ten times the rate over 100 x 100 totals.
+    fn randr(millihertz: u32) -> Option<RefreshPeriod> {
+        let dot_clock = millihertz
+            .checked_mul(10)
+            .expect("BUG: a row's rate fits a RandR dot clock");
+        let state = RandrState {
+            monitors: vec![RandrMonitor {
+                name: "DP-1".into(),
+                is_primary: true,
+                bounds: Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
+                outputs: vec![1],
+            }],
+            outputs: vec![RandrOutput {
+                id: 1,
+                crtc: 101,
+                name: "DP-1".into(),
+                edid: None,
+            }],
+            crtcs: vec![RandrCrtc { id: 101, mode: 10 }],
+            modes: vec![RandrMode {
+                id: 10,
+                dot_clock,
+                htotal: 100,
+                vtotal: 100,
+                interlace: false,
+                double_scan: false,
+            }],
+            scale_factor: None,
+            work_area: None,
+        };
+        let views = state.views();
+        assert_eq!(views.len(), 1, "the monitor is listed");
+        views[0].refresh_period
+    }
+
     /// The period a display link measuring ticks `interval` apart publishes.
     fn display_link(interval: f64) -> Option<RefreshPeriod> {
         LinkPeriod::default().observe(interval)
@@ -578,16 +605,17 @@ mod mapping {
             let case = cadence.case;
             let periods = [
                 ("Android", Some(android(cadence.hertz))),
-                ("CoreGraphics", Some(Refresh::Hertz(cadence.hertz).period())),
                 (
                     "Windows",
                     cadence.ratio.map(|ratio| display_period(Some(ratio), || 0)),
                 ),
+                ("Wayland", cadence.millihertz.map(wayland)),
                 (
-                    "Wayland and RandR",
+                    "RandR",
                     cadence
                         .millihertz
-                        .map(|millihertz| Refresh::Millihertz(millihertz).period()),
+                        .and_then(|millihertz| u32::try_from(millihertz).ok())
+                        .map(randr),
                 ),
                 ("display link", Some(display_link(cadence.interval))),
                 ("browser", Some(browser(cadence.interval))),
@@ -611,9 +639,10 @@ mod mapping {
         }
     }
 
-    /// The period of every common panel rate CoreGraphics reports stays the
-    /// one the AppKit backend reported before the display snapshot
-    /// (`1 / hz`), to the nanosecond.
+    /// The period of every common panel rate CoreGraphics reports, through
+    /// the constructor the macOS source hands it to, stays the one the AppKit
+    /// backend reported before the display snapshot (`1 / hz`), to the
+    /// nanosecond.
     #[test]
     fn macos_shim_keeps_the_period_it_reports_today() {
         for millihertz in [
@@ -621,7 +650,7 @@ mod mapping {
             120_000, 144_000, 165_000, 240_000, 360_000,
         ] {
             let hz = f64::from(millihertz) / 1000.0;
-            let period = Refresh::Hertz(hz).period().map(RefreshPeriod::get);
+            let period = RefreshPeriod::from_hz(hz).ok().map(RefreshPeriod::get);
             let before = Duration::from_secs_f64(1.0 / hz);
             assert!(
                 period.is_some_and(|period| period.abs_diff(before) <= Duration::from_nanos(1)),
@@ -635,36 +664,41 @@ mod mapping {
     /// forgotten period is unknown again.
     #[test]
     fn a_measured_period_is_published_outside_its_band() {
-        let hz = |hertz| {
-            Refresh::Hertz(hertz)
-                .period()
-                .expect("BUG: a test rate describes a cadence")
-        };
-        let mut measured = super::MeasuredPeriod::default();
-        assert!(measured.departs(hz(60.0), 0.05), "nothing is published yet");
-        assert_eq!(measured.publish(hz(60.0)), hz(60.0));
-        // (measured rate, band, whether it departs from 60 Hz)
-        for (hertz, band, departs) in [
+        let hz =
+            |hertz| RefreshPeriod::from_hz(hertz).expect("BUG: a test rate describes a cadence");
+        let mut measured = MeasuredPeriod::default();
+        assert_eq!(
+            measured.offer(hz(60.0), 0.05),
+            Some(hz(60.0)),
+            "the first publishes"
+        );
+        // (measured rate, band, whether it replaces 60 Hz)
+        for (hertz, band, replaces) in [
             (60.0, 0.05, false),
             (61.0, 0.05, false),
             (58.0, 0.05, false),
-            (64.0, 0.05, true),
             (61.0, 0.01, true),
             (120.0, 0.03, true),
         ] {
             assert_eq!(
                 measured.departs(hz(hertz), band),
-                departs,
+                replaces,
                 "{hertz} Hz within {band} of 60 Hz"
             );
         }
+        assert_eq!(measured.offer(hz(61.0), 0.05), None, "inside the band");
         assert_eq!(measured.published(), Some(hz(60.0)));
+        assert_eq!(measured.offer(hz(64.0), 0.05), Some(hz(64.0)), "outside it");
         measured.forget();
         assert_eq!(measured.published(), None);
-        assert!(
-            measured.departs(hz(60.0), 0.05),
-            "a forgotten period departs"
+        assert_eq!(
+            measured.offer(hz(64.0), 0.05),
+            Some(hz(64.0)),
+            "after forgetting"
         );
+        assert!(outside_band(1.06, 1.0, 0.05));
+        assert!(outside_band(0.94, 1.0, 0.05), "either side");
+        assert!(!outside_band(1.04, 1.0, 0.05));
     }
 }
 

@@ -24,10 +24,9 @@
 //!   window on X11 names its monitor by its CRTC.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::DisplayKey;
+use flui_platform::{DisplayKey, RefreshPeriod};
 
 use super::view::{Identity, OutputView, intersection};
-use crate::display::source::Refresh;
 
 /// One RandR mode, with the fields the refresh rate needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,8 +110,7 @@ impl RandrState {
             .first()
             .and_then(|crtc| self.crtcs.iter().find(|candidate| candidate.id == *crtc))
             .and_then(|crtc| self.modes.iter().find(|mode| mode.id == crtc.mode))
-            .and_then(mode_refresh)
-            .and_then(Refresh::period);
+            .and_then(mode_refresh_period);
         let usable_bounds = self
             .work_area
             .and_then(|area| intersection(monitor.bounds, area))
@@ -205,12 +203,11 @@ fn mode_refresh_millihertz(mode: &RandrMode) -> Option<u128> {
     Some((numerator + denominator / 2) / denominator)
 }
 
-/// `mode`'s refresh, which `Refresh::period` makes a period of; `None` for a
-/// mode whose totals give no rate.
-fn mode_refresh(mode: &RandrMode) -> Option<Refresh> {
-    Some(Refresh::Millihertz(
-        i64::try_from(mode_refresh_millihertz(mode)?).ok()?,
-    ))
+/// The period of `mode`'s refresh rate; `None` for an unknown rate or one
+/// outside 1 to 1000 Hz.
+fn mode_refresh_period(mode: &RandrMode) -> Option<RefreshPeriod> {
+    let millihertz = i64::try_from(mode_refresh_millihertz(mode)?).ok()?;
+    RefreshPeriod::from_millihertz(millihertz).ok()
 }
 
 /// `Xft.dpi / 96` from the text of the root window's `RESOURCE_MANAGER`
@@ -250,12 +247,7 @@ mod tests {
 
     use super::super::view::{FreshIds, display_of_native_number};
     use super::*;
-    use flui_platform::{DisplayRegistry, RefreshPeriod};
-
-    /// The period of `mode`'s refresh, as a monitor on it publishes it.
-    fn period_of_mode(mode: &RandrMode) -> Option<RefreshPeriod> {
-        mode_refresh(mode).and_then(Refresh::period)
-    }
+    use flui_platform::DisplayRegistry;
 
     fn mode(id: u32, dot_clock: u32, htotal: u16, vtotal: u16) -> RandrMode {
         RandrMode {
@@ -269,7 +261,7 @@ mod tests {
     }
 
     fn period_micros(mode: &RandrMode) -> Option<u128> {
-        period_of_mode(mode).map(|period| period.get().as_micros())
+        mode_refresh_period(mode).map(|period| period.get().as_micros())
     }
 
     /// 1920x1080 at 60 Hz (CEA 1080p60): 148.5 MHz over 2200 x 1125.
@@ -363,7 +355,7 @@ mod tests {
         for (htotal, vtotal) in [(0, 1125), (2200, 0), (0, 0)] {
             let broken = mode(3, 148_500_000, htotal, vtotal);
             assert_eq!(mode_refresh_millihertz(&broken), None);
-            assert_eq!(period_of_mode(&broken), None);
+            assert_eq!(mode_refresh_period(&broken), None);
         }
         // The same through a monitor: the display is listed, its rate unknown.
         let mut broken = state(vec![monitor("DP-1", &[1], 0)]);
@@ -381,20 +373,20 @@ mod tests {
             mode_refresh_millihertz(&huge),
             Some(u128::from(u32::MAX) * 1000)
         );
-        assert_eq!(period_of_mode(&huge), None, "beyond 1000 Hz");
+        assert_eq!(mode_refresh_period(&huge), None, "beyond 1000 Hz");
         // The largest totals with a double scan: 65535 * 65535 * 2 passes u32.
         let slow = RandrMode {
             double_scan: true,
             ..mode(5, u32::MAX, u16::MAX, u16::MAX)
         };
         assert_eq!(mode_refresh_millihertz(&slow), Some(500));
-        assert_eq!(period_of_mode(&slow), None, "below 1 Hz");
+        assert_eq!(mode_refresh_period(&slow), None, "below 1 Hz");
         // A large clock that is a real rate: 4.2948 GHz over 10000 x 7158 is
         // 60 Hz, and its numerator (4.29e12) passes u32 by a thousandfold.
         let wide = mode(6, 4_294_800_000, 10_000, 7_158);
         assert_eq!(mode_refresh_millihertz(&wide), Some(60_000));
         assert_eq!(
-            period_of_mode(&wide).map(RefreshPeriod::get),
+            mode_refresh_period(&wide).map(RefreshPeriod::get),
             Some(Duration::from_nanos(16_666_667))
         );
     }

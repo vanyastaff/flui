@@ -321,13 +321,13 @@ pub(crate) mod refresh_estimate {
     //! published.
     //!
     //! Pure: the platform feeds in timestamps and reads the published value, so
-    //! the rules run on every host. The estimate becomes a period by the display
-    //! model's one constructor, and is published by its one publisher, whose
-    //! band is the hysteresis below.
+    //! the rules run on every host. The estimate becomes a period by the
+    //! contract's `RefreshPeriod::from_secs_f64`, and is published by the display
+    //! model's one publisher, whose band rule also judges agreement and stability.
 
     use flui_platform::RefreshPeriod;
 
-    use crate::display::source::{MeasuredPeriod, Refresh};
+    use crate::display::source::{MeasuredPeriod, outside_band};
 
     /// How many of the most recent frame intervals the estimate is taken over.
     const WINDOW: usize = 30;
@@ -500,7 +500,7 @@ pub(crate) mod refresh_estimate {
             let trim = kept.len() / 10;
             let middle = &kept[trim..kept.len() - trim];
             let millis = middle.iter().sum::<f64>() / middle.len() as f64;
-            Refresh::Interval(millis / 1000.0).period()
+            RefreshPeriod::from_secs_f64(millis / 1000.0).ok()
         }
 
         /// Publish `candidate` if it has left the hysteresis band for
@@ -517,7 +517,7 @@ pub(crate) mod refresh_estimate {
                 let agrees = self
                     .intervals
                     .recent_mean(RECENT)
-                    .is_some_and(|recent| !differs(recent, candidate_ms, 2.0 * HYSTERESIS));
+                    .is_some_and(|recent| !outside_band(recent, candidate_ms, 2.0 * HYSTERESIS));
                 if !agrees {
                     self.pending = None;
                     return None;
@@ -525,7 +525,7 @@ pub(crate) mod refresh_estimate {
                 // Stable: the candidate is no longer moving. While the window holds
                 // two rates it glides from one to the other, a step at a time.
                 let pending = match self.pending {
-                    Some(pending) if !differs(candidate_ms, pending.anchor_ms, STABILITY) => {
+                    Some(pending) if !outside_band(candidate_ms, pending.anchor_ms, STABILITY) => {
                         Pending {
                             anchor_ms: pending.anchor_ms,
                             frames: pending.frames + 1,
@@ -542,13 +542,8 @@ pub(crate) mod refresh_estimate {
                 }
             }
             self.pending = None;
-            Some(self.published.publish(candidate))
+            self.published.offer(candidate, HYSTERESIS)
         }
-    }
-
-    /// Whether `value` is more than `fraction` of `reference` away from it.
-    fn differs(value: f64, reference: f64, fraction: f64) -> bool {
-        (value - reference).abs() > reference * fraction
     }
 
     #[cfg(test)]

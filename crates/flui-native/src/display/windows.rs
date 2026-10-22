@@ -28,7 +28,6 @@ pub(crate) mod sample {
 
     use flui_platform::{DisplayId, DisplayKey, RefreshPeriod};
 
-    use crate::display::source::Refresh;
     use crate::version::gate::Gate;
     use crate::version::gate::windows::WindowsBuild;
 
@@ -56,19 +55,11 @@ pub(crate) mod sample {
     ) -> Option<RefreshPeriod> {
         target_rate
             .and_then(|(numerator, denominator)| {
-                Refresh::HertzRatio {
-                    numerator,
-                    denominator,
-                }
-                .period()
+                RefreshPeriod::from_ratio(numerator, denominator).ok()
             })
             .or_else(|| match mode_frequency() {
                 0 | 1 => None,
-                hertz => Refresh::HertzRatio {
-                    numerator: hertz,
-                    denominator: 1,
-                }
-                .period(),
+                hertz => RefreshPeriod::from_ratio(hertz, 1).ok(),
             })
     }
 

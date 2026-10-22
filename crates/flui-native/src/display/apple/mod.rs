@@ -343,12 +343,12 @@ pub(crate) mod screen {
 pub(crate) mod link_rate {
     //! The two pure rules behind iOS frame pacing: which frame-rate request a
     //! `CADisplayLink` gets on a given iOS version, and when the cadence the link
-    //! measures becomes a new published refresh period, by the display model's
-    //! one constructor and publisher.
+    //! measures becomes a new published refresh period, by the contract's
+    //! constructor and the display model's one publisher.
 
     use flui_platform::RefreshPeriod;
 
-    use crate::display::source::{MeasuredPeriod, Refresh};
+    use crate::display::source::MeasuredPeriod;
     use crate::version::gate::{Gate, Since, apple::AppleVersion};
 
     /// The floor of the requested range: an adaptive ProMotion panel may drop to
@@ -439,11 +439,8 @@ pub(crate) mod link_rate {
         /// nothing changes. An interval that describes no cadence (negative, not
         /// finite, outside 1 ms to 1 s) is ignored.
         pub(crate) fn observe(&mut self, interval_seconds: f64) -> Option<RefreshPeriod> {
-            let measured = Refresh::Interval(interval_seconds).period()?;
-            if !self.published.departs(measured, PUBLISH_BAND) {
-                return None;
-            }
-            Some(self.published.publish(measured))
+            let measured = RefreshPeriod::from_secs_f64(interval_seconds).ok()?;
+            self.published.offer(measured, PUBLISH_BAND)
         }
 
         /// Forget the published period: the link moved to another screen, or was

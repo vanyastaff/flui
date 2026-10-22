@@ -12,14 +12,12 @@ pub(crate) use source::AndroidDisplays;
 #[forbid(unsafe_code)]
 pub(crate) mod sample {
     //! The rules of the Android display source that need no JVM: what a sample of a
-    //! `Display` becomes in the snapshot, its refresh rate by the display model's
-    //! one constructor, and what rate a window asks for. Every host runs their
-    //! tests.
+    //! `Display` becomes in the snapshot, its refresh rate as a period (by the
+    //! contract's `RefreshPeriod::from_hz`), and what rate a window asks for.
+    //! Every host runs their tests.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayId, DisplayInfo, FrameRateHint};
-
-    use crate::display::source::Refresh;
+    use flui_platform::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
 
     /// What one `android.view.Display` reported, before it has an identity.
     #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +52,7 @@ pub(crate) mod sample {
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
             let mut info = DisplayInfo::new(id, &self.name, bounds, scale_factor(self.density_dpi))
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID);
-            info.refresh_period = Refresh::Hertz(f64::from(self.refresh_hz)).period();
+            info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
             Some(info)
         }
     }
@@ -68,7 +66,7 @@ pub(crate) mod sample {
     pub(crate) fn max_refresh_hz(rates: impl IntoIterator<Item = f32>) -> Option<f32> {
         rates
             .into_iter()
-            .filter(|hz| Refresh::Hertz(f64::from(*hz)).period().is_some())
+            .filter(|hz| RefreshPeriod::from_hz(f64::from(*hz)).is_ok())
             .max_by(f32::total_cmp)
     }
 
