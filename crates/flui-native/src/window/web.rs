@@ -762,10 +762,7 @@ impl VisibilitySync {
         if !self.accepting.get() {
             return;
         }
-        let mut observed = self.observed.get();
-        let report = observed.report(visible);
-        self.observed.set(observed);
-        let Some(visible) = report else {
+        let Some(visible) = ReportedVisibility::report_in(&self.observed, visible) else {
             return;
         };
         let state = Arc::clone(&self.state);

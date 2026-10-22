@@ -277,8 +277,11 @@ mod tests {
 }
 
 /// The table of the one mode rule, which every window system's reading of its
-/// own report is held to: a row's flags, put as that system reports them and
-/// read back by the system's own reading, decide the row's mode.
+/// own report is held to: a row's facts, put as that system reports them and
+/// read back by the system's own reading, decide the row's mode. AppKit reads
+/// a full-screen window as full screen whatever else it says (it does not
+/// miniaturize one), so the rows where a minimized window also says full
+/// screen name its mode apart.
 #[cfg(test)]
 mod mapping {
     use flui_foundation::geometry::{Bounds, Point, Size};
@@ -289,36 +292,57 @@ mod mapping {
     use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
     use crate::window::windows::mode::NativeMode;
 
-    const fn flags(minimized: bool, fullscreen: bool, maximized: bool) -> ModeFlags {
-        ModeFlags {
-            minimized,
-            fullscreen,
-            maximized,
+    /// One window as its window system reports it, and the mode it is in.
+    struct Row {
+        case: &'static str,
+        said: ModeFlags,
+        mode: WindowMode,
+        /// The mode AppKit reads from the same flags.
+        appkit: WindowMode,
+    }
+
+    const fn row(
+        case: &'static str,
+        (minimized, fullscreen, maximized): (bool, bool, bool),
+        mode: WindowMode,
+        appkit: WindowMode,
+    ) -> Row {
+        Row {
+            case,
+            said: ModeFlags {
+                minimized,
+                fullscreen,
+                maximized,
+            },
+            mode,
+            appkit,
         }
     }
 
-    /// (case, what the window system says, mode)
-    const ROWS: [(&str, ModeFlags, WindowMode); 8] = [
-        ("nothing set", flags(false, false, false), Normal),
-        ("maximized", flags(false, false, true), Maximized),
-        ("fullscreen", flags(false, true, false), Fullscreen),
-        ("minimized", flags(true, false, false), Minimized),
-        (
+    const ROWS: [Row; 8] = [
+        row("nothing set", (false, false, false), Normal, Normal),
+        row("maximized", (false, false, true), Maximized, Maximized),
+        row("fullscreen", (false, true, false), Fullscreen, Fullscreen),
+        row("minimized", (true, false, false), Minimized, Minimized),
+        row(
             "fullscreen that kept its maximized flag",
-            flags(false, true, true),
+            (false, true, true),
+            Fullscreen,
             Fullscreen,
         ),
-        (
+        row(
             "minimized from fullscreen",
-            flags(true, true, false),
+            (true, true, false),
             Minimized,
+            Fullscreen,
         ),
-        (
+        row(
             "minimized from maximized",
-            flags(true, false, true),
+            (true, false, true),
+            Minimized,
             Minimized,
         ),
-        ("all three", flags(true, true, true), Minimized),
+        row("all three", (true, true, true), Minimized, Fullscreen),
     ];
 
     /// The properties an X11 window manager keeps for such a window:
@@ -341,11 +365,12 @@ mod mapping {
         )
     }
 
-    /// AppKit's flags for such a window: AppKit leaves full screen before it
-    /// miniaturizes a window, and a maximized window is a zoomed resizable one.
+    /// AppKit's flags for such a window as they stand: the full-screen style
+    /// mask, `isMiniaturized`, and a zoomed resizable window for a maximized
+    /// one.
     fn appkit(said: ModeFlags) -> ModeFlags {
         WindowFlags {
-            fullscreen: said.fullscreen && !said.minimized,
+            fullscreen: said.fullscreen,
             miniaturized: said.minimized,
             zoomed: said.maximized,
             resizable: true,
@@ -374,22 +399,25 @@ mod mapping {
         mode.flags()
     }
 
-    /// A window system's reading of its own report of a window.
-    type Reading = fn(ModeFlags) -> ModeFlags;
-
-    /// Every window system decides a row's mode alike; winit's three queries
-    /// are the flags as they stand.
+    /// Every window system decides a row's mode by the one rule from its own
+    /// reading; winit's three queries are the flags as they stand.
     #[test]
     fn every_window_system_decides_the_mode_alike() {
-        let readings: [(&str, Reading); 4] = [
-            ("winit", |said| said),
-            ("X11", x11),
-            ("AppKit", appkit),
-            ("Win32", win32),
-        ];
-        for (case, said, mode) in ROWS {
-            for (system, read) in readings {
-                assert_eq!(mode_of(read(said)), mode, "{system}: {case}");
+        for Row {
+            case,
+            said,
+            mode,
+            appkit: appkit_mode,
+        } in ROWS
+        {
+            let modes = [
+                ("winit", mode_of(said), mode),
+                ("X11", mode_of(x11(said)), mode),
+                ("Win32", mode_of(win32(said)), mode),
+                ("AppKit", mode_of(appkit(said)), appkit_mode),
+            ];
+            for (system, decided, expected) in modes {
+                assert_eq!(decided, expected, "{system}: {case}");
             }
         }
     }

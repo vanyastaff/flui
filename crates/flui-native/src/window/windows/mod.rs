@@ -135,8 +135,12 @@ pub(crate) mod mode {
             std::mem::discriminant(self) != std::mem::discriminant(next)
         }
 
-        /// What this mode says of the window: a fullscreen window minimized
-        /// is both minimized and fullscreen.
+        /// What this mode says of the window. The mode is one enum, but a
+        /// fullscreen window that was minimized holds two facts, minimized
+        /// and fullscreen, and which one wins is the one precedence
+        /// `window::state::mode_of` keeps for every window system; mapping the
+        /// enum straight to a `WindowMode` would state that precedence a
+        /// second time.
         pub(crate) fn flags(&self) -> ModeFlags {
             ModeFlags {
                 minimized: self.is_minimized(),

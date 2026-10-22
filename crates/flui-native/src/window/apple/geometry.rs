@@ -1,7 +1,8 @@
 //! What the AppKit and UIKit windows report and are asked, as pure rules:
-//! where an `NSWindow` is ([`frame`]), which mode it is in, how to reach
-//! another and whether it is seen ([`mode`]), and which screen edges a UIKit
-//! window defers its system gestures on ([`screen_edges`]).
+//! where an `NSWindow` is ([`frame`]), which mode it is in and how to reach
+//! another ([`mode`]), whether its surface is seen ([`surface`]), and which
+//! screen edges a UIKit window defers its system gestures on
+//! ([`screen_edges`]).
 //!
 //! Nothing here calls the OS, so `test` keeps the rules checked on every host.
 
@@ -333,7 +334,7 @@ pub(crate) mod frame {
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod mode {
     //! Which [`WindowMode`] an `NSWindow` is in, the AppKit requests that take
-    //! it to another, and whether its occlusion state says it is seen.
+    //! it to another.
     //!
     //! AppKit has no mode property: a window is full screen when its style mask
     //! says so, miniaturized when `isMiniaturized`, and zoomed (maximized) when its
@@ -388,20 +389,6 @@ pub(crate) mod mode {
     /// miniaturized window is not `isVisible`, but the user sees it there.
     pub(crate) const fn is_shown(on_screen: bool, miniaturized: bool) -> bool {
         on_screen || miniaturized
-    }
-
-    /// `NSWindowOcclusionStateVisible` (`NSWindow.h`: `1 << 1`) — the only bit
-    /// AppKit defines in `NSWindowOcclusionState`.
-    pub(crate) const OCCLUSION_STATE_VISIBLE: u64 = 1 << 1;
-
-    /// Whether an `NSWindowOcclusionState` raw value means the window's surface
-    /// is seen. AppKit reports "visible" as a positive bit (set when at least
-    /// part of the window is on screen and composed), so the polarity of
-    /// `on_visibility_status_change` (`is_visible`) is the bit itself — no
-    /// negation, unlike winit's `Occluded` event.
-    #[must_use]
-    pub(crate) const fn occlusion_state_is_visible(occlusion_state: u64) -> bool {
-        occlusion_state & OCCLUSION_STATE_VISIBLE != 0
     }
 
     /// One AppKit request on the way to a mode.
@@ -614,15 +601,6 @@ pub(crate) mod mode {
             assert!(!is_shown(false, false));
         }
 
-        /// AppKit's visible bit is the visibility.
-        #[test]
-        fn appkit_occlusion_reports_the_visible_bit() {
-            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE));
-            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE | 1));
-            assert!(!occlusion_state_is_visible(0));
-            assert!(!occlusion_state_is_visible(1 << 3));
-        }
-
         #[test]
         fn a_mode_is_reached_by_the_requests_that_undo_the_current_one() {
             use ModeStep::{
@@ -774,6 +752,41 @@ pub(crate) mod mode {
             sequence.enter_when_shown(Fullscreen);
             assert_eq!(sequence.take_when_shown(), Some(Fullscreen));
             assert_eq!(sequence.take_when_shown(), None, "it is entered once");
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod surface {
+    //! When an `NSWindow`'s surface is seen, from its occlusion state: the
+    //! AppKit twin of the Win32 window's `surface` rules. The delegate reads
+    //! `occlusionState` and reports through `window::visibility`.
+
+    /// `NSWindowOcclusionStateVisible` (`NSWindow.h`: `1 << 1`) — the only bit
+    /// AppKit defines in `NSWindowOcclusionState`.
+    pub(crate) const OCCLUSION_STATE_VISIBLE: u64 = 1 << 1;
+
+    /// Whether an `NSWindowOcclusionState` raw value means the window's surface
+    /// is seen. AppKit reports "visible" as a positive bit (set when at least
+    /// part of the window is on screen and composed), so the polarity of
+    /// `on_visibility_status_change` (`is_visible`) is the bit itself — no
+    /// negation, unlike winit's `Occluded` event.
+    #[must_use]
+    pub(crate) const fn occlusion_state_is_visible(occlusion_state: u64) -> bool {
+        occlusion_state & OCCLUSION_STATE_VISIBLE != 0
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{OCCLUSION_STATE_VISIBLE, occlusion_state_is_visible};
+
+        /// AppKit's visible bit is the visibility.
+        #[test]
+        fn appkit_occlusion_reports_the_visible_bit() {
+            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE));
+            assert!(occlusion_state_is_visible(OCCLUSION_STATE_VISIBLE | 1));
+            assert!(!occlusion_state_is_visible(0));
+            assert!(!occlusion_state_is_visible(1 << 3));
         }
     }
 }

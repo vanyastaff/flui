@@ -45,13 +45,36 @@ impl ReportedVisibility {
     pub(crate) fn report(&mut self, visible: bool) -> Option<bool> {
         (std::mem::replace(&mut self.last, visible) != visible).then_some(visible)
     }
+
+    /// [`report`](Self::report) for a window that keeps what the runtime
+    /// was told in a `Cell` (its owner-thread state: the Win32 and Web
+    /// windows).
+    #[cfg(any(windows, target_arch = "wasm32", test))]
+    #[must_use]
+    pub(crate) fn report_in(reported: &std::cell::Cell<Self>, visible: bool) -> Option<bool> {
+        let mut last = reported.get();
+        let report = last.report(visible);
+        reported.set(last);
+        report
+    }
 }
 
-/// The table of the one visibility rule: a window that reports a run of
-/// answers dispatches each change once, from whichever answer it opened as.
+/// The table of the one visibility rule: a window that reads a run of
+/// answers reports each change once, from whichever answer it opened as.
+/// The Win32 and AppKit windows read their answer from their messages and
+/// occlusion state with their pure readers, which the table drives; the
+/// winit and Web windows read theirs through FFI and report it as read.
 #[cfg(test)]
 mod mapping {
+    use std::cell::Cell;
+
     use super::ReportedVisibility;
+    use crate::window::apple::geometry::surface::{
+        OCCLUSION_STATE_VISIBLE, occlusion_state_is_visible,
+    };
+    use crate::window::windows::surface::{
+        SIZE_MINIMIZED, SIZE_RESTORED, show_window_visibility, size_visibility,
+    };
 
     /// The answers a window reads, in order, each with the report it owes.
     type Run = &'static [(bool, Option<bool>)];
@@ -87,17 +110,51 @@ mod mapping {
         ),
     ];
 
+    /// AppKit's `occlusionState` for the answer: the visible bit, or none.
+    const fn occlusion(visible: bool) -> u64 {
+        if visible { OCCLUSION_STATE_VISIBLE } else { 0 }
+    }
+
     #[test]
     fn every_change_is_reported_once() {
         for (case, opened, run) in ROWS {
-            let mut reported = ReportedVisibility::new(opened);
-            for (step, (answer, owed)) in run.iter().enumerate() {
-                assert_eq!(reported.report(*answer), *owed, "{case}, answer {step}");
-                assert_eq!(
-                    reported,
-                    ReportedVisibility::new(*answer),
-                    "{case}, answer {step}: the runtime holds the answer"
-                );
+            let mut read_through_ffi = ReportedVisibility::new(opened);
+            let web = Cell::new(ReportedVisibility::new(opened));
+            let mut appkit = ReportedVisibility::new(opened);
+            // A Win32 window hidden by `ShowWindow`, and one minimized and
+            // restored, which opened minimized when it opened hidden.
+            let shown = Cell::new(ReportedVisibility::new(opened));
+            let sized = Cell::new(ReportedVisibility::new(opened));
+            let mut minimized = !opened;
+            for (step, (answer, owed)) in run.iter().copied().enumerate() {
+                let size_type = if answer {
+                    SIZE_RESTORED
+                } else {
+                    SIZE_MINIMIZED
+                };
+                let size_edge = size_visibility(size_type, minimized);
+                minimized = !answer;
+                let reports = [
+                    ("winit", read_through_ffi.report(answer)),
+                    ("Web", ReportedVisibility::report_in(&web, answer)),
+                    (
+                        "AppKit",
+                        appkit.report(occlusion_state_is_visible(occlusion(answer))),
+                    ),
+                    (
+                        "Win32 WM_SHOWWINDOW",
+                        show_window_visibility(answer, false)
+                            .and_then(|visible| ReportedVisibility::report_in(&shown, visible)),
+                    ),
+                    (
+                        "Win32 WM_SIZE",
+                        size_edge
+                            .and_then(|visible| ReportedVisibility::report_in(&sized, visible)),
+                    ),
+                ];
+                for (system, report) in reports {
+                    assert_eq!(report, owed, "{system}: {case}, answer {step}");
+                }
             }
         }
     }

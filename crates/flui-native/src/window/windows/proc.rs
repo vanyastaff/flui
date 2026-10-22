@@ -2005,10 +2005,8 @@ impl WindowContext {
     }
 
     fn settle_visibility(&self) {
-        let mut reported = self.visibility.reported.get();
-        let report = reported.report(self.visibility.visible());
-        self.visibility.reported.set(reported);
-        if let Some(visible) = report {
+        let visible = self.visibility.visible();
+        if let Some(visible) = ReportedVisibility::report_in(&self.visibility.reported, visible) {
             tracing::debug!(visible, "window visibility changed");
             self.callbacks.dispatch_visibility_status_change(visible);
         }
