@@ -77,7 +77,7 @@ pub(crate) struct WindowStateCell {
     invalidations: AtomicU64,
 }
 
-impl super::system_notice::StaleOnWake for WindowStateCell {
+impl crate::owner::notices::StaleOnWake for WindowStateCell {
     fn mark_stale(&self) {
         self.invalidate();
     }

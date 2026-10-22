@@ -11,7 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use super::broadcast::Subscriber;
-use super::control::OwnerObjects;
+use super::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
 use super::{
     CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
     WindowsLoop, dispatch_window_message, window_created,
@@ -75,11 +75,24 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks and no broadcast subscriber.
+/// A host of the tests' own: two hooks, the Windows host's sources and no
+/// broadcast subscriber.
 pub(super) struct TestHost;
 
 impl WindowsHost for TestHost {
     const WINDOW_HOOKS: WindowHooks = &[&First, &Second];
+
+    fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
+        <crate::hosts::windows::Windows as WindowsHost>::preferences(owner)
+    }
+
+    fn notices() -> std::sync::Arc<dyn crate::owner::notices::NoticeChannel> {
+        <crate::hosts::windows::Windows as WindowsHost>::notices()
+    }
+
+    fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
+        <crate::hosts::windows::Windows as WindowsHost>::lifecycle(owner)
+    }
 
     fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         Vec::new()

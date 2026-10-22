@@ -10,11 +10,23 @@ use crate::display::windows::WindowsDisplays;
 #[cfg(target_os = "linux")]
 use crate::display::winit::WinitDisplaySource;
 use crate::host::{Absent, Host, position};
-use crate::owner::winit::{HostDisplays, WinitHost, WinitLoop};
+#[cfg(target_os = "linux")]
+use crate::lifecycle::linux::WinitNotices;
+use crate::lifecycle::notice::SystemNotices;
+use crate::owner::notices::NoticeChannel;
+#[cfg(target_os = "linux")]
+use crate::owner::winit::HostNoticeStart;
+use crate::owner::winit::{HostDisplays, PreferenceStart, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::platforms::linux::UnixAccessibility;
 use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitWindow};
+#[cfg(target_os = "macos")]
+use crate::preferences::apple::macos::WinitSettings;
+#[cfg(target_os = "linux")]
+use crate::preferences::linux::WinitSettings;
+#[cfg(windows)]
+use crate::preferences::windows::WinitSettings;
 use crate::storage::UserDataDirs;
 use crate::text::winit::WinitTextInput;
 
@@ -44,8 +56,15 @@ impl Host for Winit {
     type Drag = WinitDataTransfer;
     // Desktop winit targets have no haptic hardware to drive.
     type Haptics = Absent<position::Haptics>;
+    // winit reports no preferences: the loop reads the source of the system
+    // it runs on, which the table registers.
     type Preferences = WinitLoop;
+    // Only Linux's login manager and kernel report lifecycle events through
+    // this host; on Windows and macOS winit reports none.
+    #[cfg(target_os = "linux")]
     type Lifecycle = WinitLoop;
+    #[cfg(not(target_os = "linux"))]
+    type Lifecycle = Absent<position::Lifecycle>;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
 }
@@ -63,6 +82,20 @@ type NativeDisplays = WinitDisplaySource;
 impl WinitHost for Winit {
     fn displays() -> Arc<dyn HostDisplays> {
         Arc::new(NativeDisplays::new())
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
+    }
+
+    /// The source of the system the host runs on.
+    fn preferences() -> Box<dyn PreferenceStart> {
+        Box::new(WinitSettings)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn host_notices() -> Box<dyn HostNoticeStart> {
+        Box::new(WinitNotices)
     }
 }
 

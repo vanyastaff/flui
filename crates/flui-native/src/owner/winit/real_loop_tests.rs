@@ -221,6 +221,8 @@ fn wake_after_native_drain(
     reason = "pointer-free queued mouse messages target an owned hidden HWND"
 )]
 fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
+    use crate::owner::windows::control::OwnerPreferences;
+
     struct RetryObserver {
         inner: WinitApp,
         packets: Arc<Mutex<Vec<flui_platform::pointer::ScrollEvent>>>,
@@ -254,11 +256,12 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             // Drain the real ingress and initial frame before measuring an idle retry.
             if !self.injected && self.packets.lock().len() == 4 && *self.frames.lock() > 0 {
                 self.injected = true;
-                let source = self
-                    .inner
-                    .preference_source
-                    .as_ref()
-                    .expect("live native source");
+                let source = crate::preferences::windows::kept(std::rc::Rc::clone(
+                    self.inner
+                        .preference_source
+                        .as_ref()
+                        .expect("live native source"),
+                ));
                 let receiver = self
                     .inner
                     .broadcasts
@@ -581,7 +584,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 .lock()
                 .clone()
                 .expect("live owner signal");
-            let source = crate::platforms::windows::preferences::PreferenceSource::new(&signal)
+            let source = crate::preferences::windows::PreferenceSource::new(&signal)
                 .expect("native source construction");
             assert!(
                 source
@@ -590,7 +593,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                     }))
                     .is_err()
             );
-            self.inner.preference_source = Some(source);
+            self.inner.preference_source = Some(std::rc::Rc::new(source));
             self.inner.resumed(event_loop);
             let _ = signal.wake();
         }

@@ -7,15 +7,20 @@ use android_activity::AndroidApp;
 
 use crate::display::android::AndroidDisplays;
 use crate::host::{Absent, Host, position};
+use crate::lifecycle::android::ActivityRule;
+use crate::lifecycle::notice::SystemNotices;
+use crate::owner::android::activity_callbacks::ActivityCallbacks;
 use crate::owner::android::java_view::InputMethod;
 use crate::owner::android::ndk::SymbolSource;
-use crate::owner::android::{AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::android::{ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
     AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer, AndroidWindow,
     MockClipboard,
 };
+use crate::preferences::android::AndroidPreferences;
 use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
@@ -53,6 +58,23 @@ impl AndroidHost for Android {
         owner: Weak<OwnerSignal>,
     ) -> Arc<dyn HostDisplays> {
         Arc::new(AndroidDisplays::new(api, library, owner))
+    }
+
+    fn preferences(
+        app: &AndroidApp,
+        api: AndroidApi,
+        signal: &Arc<OwnerSignal>,
+    ) -> Box<dyn ActivityPreferences> {
+        Box::new(AndroidPreferences::new(app, api, signal))
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
+    }
+
+    /// The lifecycle feature's reading of the Activity's callbacks.
+    fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks> {
+        Box::new(ActivityRule::new(app))
     }
 }
 

@@ -79,7 +79,7 @@ impl WindowContext {
 
     /// `WM_WTSSESSION_CHANGE`: the session may have locked or unlocked.
     pub(super) fn session_changed(&self, wparam: usize, lparam: isize) {
-        use crate::shared::windows_host_messages::{
+        use crate::lifecycle::windows::messages::{
             HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify,
         };
         match classify(WM_WTSSESSION_CHANGE, wparam, lparam) {

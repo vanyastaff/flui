@@ -44,10 +44,10 @@ use crate::display::linux::{
     source::{DisplayWatcher, LinuxDisplays},
 };
 use crate::error::PlatformError;
+use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
 use crate::owner::winit::HostDisplays;
-use crate::shared::system_notice::StaleOnWake;
 
 /// The platform's outputs, shared with every window.
 pub struct WinitDisplaySource {

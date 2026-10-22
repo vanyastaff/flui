@@ -124,7 +124,7 @@ pub(crate) fn bounds_of(rect: NSRect) -> Bounds<f64> {
     }
 }
 
-impl crate::shared::system_notice::StaleOnWake for MacosDisplays {
+impl crate::owner::notices::StaleOnWake for MacosDisplays {
     fn mark_stale(&self) {
         self.source.invalidate();
     }

@@ -390,7 +390,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     ///
     /// A backend that delivers [`SystemNotice::Wake`] marks its display
     /// snapshot and every window's state stale first, in the shared dispatch
-    /// (`shared::system_notice`), so the first read after the machine woke asks
+    /// (`owner::notices`), so the first read after the machine woke asks
     /// the operating system again.
     fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>);
 

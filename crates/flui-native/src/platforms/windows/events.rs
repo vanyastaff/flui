@@ -371,7 +371,7 @@ pub(super) fn click_settings(scale: f64) -> Option<ClickSettings> {
         reason = "a finite positive scale times 96 is a small DPI"
     )]
     let dpi = (scale * 96.0).round() as u32;
-    let area = super::preferences::mouse_geometry(dpi)
+    let area = crate::preferences::windows::mouse_geometry(dpi)
         .inspect_err(|error| tracing::debug!(%error, "double-click area unavailable"))
         .ok()?
         .double_click_area();
