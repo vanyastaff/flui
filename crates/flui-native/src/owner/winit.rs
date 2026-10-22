@@ -213,6 +213,11 @@ pub struct WinitLoop {
     #[cfg(target_os = "linux")]
     pub(crate) x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
 
+    /// Run where a turn reads what wakes asked of it, before the
+    /// application's turn: a test wakes the owner from here.
+    #[cfg(test)]
+    pub(crate) read_during_turn: Mutex<Option<Box<dyn FnMut() + Send>>>,
+
     state: Arc<Mutex<WinitLoopState>>,
 }
 
@@ -360,6 +365,8 @@ impl WinitLoop {
             notices: Arc::new(SystemNotices::default()),
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            read_during_turn: Mutex::new(None),
             state: Arc::new(Mutex::new(WinitLoopState::new())),
         };
         #[cfg(target_os = "linux")]
@@ -367,6 +374,14 @@ impl WinitLoop {
             .notices
             .mark_stale_on_wake(&platform.displays.native());
         platform
+    }
+
+    /// Run the test's read, as the loop's own reads run in a turn.
+    #[cfg(test)]
+    fn read_during_turn_for_test(&self) {
+        if let Some(read) = self.read_during_turn.lock().as_mut() {
+            read();
+        }
     }
 
     /// The shell windows opened from here will be on, before any exists.
@@ -1927,6 +1942,13 @@ impl WinitApp {
             self.request_exit(event_loop);
             return;
         }
+        // Begun before the reads below (host notices, the portal's
+        // appearance, X11 window properties, Windows preferences), so a wake
+        // that lands while they run posts the next turn instead of being
+        // settled by this one's drive with its change unread.
+        let turn = signal
+            .as_deref()
+            .map(crate::owner::signal::OwnerSignal::begin_turn);
         if self.control.take_quit_requested() {
             self.complete_pending_closes(event_loop);
             self.request_exit(event_loop);
@@ -1995,8 +2017,10 @@ impl WinitApp {
         self.deliver_host_notices();
         #[cfg(target_os = "linux")]
         self.refresh_x11_windows();
-        if let Some(signal) = signal
-            && signal.drive()
+        #[cfg(test)]
+        self.platform.read_during_turn_for_test();
+        if let Some(turn) = turn
+            && turn.drive()
         {
             self.request_exit(event_loop);
             return;

@@ -2183,11 +2183,99 @@ mod tests {
         signal.close();
     }
 
+    /// A loop that reads what wakes asked of it begins the turn, reads, then
+    /// drives. A wake that lands while it reads posts the next turn, and the
+    /// loop reads again there: a change recorded during the first read is not
+    /// left for an unrelated later wake.
+    fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        signal
+            .register(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("register");
+        signal.start().expect("start");
+        // What a background source records for the loop to read, and wakes
+        // the owner for.
+        let changes = Arc::new(Mutex::new(Vec::<u32>::new()));
+        changes.lock().push(1);
+        signal.wake().expect("wake");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+
+        let mut read = Vec::new();
+        let mut turns = 0;
+        // The loop: one pass per posted turn.
+        while turns < posts.load(Ordering::SeqCst) {
+            turns += 1;
+            let turn = signal.begin_turn();
+            read.extend(std::mem::take(&mut *changes.lock()));
+            if turns == 1 {
+                // The source records another change while the loop reads.
+                changes.lock().push(2);
+                signal.wake().expect("wake");
+            }
+            assert!(!turn.drive());
+        }
+        assert_eq!(
+            read,
+            [1, 2],
+            "the change made during the read was never read"
+        );
+        assert_eq!(turns, 2);
+        assert!(calls.load(Ordering::SeqCst) >= 1);
+        signal.close();
+    }
+
+    /// A wake with no callback stays owed, and a registration posts it; so
+    /// does a turn begun and dropped before it was driven.
+    fn a_wake_with_no_callback_is_owed_to_the_registration() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        signal.start().expect("start");
+        signal.wake().expect("wake");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert!(!signal.drive(), "no callback: nothing runs");
+        let unread = signal.begin_turn();
+        drop(unread);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        signal
+            .register(Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("register");
+        assert_eq!(
+            posts.load(Ordering::SeqCst),
+            2,
+            "the registration posts the owed turn"
+        );
+        assert!(!signal.drive());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the owed turn runs the callback"
+        );
+        signal.close();
+    }
+
     /// The owner-thread machinery's contracts: hostile callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
     /// existing unwind), the HWND user-data refusal precedence holds, and the
-    /// owner signal coalesces a burst and gives a re-entrant wake a later turn.
+    /// owner signal coalesces a burst and gives a re-entrant wake a later turn,
+    /// gives a wake that lands while the loop reads a turn that reads again,
+    /// and keeps a wake with no callback owed to the registration.
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
@@ -2228,6 +2316,14 @@ mod tests {
             (
                 "worker burst and reentrant wake",
                 worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn,
+            ),
+            (
+                "a wake while the loop reads",
+                a_wake_while_the_loop_reads_gets_a_turn_that_reads_again,
+            ),
+            (
+                "a wake owed to the registration",
+                a_wake_with_no_callback_is_owed_to_the_registration,
             ),
             (
                 "off-owner normal diagnostics",

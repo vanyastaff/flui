@@ -2,11 +2,15 @@
 //!
 //! The signal carries admission and scheduling state only; the owner-turn
 //! callback waits between turns in a [`TurnSlot`] passed to
-//! [`OwnerSignal::register_in`] and [`OwnerSignal::drive_in`]. A backend
+//! [`OwnerSignal::register_in`] and `OwnerSignal::drive_in`. A backend
 //! that keeps an `OwnerTurnSlot` (Windows only) in owner-only state therefore never has
 //! its callback dropped by whichever thread closes or drops the last
 //! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
 //! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
+//!
+//! A posted turn is begun before the loop reads anything a wake asked it to
+//! read ([`OwnerSignal::begin_turn`]), and driven after: a wake that lands
+//! while the loop reads posts the next turn, which reads again.
 use super::handlers::{InputWake, WindowCallbacks};
 use super::panic_boundary::contain_owner_callback;
 use crate::{PlatformError, ProxySendError, WakeRegistrationError};
@@ -290,16 +294,37 @@ impl OwnerSignal {
         }
     }
 
-    /// One finite turn over the signal's own shared slot.
-    pub(crate) fn drive(&self) -> bool {
-        self.drive_in(&self.shared)
+    /// Begin the turn the loop was woken for: from here on a wake posts a
+    /// turn of its own instead of joining this one.
+    ///
+    /// A loop that reads what wakes ask of it before the application's turn
+    /// (a source a background thread fills: an X11 window's properties, host
+    /// notices, the portal's appearance) begins the turn, reads, then drives
+    /// it. A wake that lands while it reads finds this turn already reading,
+    /// so it posts the next one, which reads again; were it folded into this
+    /// turn, the drive would settle it and what it asked for would wait for
+    /// some later, unrelated wake.
+    pub(crate) fn begin_turn(&self) -> OwnerTurn<'_> {
+        debug_assert_eq!(self.owner(), std::thread::current().id());
+        self.state.lock().queued = false;
+        OwnerTurn { signal: self }
     }
-    /// One finite turn over `slot`. `true` asks the native owner to perform its quit path.
+    /// One finite turn over the signal's own shared slot, begun and driven
+    /// at once: for a loop that reads nothing of its own first.
+    pub(crate) fn drive(&self) -> bool {
+        self.begin_turn().drive()
+    }
+    /// [`drive`](Self::drive) over `slot`. `true` asks the native owner to
+    /// perform its quit path.
+    #[cfg(target_os = "windows")]
     pub(crate) fn drive_in(&self, slot: &dyn TurnSlot) -> bool {
+        self.begin_turn().drive_in(slot)
+    }
+    /// The application's turn over `slot`, for a turn already begun.
+    fn run_turn(&self, slot: &dyn TurnSlot) -> bool {
         debug_assert_eq!(self.owner(), std::thread::current().id());
         let mut callback = {
             let mut state = self.state.lock();
-            state.queued = false;
             if state.active {
                 return false;
             }
@@ -371,6 +396,28 @@ impl OwnerSignal {
 impl Drop for OwnerSignal {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// A turn the loop has begun ([`OwnerSignal::begin_turn`]) and has yet to
+/// drive. Dropping it without driving leaves the application's turn owed, as
+/// a wake with no callback does: the next wake or registration posts it.
+#[must_use = "a begun turn is driven once the loop has read what wakes asked of it"]
+pub(crate) struct OwnerTurn<'signal> {
+    signal: &'signal OwnerSignal,
+}
+
+impl OwnerTurn<'_> {
+    /// The application's turn over the signal's own shared slot. `true` asks
+    /// the native owner to perform its quit path.
+    pub(crate) fn drive(self) -> bool {
+        let shared = &self.signal.shared;
+        self.drive_in(shared)
+    }
+    /// The application's turn over `slot`, which the caller's owner-side
+    /// state holds.
+    pub(crate) fn drive_in(self, slot: &dyn TurnSlot) -> bool {
+        self.signal.run_turn(slot)
     }
 }
 

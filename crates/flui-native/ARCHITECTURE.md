@@ -1950,6 +1950,19 @@ context. **Unasserted:** no test pins this. macOS, UIKit, winit and headless
 still use `register` and `drive`, backed by a shared slot inside the signal,
 until their own steps of ADR-0082 §4.
 
+A posted turn is acknowledged when it begins (`OwnerSignal::begin_turn`), not
+when the application's turn runs. A loop that reads what wakes asked of it
+before driving (the winit loop's host notices, portal appearance and X11 window
+properties) begins the turn, reads, then drives the `OwnerTurn`; a wake that
+lands while it reads posts the next turn, which reads again, instead of being
+settled by the drive with its change unread. `drive` and `drive_in` begin and
+drive at once, for loops that read nothing first (Win32, AppKit, UIKit, web,
+headless) or read only after the drive (Android's view events, UIKit's scene
+installation). A wake that finds no callback stays owed, and a registration
+posts it. Tests: `a_wake_while_the_loop_reads_gets_a_turn_that_reads_again`
+(the winit loop and the signal itself),
+`a_wake_with_no_callback_is_owed_to_the_registration`.
+
 macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
 provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
