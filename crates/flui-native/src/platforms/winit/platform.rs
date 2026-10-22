@@ -427,7 +427,7 @@ impl WinitLoop {
     }
 
     /// Create and run the event loop for `platform`, the
-    /// [`HostPlatform`](crate::HostPlatform) over this loop that `on_ready`'s
+    /// [`HostPlatform`] over this loop that `on_ready`'s
     /// owner capability wraps
     ///
     /// This is the main entry point for the platform. It creates the event
