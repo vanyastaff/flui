@@ -1575,6 +1575,106 @@ graph LR
   `flui-app` под macOS и iOS (сборочный скрипт `psm` требует C-компилятора Apple и `xcrun`); Mac и
   iPhone: перенос чтения версии iOS в `AppleVersion::read`, публичные имена macOS и iOS от корня и
   тесты реального цикла на macOS (там они `ignore`) проверены только сборкой.
+- [x] **LY36** — ветка `platform/os-types`, на `main` @ `fc8f8ebaa` (LY34). Ни один публичный путь
+  ядра, скрытые включая, не называет OS-тип, AccessKit или tokio ни на одной цели, где ядро строит
+  хост (R4.10). `as_any` — с `PlatformWindow` на `HostWindow` (обязательный, без тела): каждое окно
+  ядра реализует его рядом с прочим `HostWindow`, двойники `PlatformWindow` (`flui-app`,
+  `flui-runtime`, `flui-interaction`, `flui-testing`, тесты ядра) его теряют, тесты, приводившие
+  headless-окно, держат `Arc<dyn HostWindow>` (`headless_host_window`, `test_host_window`); doc
+  контракта — compile_fail E0599 на `window.as_any()` у `dyn PlatformWindow`. Расширения ОС:
+  `WindowsWindowExt` и `MacOSWindowExt` реализованы для `dyn HostWindow + '_` поверх `as_any`, берут
+  `&self` и отвечают `Option` — `None` для окна другого хоста, у которого ничего не просят (сеттеры
+  — `Option<()>`); тела — `pub(crate)` методы `WindowsWindow` и `MacOSWindow`, заглушки, не
+  трогающие окно (прогресс на панели задач, тень, анимации, tiling), — связанные функции;
+  `add_tab_to_window(&self, &dyn HostWindow) -> Option<bool>` отвечает `Some(false)`, если другое
+  окно не AppKit. Скрыто: модуль `win32` удалён (его не называл никто); `WindowsWindow`,
+  `MacOSWindow`, `IOSWindow`, `WinitWindow` ушли из корня — по правилу строки «не называет никто вне
+  крейта», как только `tests/` перешли на `raw-window-handle` (номинально они `pub` в
+  `pub(crate)`-модулях: тип позиции `Host::Window` в публичной реализации); `WindowsWindow::hwnd`,
+  `toggle_fullscreen_for_hwnd`, `WindowsAccessibility::new` — `pub(crate)`; `HostPlatform::app`
+  macOS и Android и `WebWindow::canvas` удалены (вызывающих нет); `BackgroundExecutor::handle` —
+  `pub(crate)` под `cfg(all(linux, winit-backend))`, его зовут источники Linux; `liquid_glass` — типы
+  не публичны, `set_liquid_glass*` и `clear_liquid_glass` ушли из `MacOSWindowExt` в `pub(crate)`
+  методы окна с `expect(dead_code)` (причина — команда материала фона, ADR-0254 п. 3, строка LY43);
+  `WindowConfiguration` — `pub(crate)` под `cfg(any(windows, macos))` с одним полем, которое читает
+  хост (`fullscreen_hotkey`, F11), `FullscreenMonitor` и `resize_debounce_ms` удалены (их не читал
+  ни один хост), `with_config` Windows и macOS — тоже; `FakeAccessibility::{published,
+  request_action}` удалены (называли `accesskit`, вызывающих нет): двойник считает опубликованное
+  (`published_count`), а не хранит деревья, слушатель действий держит до замены и не зовёт; из
+  корня ушли `FakeSystemChrome`, `IOSExecutor` и `FakeHaptics` (это `flui_platform::haptics::
+  FakeHaptics`, один путь — ADR-0151 §9). Остались: `HeadlessDeferredWindowOpens`
+  (`enable_deferred_window_open`, его зовёт `flui-app`), `HeadlessInputDevices`,
+  `HeadlessWindowPolicy`, `DisplayChangeError` (`tests/`), `IOSSceneAttachmentId` (поле
+  `IOSSceneEvent`), `InputCallback`, `InputWake` (`WindowCallbacks`), `InstallationCancelled`;
+  `PlatformReadyCallback` — LY45; `PlatformExecutor`, `WaitError`, `PlatformResult`, `Task`,
+  `TaskLabel`, `PathPromptOptions` — LY61. Вход Android: `flui_native::android_platform(app:
+  android_activity::AndroidApp) -> Box<dyn Platform>` (`cfg(target_os = "android")`, `#[must_use]`),
+  рядом с `current_platform()` и `headless_platform()`; `AndroidPlatform` (псевдоним, `new`, `app`)
+  ушёл, `HostPlatform<Android>::new` — `pub(crate)`; других типов `android_activity` вход не
+  называет, фасад новых не получает (`run_app_android` берёт тот же `AndroidApp`), а
+  `current_platform()` на Android отвечает ошибкой с именем входа. `tests/` берут `HWND` как
+  встраивающий код — через `raw-window-handle` (`win32_handle` в `tests/main.rs`; `contract.rs`,
+  `windows_window_commands.rs`, `windows_host_events.rs` меняют только приведение на этот хелпер и
+  импорты); тесты в крейте — пути `crate::window::windows::WindowsWindow` и
+  `crate::haptics::headless::FakeHaptics`. Примеров `windows11_demo` и `resize_jitter_probe` нет с
+  #1827 — переводить нечего (строка LY37 их тоже называет). Гейт API-замыкания, решения сверх
+  строки: (1) `targets` — rustdoc-JSON по сборке на цель (`features` или `all-features`): Linux,
+  Windows, macOS — все фичи, iOS, Android, wasm32 — по умолчанию; хостом CI одним `HWND` не увидеть
+  никогда; находка называет сборку; rustdoc идёт с `DOCS_RS=1`, как сборка docs.rs
+  (`objc2-exception-helper` на iOS не компилирует C); (2) `entries` — одному элементу `deny`-пакета
+  можно назвать один запрещённый крейт (`flui_native::android_platform` → `android_activity`),
+  ненужная запись — находка; (3) под `deny` метод реализации трейта другого крейта workspace —
+  сигнатура этого трейта, за неё отвечает его крейт: окна и `Absent<position::Accessibility>`
+  (скрытый публичный `host`) реализуют `PlatformAccessibility` из `flui-semantics`, чьи методы
+  называют дерево AccessKit; заголовок реализации и её ассоциированные типы проверяются; (4)
+  `workspace` не знал ключа `api-closure` (LY39 таблиц не заводил) — добавлен. `deny` ядра — 37
+  крейтов (`windows`, `windows_core`, семейство `objc2`, `core_foundation`, `core_graphics`,
+  `dispatch{,2}`, `block2`, `android_activity`, `ndk{,_sys}`, `jni{,_sys}`, `libc`, `web_sys`,
+  `js_sys`, `wasm_bindgen`, `winit`, `ui_events_winit`, `arboard`, `x11rb`, `wayland_*`, `rustix`,
+  `zbus`, `accesskit*`, `tokio`). CI: job `doc` ставит nightly с пятью целями, таймаут 40 мин.
+  ADR-0151 — `Amended` (вход Android в §8, подтверждение гейтом по целям), ADR-0089 — проверка
+  называет новые случаи самотеста; `docs/architecture.md`, README и ARCHITECTURE.md ядра (инвариант
+  «No public path names an OS type»), строка материала фона в `docs/platform-parity.md`;
+  `changelog.d/platform-os-types.md`, а из фрагмента LY34 убраны имена, которых больше нет.
+  Исключения `module-dag` не менялись: 33. Тесты: строка
+  `the_windows_extension_answers_only_for_a_win32_window` в `native_window_commands` (headless —
+  `None` у `backdrop`, `set_backdrop`, `set_corner_preference`, `is_dark_mode`, `dpi`,
+  `convert_point_to_device`, `set_taskbar_progress`; Win32 — `dpi() > 0`, `Some(())`, `Some(_)`):
+  без исправления не компилируется, с `expect` в приведении (как `unwrap` winit) падает —
+  «failing cases: ["the_windows_extension_answers_only_for_a_win32_window"]»; xtask —
+  `a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list`,
+  `an_entry_admits_its_item_and_crate_until_no_build_needs_it`,
+  `an_entry_one_build_needs_is_needed_and_each_build_reports_its_own` (без пропуска метода трейта
+  workspace падает первый, без поиска записи — два других), самотест — 6 случаев (+2). Гейт до
+  правок (Windows, `nightly-2026-10-12`, хост, пробный `deny`) — 23 находки: `win32` (5), `hwnd`,
+  `toggle_fullscreen_for_hwnd`, `FakeAccessibility` (3), `Absent<Accessibility>::publish`,
+  `BackgroundExecutor::handle` и 11 сеттеров `WindowCallbacks` с `parking_lot`, который в итоговый
+  `deny` не вошёл; после — пусто на всех шести целях (`1.99.0` с `RUSTC_BOOTSTRAP=1`: у nightly на
+  этой машине только цель Windows), переименованная запись даёт находку сборки Android и «names no
+  `android_activity` item». Проверки (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-platform
+  -p flui-native -p flui-app --all-targets`, `-p flui-native -p flui-app --all-targets --features
+  flui-native/winit-backend,flui-native/a11y`, `-p flui-runtime -p flui-interaction -p flui-testing
+  -p flui --all-targets`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app -p
+  flui-platform` — 343 (2 пропущены), `-p flui-native -p flui-app` с `winit-backend,a11y` — 337 (2),
+  `-p xtask` — 48; doctest'ы `flui-platform` и `flui-native`; clippy Android `-p flui-native -p
+  flui-app --all-targets`, macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`), wasm32 lib;
+  `wasm-check`, `wasm-test` — 51; `checks` (taplo, `android-dex`, `module-dag` — 290 модулей, 33
+  исключения, — и самотест, `globals` — 56 — и самотест, `file-length`, `markers`, `testing`,
+  `docs-paths`, `workspace` — 28 крейтов, 229 рёбер, `reach`), `doc-strict`; `api-closure -p flui -p
+  flui-platform -p flui-protocol` на `nightly-2026-10-12` — чисто. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY`
+  и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform -p flui-native -p flui-app --all-targets` и с
+  `winit-backend,a11y` (первый прогон нашёл `BackgroundExecutor::handle` у источников Linux — отсюда
+  `pub(crate)` выше); nextest `FLUI_HEADLESS=1` `-p flui-native -p flui-app -p flui-platform` — 360:
+  358, два теста X11 (`x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`,
+  `x11_window_takes_commands_and_publishes_what_the_server_holds`) падают на X-сервере WSLg, как в
+  LY29 и LY34; `--all-features` под xvfb (команда CI) — 278 из 278; rustdoc `-D warnings
+  --document-private-items` без фич и с `winit-backend,a11y`; `api-closure` трёх Stable-пакетов и
+  самотест на nightly — чисто, 6 случаев (nightly в WSL поставил сам `rustup +nightly target list`;
+  целей, кроме Linux, у него нет). Устройства не нужны: путь Android меняет только имя входа (тот же
+  `HostPlatform::<Android>::new`), его держит clippy Android. Не запускалось: `cross-typecheck` (нет
+  `zig`; job в CI); `api-closure -p flui-native` хостом Linux на nightly — его первый прогон в job
+  `doc`; Mac и iPhone (расширение macOS поверх `dyn HostWindow`, `liquid_glass`, корень iOS) — в
+  очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
