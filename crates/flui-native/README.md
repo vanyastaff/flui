@@ -25,15 +25,22 @@ platform.rs      Platform, PlatformExecutor, and HostPlatform<H>, its one implem
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
 owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
-                 signal, the owner-thread slot and the panic boundary
-shared/          PlatformHandlers / WindowCallbacks — callback registries
-clipboard/, drag/, accessibility/, haptics/
+                 signal, the owner-thread slot, the panic boundary, the
+                 PlatformHandlers / WindowCallbacks registries, and each
+                 platform's loop
+version/         the OS version floors and the gates above them (ADR-0244)
+window/, input/, text/, display/, clipboard/, drag/, accessibility/,
+haptics/, preferences/, lifecycle/
                  a feature each: its model beside one file per platform
-platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)
+                 (windows, apple, android, web, linux, winit, headless)
+storage/         where an application keeps its data
 executor.rs      BackgroundExecutor (tokio pool)
-window.rs        Window API surface — binding entry for platform integrators
-config.rs        WindowConfiguration, fullscreen/monitor selection
+error.rs         PlatformError, BootstrapError
 ```
+
+`window::config` (`WindowConfiguration`, fullscreen monitor selection) is public
+as `flui_native::config`; each host's window and its extensions
+(`WindowsWindow`, `MacOSWindow`, `WinitWindow`, …) are named at the crate root.
 
 - **Windows** — creation, bounds, appearance, fullscreen, and `WindowEvent`
   dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).
