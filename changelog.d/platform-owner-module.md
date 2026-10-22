@@ -13,3 +13,5 @@
   keep their crate-root paths: `flui_native::{Platform, PlatformExecutor, PlatformReadyCallback,
   PathPromptOptions, HostWindow, OwnerPlatform, SharedPlatform, PlatformProxy, PendingWindow,
   WindowOpen, OpenWindowError, ProxySendError, WaitError, WakeRegistrationError}`.
+- The hidden `flui_native::shared::panic_boundary` path and its `contain_os_entry`,
+  `panic_payload_message` and `OPAQUE_PANIC_PAYLOAD`: the panic boundary is the core host's own.

@@ -55,7 +55,7 @@ reason = "the decision's context names the layout the decision changed"
 path = "docs/adr/ADR-0082-platform-api-contract-crate.md"
 kind = "path"
 count = 4
-reason = "the decision's context names the layout the decision changed"
+reason = "the decision's context names the layout the decision changed, and files where they lay when the record was written; records are not rewritten"
 
 [[allow]]
 path = "docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md"
@@ -67,7 +67,7 @@ reason = "the decision's context names the layout the decision changed"
 path = "docs/adr/ADR-0084-open-capability-seam-and-plugins.md"
 kind = "path"
 count = 4
-reason = "the decision's context names the layout the decision changed"
+reason = "the decision's context names the layout the decision changed, and files where they lay when the record was written; records are not rewritten"
 
 [[allow]]
 path = "docs/adr/ADR-0086-signal-writes-through-event-context.md"
@@ -85,7 +85,7 @@ reason = "the decision's context names the layout the decision changed"
 path = "docs/adr/ADR-0089-upstream-types-in-stable-signatures.md"
 kind = "path"
 count = 2
-reason = "the decision's context names the layout the decision changed"
+reason = "the decision's context names the layout the decision changed, and files where they lay when the record was written; records are not rewritten"
 
 [[allow]]
 path = "docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md"

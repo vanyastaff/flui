@@ -57,7 +57,7 @@ mod sealed {
     #[diagnostic::on_unimplemented(
         message = "`{Self}` cannot implement `HostWindow`: the trait is sealed",
         label = "not a window of a host in `flui-native`",
-        note = "only the windows the core host builds implement `HostWindow`; a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)"
+        note = "only the windows the core host builds implement `HostWindow` (inside `flui-native`, a new window adds `impl CoreHostWindow for` it); a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)"
     )]
     pub trait Sealed {}
 

@@ -429,8 +429,17 @@ graph LR
   методами дают ровно по одной ошибке печати (одинаково на Windows и Linux, с `winit-backend` и без).
   Случаи удалённых имён импортируют из корня (E0432); случай `owner_thread_token_has_no_default`
   получил по снимку на написание `Default`: rustc пишет `std::default::Default` на Windows и
-  `Default` на Linux, и снимок с Windows с LY20 не совпадал в Linux-job trybuild. `globals`:
-  `owner::slot::{LAST_SLOT_KEY, OWNER_VALUES}`; `module-dag`: `base = ["owner"]`. Решения:
+  `Default` на Linux, и снимок с Windows с LY20 не совпадал в Linux-job trybuild (Linux-снимок
+  совпадает и с `winit-backend,a11y`; macOS не проверен — trybuild в CI идёт на Linux).
+  `owner_thread_token_is_private` теперь доказывает, что корень не реэкспортирует токен (E0432):
+  модуля `traits`, через который `pub(crate)`-реэкспорт давал E0603, нет. `globals`:
+  `owner::slot::{LAST_SLOT_KEY, OWNER_VALUES}`; из пяти записей под `shared::` переехали две,
+  три (`clipboard_lock::{CLIPBOARD, reentrancy::SESSION_OPEN}`, `pointer_assembly::capture::INSTALLED`)
+  принадлежат буферу обмена и вводу и переедут с ними (LY32, LY29); `module-dag`: `base = ["owner"]`.
+  Известные пределы: печать `Platform` держится и на том, что `HostPlatform::from_loop` —
+  `pub(crate)` (внешний `Host` реализуем, но платформу из него не построить); `owner/signal.rs`
+  называет `shared::{InputWake, WindowCallbacks}` — оконную машинерию: когда она уйдёт в `window/`
+  (LY28), `owner/` получит трейт-хук вместо этого ребра (ADR-0151 §10). Решения:
   `panic_boundary` — `pub(crate)`, его тест переехал к модулю (AGENTS.md DoD); doctest удалённых
   имён ушёл с `traits/mod.rs` (их держат четыре trybuild-случая). Проверки на Windows: clippy
   `-p flui-native -p flui-app -p flui-testing --all-targets -D warnings` и с `winit-backend,a11y`;
