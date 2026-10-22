@@ -4,17 +4,14 @@ use std::sync::Arc;
 
 use objc2::MainThreadMarker;
 
-use super::{IOSPreferences, IOSWindow};
-use crate::PlatformError;
+use super::IOSWindow;
 use crate::host;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::apple::IOSLoop;
 use crate::owner::call_point::install;
 use flui_foundation::geometry::Size;
-use flui_platform::{
-    PlatformWindow, SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
-};
+use flui_platform::{PlatformWindow, WindowCapabilities, WindowEvent, WindowId, WindowOptions};
 
 impl host::Window<IOSLoop> for IOSWindow {
     fn open(_: &IOSLoop, _options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
@@ -39,14 +36,5 @@ impl host::Window<IOSLoop> for IOSWindow {
             &owner.handler(|handlers| &mut handlers.window_event),
             callback,
         );
-    }
-}
-
-impl host::Preferences<IOSLoop> for IOSPreferences {
-    fn sample(owner: &IOSLoop) -> Result<SystemPreferences, PlatformError> {
-        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
-            message: "UIKit preference sampling must run on the main thread".into(),
-        })?;
-        owner.preferences.get(marker).sample(marker)
     }
 }

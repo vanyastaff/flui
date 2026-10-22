@@ -13,13 +13,15 @@ use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
 use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
+use crate::lifecycle::notice::SystemNotices;
+use crate::lifecycle::windows::HostEvents;
+use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
-use crate::owner::windows::control::OwnerObjects;
+use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
 use crate::owner::windows::{HostDisplays, HostDrag, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::windows::{
-    HostEvents, PreferenceSource, Touchpad, WindowProc, WindowsWindow,
-};
+use crate::platforms::windows::{Touchpad, WindowProc, WindowsWindow};
+use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
 use crate::text::windows::{TextServices, Tsf};
 
@@ -42,8 +44,8 @@ impl Host for Windows {
     type Clipboard = WindowsClipboard;
     type Drag = WindowsLoop;
     type Haptics = WindowsHaptics;
-    type Preferences = PreferenceSource;
-    type Lifecycle = HostEvents;
+    type Preferences = WindowsLoop;
+    type Lifecycle = WindowsLoop;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
 }
@@ -56,6 +58,21 @@ impl WindowsHost for Windows {
     /// touchpad viewport.
     const WINDOW_HOOKS: WindowHooks = &[&Tsf, &WindowProc, &DropTargetRegistration, &Touchpad];
 
+    fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
+        Ok(Rc::new(PreferenceSource::new(owner.signal)?))
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
+    }
+
+    fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
+        Rc::new(HostEvents::new(
+            Rc::clone(owner.handlers),
+            Arc::clone(owner.notices),
+        ))
+    }
+
     /// The displays (display and work-area changes) and the preferences
     /// (setting changes) only observe, so their order carries no meaning; the
     /// lifecycle (session, power, lock and memory) answers the session-end
@@ -63,7 +80,7 @@ impl WindowsHost for Windows {
     fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         vec![
             Rc::new(DisplayBroadcasts::new(owner.displays, owner.signal)),
-            Rc::new(owner.preferences.broadcasts()),
+            owner.preferences.broadcasts(),
             Rc::clone(owner.lifecycle) as Rc<dyn Subscriber>,
         ]
     }

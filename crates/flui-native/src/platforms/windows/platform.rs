@@ -56,10 +56,6 @@ use keystroke_queue::{
     take_translated_sys_chars,
 };
 
-#[cfg(test)]
-#[path = "platform/preference_retry_tests.rs"]
-mod preference_retry_tests;
-
 /// One window as an object that outlives its borrow of the window names it:
 /// the handle and the identity of the context created with it. The OS
 /// recycles handles, so a handle alone can name a later window;
@@ -1188,7 +1184,7 @@ impl WindowProc {
 
                 // The window's own subscription (`WM_CREATE`): a locked
                 // session hides every window, whatever its surface.
-                crate::shared::windows_host_messages::WM_WTSSESSION_CHANGE => {
+                crate::lifecycle::windows::messages::WM_WTSSESSION_CHANGE => {
                     if let Some(ctx) = ctx {
                         ctx.session_changed(wparam.0, lparam.0);
                     }

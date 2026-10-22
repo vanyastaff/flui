@@ -6,16 +6,15 @@
 //! uses it (the outputs of a Wayland compositor or an X server are the display
 //! feature's, `display::linux`):
 //!
-//! - `host_notices`: sleep and wake, shutdown, the screen lock and memory
-//!   pressure, from the login manager and the kernel;
-//! - `lifecycle_model`: the pure models behind those adapters and the X11 probe;
+//! - `lifecycle_model`: the pure model behind the X11 probe;
 //! - `x11_window_probe`: whether a window is minimized, and its mode, as the X
 //!   server and the window manager report them.
 //!
 //! The AT-SPI adapter is the accessibility feature's (`accessibility::linux`).
+//! Sleep, shutdown, the screen lock and memory pressure are the lifecycle's
+//! (`lifecycle::linux`); the Settings portal is the preferences'
+//! (`preferences::linux`).
 
-#[cfg(feature = "winit-backend")]
-pub(crate) mod host_notices;
 #[cfg(feature = "winit-backend")]
 pub(crate) mod lifecycle_model;
 #[cfg(feature = "winit-backend")]

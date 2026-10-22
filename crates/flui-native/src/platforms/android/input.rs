@@ -506,6 +506,125 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
     mods
 }
 
+/// The distance one unit of a wheel or a scrolling axis moves: the public
+/// API26 factors, or the public theme attribute on API21–25, projected through
+/// the same Activity resource metrics that produced the measurement. The loop
+/// reads it with the preferences, on the same events.
+pub(crate) fn scroll_factors(
+    app: &android_activity::AndroidApp,
+    api: crate::shared::os_version::android::AndroidApi,
+) -> Result<crate::shared::android_scroll::PixelFactors, flui_platform::PreferenceQueryError> {
+    use crate::owner::android::activity::with_activity;
+    use crate::shared::android_scroll::{FactorApi, PixelFactors};
+    use flui_foundation::geometry::DevicePixelRatio;
+    use flui_platform::PreferenceQueryError;
+    use jni::{JValue, jni_sig, jni_str};
+
+    let factors = with_activity(app, |env, activity| {
+        let resources = env
+            .call_method(
+                activity,
+                jni_str!("getResources"),
+                jni_sig!("()Landroid/content/res/Resources;"),
+                &[],
+            )?
+            .l()?;
+        let metrics = env
+            .call_method(
+                &resources,
+                jni_str!("getDisplayMetrics"),
+                jni_sig!("()Landroid/util/DisplayMetrics;"),
+                &[],
+            )?
+            .l()?;
+        let density = env
+            .get_field(&metrics, jni_str!("density"), jni_sig!("F"))?
+            .f()?;
+        if FactorApi::for_api(api) == FactorApi::ThemeAttribute {
+            let value =
+                env.new_object(jni_str!("android/util/TypedValue"), jni_sig!("()V"), &[])?;
+            let theme = env
+                .call_method(
+                    activity,
+                    jni_str!("getTheme"),
+                    jni_sig!("()Landroid/content/res/Resources$Theme;"),
+                    &[],
+                )?
+                .l()?;
+            let attribute = env
+                .get_static_field(
+                    jni_str!("android/R$attr"),
+                    jni_str!("listPreferredItemHeight"),
+                    jni_sig!("I"),
+                )?
+                .i()?;
+            let resolved = env
+                .call_method(
+                    &theme,
+                    jni_str!("resolveAttribute"),
+                    jni_sig!("(ILandroid/util/TypedValue;Z)Z"),
+                    &[
+                        JValue::Int(attribute),
+                        JValue::Object(&value),
+                        JValue::Bool(true),
+                    ],
+                )?
+                .z()?;
+            if !resolved {
+                return Ok(None);
+            }
+            let factor = env
+                .call_method(
+                    &value,
+                    jni_str!("getDimension"),
+                    jni_sig!("(Landroid/util/DisplayMetrics;)F"),
+                    &[JValue::Object(&metrics)],
+                )?
+                .f()?;
+            return Ok(Some((
+                f64::from(factor),
+                f64::from(factor),
+                f64::from(density),
+            )));
+        }
+        let config = env
+            .call_static_method(
+                jni_str!("android/view/ViewConfiguration"),
+                jni_str!("get"),
+                jni_sig!("(Landroid/content/Context;)Landroid/view/ViewConfiguration;"),
+                &[JValue::Object(activity)],
+            )?
+            .l()?;
+        let x = env
+            .call_method(
+                &config,
+                jni_str!("getScaledHorizontalScrollFactor"),
+                jni_sig!("()F"),
+                &[],
+            )?
+            .f()?;
+        let y = env
+            .call_method(
+                &config,
+                jni_str!("getScaledVerticalScrollFactor"),
+                jni_sig!("()F"),
+                &[],
+            )?
+            .f()?;
+        Ok(Some((f64::from(x), f64::from(y), f64::from(density))))
+    })?;
+    let (horizontal, vertical, density) = factors.ok_or_else(|| PreferenceQueryError::Native {
+        message: "Activity theme has no scroll factor observation".into(),
+    })?;
+    let ratio =
+        DevicePixelRatio::new(density).ok_or(flui_platform::InvalidPreference::PixelRatio)?;
+    PixelFactors::from_physical(horizontal, vertical, ratio).ok_or_else(|| {
+        PreferenceQueryError::Native {
+            message: "Android returned invalid scroll factors".into(),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

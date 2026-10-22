@@ -21,19 +21,30 @@ use crate::haptics::apple::IOSHaptics;
 #[cfg(target_os = "macos")]
 use crate::haptics::apple::MacHaptics;
 use crate::host::{Absent, Host, position};
+#[cfg(target_os = "macos")]
+use crate::lifecycle::apple::macos::SystemNoticeSources;
+use crate::lifecycle::notice::SystemNotices;
 #[cfg(target_os = "ios")]
 use crate::owner::apple::IOSLoop;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::MacOSLoop;
 #[cfg(target_os = "ios")]
-use crate::owner::apple::ios::IosHost;
+use crate::owner::apple::ios::{IosHost, UIKitPreferences};
 #[cfg(target_os = "macos")]
-use crate::owner::apple::macos::MacosHost;
+use crate::owner::apple::macos::{LoopControl, MacosHost, NoticeSources};
+use crate::owner::notices::NoticeChannel;
+use crate::owner::signal::OwnerSignal;
+#[cfg(target_os = "macos")]
+use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::HostPlatform;
 #[cfg(target_os = "ios")]
-use crate::platforms::ios::{IOSPreferences, IOSSystemChrome, IOSWindow};
+use crate::platforms::ios::{IOSSystemChrome, IOSWindow};
 #[cfg(target_os = "macos")]
-use crate::platforms::macos::{MacOSWindow, PreferenceSource};
+use crate::platforms::macos::MacOSWindow;
+#[cfg(target_os = "ios")]
+use crate::preferences::apple::ios::IOSPreferences;
+#[cfg(target_os = "macos")]
+use crate::preferences::apple::macos::AppKitPreferences;
 use crate::storage::UserDataDirs;
 #[cfg(target_os = "macos")]
 use crate::text::apple::macos::MacOSTextInput;
@@ -93,9 +104,9 @@ impl Host for Apple {
     type Haptics = IOSHaptics;
 
     #[cfg(target_os = "macos")]
-    type Preferences = PreferenceSource;
+    type Preferences = MacOSLoop;
     #[cfg(target_os = "ios")]
-    type Preferences = IOSPreferences;
+    type Preferences = IOSLoop;
 
     #[cfg(target_os = "macos")]
     type Lifecycle = MacOSLoop;
@@ -124,6 +135,21 @@ impl MacosHost for Apple {
     fn displays() -> Arc<dyn crate::owner::apple::macos::HostDisplays> {
         Arc::new(MacosDisplays::new())
     }
+
+    fn preferences(signal: &Arc<OwnerSignal>) -> Box<dyn SystemPreferenceSource> {
+        Box::new(AppKitPreferences::new(signal))
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
+    }
+
+    fn notice_sources(
+        notices: &Arc<dyn NoticeChannel>,
+        control: &Arc<LoopControl>,
+    ) -> Box<dyn NoticeSources> {
+        Box::new(SystemNoticeSources::new(notices, control))
+    }
 }
 
 #[cfg(target_os = "ios")]
@@ -132,6 +158,17 @@ impl IosHost for Apple {
         marker: objc2::MainThreadMarker,
     ) -> Arc<dyn crate::owner::apple::ios::HostDisplays> {
         Arc::new(IosDisplays::new(marker))
+    }
+
+    fn preferences(
+        signal: &Arc<OwnerSignal>,
+        marker: objc2::MainThreadMarker,
+    ) -> Box<dyn UIKitPreferences> {
+        Box::new(IOSPreferences::new(signal, marker))
+    }
+
+    fn notices() -> Arc<dyn NoticeChannel> {
+        Arc::new(SystemNotices::default())
     }
 }
 

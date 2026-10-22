@@ -5,14 +5,16 @@
 //! [`MacOSLoop`] is the loop of the macOS host's table; windows, the
 //! clipboard and the other features keep their code under `platforms::macos`
 //! and reach the owner thread through what this module re-exports. The loop
-//! holds the displays through [`HostDisplays`], which the table makes
-//! ([`MacosHost`]).
+//! holds the displays, the preference source, the notice channel and the
+//! notice sources through the hooks the table makes ([`MacosHost`]), and is
+//! the table's displays, preference and lifecycle position.
 
 // `NSApplication.activateIgnoringOtherApps`, which the loop calls as the
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
 #![expect(deprecated)]
 
 mod loop_control;
+pub(crate) mod observation;
 mod owner_lane;
 mod wake_pump;
 
@@ -25,12 +27,36 @@ pub(crate) use owner_lane::{
 pub(crate) use wake_pump::WeakWakePump;
 
 /// What the macOS host's table names for its owner thread (ADR-0151 §10): the
-/// displays the loop holds. The owner reaches them through the hook and names
-/// no feature.
+/// displays, the preference source, the notice channel and the notice sources
+/// the loop holds. The owner reaches them through the hooks and names no
+/// feature.
 pub(crate) trait MacosHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to every window it opens.
     fn displays() -> Arc<dyn HostDisplays>;
+
+    /// The system preference source, for the table's preference position; it
+    /// wakes the owner behind `signal` when what it reads changes.
+    fn preferences(signal: &Arc<OwnerSignal>) -> Box<dyn SystemPreferenceSource>;
+
+    /// The channel the host's system notices take to the application.
+    fn notices() -> Arc<dyn NoticeChannel>;
+
+    /// The sources of those notices, for the loop whose channel is `notices`
+    /// and whose control answers the terminate request; nothing listens until
+    /// the loop starts them.
+    fn notice_sources(
+        notices: &Arc<dyn NoticeChannel>,
+        control: &Arc<LoopControl>,
+    ) -> Box<dyn NoticeSources>;
+}
+
+/// The sources of the macOS host's system notices, which the loop starts once
+/// the application has bootstrapped: a notice that arrived earlier would find
+/// no hook installed and be lost.
+pub(crate) trait NoticeSources {
+    /// Listen to the operating system until the returned watch is dropped.
+    fn listen(&self) -> Watch;
 }
 
 /// The host's screens as the loop and the windows it opens reach them, which
@@ -66,9 +92,7 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
-use crate::platforms::macos::{
-    MacOSWindow, PreferenceObservers, PreferenceSource, SystemNoticeSources,
-};
+use crate::platforms::macos::MacOSWindow;
 use crate::{
     config::WindowConfiguration,
     error::PlatformError,
@@ -78,18 +102,16 @@ use crate::{
     owner::OwnerPlatform,
     owner::apple::NativeOwner,
     owner::call_point::{Field, install},
-    owner::handlers::PlatformHandlers,
+    owner::handlers::{PlatformHandlers, SessionEndHook},
+    owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake},
     owner::signal::OwnerSignal,
+    owner::sources::SystemPreferenceSource,
     owner::watch::Watch,
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
-    shared::system_notice::{StaleOnWake, SystemNotices},
 };
-use flui_platform::{
-    DisplayId, DisplaySnapshot, PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice,
-    WindowOptions,
-};
+use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences, WindowOptions};
 
 /// The macOS host's loop: the state every position of its table reads.
 ///
@@ -112,11 +134,12 @@ pub struct MacOSLoop {
 
     pub(crate) loop_control: Arc<LoopControl>,
 
-    /// Wakes the owner when AppKit reports a preference change. Declared
-    /// before the source so native observation ends first.
-    _preference_observers: PreferenceObservers,
+    /// The system preference source the table built, with the observers that
+    /// wake the owner when it changes.
+    preferences: Box<dyn SystemPreferenceSource>,
 
-    pub(crate) preferences: Arc<PreferenceSource>,
+    /// The sources of the host's system notices, as the table built them.
+    notice_sources: Box<dyn NoticeSources>,
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
@@ -135,7 +158,7 @@ pub struct MacOSLoop {
 
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
-    pub(crate) notices: Arc<SystemNotices>,
+    pub(crate) notices: Arc<dyn NoticeChannel>,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -169,10 +192,11 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
 // SAFETY: the NSApplication pointer is a process-wide singleton only messaged
 // from the main thread (AppKit convention); the screen observer is a
 // `NativeOwner`, which only the main thread reads and which releases its value
-// there wherever the loop is dropped; the preference observers hold
-// notification-centre tokens, which any thread may remove; every other field
-// is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper
-// to be shareable.
+// there wherever the loop is dropped; the preference source and the notice
+// sources are read and started on the main thread only, and what they hold of
+// AppKit is notification-centre tokens, which any thread may remove; every
+// other field is `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires
+// the wrapper to be shareable.
 unsafe impl Send for MacOSLoop {}
 // SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
 // screen observer is reached only through a main-thread marker, and the raw
@@ -259,18 +283,19 @@ impl MacOSLoop {
             tracing::info!("macOS platform initialized with AppKit");
 
             let loop_control = LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
-            let (preferences, preference_observers) =
-                PreferenceSource::new(&loop_control.owner_signal);
+            let preferences = H::preferences(&loop_control.owner_signal);
             let displays = H::displays();
             let screen_observer = NativeOwner::new(
                 Arc::clone(&displays).observe(&loop_control.owner_signal),
                 mtm,
             );
-            let notices = Arc::new(SystemNotices::default());
+            let notices = H::notices();
             notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
+            let notice_sources = H::notice_sources(&notices, &loop_control);
             let platform = Self {
                 loop_control,
                 preferences,
+                notice_sources,
                 app,
                 windows,
                 handlers,
@@ -279,7 +304,6 @@ impl MacOSLoop {
                 config,
                 displays,
                 _screen_observer: screen_observer,
-                _preference_observers: preference_observers,
                 notices,
                 affinity: OwnerAffinity::new(),
             };
@@ -350,9 +374,9 @@ impl host::Loop for MacOSLoop {
         // The sources start listening only now: the application has installed
         // its hooks while it bootstrapped, and a notice that arrived earlier
         // would find none and be lost.
-        let notice_sources = SystemNoticeSources::new(&self.notices, &self.loop_control);
+        let notice_watch = self.notice_sources.listen();
         ownership.run();
-        drop(notice_sources);
+        drop(notice_watch);
         drop(ownership);
 
         Ok(())
@@ -478,32 +502,33 @@ impl host::Input<MacOSLoop> for MacOSLoop {
     }
 }
 
-impl host::Lifecycle<MacOSLoop> for MacOSLoop {
-    fn on_session_end(
-        owner: &MacOSLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &owner.handler(|handlers| &mut handlers.session_end),
-            callback,
-        );
+/// The preference position is the loop's: it reads the source the table made
+/// ([`MacosHost::preferences`]).
+impl host::Preferences<MacOSLoop> for MacOSLoop {
+    fn sample(owner: &MacOSLoop) -> Result<SystemPreferences, PlatformError> {
+        owner.preferences.sample()
+    }
+}
+
+/// AppKit tells the application delegate, which is the loop's, that the user
+/// reopened the application; the notice sources tell the loop control a
+/// session end is announced, and the control answers the terminate request.
+/// The lifecycle feature's position reaches the hooks through this.
+impl LifecycleHooks for MacOSLoop {
+    fn notices(&self) -> &dyn NoticeChannel {
+        &*self.notices
     }
 
-    fn on_host_notice(owner: &MacOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        owner.notices.set_hook(callback);
+    fn set_session_end_hook(&self, hook: SessionEndHook) {
+        install(&self.handler(|handlers| &mut handlers.session_end), hook);
     }
 
-    fn release_session_end(owner: &MacOSLoop) {
-        owner.loop_control.session_end_released();
+    fn release_session_end(&self) {
+        self.loop_control.session_end_released();
     }
 
-    fn on_reopen(owner: &MacOSLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.loop_control.set_reopen(callback);
-    }
-
-    fn activate(_: &MacOSLoop, _: bool) {
-        // The application is activated once, as its loop starts; a later
-        // request is not acted on.
+    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
+        self.loop_control.set_reopen(hook);
     }
 }
 

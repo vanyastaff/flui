@@ -153,7 +153,7 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
     // the display thread has not heard of the change. (Part of this test, not
     // a test of its own: two tests reconfiguring one server would race.)
     use crate::display::linux::source::LinuxDisplays;
-    use crate::shared::system_notice::StaleOnWake;
+    use crate::owner::notices::StaleOnWake;
 
     let displays = LinuxDisplays::new();
     let outputs = || displays.snapshot().expect("a snapshot").displays().len();

@@ -568,7 +568,7 @@ impl WindowsWindow {
         frames: Rc<crate::owner::windows::FrameCount>,
         exit_policy: crate::owner::windows::control::ExitPolicyRequest,
         displays: Arc<dyn crate::owner::windows::HostDisplays>,
-        notices: Arc<crate::shared::system_notice::SystemNotices>,
+        notices: Arc<dyn crate::owner::notices::NoticeChannel>,
         config: crate::config::WindowConfiguration,
         identity: crate::owner::windows::WindowIdentity,
         hwnd: HWND,
@@ -1898,7 +1898,7 @@ impl PlatformWindow for WindowsWindow {
             // SAFETY: the checked owner context proves this is the still-live
             // owned HWND. The scalar DPI getter does not dispatch user code.
             let dpi = unsafe { GetDpiForWindow(self.hwnd) };
-            let native = super::preferences::mouse_geometry(dpi)?;
+            let native = crate::preferences::windows::mouse_geometry(dpi)?;
             Ok(Some(GestureGeometry::from_native_mouse(&native)?))
         })
         .map_err(|refusal| match refusal {

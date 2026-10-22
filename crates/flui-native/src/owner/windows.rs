@@ -65,12 +65,13 @@ use windows::{
 };
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
+use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::platforms::windows::platform::{WindowMap, WindowRef};
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
     owner::OwnerHooks, owner::OwnerPlatform, owner::handlers::PlatformHandlers, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
-    shared::hwnd_affinity::UserDataRefusal, shared::system_notice::StaleOnWake,
+    shared::hwnd_affinity::UserDataRefusal,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -94,13 +95,29 @@ pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
 /// hooks of FLUI's window class and the subscribers of the broadcast receiver,
-/// each in the order a message reaches them, and the displays and the
-/// drag-and-drop transport the loop holds. The owner dispatches through them
-/// and names no feature.
+/// each in the order a message reaches them, and the displays, the preference
+/// source, the notice channel, the lifecycle and the drag-and-drop transport
+/// the loop holds. The owner dispatches through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
     /// The hooks of FLUI's window class; its procedure is
     /// `window_proc::<Self>`.
     const WINDOW_HOOKS: WindowHooks;
+
+    /// The system preference source the owner keeps for the table's
+    /// preference position.
+    ///
+    /// # Errors
+    /// [`PlatformError::Preferences`] when the system's settings cannot be
+    /// observed.
+    fn preferences(
+        owner: &control::OwnerSeeds<'_>,
+    ) -> Result<Rc<dyn control::OwnerPreferences>, PlatformError>;
+
+    /// The channel the owner's system notices take to the application.
+    fn notices() -> Arc<dyn NoticeChannel>;
+
+    /// The lifecycle the owner keeps for the table's lifecycle position.
+    fn lifecycle(owner: &control::OwnerSeeds<'_>) -> Rc<dyn control::OwnerLifecycle>;
 
     /// The broadcast receiver's subscribers, made from the owner's objects.
     fn broadcast_subscribers(owner: &control::OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>>;
@@ -589,7 +606,7 @@ impl WindowsLoop {
         let windows = Arc::new(Mutex::new(HashMap::new()));
         let drag = drag();
         let displays = H::displays();
-        let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
+        let notices = H::notices();
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
@@ -1421,6 +1438,81 @@ impl host::Services for WindowsLoop {
 impl host::Displays<WindowsLoop> for WindowsLoop {
     fn snapshot(owner: &WindowsLoop) -> Result<DisplaySnapshot, PlatformError> {
         owner.displays.snapshot()
+    }
+}
+
+/// The preference position is the loop's: it reads the source the table made
+/// ([`WindowsHost::preferences`]) on the owner thread.
+impl host::Preferences<WindowsLoop> for WindowsLoop {
+    fn sample(owner: &WindowsLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        owner
+            .owner_control
+            .shares("read system preferences")
+            .map_err(|reason| PlatformError::Preferences {
+                message: format!("platform owner is unavailable: {reason:?}"),
+            })?
+            .preferences
+            .sample()
+    }
+}
+
+/// The lifecycle position is the loop's: the broadcast receiver tells the
+/// lifecycle the table made ([`WindowsHost::lifecycle`]) of the session, power,
+/// lock and memory messages, and the loop keeps the application's hooks.
+impl host::Lifecycle<WindowsLoop> for WindowsLoop {
+    fn on_session_end(
+        owner: &WindowsLoop,
+        callback: Box<
+            dyn FnMut(flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer + Send,
+        >,
+    ) {
+        owner.register_handler("on_session_end", callback, |handlers| {
+            &mut handlers.session_end
+        });
+    }
+
+    fn on_host_notice(
+        owner: &WindowsLoop,
+        callback: Box<dyn FnMut(flui_platform::SystemNotice) + Send>,
+    ) {
+        match owner.owner_control.shares("on_host_notice") {
+            Ok(shares) => shares.notices.set_hook(callback),
+            Err(reason) => {
+                tracing::debug!(?reason, "host notice registration refused");
+                drop(callback);
+            }
+        }
+    }
+
+    fn release_session_end(owner: &WindowsLoop) {
+        if let Ok(shares) = owner.owner_control.shares("release_session_end") {
+            shares.lifecycle.release_session_end();
+        }
+    }
+
+    fn on_reopen(_: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
+        // Windows sends no reopen signal; nothing will call the callback.
+        drop(callback);
+    }
+
+    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+
+        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
+        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
+        unsafe {
+            // Bring the foreground window to front
+            let hwnd = GetForegroundWindow();
+            if !hwnd.is_invalid()
+                && let Err(error) = SetForegroundWindow(hwnd).ok()
+            {
+                tracing::warn!(
+                    ?hwnd,
+                    ?error,
+                    "SetForegroundWindow failed in Platform::activate"
+                );
+            }
+        }
     }
 }
 

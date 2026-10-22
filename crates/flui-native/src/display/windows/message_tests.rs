@@ -124,9 +124,11 @@ fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
 
     use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
     use crate::owner::signal::OwnerSignal;
+    use crate::owner::sources::SystemPreferenceSource;
     use crate::owner::windows::HostDisplays;
     use crate::owner::windows::broadcast::{Receiver, Subscriber};
-    use crate::platforms::windows::PreferenceSource;
+    use crate::owner::windows::control::OwnerPreferences;
+    use crate::preferences::windows::PreferenceSource;
 
     let samples_again = |displays: &Arc<dyn HostDisplays>| {
         let before = displays.sample_count();
@@ -145,7 +147,7 @@ fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
         let preferences = PreferenceSource::new(&signal).expect("native preference source");
         let display_subscriber: Rc<dyn Subscriber> =
             Rc::new(DisplayBroadcasts::new(&displays, &signal));
-        let preference_subscriber: Rc<dyn Subscriber> = Rc::new(preferences.broadcasts());
+        let preference_subscriber: Rc<dyn Subscriber> = preferences.broadcasts();
         let subscribers = if displays_first {
             [display_subscriber, preference_subscriber]
         } else {

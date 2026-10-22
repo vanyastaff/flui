@@ -24,13 +24,13 @@ use super::owner_lane::{
 };
 use crate::{
     error::PlatformError,
+    owner::apple::terminate_gate::ANNOUNCEMENT_LIFETIME,
+    owner::apple::terminate_gate::DEFERRAL_LIMIT,
+    owner::apple::terminate_gate::TerminateGate,
+    owner::apple::terminate_gate::Termination,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
     platforms::macos::MacOSWindow,
-    shared::terminate_gate::ANNOUNCEMENT_LIFETIME,
-    shared::terminate_gate::DEFERRAL_LIMIT,
-    shared::terminate_gate::TerminateGate,
-    shared::terminate_gate::Termination,
 };
 use flui_platform::PlatformWindow;
 

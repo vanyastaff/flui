@@ -66,18 +66,13 @@
 mod display_pass;
 mod events;
 mod liquid_glass;
-mod observation;
 mod positions;
-pub(super) mod preferences;
-mod system_notices;
 pub(crate) mod view;
 pub(crate) mod window;
 mod window_ext;
 mod window_tiling;
 
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
-pub(crate) use preferences::{PreferenceObservers, PreferenceSource};
-pub(crate) use system_notices::SystemNoticeSources;
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
 pub use window_tiling::{

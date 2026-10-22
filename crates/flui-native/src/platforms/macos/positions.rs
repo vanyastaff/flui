@@ -5,9 +5,8 @@ use std::sync::Arc;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 
+use super::MacOSWindow;
 use super::window::{decorated_frame_inset, window_capabilities};
-use super::{MacOSWindow, PreferenceSource};
-use crate::PlatformError;
 use crate::host;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
@@ -15,7 +14,7 @@ use crate::owner::apple::MacOSLoop;
 use crate::owner::apple::macos::debug_assert_appkit_main_thread;
 use crate::owner::call_point::install;
 use flui_foundation::geometry::Size;
-use flui_platform::{SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{WindowCapabilities, WindowEvent, WindowId, WindowOptions};
 
 impl host::Window<MacOSLoop> for MacOSWindow {
     fn open(
@@ -84,11 +83,5 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             &owner.handler(|handlers| &mut handlers.window_event),
             callback,
         );
-    }
-}
-
-impl host::Preferences<MacOSLoop> for PreferenceSource {
-    fn sample(owner: &MacOSLoop) -> Result<SystemPreferences, PlatformError> {
-        owner.preferences.read()
     }
 }

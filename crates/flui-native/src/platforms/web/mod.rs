@@ -19,11 +19,7 @@ compile_error!(
 );
 
 pub(crate) mod events;
-mod page_events;
-mod preferences;
 pub(crate) mod registration;
 pub(crate) mod window;
 
-pub(crate) use page_events::PageObservers;
-pub(crate) use preferences::WebPreferences;
 pub(crate) use window::WebWindow;

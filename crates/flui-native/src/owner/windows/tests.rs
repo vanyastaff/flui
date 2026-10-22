@@ -19,7 +19,10 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 
 use super::broadcast::Subscriber;
-use super::control::{OwnerControl, OwnerMessages, OwnerObjects, OwnerPost, OwnerWindow};
+use super::control::{
+    OwnerControl, OwnerLifecycle, OwnerMessages, OwnerObjects, OwnerPost, OwnerPreferences,
+    OwnerSeeds, OwnerWindow,
+};
 use super::{
     CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity, WindowMessages,
     WindowsHost, WindowsLoop, dispatch_window_message, window_created,
@@ -85,12 +88,24 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks, no broadcast subscriber, and a drag
-/// position that takes no drags.
+/// A host of the tests' own: two hooks, the Windows host's sources, no
+/// broadcast subscriber and a drag position that takes no drags.
 pub(super) struct TestHost;
 
 impl WindowsHost for TestHost {
     const WINDOW_HOOKS: WindowHooks = &[&First, &Second];
+
+    fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
+        <crate::hosts::windows::Windows as WindowsHost>::preferences(owner)
+    }
+
+    fn notices() -> std::sync::Arc<dyn crate::owner::notices::NoticeChannel> {
+        <crate::hosts::windows::Windows as WindowsHost>::notices()
+    }
+
+    fn lifecycle(owner: &OwnerSeeds<'_>) -> Rc<dyn OwnerLifecycle> {
+        <crate::hosts::windows::Windows as WindowsHost>::lifecycle(owner)
+    }
 
     fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         Vec::new()
@@ -406,7 +421,7 @@ fn every_owner_hook_hears_the_window_go_after_one_panics() {
             }),
         ],
         Arc::new(WindowsDisplays::new()),
-        Arc::default(),
+        TestHost::notices(),
     )
     .expect("the owner control");
     HEARD.with(|heard| heard.borrow_mut().clear());

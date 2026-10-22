@@ -107,7 +107,7 @@ impl AndroidHaptics {
     fn vibrator(&self) -> &AndroidVibrator {
         self.vibrator.get_or_init(|| {
             let api = self.api;
-            crate::platforms::android::preferences::with_activity(&self.app, |env, activity| {
+            crate::owner::android::activity::with_activity(&self.app, |env, activity| {
                 let permission = env.new_string("android.permission.VIBRATE")?;
                 let granted = env
                     .call_method(
@@ -184,71 +184,66 @@ impl AndroidHaptics {
 
     /// Play `plan` on the vibrator; `false` when the call failed.
     fn vibrate(&self, plan: &AndroidPatternPlan) -> bool {
-        let played =
-            crate::platforms::android::preferences::with_activity(&self.app, |env, activity| {
-                let vibrator = system_vibrator(env, activity)?;
-                let effect = match plan {
-                    AndroidPatternPlan::Envelope {
-                        initial_sharpness,
-                        steps,
-                    } => envelope(env, *initial_sharpness, steps)?,
-                    AndroidPatternPlan::Composition(primitives) => {
-                        composition(env, &vibrator, self.api, primitives)?
-                    }
-                    AndroidPatternPlan::Waveform(steps) => waveform(env, steps)?,
-                    _ => return Ok(false),
-                };
-                match android_vibration_usage(self.api) {
-                    AndroidVibrationUsage::Attributes { usage } => {
-                        let attributes = env
-                            .call_static_method(
-                                jni_str!("android/os/VibrationAttributes"),
-                                jni_str!("createForUsage"),
-                                jni_sig!("(I)Landroid/os/VibrationAttributes;"),
-                                &[JValue::Int(usage)],
-                            )?
-                            .l()?;
-                        env.call_method(
-                            &vibrator,
-                            jni_str!("vibrate"),
-                            jni_sig!(
-                                "(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V"
-                            ),
-                            &[JValue::Object(&effect), JValue::Object(&attributes)],
-                        )?;
-                    }
-                    AndroidVibrationUsage::Audio { usage } => {
-                        let builder = env.new_object(
-                            jni_str!("android/media/AudioAttributes$Builder"),
-                            jni_sig!("()V"),
-                            &[],
-                        )?;
-                        env.call_method(
-                            &builder,
-                            jni_str!("setUsage"),
-                            jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
-                            &[JValue::Int(usage)],
-                        )?;
-                        let attributes = env
-                            .call_method(
-                                &builder,
-                                jni_str!("build"),
-                                jni_sig!("()Landroid/media/AudioAttributes;"),
-                                &[],
-                            )?
-                            .l()?;
-                        env.call_method(
-                            &vibrator,
-                            jni_str!("vibrate"),
-                            jni_sig!(
-                                "(Landroid/os/VibrationEffect;Landroid/media/AudioAttributes;)V"
-                            ),
-                            &[JValue::Object(&effect), JValue::Object(&attributes)],
-                        )?;
-                    }
+        let played = crate::owner::android::activity::with_activity(&self.app, |env, activity| {
+            let vibrator = system_vibrator(env, activity)?;
+            let effect = match plan {
+                AndroidPatternPlan::Envelope {
+                    initial_sharpness,
+                    steps,
+                } => envelope(env, *initial_sharpness, steps)?,
+                AndroidPatternPlan::Composition(primitives) => {
+                    composition(env, &vibrator, self.api, primitives)?
                 }
-                Ok(true)
-            });
+                AndroidPatternPlan::Waveform(steps) => waveform(env, steps)?,
+                _ => return Ok(false),
+            };
+            match android_vibration_usage(self.api) {
+                AndroidVibrationUsage::Attributes { usage } => {
+                    let attributes = env
+                        .call_static_method(
+                            jni_str!("android/os/VibrationAttributes"),
+                            jni_str!("createForUsage"),
+                            jni_sig!("(I)Landroid/os/VibrationAttributes;"),
+                            &[JValue::Int(usage)],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        &vibrator,
+                        jni_str!("vibrate"),
+                        jni_sig!("(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V"),
+                        &[JValue::Object(&effect), JValue::Object(&attributes)],
+                    )?;
+                }
+                AndroidVibrationUsage::Audio { usage } => {
+                    let builder = env.new_object(
+                        jni_str!("android/media/AudioAttributes$Builder"),
+                        jni_sig!("()V"),
+                        &[],
+                    )?;
+                    env.call_method(
+                        &builder,
+                        jni_str!("setUsage"),
+                        jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
+                        &[JValue::Int(usage)],
+                    )?;
+                    let attributes = env
+                        .call_method(
+                            &builder,
+                            jni_str!("build"),
+                            jni_sig!("()Landroid/media/AudioAttributes;"),
+                            &[],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        &vibrator,
+                        jni_str!("vibrate"),
+                        jni_sig!("(Landroid/os/VibrationEffect;Landroid/media/AudioAttributes;)V"),
+                        &[JValue::Object(&effect), JValue::Object(&attributes)],
+                    )?;
+                }
+            }
+            Ok(true)
+        });
         played.unwrap_or_else(|error| {
             tracing::warn!(
                 target: "flui_native::android",
@@ -427,32 +422,31 @@ fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAns
     let answering = Answering(Some(Arc::clone(answers)));
     let app = app.clone();
     app.clone().run_on_java_main_thread(Box::new(move || {
-        let result =
-            crate::platforms::android::preferences::with_activity(&app, |env, activity| {
-                let window = env
-                    .call_method(
-                        activity,
-                        jni_str!("getWindow"),
-                        jni_sig!("()Landroid/view/Window;"),
-                        &[],
-                    )?
-                    .l()?;
-                let decor = env
-                    .call_method(
-                        &window,
-                        jni_str!("getDecorView"),
-                        jni_sig!("()Landroid/view/View;"),
-                        &[],
-                    )?
-                    .l()?;
-                env.call_method(
-                    &decor,
-                    jni_str!("performHapticFeedback"),
-                    jni_sig!("(I)Z"),
-                    &[JValue::Int(constant)],
+        let result = crate::owner::android::activity::with_activity(&app, |env, activity| {
+            let window = env
+                .call_method(
+                    activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
                 )?
-                .z()
-            });
+                .l()?;
+            let decor = env
+                .call_method(
+                    &window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            env.call_method(
+                &decor,
+                jni_str!("performHapticFeedback"),
+                jni_sig!("(I)Z"),
+                &[JValue::Int(constant)],
+            )?
+            .z()
+        });
         let answer = match result {
             Ok(true) => AndroidFeedbackAnswer::Played,
             Ok(false) => AndroidFeedbackAnswer::Declined,

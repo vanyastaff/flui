@@ -8,8 +8,9 @@
 //! process bootstrap. The scene delegate owns subsequent window attachments.
 //! Windows, the clipboard and the other features keep their code under
 //! `platforms::ios` and reach the owner thread through what this module
-//! re-exports. The loop holds the displays through [`HostDisplays`], which the
-//! table makes ([`IosHost`]).
+//! re-exports. The loop holds the displays, the preference source and the
+//! notice channel through the hooks the table makes ([`IosHost`]), and is the
+//! table's displays, preference and lifecycle position.
 //!
 //! # Lifecycle
 //!
@@ -37,6 +38,7 @@
 
 mod executor;
 mod scene;
+mod scene_error;
 
 pub(crate) use super::NativeOwner;
 pub use executor::IOSExecutor;
@@ -67,29 +69,51 @@ use parking_lot::Mutex;
 use crate::error::PlatformError;
 use crate::host::{self, Host};
 use crate::owner::call_point::{Called, Field, Once, SharedField, call, install, retire};
-use crate::owner::handlers::PlatformHandlers;
+use crate::owner::handlers::{PlatformHandlers, SessionEndHook};
+use crate::owner::notices::{LifecycleHooks, NoticeChannel};
+use crate::owner::sources::SystemPreferenceSource;
 use crate::platform::HostPlatform;
-use crate::shared::system_notice::SystemNotices;
 use crate::{
     owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
 };
-use flui_platform::{PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId};
+use flui_platform::{
+    PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId,
+};
 
 use crate::owner::watch::Watch;
-use crate::platforms::ios::{IOSPreferences, IOSWindow, LifecycleObservation};
+use crate::platforms::ios::{IOSWindow, LifecycleObservation};
 use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::UIScreen;
 
 /// What the iOS host's table names for its owner thread (ADR-0151 §10): the
-/// displays the loop holds. The owner reaches them through the hook and names
-/// no feature.
+/// displays, the preference source and the notice channel the loop holds. The
+/// owner reaches them through the hooks and names no feature.
 pub(crate) trait IosHost: 'static {
     /// The displays, made once per loop on the main thread: the loop holds
     /// them for the table's displays position and hands them to every window
     /// it opens.
     fn displays(marker: MainThreadMarker) -> Arc<dyn HostDisplays>;
+
+    /// The system preference source, made on the main thread for the table's
+    /// preference position; it wakes the owner behind `signal` when what it
+    /// reads changes.
+    fn preferences(
+        signal: &Arc<OwnerSignal>,
+        marker: MainThreadMarker,
+    ) -> Box<dyn UIKitPreferences>;
+
+    /// The channel the memory warning takes to the application.
+    fn notices() -> Arc<dyn NoticeChannel>;
+}
+
+/// The system preference source the UIKit loop keeps, on the main thread
+/// (ADR-0172). The loop closes it as it quits: it then answers no more and
+/// stops waking the owner.
+pub(crate) trait UIKitPreferences: SystemPreferenceSource {
+    /// Stop observing; later samples are refused.
+    fn close(&self);
 }
 
 /// The number the iOS display source gives a `UIScreen` it retains: it keys
@@ -207,7 +231,8 @@ pub struct IOSLoop {
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
     scenes: NativeOwner<RefCell<SceneState>>,
-    pub(crate) preferences: NativeOwner<IOSPreferences>,
+    /// The system preference source the table made.
+    preferences: NativeOwner<Box<dyn UIKitPreferences>>,
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
@@ -218,7 +243,7 @@ pub struct IOSLoop {
     /// notifications; main-thread owned like `preferences`.
     _screen_observer: NativeOwner<Watch>,
     /// Where the memory warning goes on its way to the host.
-    notices: Arc<SystemNotices>,
+    notices: Arc<dyn NoticeChannel>,
 }
 
 impl std::fmt::Debug for IOSLoop {
@@ -277,14 +302,14 @@ impl IOSLoop {
                 }),
                 marker,
             ),
-            preferences: NativeOwner::new(IOSPreferences::new(&signal, marker), marker),
+            preferences: NativeOwner::new(H::preferences(&signal, marker), marker),
             signal,
             identity,
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
-            notices: Arc::default(),
+            notices: H::notices(),
         })
     }
 
@@ -634,33 +659,38 @@ impl host::Input<IOSLoop> for IOSLoop {
     }
 }
 
-impl host::Lifecycle<IOSLoop> for IOSLoop {
-    fn on_session_end(
-        owner: &IOSLoop,
-        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
-    ) {
-        install(
-            &owner.handler(|handlers| &mut handlers.session_end),
-            callback,
-        );
+/// The preference position is the loop's: it reads the source the table made
+/// ([`IosHost::preferences`]), on the main thread.
+impl host::Preferences<IOSLoop> for IOSLoop {
+    fn sample(owner: &IOSLoop) -> Result<SystemPreferences, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
+            message: "UIKit preference sampling must run on the main thread".into(),
+        })?;
+        owner.preferences.get(marker).sample()
+    }
+}
+
+/// UIKit tells the application delegate, which is the loop's, that the process
+/// is about to terminate and that memory is low; it cannot be asked to wait
+/// and has no reopen. The lifecycle feature's position reaches the hooks
+/// through this.
+impl LifecycleHooks for IOSLoop {
+    fn notices(&self) -> &dyn NoticeChannel {
+        &*self.notices
     }
 
-    fn on_host_notice(owner: &IOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        owner.notices.set_hook(callback);
+    fn set_session_end_hook(&self, hook: SessionEndHook) {
+        install(&self.handler(|handlers| &mut handlers.session_end), hook);
     }
 
-    fn release_session_end(_: &IOSLoop) {
-        // The answer to the session-end hook is not read (UIKit cannot be asked
-        // to wait), so no session end is held open.
+    fn release_session_end(&self) {
+        // The answer to the session-end hook is not read, so no session end is
+        // held open.
     }
 
-    fn on_reopen(_: &IOSLoop, callback: Box<dyn FnMut() + Send>) {
+    fn set_reopen_hook(&self, hook: Box<dyn FnMut() + Send>) {
         // UIKit has no reopen signal.
-        drop(callback);
-    }
-
-    fn activate(_: &IOSLoop, _: bool) {
-        // An iOS application cannot bring itself to the front.
+        drop(hook);
     }
 }
 
@@ -1281,7 +1311,7 @@ impl IOSLoop {
                     tracing::error!(%error, "scene discard observer failed");
                 }
                 if request_native {
-                    let handler = crate::shared::apple_scene_error::destruction_error_handler();
+                    let handler = scene_error::destruction_error_handler();
                     UIApplication::sharedApplication(marker)
                         .requestSceneSessionDestruction_options_errorHandler(
                             &record.session,

@@ -41,8 +41,8 @@ use crate::owner::signal::OwnerSignal;
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 
+use crate::owner::android::activity::with_activity;
 use crate::platforms::android::AndroidWindow;
-use crate::platforms::android::preferences::with_activity;
 
 /// The view's classes, compiled from `android/java` (see the module doc).
 const DEX: &[u8] = include_bytes!("../../../android/classes.dex");

@@ -11,6 +11,12 @@
 //!   window handler, with no lock or borrow held;
 //! - [`handlers`]: the application's handler set and a window's callbacks,
 //!   called through it;
+//! - [`notices`]: the channel a loop pushes system notices through, which the
+//!   lifecycle feature implements, and the application's lifecycle hooks a
+//!   loop keeps;
+//! - `sources`: what a loop keeps of its host's preference source;
+//! - `watch`: an observation a feature started for a loop, which the loop
+//!   ends by dropping it;
 //! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
@@ -18,11 +24,12 @@
 //!   modal loop asks for frames, both pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
-//!   feature's state or object the loop keeps (the displays, a clipboard, a
-//!   drag-and-drop transport) it holds in a field typed by a hook declared
-//!   beside it, which its host trait makes, and it answers that position
-//!   itself; an observation a feature starts for the loop it keeps as a
-//!   `watch::Watch`.
+//!   feature's state or object the loop keeps (the displays, the preference
+//!   source, the notice channel, a clipboard, a drag-and-drop transport) it
+//!   holds in a field typed by a hook declared beside it, which the host's
+//!   table fills through the loop's host trait, and it answers that position
+//!   itself where it can; an observation a feature starts for the loop it keeps
+//!   as a `watch::Watch`.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -50,13 +57,14 @@
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
+pub(crate) mod notices;
 pub(crate) mod panic_boundary;
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod redraw_poll;
@@ -70,6 +78,17 @@ pub(crate) mod slot;
     all(target_os = "linux", feature = "winit-backend")
 ))]
 pub(crate) mod watch;
+// Every native host keeps a source; the headless host keeps none, so a Linux
+// build without the winit host has no loop to keep one.
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
+pub(crate) mod sources;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 #[cfg(windows)]

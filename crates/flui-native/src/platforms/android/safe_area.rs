@@ -75,7 +75,7 @@ impl Default for Capture {
 /// content) reserves no space. Below it the only reading without the keyboard
 /// is the stable one, which keeps a hidden bar's space.
 pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
-    super::preferences::with_activity(app, |env, activity| {
+    crate::owner::android::activity::with_activity(app, |env, activity| {
         let window = env
             .call_method(
                 activity,

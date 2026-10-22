@@ -1,5 +1,6 @@
 //! The web host: a canvas in the browser page, on the browser's own event loop.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::Clipboard;
@@ -10,9 +11,13 @@ use crate::drag::web::WebTransfer;
 use crate::error::PlatformError;
 use crate::haptics::web::WebHaptics;
 use crate::host::{Absent, Host, position};
-use crate::owner::web::{HostDisplays, HostDrag, WebHost, WebLoop};
+use crate::lifecycle::web::PageSession;
+use crate::owner::signal::OwnerSignal;
+use crate::owner::sources::SystemPreferenceSource;
+use crate::owner::web::{HostDisplays, HostDrag, PageLifecycle, WebHost, WebLoop};
 use crate::platform::HostPlatform;
-use crate::platforms::web::{PageObservers, WebPreferences, WebWindow};
+use crate::platforms::web::WebWindow;
+use crate::preferences::web::WebPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::web::WebTextInput;
 
@@ -27,13 +32,13 @@ impl Host for Web {
     type Window = WebWindow;
     type Displays = WebLoop;
     type Input = WebLoop;
-    type Text = std::rc::Rc<WebTextInput>;
+    type Text = Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WebLoop;
     type Drag = WebLoop;
     type Haptics = WebHaptics;
-    type Preferences = WebPreferences;
-    type Lifecycle = PageObservers;
+    type Preferences = WebLoop;
+    type Lifecycle = WebLoop;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
 }
@@ -41,6 +46,16 @@ impl Host for Web {
 impl WebHost for Web {
     fn displays() -> Arc<dyn HostDisplays> {
         WebDisplays::new()
+    }
+
+    fn preferences(
+        signal: &Arc<OwnerSignal>,
+    ) -> Result<Rc<dyn SystemPreferenceSource>, PlatformError> {
+        Ok(Rc::new(WebPreferences::new(signal)?))
+    }
+
+    fn page() -> Box<dyn PageLifecycle> {
+        Box::new(PageSession)
     }
 
     /// The page's own clipboard, which reads only its own writes.

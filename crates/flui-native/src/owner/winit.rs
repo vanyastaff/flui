@@ -114,20 +114,23 @@ use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::DataTransferSource;
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
+use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
+#[cfg(target_os = "macos")]
+use crate::owner::sources::SystemPreferenceSource;
+#[cfg(windows)]
+use crate::owner::windows::control::OwnerPreferences;
 #[cfg(target_os = "linux")]
 use crate::platforms::linux::x11_window_probe::X11WindowProbe;
 use crate::platforms::winit::events as winit_events;
 use crate::platforms::winit::window::{WinitWindow, shell_of};
 use crate::platforms::winit::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::shared::system_notice::StaleOnWake;
 use crate::{
     error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
     host_window::HostWindow, owner::OpenWindowError, owner::OwnerHooks, owner::OwnerPlatform,
     owner::PendingWindow, owner::ProxySendError, owner::ProxyTransport, owner::WindowOpen,
     owner::handlers::PlatformHandlers, platform::HostPlatform, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
-    shared::system_notice::SystemNotices,
 };
 use control::{
     ControlCommand, ControlReceiver, ControlSendError, ControlSender, OpenWindowResult,
@@ -140,16 +143,35 @@ use flui_platform::{
 
 pub(crate) mod control;
 mod file_drops;
+#[cfg(target_os = "linux")]
+mod session_end;
+mod system_sources;
 
 pub(crate) use file_drops::FileDrops;
+pub(crate) use system_sources::PreferenceStart;
+#[cfg(target_os = "linux")]
+pub(crate) use system_sources::{HostNoticeStart, HostNotices, PortalPreferences};
 
 /// What the winit host's table names for its owner thread (ADR-0151 §10): the
-/// displays, the clipboard and the drag-and-drop transport the loop holds. The
-/// owner reaches them through hooks and names no feature.
+/// displays the loop holds, the channel its system notices take, the clipboard
+/// and the drag-and-drop transport, and the operating system's own sources
+/// winit lacks, which the loop starts as it runs, once its signal exists. The
+/// owner reaches them through the hooks and names no feature.
 pub(crate) trait WinitHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to every window it opens.
     fn displays() -> Arc<dyn HostDisplays>;
+
+    /// The channel the host's system notices take to the application.
+    fn notices() -> Arc<dyn NoticeChannel>;
+
+    /// The system's preferences, which winit does not report.
+    fn preferences() -> Box<dyn PreferenceStart>;
+
+    /// The sources of the host's system notices: logind and the kernel's
+    /// memory pressure.
+    #[cfg(target_os = "linux")]
+    fn host_notices() -> Box<dyn HostNoticeStart>;
 
     /// The clipboard, made once per loop: the loop holds it and answers the
     /// table's clipboard position from it.
@@ -308,13 +330,22 @@ pub struct WinitLoop {
 
     /// Where system notices go, and what a wake marks stale before the host
     /// hears of it.
-    pub(crate) notices: Arc<SystemNotices>,
+    pub(crate) notices: Arc<dyn NoticeChannel>,
 
     /// The X11 connections that read what winit cannot of a window, started
     /// with the first X11 window; `None` inside when the server cannot be
     /// reached a second time.
     #[cfg(target_os = "linux")]
     pub(crate) x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
+
+    /// Starts the system preference source as the loop resumes, as the table
+    /// made it ([`WinitHost::preferences`]).
+    preference_start: Box<dyn PreferenceStart>,
+
+    /// Starts the sources of the host's system notices once the owner can
+    /// deliver what they queue ([`WinitHost::host_notices`]).
+    #[cfg(target_os = "linux")]
+    host_notice_start: Box<dyn HostNoticeStart>,
 
     state: Arc<Mutex<WinitLoopState>>,
 }
@@ -340,10 +371,12 @@ pub(crate) struct WinitLoopState {
     /// Delivery values only; native observation remains on the event-loop owner.
     #[cfg(windows)]
     pub(crate) preferences: PreferenceObservation,
+    /// The source the owner keeps, once it resumed.
     #[cfg(target_os = "macos")]
-    pub(crate) preferences: std::sync::Weak<crate::platforms::macos::PreferenceSource>,
+    pub(crate) preferences: Option<std::sync::Weak<dyn SystemPreferenceSource + Send + Sync>>,
+    /// The source the owner keeps, once it resumed.
     #[cfg(target_os = "linux")]
-    pub(crate) preferences: std::sync::Weak<crate::platforms::winit::preferences::PreferenceSource>,
+    pub(crate) preferences: Option<std::sync::Weak<dyn PortalPreferences>>,
     /// Native pointer identities and phase state are committed before dispatch.
     native_pointer: winit_events::NativePointerState,
     /// Callback handlers
@@ -401,7 +434,7 @@ impl WinitLoopState {
             #[cfg(windows)]
             preferences: PreferenceObservation::Deferred,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
-            preferences: std::sync::Weak::new(),
+            preferences: None,
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
@@ -444,16 +477,19 @@ impl WinitLoopState {
 }
 
 impl WinitLoop {
-    /// A loop that has not run yet, over the displays, the clipboard and the
-    /// drag-and-drop transport `H` makes.
+    /// A loop that has not run yet, over the displays, the notice channel, the
+    /// sources, the clipboard and the drag-and-drop transport `H` makes.
     pub(crate) fn new<H: WinitHost>() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
             displays: H::displays(),
             frame_inset: Arc::new(FrameInset::default()),
-            notices: Arc::new(SystemNotices::default()),
+            notices: H::notices(),
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
+            preference_start: H::preferences(),
+            #[cfg(target_os = "linux")]
+            host_notice_start: H::host_notices(),
             state: Arc::new(Mutex::new(WinitLoopState::new(H::clipboard(), H::drag()))),
         };
         #[cfg(target_os = "linux")]
@@ -702,7 +738,12 @@ impl WinitLoop {
             Arc::clone(&self.frame_inset),
         ));
         #[cfg(target_os = "linux")]
-        if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
+        if let Some(source) = self.with_state(|state| {
+            state
+                .preferences
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+        }) {
             winit_window.observe_portal_appearance(source.appearance());
         }
         let availability = crate::shared::input_availability::winit(winit_session(event_loop));
@@ -966,22 +1007,22 @@ fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> 
 /// consuming the event loop.
 pub(crate) struct WinitApp {
     #[cfg(windows)]
-    preference_source: Option<crate::platforms::windows::preferences::PreferenceSource>,
+    preference_source: Option<std::rc::Rc<dyn OwnerPreferences>>,
     /// The hidden top-level window that tells the displays and the preference
     /// source the system's display and setting broadcasts; owner-thread only.
     #[cfg(windows)]
     broadcasts: Option<super::windows::broadcast::Receiver>,
     #[cfg(target_os = "macos")]
-    preference_source: Option<Arc<crate::platforms::macos::PreferenceSource>>,
+    preference_source: Option<Arc<dyn SystemPreferenceSource + Send + Sync>>,
     /// Wakes the owner when AppKit reports a preference change; owner-thread only.
     #[cfg(target_os = "macos")]
-    preference_observers: Option<crate::platforms::macos::PreferenceObservers>,
+    preference_observers: Option<super::watch::Watch>,
     #[cfg(target_os = "linux")]
-    preference_source: Option<Arc<crate::platforms::winit::preferences::PreferenceSource>>,
+    preference_source: Option<Arc<dyn PortalPreferences>>,
     /// Sleep, shutdown, lock and memory pressure from logind and the kernel;
     /// owner-thread only.
     #[cfg(target_os = "linux")]
-    pub(crate) host_notices: Option<crate::platforms::linux::host_notices::HostNoticeSource>,
+    pub(crate) host_notices: Option<Box<dyn HostNotices>>,
     /// The displays' observation of what changes them, started on resume and
     /// ended when dropped; owner-thread only. On Windows the displays hear the
     /// receiver in `broadcasts` instead.
@@ -1703,7 +1744,7 @@ impl ApplicationHandler for WinitApp {
             wake_deadline,
             self.preference_source
                 .as_ref()
-                .and_then(crate::platforms::windows::preferences::PreferenceSource::retry_deadline),
+                .and_then(|source| source.retry_deadline()),
         );
         let control_flow = match earliest_deadline(wake_deadline, self.self_close_deadline) {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
@@ -1768,45 +1809,6 @@ impl WinitApp {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
-        if self.preference_source.is_none() {
-            let signal = self.platform.owner_signal.lock().clone().ok_or_else(|| {
-                PlatformError::Preferences {
-                    message: "the Linux preference owner is unavailable".into(),
-                }
-            })?;
-            let executor = self
-                .platform
-                .with_state(|state| Arc::clone(&state.background_executor));
-            let source =
-                crate::platforms::winit::preferences::PreferenceSource::new(&executor, &signal);
-            self.platform
-                .with_state(|state| state.preferences = Arc::downgrade(&source));
-            self.preference_source = Some(source);
-        }
-        Ok(())
-    }
-
-    /// Report a changed portal `color-scheme` to each window that has no winit
-    /// theme of its own. The portal's wake reaches here on the owner; the
-    /// window list is copied out so callbacks run without the state lock.
-    #[cfg(target_os = "linux")]
-    fn deliver_portal_appearance(&self) {
-        let Some(source) = &self.preference_source else {
-            return;
-        };
-        let appearance = source.appearance();
-        let windows: Vec<_> = self
-            .platform
-            .with_state(|state| state.windows.values().cloned().collect());
-        for window in windows {
-            if window.observe_portal_appearance(appearance) {
-                window.callbacks().dispatch_appearance_changed();
-            }
-        }
-    }
-
     /// Start the displays' observation of what changes them, once.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn observe_displays(&mut self) {
@@ -1817,115 +1819,6 @@ impl WinitApp {
         if let Some(signal) = signal {
             self.display_watch = Some(Arc::clone(&self.platform.displays).observe(&signal));
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
-        if self.preference_source.is_none() {
-            let signal = self.platform.owner_signal.lock().clone().ok_or_else(|| {
-                PlatformError::Preferences {
-                    message: "the AppKit preference owner is unavailable".into(),
-                }
-            })?;
-            let (source, observers) = crate::platforms::macos::PreferenceSource::new(&signal);
-            self.platform
-                .with_state(|state| state.preferences = Arc::downgrade(&source));
-            self.preference_source = Some(source);
-            self.preference_observers = Some(observers);
-        }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
-        self.initialize_preferences_with(
-            crate::platforms::windows::preferences::PreferenceSource::new,
-        )
-    }
-
-    /// [`Self::initialize_preferences`] with the source `open` makes. The
-    /// system's broadcasts reach the displays and the source through a
-    /// receiver of their own (winit has no lifecycle subscriber on Windows),
-    /// built from the subscribers that exist: a source that cannot open costs
-    /// the preferences, never the displays' notifications, and its failure is
-    /// reported once the receiver stands. A source that opens later joins a
-    /// receiver built anew.
-    #[cfg(windows)]
-    fn initialize_preferences_with(
-        &mut self,
-        open: impl FnOnce(
-            &Arc<OwnerSignal>,
-        ) -> Result<
-            crate::platforms::windows::preferences::PreferenceSource,
-            PlatformError,
-        >,
-    ) -> Result<(), PlatformError> {
-        use super::windows::broadcast::{Receiver, Subscriber};
-        use std::rc::Rc;
-
-        let Some(signal) = self.platform.owner_signal.lock().clone() else {
-            return Ok(());
-        };
-        // Whether a source opened now, or why it could not.
-        let opened = if self.preference_source.is_some() {
-            Ok(false)
-        } else {
-            open(&signal).map(|source| {
-                self.preference_source = Some(source);
-                true
-            })
-        };
-        if self.broadcasts.is_none() || matches!(opened, Ok(true)) {
-            let mut subscribers: Vec<Rc<dyn Subscriber>> =
-                vec![Arc::clone(&self.platform.displays).broadcasts(&signal)];
-            if let Some(source) = &self.preference_source {
-                subscribers.push(Rc::new(source.broadcasts()));
-            }
-            // The receiver it replaces retires after its successor stands.
-            let receiver =
-                Receiver::new(subscribers).map_err(|error| PlatformError::Preferences {
-                    message: error.to_string(),
-                })?;
-            self.broadcasts = Some(receiver);
-        }
-        opened?;
-        self.refresh_preferences();
-        Ok(())
-    }
-
-    /// Publishes before owner delivery; errors retain the native source's retry.
-    #[cfg(windows)]
-    fn refresh_preferences(&self) -> bool {
-        let Some(source) = &self.preference_source else {
-            return false;
-        };
-        if !source.pending() {
-            return false;
-        }
-        let observation = match source.sample() {
-            Ok(values) => PreferenceObservation::Observed(values),
-            Err(PlatformError::PreferencesDeferred) => PreferenceObservation::Deferred,
-            Err(error) => PreferenceObservation::Failed(error.to_string()),
-        };
-        let accepted = matches!(&observation, PreferenceObservation::Observed(_));
-        self.platform
-            .with_state(|state| state.preferences = observation);
-        if accepted {
-            let signal = self.platform.owner_signal.lock().clone();
-            if let Some(signal) = signal {
-                let _ = signal.wake();
-            }
-        }
-        accepted
-    }
-
-    #[cfg(windows)]
-    fn deliver_preferences(&self) -> bool {
-        if !self.refresh_preferences() {
-            return false;
-        }
-        let signal = self.platform.owner_signal.lock().clone();
-        signal.is_some_and(|signal| signal.drive() || signal.quitting())
     }
 
     /// Shared body of the `HoveredFile`/`DroppedFile` arms: feed the path
@@ -3162,7 +3055,7 @@ mod tests {
             (false, false, false),
         ] {
             assert_eq!(
-                crate::platforms::winit::linux_notices::moves_unannounced(wayland, awaiting),
+                crate::platforms::winit::linux_unreported::moves_unannounced(wayland, awaiting),
                 looked_at,
                 "wayland {wayland}, awaiting a display {awaiting}"
             );
