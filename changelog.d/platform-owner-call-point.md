@@ -1,13 +1,17 @@
 ### Changed
 
 - **`flui-native`**: `InputCallback` and `InputWake` are named at the crate root, beside
-  `PlatformHandlers` and `WindowCallbacks`; `flui_native::shared` no longer names any of the four.
+  `WindowCallbacks`.
+- **`flui-native`**: on the headless platform, a window the exit-policy hook opens while the last
+  window closes keeps the platform running; before, it quit anyway.
 
 ### Removed
 
-- **`flui-native`**: `PlatformHandlers`' `invoke_*` methods and `run_session_end`. The platform
-  alone calls a handler, through one call point that holds none of its locks
-  ([ADR-0151](/docs/adr/ADR-0151-platform-layer-boundary-and-names.md) §10).
+- **`flui-native`**: the paths `flui_native::shared::{PlatformHandlers, WindowCallbacks,
+  InputCallback, InputWake}`, and `PlatformHandlers` from the public API: its fields reached a
+  handler without the platform's call point. `PlatformHandlers`' `invoke_*` methods and
+  `run_session_end` are gone too. The platform alone calls a handler, through one call point that
+  holds none of its locks ([ADR-0151](/docs/adr/ADR-0151-platform-layer-boundary-and-names.md) §10).
 
 ### Fixed
 
@@ -26,3 +30,6 @@
 - **`flui-native`**: a handler that replaces itself and then panics keeps that panic as the failure
   reported, and its captures are kept rather than dropped into a second failure; Win32's
   exit-policy and session-end hooks and AppKit's hooks dropped them.
+- **`flui-native`**: on Windows, the handlers still installed when the loop ends are dropped with a
+  destructor's panic contained, and kept when the loop ends during an unwind; a panicking
+  destructor escaped `Platform::run`.

@@ -232,7 +232,7 @@ pub use hosts::WindowsPlatform;
 ))]
 pub use hosts::WinitPlatform;
 // The application's handler set and a window's callbacks (`owner/handlers.rs`).
-pub use owner::handlers::{InputCallback, InputWake, PlatformHandlers, WindowCallbacks};
+pub use owner::handlers::{InputCallback, InputWake, WindowCallbacks};
 // Re-export task types
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from

@@ -1034,8 +1034,10 @@ one for Win32 makes that safe without changing a signature.
   out of its slot, run with no borrow held, and put back only if the slot is
   still empty. A handler registered while it ran — including by itself — wins,
   the rule `OwnerSignal::drive` already follows.
-- **Quit order.** The run's teardown takes the quit callback while the owner
-  context exists, destroys the owner window, then runs the callback.
+- **Quit order.** The run's teardown keeps a handle to the handler set while
+  the owner context exists, destroys the owner window, runs the quit callback
+  once (its panic contained), then retires the handler set: the other handlers
+  drop contained, or stay alive when the teardown runs during an unwind.
 
 The other backends still store `Send` callbacks behind locks until their own
 steps.

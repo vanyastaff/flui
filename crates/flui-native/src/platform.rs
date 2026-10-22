@@ -150,10 +150,8 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     /// Install the hook this platform consults before it would otherwise
     /// exit unconditionally because its own window bookkeeping believes
-    /// every window it tracks has just closed (see
-    /// [`crate::owner::handlers::PlatformHandlers::exit_policy`]'s doc for the exact
-    /// contract: `true` allows the exit it was about to take anyway, `false`
-    /// vetoes it).
+    /// every window it tracks has just closed: `true` allows the exit it was
+    /// about to take anyway, `false` vetoes it.
     ///
     /// This is the embedder-facing seam issue #555's `ExitPolicy` /
     /// `AppRuntime::should_exit` wire through: an embedder that hosts more

@@ -518,7 +518,22 @@ graph LR
   завершён, службы приложения остановлены за ~40 мс, без ANR и паники; повторный запуск в том же
   процессе — новый `android_main`, `MediaQuery` приходит. Предупреждение `close_this_window:
   dispatch refused` при этом выходе было и до LY26 (та же проба на дереве LY22). macOS и iOS —
-  только проверка типов, их места покрыты общей точкой и её тестами.
+  только проверка типов, их места покрыты общей точкой и её тестами. После ревью: Win32
+  `RunGuard` отдаёт набор обработчиков `retire` после quit (раньше последний `Rc` падал без
+  границы, в т. ч. во время раскрутки) — строка `a handler dropped at teardown is contained`
+  (без исправления: «a handler's destructor escaped the teardown»); строка headless `an exit-policy
+  hook that opens a window keeps the platform` закрепляет решение (3) (без повторной проверки окон:
+  «the window the hook opened keeps the platform running»); `PlatformHandlers` ушёл из публичного
+  API (его поля обходили точку вызова), публичная doc `set_exit_policy_hook` больше на него не
+  ссылается. Покрытие по хостам — честно: headless — все пять видов, каждый падает без
+  исправления; Win32 — все пять, без исправления падают строки паники и teardown, остальные — страж
+  регрессий (на Win32 этих дефектов не было); Web — замена, quit, `Drop` (страж); winit — замена,
+  `Drop`, паника (юнит); Android, iOS, macOS — исправления через общую точку и её юнит-тесты,
+  проверка типов, прогон Android на S21; запуск macOS и iOS — vanyastaff/flui#1840. Строке «все
+  падают без исправления» отвечают headless, winit и Win32-строки паники и teardown. Известный
+  дефект до LY26, не исправленный здесь: в `SystemNotices::dispatch` уведомление из другого потока
+  между выходом из цикла и сбросом `delivering` ждёт следующего уведомления — чинится отдельной
+  задачей вне серии.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

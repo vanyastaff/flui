@@ -66,7 +66,7 @@ static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
 #[path = "platform/wake_deadline.rs"]
 mod wake_deadline;
-use crate::owner::call_point::{Field, Once, SharedField, call, install};
+use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
 use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 pub(super) use wake_deadline::{FrameCount, ModalDelivery};
 
@@ -2496,6 +2496,10 @@ impl host::Loop for WindowsLoop {
                         |quit| quit(),
                     )
                     .or_contain((), "the quit callback");
+                    // The last handle to the handler set when the owner context
+                    // is gone: its handlers' destructors are user code, dropped
+                    // contained, or kept while an unwind is under way.
+                    retire(handlers);
                 }
             }
         }

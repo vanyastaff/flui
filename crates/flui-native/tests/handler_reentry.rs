@@ -449,6 +449,52 @@ fn headless_failing_hook_keeps_the_first_failure() {
     });
 }
 
+/// The exit-policy hook, asked when the last window closes, opens a window and
+/// allows the exit: the window it opened keeps the platform running.
+fn headless_exit_policy_hook_that_opens_a_window_keeps_the_platform() {
+    within("headless exit-policy hook", || {
+        let platform = headless();
+        let quits = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&quits);
+        platform.on_quit(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let opened = Arc::new(Mutex::new(None));
+        let (weak, kept) = (Arc::downgrade(&platform), Arc::clone(&opened));
+        let first = AtomicBool::new(true);
+        platform.set_exit_policy_hook(Box::new(move || {
+            if first.swap(false, Ordering::SeqCst) {
+                let window = weak
+                    .upgrade()
+                    .expect("the platform")
+                    .open_window(WindowOptions::default())
+                    .expect("a window opens from inside the hook");
+                *kept.lock() = Some(window);
+            }
+            true
+        }));
+
+        let window = platform
+            .open_window(WindowOptions::default())
+            .expect("a window");
+        window.close();
+
+        assert!(opened.lock().is_some(), "the hook ran and opened a window");
+        assert_eq!(
+            quits.load(Ordering::SeqCst),
+            0,
+            "the window the hook opened keeps the platform running"
+        );
+        let window = opened.lock().take().expect("the hook's window");
+        window.close();
+        assert_eq!(
+            quits.load(Ordering::SeqCst),
+            1,
+            "closing it, with no window left, quits"
+        );
+    });
+}
+
 #[test]
 fn handlers_run_outside_every_lock_of_the_headless_platform() {
     crate::run_table(
@@ -477,6 +523,10 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
             (
                 "a failing hook keeps the first failure",
                 headless_failing_hook_keeps_the_first_failure,
+            ),
+            (
+                "an exit-policy hook that opens a window keeps the platform",
+                headless_exit_policy_hook_that_opens_a_window_keeps_the_platform,
             ),
         ],
     );
@@ -657,6 +707,36 @@ mod win32 {
         });
     }
 
+    /// A handler whose captures panic when dropped is still installed when the
+    /// loop ends: the teardown retires it with its panic contained, and `run`
+    /// returns.
+    fn a_handler_dropped_at_teardown_is_contained() {
+        within("Win32 teardown", || {
+            struct PanicsOnDrop;
+            impl Drop for PanicsOnDrop {
+                fn drop(&mut self) {
+                    panic!("a capture's destructor");
+                }
+            }
+            let platform = WindowsPlatform::new().expect("native Windows platform");
+            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Box::new(platform).run(Box::new(|owner| {
+                    let capture = PanicsOnDrop;
+                    owner.shared().on_keyboard_layout_change(Box::new(move || {
+                        let _ = &capture;
+                    }));
+                    owner.proxy().request_quit().expect("the loop takes a quit");
+                    Ok(())
+                }))
+            }));
+            assert!(
+                matches!(ran, Ok(Ok(()))),
+                "a handler's destructor escaped the teardown: {:?}",
+                ran.map(|result| result.is_ok())
+            );
+        });
+    }
+
     #[test]
     fn handlers_run_outside_every_borrow_of_the_win32_platform() {
         crate::run_table(
@@ -677,6 +757,10 @@ mod win32 {
                 (
                     "a failing exit-policy hook keeps the first failure",
                     failing_exit_policy_keeps_the_first_failure,
+                ),
+                (
+                    "a handler dropped at teardown is contained",
+                    a_handler_dropped_at_teardown_is_contained,
                 ),
             ],
         );
