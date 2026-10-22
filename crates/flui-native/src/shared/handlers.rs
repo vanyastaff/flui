@@ -23,6 +23,8 @@ use flui_platform::{
     WindowExecutionState,
 };
 
+use crate::owner::panic_boundary::contain_owner_callback;
+
 /// The callback a platform asks at each phase of the user's session ending.
 pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
 
@@ -414,7 +416,7 @@ pub struct WindowCallbacks {
     /// consumed. Installed only through [`Self::set_input_callback`], which
     /// delivers the capability snapshot first.
     /// Owner-thread-only (ADR-0082 §4): the callback need not be `Send`.
-    on_input: super::owner_slot::OwnerSlot<InputCallback>,
+    on_input: crate::owner::slot::OwnerSlot<InputCallback>,
     input_feed: Mutex<InputFeed>,
     input_wake: Mutex<Option<InputWake>>,
     /// Keys answered "not handled" while queued behind a running callback,
@@ -615,7 +617,7 @@ impl<E> Drop for DispatchDrain<'_, E> {
                 std::mem::take(&mut state.pending)
             };
             for event in pending {
-                super::panic_boundary::contain_owner_callback(|| drop(event));
+                contain_owner_callback(|| drop(event));
             }
         }
     }
@@ -695,7 +697,7 @@ impl<T> Drop for CallbackLease<'_, T> {
                 // An invocation failure remains authoritative. Retire this
                 // individual outgoing capture after releasing its slot guard;
                 // its destructor must not abort the original unwind.
-                super::panic_boundary::contain_owner_callback(|| drop(callback));
+                contain_owner_callback(|| drop(callback));
             } else {
                 drop(callback);
             }
@@ -710,14 +712,14 @@ impl<T> Drop for CallbackLease<'_, T> {
 /// registered meanwhile, in which case it retires here. Every step runs on
 /// the owner thread, so no lock orders the restore against a clear.
 struct InputLease<'a> {
-    slot: &'a super::owner_slot::OwnerSlot<InputCallback>,
+    slot: &'a crate::owner::slot::OwnerSlot<InputCallback>,
     cleared: &'a AtomicBool,
     callback: Option<InputCallback>,
 }
 
 impl<'a> InputLease<'a> {
     fn take(
-        slot: &'a super::owner_slot::OwnerSlot<InputCallback>,
+        slot: &'a crate::owner::slot::OwnerSlot<InputCallback>,
         cleared: &'a AtomicBool,
     ) -> Self {
         Self {
@@ -750,7 +752,7 @@ impl<'a> InputLease<'a> {
         if failed {
             std::mem::forget(outgoing);
         } else {
-            super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+            contain_owner_callback(|| drop(outgoing));
         }
     }
 }
@@ -783,7 +785,7 @@ fn invoke_contained(lease: &mut InputLease<'_>, input: PlatformInput) -> bool {
         Ok(()) => true,
         Err(payload) => {
             std::mem::forget(payload);
-            super::panic_boundary::contain_owner_callback(|| {
+            contain_owner_callback(|| {
                 tracing::error!("input callback panicked; the queued input stays in order");
             });
             false
@@ -813,7 +815,7 @@ impl WindowCallbacks {
             on_execution_state_change: Mutex::new(None),
             on_safe_area_change: Mutex::new(None),
             safe_area_dispatch: Mutex::new(DispatchState::new()),
-            on_input: super::owner_slot::OwnerSlot::new(),
+            on_input: crate::owner::slot::OwnerSlot::new(),
             input_feed: Mutex::new(InputFeed::new()),
             input_wake: Mutex::new(None),
             unanswered_keys: Mutex::new(VecDeque::new()),
@@ -963,24 +965,24 @@ impl WindowCallbacks {
         let on_surface_status_change = self.on_surface_status_change.lock().take();
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
-        super::panic_boundary::contain_owner_callback(|| drop(on_safe_area_change));
-        super::panic_boundary::contain_owner_callback(|| drop(on_execution_state_change));
-        super::panic_boundary::contain_owner_callback(|| drop(on_input));
+        contain_owner_callback(|| drop(on_safe_area_change));
+        contain_owner_callback(|| drop(on_execution_state_change));
+        contain_owner_callback(|| drop(on_input));
         for input in held {
-            super::panic_boundary::contain_owner_callback(|| drop(input));
+            contain_owner_callback(|| drop(input));
         }
-        super::panic_boundary::contain_owner_callback(|| drop(input_wake));
-        super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
-        super::panic_boundary::contain_owner_callback(|| drop(on_resize));
-        super::panic_boundary::contain_owner_callback(|| drop(on_state_changed));
-        super::panic_boundary::contain_owner_callback(|| drop(on_close));
-        super::panic_boundary::contain_owner_callback(|| drop(on_should_close));
-        super::panic_boundary::contain_owner_callback(|| drop(on_active_status_change));
-        super::panic_boundary::contain_owner_callback(|| drop(on_visibility_status_change));
-        super::panic_boundary::contain_owner_callback(|| drop(on_hover_status_change));
-        super::panic_boundary::contain_owner_callback(|| drop(on_appearance_changed));
-        super::panic_boundary::contain_owner_callback(|| drop(on_display_changed));
-        super::panic_boundary::contain_owner_callback(|| drop(on_surface_status_change));
+        contain_owner_callback(|| drop(input_wake));
+        contain_owner_callback(|| drop(on_request_frame));
+        contain_owner_callback(|| drop(on_resize));
+        contain_owner_callback(|| drop(on_state_changed));
+        contain_owner_callback(|| drop(on_close));
+        contain_owner_callback(|| drop(on_should_close));
+        contain_owner_callback(|| drop(on_active_status_change));
+        contain_owner_callback(|| drop(on_visibility_status_change));
+        contain_owner_callback(|| drop(on_hover_status_change));
+        contain_owner_callback(|| drop(on_appearance_changed));
+        contain_owner_callback(|| drop(on_display_changed));
+        contain_owner_callback(|| drop(on_surface_status_change));
     }
 
     fn drain_events(
@@ -1000,7 +1002,7 @@ impl WindowCallbacks {
                             // The backend has already accepted this observation.
                             // Dropping it would lose both its getter commit and
                             // notification, even after a duplicate native signal.
-                            super::panic_boundary::contain_owner_callback(|| {
+                            contain_owner_callback(|| {
                                 self.deliver_status_observation(
                                     &self.on_active_status_change,
                                     focused,
@@ -1009,7 +1011,7 @@ impl WindowCallbacks {
                             });
                         }
                         WindowCallbackEvent::Visibility(visible, Some(commit)) => {
-                            super::panic_boundary::contain_owner_callback(|| {
+                            contain_owner_callback(|| {
                                 self.deliver_status_observation(
                                     &self.on_visibility_status_change,
                                     visible,
@@ -1025,16 +1027,16 @@ impl WindowCallbacks {
                             // aborted causal callback, before capture retirement.
                             let callback = self.on_close.lock().take();
                             if let Some(callback) = callback {
-                                super::panic_boundary::contain_owner_callback(callback);
+                                contain_owner_callback(callback);
                             }
                         }
                         WindowCallbackEvent::Clear(retired) => {
                             self.clear_now();
                             if let Some(retired) = retired {
-                                super::panic_boundary::contain_owner_callback(retired);
+                                contain_owner_callback(retired);
                             }
                         }
-                        event => super::panic_boundary::contain_owner_callback(|| drop(event)),
+                        event => contain_owner_callback(|| drop(event)),
                     }
                 }
                 if self.lifecycle_closed.load(Ordering::SeqCst) {
@@ -1153,7 +1155,7 @@ impl WindowCallbacks {
                 WindowCallbackEvent::Clear(retired) => {
                     self.clear_now();
                     if let Some(retired) = retired {
-                        super::panic_boundary::contain_owner_callback(retired);
+                        contain_owner_callback(retired);
                     }
                 }
             }
@@ -1236,7 +1238,7 @@ impl WindowCallbacks {
                     DispatchEventResult::default()
                 };
                 drop(feed);
-                super::panic_boundary::contain_owner_callback(|| drop(evicted));
+                contain_owner_callback(|| drop(evicted));
                 self.resume_input_delivery();
                 return result;
             }
@@ -1306,7 +1308,7 @@ impl WindowCallbacks {
                 }
             }
         };
-        super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+        contain_owner_callback(|| drop(outgoing));
         self.resume_input_delivery();
     }
 
@@ -1321,7 +1323,7 @@ impl WindowCallbacks {
             if !feed.held.is_empty() {
                 let evicted = feed.hold(PlatformInput::Capabilities(capabilities));
                 drop(feed);
-                super::panic_boundary::contain_owner_callback(|| drop(evicted));
+                contain_owner_callback(|| drop(evicted));
                 self.resume_input_delivery();
                 return;
             }
@@ -1359,7 +1361,7 @@ impl WindowCallbacks {
     /// tail does not wait for unrelated input.
     pub fn set_input_wake(&self, wake: InputWake) {
         let outgoing = self.input_wake.lock().replace(wake);
-        super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+        contain_owner_callback(|| drop(outgoing));
     }
 
     /// Deliver the pending snapshot and held input to the input callback.
@@ -1494,13 +1496,13 @@ impl WindowCallbacks {
         let (at, evicted) = feed.hold_at(at, input);
         feed.redirected = at + 1;
         drop(feed);
-        super::panic_boundary::contain_owner_callback(|| drop(evicted));
+        contain_owner_callback(|| drop(evicted));
     }
 
     fn wake_input(&self) {
         let wake = self.input_wake.lock().clone();
         if let Some(wake) = wake {
-            super::panic_boundary::contain_owner_callback(|| wake());
+            contain_owner_callback(|| wake());
         }
     }
 
@@ -1593,7 +1595,6 @@ impl WindowCallbacks {
     }
 
     fn invoke_lifecycle<T, F: FnMut(T)>(&self, slot: &Mutex<Option<F>>, value: T) {
-        use super::panic_boundary::contain_owner_callback;
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
@@ -1671,12 +1672,12 @@ impl WindowCallbacks {
             let mut slot = self.on_safe_area_change.lock();
             if self.lifecycle_closed.load(Ordering::SeqCst) {
                 drop(slot);
-                super::panic_boundary::contain_owner_callback(|| drop(callback));
+                contain_owner_callback(|| drop(callback));
                 return;
             }
             slot.replace(callback)
         };
-        super::panic_boundary::contain_owner_callback(|| drop(old));
+        contain_owner_callback(|| drop(old));
     }
 
     /// Immediate metrics delivery, independently leased from the input FIFO.
@@ -1706,12 +1707,12 @@ impl WindowCallbacks {
         // requested — `clear()` sets this latch on entry — rather than at slot
         // teardown, which can sit behind a still-running drain.
         let mut lease = CallbackLease::take(&self.on_resize, &self.lifecycle_closed);
-        super::panic_boundary::contain_owner_callback(|| {
+        contain_owner_callback(|| {
             if let Some(callback) = lease.callback_mut() {
                 callback(metrics);
             }
         });
-        super::panic_boundary::contain_owner_callback(|| drop(lease));
+        contain_owner_callback(|| drop(lease));
     }
 
     /// Replace an execution observer, disposing captures outside the storage lock.
@@ -1936,7 +1937,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, AtomicUsize};
 
-    use crate::shared::{hwnd_affinity, owner_signal};
+    use crate::owner::signal::OwnerSignal;
+    use crate::shared::hwnd_affinity;
 
     use super::*;
 
@@ -2238,7 +2240,7 @@ mod tests {
         struct Guard(Option<Box<dyn FnMut() + Send>>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                crate::shared::panic_boundary::invoke_and_drop_owner_callback(
+                crate::owner::panic_boundary::invoke_and_drop_owner_callback(
                     self.0.take().expect("callback"),
                 );
             }
@@ -2290,7 +2292,7 @@ mod tests {
             fn drop(&mut self) {
                 let report_drops = Arc::clone(&self.report_drops);
                 let fail_report = self.fail_report;
-                crate::shared::panic_boundary::retain_off_owner_resource(
+                crate::owner::panic_boundary::retain_off_owner_resource(
                     self.resource.take().expect("resource"),
                     || {
                         if fail_report {
@@ -2331,7 +2333,7 @@ mod tests {
             assert!(result.is_ok(), "report failure must remain contained");
         }
         let next = AtomicUsize::new(0);
-        crate::shared::panic_boundary::contain_owner_callback(|| {
+        contain_owner_callback(|| {
             next.fetch_add(1, Ordering::SeqCst);
         });
         assert_eq!(next.load(Ordering::SeqCst), 1);
@@ -2385,7 +2387,7 @@ mod tests {
     fn worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
-        let signal = owner_signal::OwnerSignal::new(Arc::new(move || {
+        let signal = OwnerSignal::new(Arc::new(move || {
             recorded.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }));

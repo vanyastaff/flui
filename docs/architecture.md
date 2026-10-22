@@ -132,7 +132,8 @@ self.nodes.get(id.get() - 1);
 `flui-native`, the core host, exposes one `Platform` trait over its native and headless hosts:
 
 ```rust
-pub trait Platform: Send + Sync + 'static {
+// Sealed: `HostPlatform<H>` over a host's table is its one implementation.
+pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // Core
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
 
@@ -152,7 +153,7 @@ pub trait Platform: Send + Sync + 'static {
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
     fn name(&self) -> &'static str;
-    // ... plus optional methods for cursor, file pickers, app activation, etc.
+    // ... plus file pickers, app activation, exit policy, preferences and data dirs
 }
 
 // PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>

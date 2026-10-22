@@ -41,11 +41,11 @@ use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, Refresh
 use super::native_owner::NativeOwner;
 use super::os_version;
 use crate::error::PlatformError;
+use crate::owner::signal::OwnerSignal;
 use crate::shared::apple_display_identity::{SameObject, ScreenLedger};
 use crate::shared::display_link_rate::{FrameRatePreference, ScreenPeriods, frame_rate_preference};
 use crate::shared::display_source::DisplaySource;
 use crate::shared::os_version::apple::AppleVersion;
-use crate::shared::owner_signal::OwnerSignal;
 use flui_platform::WindowId;
 
 type RetainedScreen = Retained<UIScreen>;
@@ -239,7 +239,7 @@ impl ScreenObserver {
                 // read. Dropping the upgraded leases can release the last
                 // owner, so the whole body runs inside the owner-callback
                 // panic boundary.
-                crate::shared::panic_boundary::contain_owner_callback(|| {
+                crate::owner::panic_boundary::contain_owner_callback(|| {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }

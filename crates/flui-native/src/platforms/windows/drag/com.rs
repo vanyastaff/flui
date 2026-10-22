@@ -5,7 +5,7 @@
 //! so a panic (a hostile diagnostics subscriber, a provider) never unwinds
 //! into OLE; it answers `E_UNEXPECTED` and its payload is retained.
 
-use crate::shared::panic_boundary::contain_os_entry;
+use crate::owner::panic_boundary::contain_os_entry;
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
@@ -204,7 +204,7 @@ impl SourceData {
         // Nothing refills the slot while the provider is leased out.
         let replaced = self.provider.borrow_mut().replace(provider);
         debug_assert!(replaced.is_none(), "BUG: the provider slot was refilled");
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(replaced));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(replaced));
         let payload = match served {
             Ok(payload) => payload,
             Err(error) => {
@@ -222,7 +222,7 @@ impl Drop for SourceData {
         // function a panic cannot unwind out of: the provider's user captures
         // retire under the owner's containment instead of aborting.
         let provider = self.provider.get_mut().take();
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(provider));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(provider));
     }
 }
 

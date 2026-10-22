@@ -56,7 +56,7 @@ use super::OleTransfer;
 use crate::WindowsPlatform;
 use crate::platforms::windows::WindowsWindow;
 use crate::platforms::windows::platform::with_window_context;
-use crate::{traits::HostWindow, traits::Platform as _};
+use crate::{host_window::HostWindow, platform::Platform as _};
 use flui_platform::WindowOptions;
 
 /// A drop source whose answers the case scripts.

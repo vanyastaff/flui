@@ -176,7 +176,7 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::*;
-    use crate::{WinitPlatform, traits::Platform};
+    use crate::{WinitPlatform, platform::Platform};
 
     type Phases = Arc<Mutex<Vec<SessionEndPhase>>>;
 

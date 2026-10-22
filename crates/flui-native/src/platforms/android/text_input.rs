@@ -30,13 +30,13 @@ use flui_platform::text_store::{
 };
 use jni::{JValue, jni_sig, jni_str};
 
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::android_ime::{
     CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Snapshot, cursor_anchor, editor_info,
     replay_current,
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
-use crate::shared::panic_boundary::contain_owner_callback;
 
 use super::java_view::JavaView;
 

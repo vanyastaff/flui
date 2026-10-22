@@ -1,3 +1,3 @@
-use flui_native::traits::PlatformEmbedder;
+use flui_native::PlatformEmbedder;
 
 fn main() {}

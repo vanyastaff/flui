@@ -8,6 +8,7 @@
 //! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
 //! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
 use super::panic_boundary::contain_owner_callback;
+use crate::shared::{InputWake, WindowCallbacks};
 use crate::{PlatformError, ProxySendError, WakeRegistrationError};
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
@@ -95,7 +96,7 @@ struct State {
     active: bool,
     quit: bool,
     /// Windows whose held input waits for an owner turn (ADR-0213 §3).
-    input_resumes: Vec<super::InputWake>,
+    input_resumes: Vec<InputWake>,
 }
 
 pub(crate) struct OwnerSignal {
@@ -230,7 +231,7 @@ impl OwnerSignal {
     }
     /// Ask for an owner turn that runs `resume`, a window's held input
     /// delivery; one queued run per window.
-    pub(crate) fn resume_input(&self, resume: super::InputWake) {
+    pub(crate) fn resume_input(&self, resume: InputWake) {
         {
             let mut state = self.state.lock();
             if !state.accepting {
@@ -250,16 +251,16 @@ impl OwnerSignal {
     }
 
     /// The wake a window installs with
-    /// [`WindowCallbacks::set_input_wake`](super::WindowCallbacks::set_input_wake).
+    /// [`WindowCallbacks::set_input_wake`](WindowCallbacks::set_input_wake).
     /// `resume` calls the window's
-    /// [`WindowCallbacks::resume_input_delivery`](super::WindowCallbacks::resume_input_delivery)
+    /// [`WindowCallbacks::resume_input_delivery`](WindowCallbacks::resume_input_delivery)
     /// through a weak reference, so a queued turn never keeps a window alive.
     pub(crate) fn input_wake(
         signal: &Arc<Self>,
         resume: impl Fn() + Send + Sync + 'static,
-    ) -> super::InputWake {
+    ) -> InputWake {
         let signal = Arc::downgrade(signal);
-        let resume: super::InputWake = Arc::new(resume);
+        let resume: InputWake = Arc::new(resume);
         Arc::new(move || {
             if let Some(signal) = signal.upgrade() {
                 signal.resume_input(Arc::clone(&resume));
@@ -270,8 +271,8 @@ impl OwnerSignal {
     /// The wake for a window whose callbacks are shared.
     pub(crate) fn callbacks_wake(
         signal: &Arc<Self>,
-        callbacks: &Arc<super::WindowCallbacks>,
-    ) -> super::InputWake {
+        callbacks: &Arc<WindowCallbacks>,
+    ) -> InputWake {
         let callbacks = Arc::downgrade(callbacks);
         Self::input_wake(signal, move || {
             if let Some(callbacks) = callbacks.upgrade() {
@@ -385,7 +386,7 @@ impl SignalTransport {
         }
     }
 }
-impl crate::traits::owner::ProxyTransport for SignalTransport {
+impl super::ProxyTransport for SignalTransport {
     fn open_window(
         &self,
         options: flui_platform::WindowOptions,

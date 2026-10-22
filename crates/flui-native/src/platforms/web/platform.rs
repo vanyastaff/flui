@@ -13,10 +13,9 @@ use flui_platform::SessionEndPhase;
 
 use crate::host::{self, Loop as _};
 use crate::{
-    error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
-    shared::owner_signal::OwnerSignal, traits::OwnerPlatform, traits::Platform,
-    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
-    traits::owner::OwnerHooks,
+    error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
 };
 use flui_platform::{WindowEvent, WindowId};
 
@@ -163,7 +162,7 @@ impl WebLoop {
         let Some(mut hook) = state.lock().handlers.session_end.take() else {
             return;
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| {
+        crate::owner::panic_boundary::contain_owner_callback(|| {
             hook(phase);
         });
         // A hook registered while it ran replaces this one.
@@ -176,7 +175,7 @@ impl WebLoop {
                 Some(hook)
             }
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(replaced));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(replaced));
     }
 
     /// Start the requestAnimationFrame render loop

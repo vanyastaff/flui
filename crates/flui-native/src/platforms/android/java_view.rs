@@ -30,10 +30,10 @@ use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 use parking_lot::Mutex;
 
+use crate::owner::signal::OwnerSignal;
 use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
-use crate::shared::owner_signal::OwnerSignal;
 
 use super::drag::AndroidTransfer;
 
@@ -557,7 +557,7 @@ fn contained<T: Default>(body: impl FnOnce() -> T) -> T {
         Err(payload) => {
             // The payload's own Drop may panic: keep it.
             std::mem::forget(payload);
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 tracing::error!(target: "flui_native::android", "a FluiView callback panicked");
             });
             T::default()

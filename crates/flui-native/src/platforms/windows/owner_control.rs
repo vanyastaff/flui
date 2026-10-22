@@ -14,13 +14,12 @@
 //! turn rather than nested inside whatever code destroyed the window.
 use super::platform::{FrameCount, ModalDelivery, WindowIdentity, WindowMap};
 use crate::{
-    PlatformError, WakeRegistrationError, shared::PlatformHandlers,
+    PlatformError, WakeRegistrationError, owner::DirectOwnerHooks, owner::OpenWindowError,
+    owner::OwnerHooks, owner::ProxyTransport, owner::WindowOpen,
+    owner::panic_boundary::contain_owner_callback, owner::signal::OwnerSignal,
+    owner::signal::OwnerTurnSlot, platform::Platform, shared::PlatformHandlers,
     shared::hwnd_affinity::UserDataRefusal, shared::hwnd_affinity::UserDataVerdict,
-    shared::hwnd_affinity::classify_user_data_access, shared::owner_signal::OwnerSignal,
-    shared::owner_signal::OwnerTurnSlot, shared::panic_boundary::contain_owner_callback,
-    shared::system_notice::SystemNotices, traits::OpenWindowError, traits::Platform,
-    traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks, traits::owner::ProxyTransport,
-    traits::owner::WindowOpen,
+    shared::hwnd_affinity::classify_user_data_access, shared::system_notice::SystemNotices,
 };
 use flui_platform::WindowOptions;
 use parking_lot::Mutex;

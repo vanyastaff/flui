@@ -55,8 +55,8 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, PWSTR};
 
 use super::TextServices;
+use crate::platform::Platform;
 use crate::shared::text_geometry::range_rect_to_screen;
-use crate::traits::Platform;
 use flui_platform::WindowOptions;
 
 /// Microsoft IME ja-JP: its TIP class and profile.
@@ -444,7 +444,7 @@ fn text_services_probe() {
     // (1) activation and focus: the window activated TSF as it was created
     // and offers it as its text-store host, as the presentation reads it.
     let host = {
-        use crate::traits::{HostWindow as _, OwnerThreadToken};
+        use crate::host_window::{HostWindow as _, OwnerThreadToken};
         window
             .as_any()
             .downcast_ref::<super::super::WindowsWindow>()

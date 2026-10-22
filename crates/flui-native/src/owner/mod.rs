@@ -1,13 +1,21 @@
-//! The owner-thread platform capability (ADR-0039).
+//! The owner thread: the thread that runs a host's event loop, and what
+//! proves, schedules and guards work on it (ADR-0151 §10).
+//!
+//! - this module: the owner-thread platform capability (ADR-0039) and the
+//!   cross-thread handles minted from it;
+//! - [`signal`]: coalesced owner turns and quit admission;
+//! - [`slot`]: owner-thread storage for a value that is not `Send`;
+//! - [`panic_boundary`]: the containment a panic in user code meets before it
+//!   reaches the operating system.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
 //! appearance/keyboard queries, and quit. It is minted only by a backend, on
 //! the thread that owns — or, before the loop starts, will own — its event
-//! loop, and handed to [`super::PlatformReadyCallback`]. `!Send + !Sync` by
-//! phantom marker: possession proves the thread, so a wrong-thread call
-//! becomes a compile error instead of a runtime assert (the [`OwnerAffinity`]
-//! backstop `flui-foundation` carries).
+//! loop, and handed to [`PlatformReadyCallback`](crate::PlatformReadyCallback).
+//! `!Send + !Sync` by phantom marker: possession proves the thread, so a
+//! wrong-thread call becomes a compile error instead of a runtime assert (the
+//! [`OwnerAffinity`] backstop `flui-foundation` carries).
 //!
 //! [`OwnerAffinity`]: flui_foundation::OwnerAffinity
 //!
@@ -20,12 +28,13 @@
 //! thread-affine capability, only a bounded, typed, cross-thread request
 //! channel.
 //!
-//! `Platform` becomes de-facto crate-sealed by this module: minting an
-//! `OwnerPlatform` requires the `pub(crate)` constructor here, so an
-//! out-of-crate `impl Platform` cannot hand its own `run()` the capability
-//! `on_ready` needs. An external-embedder minting seam is design work
-//! tracked separately (#560); until then, backend implementations of
-//! `Platform` live in this crate.
+//! Only the `pub(crate)` constructor here mints an `OwnerPlatform`, so only a
+//! host in this crate can hand `on_ready` the capability it needs; `Platform`
+//! is sealed to say so in its type (ADR-0151 §5).
+
+pub(crate) mod panic_boundary;
+pub(crate) mod signal;
+pub(crate) mod slot;
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -39,11 +48,13 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-use super::{HostWindow, PathPromptOptions, Platform, PlatformExecutor};
 use crate::error::PlatformError;
+use crate::host_window::{HostWindow, OwnerThreadToken};
+use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{Clipboard, ClipboardItem, WindowEvent, WindowId, WindowOptions};
+use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
 // OwnerPlatform
@@ -217,7 +228,7 @@ impl OwnerPlatform {
     /// [`PlatformWindow::text_input`]: flui_platform::PlatformWindow::text_input
     #[must_use]
     pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
-        window.text_store_host(super::host_window::OwnerThreadToken::new())
+        window.text_store_host(OwnerThreadToken::new())
     }
 
     /// Acquire a detached numeric text converter for this native presentation.
@@ -228,7 +239,7 @@ impl OwnerPlatform {
         &self,
         window: &Arc<dyn HostWindow>,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        window.capture_text_sizing(super::host_window::OwnerThreadToken::new())
+        window.capture_text_sizing(OwnerThreadToken::new())
     }
 }
 
@@ -868,17 +879,14 @@ pub(crate) trait OwnerHooks: Send + Sync {
 /// [`Platform::open_window`] itself returns the typed [`OpenWindowError`]
 /// taxonomy, so its failure passes through unmapped.
 pub(crate) struct DirectOwnerHooks {
-    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    signal: Arc<OwnerSignal>,
     platform: Arc<dyn Platform>,
 }
 
 impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
     /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`).
-    pub(crate) fn with_signal(
-        platform: Arc<dyn Platform>,
-        signal: Arc<crate::shared::owner_signal::OwnerSignal>,
-    ) -> Self {
+    pub(crate) fn with_signal(platform: Arc<dyn Platform>, signal: Arc<OwnerSignal>) -> Self {
         Self { signal, platform }
     }
 }
@@ -898,9 +906,7 @@ impl OwnerHooks for DirectOwnerHooks {
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        Arc::new(crate::shared::owner_signal::SignalTransport::new(
-            &self.signal,
-        ))
+        Arc::new(SignalTransport::new(&self.signal))
     }
 }
 

@@ -1,7 +1,7 @@
-error[E0432]: unresolved import `flui_native::traits::BasicVelocityTracker`
+error[E0432]: unresolved import `flui_native::BasicVelocityTracker`
  --> tests/ui/basic_velocity_tracker_is_retired.rs:1:5
   |
-1 | use flui_native::traits::BasicVelocityTracker;
-  |     ^^^^^^^^^^^^^^^^^^^^^--------------------
-  |                          |
-  |                          no `BasicVelocityTracker` in `traits`
+1 | use flui_native::BasicVelocityTracker;
+  |     ^^^^^^^^^^^^^--------------------
+  |                  |
+  |                  no `BasicVelocityTracker` in the root

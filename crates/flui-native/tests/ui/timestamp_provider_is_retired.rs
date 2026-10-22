@@ -1,3 +1,3 @@
-use flui_native::traits::TimestampProvider;
+use flui_native::TimestampProvider;
 
 fn main() {}

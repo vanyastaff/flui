@@ -4,9 +4,9 @@
 //! [`PlatformWindow`] is the per-window contract the framework programs
 //! against, and it names no AccessKit type (ADR-0082 §1). The accessibility
 //! bridge speaks AccessKit, so it is reached through this subtrait instead:
-//! [`Platform::open_window`](crate::traits::Platform::open_window),
-//! [`WindowOpen::Ready`](crate::traits::WindowOpen::Ready) and
-//! [`PendingWindow`](crate::traits::PendingWindow) hand the runner an
+//! [`Platform::open_window`](crate::Platform::open_window),
+//! [`WindowOpen::Ready`](crate::WindowOpen::Ready) and
+//! [`PendingWindow`](crate::PendingWindow) hand the runner an
 //! `Arc<dyn HostWindow>`, the runner reads [`HostWindow::accessibility`] once
 //! and passes the window on as an `Arc<dyn PlatformWindow>` (an upcast).
 //!
@@ -51,16 +51,37 @@ mod sealed {
             Self(PhantomData)
         }
     }
+
+    /// The seal of [`HostWindow`](super::HostWindow): public in a private
+    /// module, so no other crate can implement it.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot implement `HostWindow`: the trait is sealed",
+        label = "not a window of a host in `flui-native`",
+        note = "only the windows the core host builds implement `HostWindow` (inside `flui-native`, a new window adds `impl CoreHostWindow for` it); a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)"
+    )]
+    pub trait Sealed {}
+
+    /// A window a host in this crate builds; each implements it beside its
+    /// `HostWindow`. The seal reaches them through one generic
+    /// implementation rather than one per window, so the compiler's account
+    /// of a refused outside `impl HostWindow` names the same implementations
+    /// on every target and feature set.
+    pub trait CoreHostWindow {}
+
+    #[diagnostic::do_not_recommend]
+    impl<W: CoreHostWindow> Sealed for W {}
 }
 
-pub(crate) use sealed::OwnerThreadToken;
+pub(crate) use sealed::{CoreHostWindow, OwnerThreadToken};
 
 /// A window as a backend hands it to the composition root.
 ///
-/// Implemented by every backend window next to its [`PlatformWindow`] impl.
-/// A test double that is only ever handed to the framework needs just
-/// [`PlatformWindow`]; one returned from `open_window` needs this too.
-pub trait HostWindow: PlatformWindow {
+/// Implemented by every backend window next to its [`PlatformWindow`] impl,
+/// and sealed (ADR-0151 §5): a private supertrait keeps every implementation
+/// in this crate, so an outside `impl HostWindow` does not compile
+/// (`trybuild_ui::ui_tests` pins the error). A test double handed to the
+/// framework implements [`PlatformWindow`], which stays open.
+pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// Acquire this presentation's native numeric converter on the owner lane.
     /// Pending acquisition owns a completion wake obligation; no frame path waits.
     /// The hidden token is minted by `OwnerPlatform::capture_text_sizing`.
@@ -99,14 +120,14 @@ pub trait HostWindow: PlatformWindow {
     /// beside this trait. `trybuild_ui::ui_tests` pins both the private-import
     /// and missing-`Default` diagnostics and a valid owner-capability caller:
     ///
-    /// ```compile_fail,E0603
-    /// use flui_native::traits::OwnerThreadToken;
+    /// ```compile_fail,E0432
+    /// use flui_native::OwnerThreadToken;
     /// ```
     ///
     /// nor conjured:
     ///
     /// ```compile_fail,E0277
-    /// fn read(window: &dyn flui_native::traits::HostWindow) {
+    /// fn read(window: &dyn flui_native::HostWindow) {
     ///     let _ = window.text_store_host(Default::default());
     /// }
     /// ```

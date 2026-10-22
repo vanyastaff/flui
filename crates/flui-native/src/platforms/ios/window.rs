@@ -71,7 +71,7 @@ pub struct FluiViewIvars {
     callbacks: Arc<WindowCallbacks>,
     text_sizing: RefCell<Option<crate::CapturedTextSizing>>,
     text_sizing_authority: RefCell<Arc<AtomicBool>>,
-    owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+    owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
     input: RefCell<TouchInputState>,
     /// Where this view stands in the attach/detach lifecycle: whether it may
     /// report metrics at all, and which window a report belongs to, so a
@@ -120,8 +120,8 @@ define_class!(
             self.pin_for_native_callback();
             // SAFETY: UIView's implementation receives the borrowed old traits.
             let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
-            crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
-            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(didMoveToWindow))]
@@ -129,8 +129,8 @@ define_class!(
             self.pin_for_native_callback();
             // SAFETY: UIView declares this selector and the receiver is pinned.
             let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
-            crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
-            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(onPencilHover:))]
@@ -176,7 +176,7 @@ define_class!(
             // The annotation pins the return type, which `msg_send!` cannot
             // infer for a `void` super call.
             let _: () = unsafe { msg_send![super(self), layoutSubviews] };
-            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
         }
 
         #[unsafe(method(safeAreaInsetsDidChange))]
@@ -191,7 +191,7 @@ define_class!(
             // `msg_send!` cannot infer. `UIView` gained this selector in
             // iOS 11, and no lower deployment target is configured here.
             let _: () = unsafe { msg_send![super(self), safeAreaInsetsDidChange] };
-            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
         }
 
         /// The `CADisplayLink` target: one tick per refresh requests a frame.
@@ -266,7 +266,7 @@ impl FluiView {
         callbacks: Arc<WindowCallbacks>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
         dark: Arc<AtomicBool>,
-        owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+        owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
         display: ViewDisplay,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
@@ -754,14 +754,14 @@ impl IOSWindow {
     pub(super) fn new(
         mtm: MainThreadMarker,
         id: WindowId,
-        signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+        signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
         displays: Arc<IosDisplays>,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());
         callbacks.set_input_capabilities(crate::shared::input_availability::ios());
         if let Some(owner) = signal.upgrade() {
-            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
                 &owner, &callbacks,
             ));
         }
@@ -1096,8 +1096,8 @@ impl IOSWindow {
             ));
         self.callbacks
             .dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
-        crate::shared::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
-        crate::shared::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
+        crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
+        crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
         if let Some(marker) = MainThreadMarker::new() {
             self.detach_native(marker);
         }
@@ -1113,10 +1113,12 @@ impl std::fmt::Debug for IOSWindow {
     }
 }
 
-impl crate::traits::HostWindow for IOSWindow {
+impl crate::host_window::CoreHostWindow for IOSWindow {}
+
+impl crate::host_window::HostWindow for IOSWindow {
     fn capture_text_sizing(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
         let marker = MainThreadMarker::new().ok_or(crate::TextSizingCaptureError::WrongThread)?;
         if self.closed.load(Ordering::Acquire) {

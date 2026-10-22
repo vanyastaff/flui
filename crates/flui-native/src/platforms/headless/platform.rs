@@ -27,11 +27,11 @@ use super::window_policy::HeadlessWindowPolicy;
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::{
-    error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
-    shared::window_state::WindowStateCell, traits::HostWindow, traits::OpenWindowError,
-    traits::OwnerPlatform, traits::PendingWindow, traits::Platform, traits::PlatformExecutor,
-    traits::PlatformReadyCallback, traits::WindowOpen, traits::owner::DirectOwnerHooks,
-    traits::owner::OwnerHooks, traits::owner::ProxyTransport,
+    error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
+    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
+    owner::WindowOpen, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::PlatformHandlers, shared::WindowCallbacks,
+    shared::window_state::WindowStateCell,
 };
 use flui_platform::{
     Clipboard, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot, PlatformHaptics,
@@ -75,7 +75,7 @@ fn next_headless_window_id() -> WindowId {
 /// unit tests, CI without a display server and benchmarks without rendering.
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) is its platform.
 pub struct HeadlessLoop {
-    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    signal: Arc<crate::owner::signal::OwnerSignal>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
     state: Arc<Mutex<HeadlessState>>,
 }
@@ -84,7 +84,7 @@ pub(super) struct HeadlessState {
     /// The simulated OS drag session and the platform's one data-transfer
     /// source (ADR-0211).
     drag: Arc<super::drag::DragDouble>,
-    owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     clipboard: Arc<InMemoryClipboard>,
@@ -183,7 +183,7 @@ impl HeadlessLoop {
         let failure = Arc::clone(&wake_failure);
         let platform = Self {
             wake_failure,
-            signal: crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+            signal: crate::owner::signal::OwnerSignal::new(Arc::new(move || {
                 if failure.swap(false, Ordering::AcqRel) {
                     Err(PlatformError::EventLoop {
                         message: "injected headless owner wake failure".into(),
@@ -437,7 +437,7 @@ impl host::Loop for HeadlessLoop {
         let state_handle = Arc::clone(&self.state);
         let signal = Arc::clone(&self.signal);
         signal.bind_owner();
-        struct BootstrapGuard(Option<Arc<crate::shared::owner_signal::OwnerSignal>>);
+        struct BootstrapGuard(Option<Arc<crate::owner::signal::OwnerSignal>>);
         impl Drop for BootstrapGuard {
             fn drop(&mut self) {
                 if let Some(signal) = self.0.take() {
@@ -818,14 +818,14 @@ fn create_mock_window(
     if let Some(signal) = state.owner_signal.upgrade() {
         window
             .callbacks
-            .set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            .set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
                 &signal,
                 &window.callbacks,
             ));
         let callbacks = Arc::downgrade(&window.callbacks);
         window.owner_redraw = Some(OwnerRedraw {
             signal: Arc::downgrade(&signal),
-            wake: crate::shared::owner_signal::OwnerSignal::input_wake(&signal, move || {
+            wake: crate::owner::signal::OwnerSignal::input_wake(&signal, move || {
                 if let Some(callbacks) = callbacks.upgrade() {
                     callbacks.dispatch_request_frame();
                 }
@@ -854,7 +854,7 @@ fn create_mock_window(
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
 /// demand.
 struct HeadlessDeferredOwnerHooks {
-    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Arc<Mutex<HeadlessState>>,
     owner_thread: ThreadId,
 }
@@ -886,9 +886,7 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        Arc::new(crate::shared::owner_signal::SignalTransport::new(
-            &self.signal,
-        ))
+        Arc::new(crate::owner::signal::SignalTransport::new(&self.signal))
     }
 }
 
@@ -897,7 +895,7 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
 pub struct HeadlessOwnerTurns {
     wake_failure: Weak<std::sync::atomic::AtomicBool>,
     owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
-    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    signal: Weak<crate::owner::signal::OwnerSignal>,
     state: Weak<Mutex<HeadlessState>>,
 }
 static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
@@ -1035,7 +1033,7 @@ impl Drop for TakenSessionHook<'_> {
 /// thread: the owner re-samples `Platform::display_snapshot` on its next turn.
 #[derive(Clone)]
 pub struct HeadlessDisplayControls {
-    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    signal: Weak<crate::owner::signal::OwnerSignal>,
     state: Weak<Mutex<HeadlessState>>,
 }
 
@@ -1088,7 +1086,7 @@ impl HeadlessDisplayControls {
 /// delivers what it accepts to every runtime.
 #[derive(Clone)]
 pub struct HeadlessPreferences {
-    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    signal: Weak<crate::owner::signal::OwnerSignal>,
     state: Weak<Mutex<HeadlessState>>,
 }
 
@@ -1368,7 +1366,7 @@ pub struct MockWindow {
 /// any request already queued, as a native backend posts its redraw.
 #[derive(Clone)]
 struct OwnerRedraw {
-    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    signal: Weak<crate::owner::signal::OwnerSignal>,
     wake: crate::shared::InputWake,
 }
 
@@ -1639,7 +1637,7 @@ impl MockWindow {
     /// exit-policy hook (see [`crate::shared::PlatformHandlers::exit_policy`])
     /// exactly as the winit backend's `CloseRequested` handling does. A
     /// caller that never installed a hook sees no behavior change: this is
-    /// a no-op unless [`crate::traits::Platform::set_exit_policy_hook`] was
+    /// a no-op unless [`crate::Platform::set_exit_policy_hook`] was
     /// called first, matching every other headless test/consumer that
     /// predates this mechanism.
     ///
@@ -2281,6 +2279,8 @@ impl PlatformWindow for MockWindow {
     }
 }
 
+impl crate::host_window::CoreHostWindow for MockWindow {}
+
 impl HostWindow for MockWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility)
@@ -2289,7 +2289,7 @@ impl HostWindow for MockWindow {
 
     fn text_store_host(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn TextStoreHost>> {
         self.text_store_host.as_ref().map(|factory| factory())
     }

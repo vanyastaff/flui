@@ -11,7 +11,7 @@ use std::{
 
 use tokio::runtime::Runtime;
 
-use crate::{task::Task, traits::PlatformExecutor};
+use crate::{platform::PlatformExecutor, task::Task};
 
 /// Worker threads in the lazily-started runtime. Deliberately small: since
 /// the unified execution services (issue #557) the loop-scoped `AppRuntime`

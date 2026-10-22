@@ -27,8 +27,8 @@ use super::super::linux::x11_window_probe::X11WindowProbe;
 use super::control::ControlSender;
 use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell};
+use crate::host_window::HostWindow;
 use crate::shared::window_state::{WindowStateCell, mode_of};
-use crate::traits::HostWindow;
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
     WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
@@ -909,6 +909,8 @@ impl PlatformWindow for WinitWindow {
     // hardware to drive, so the `PlatformWindow` trait default (`None`) is
     // the permanent correct answer here, not a stub awaiting a backend.
 }
+
+impl crate::host_window::CoreHostWindow for WinitWindow {}
 
 impl HostWindow for WinitWindow {
     /// The window's own AT-SPI bridge — the capability the composition

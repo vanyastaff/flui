@@ -34,7 +34,8 @@ use winit::{
 
 use super::{SelfCloseRoute, WinitApp, WinitLoop, WinitRunState};
 use crate::{
-    WinitPlatform, platforms::winit::control::control_lane, traits::HostWindow, traits::Platform,
+    WinitPlatform, host_window::HostWindow, platform::Platform,
+    platforms::winit::control::control_lane,
 };
 use flui_platform::{WindowEvent, WindowId, WindowOptions};
 
@@ -48,7 +49,7 @@ fn options(title: impl Into<String>) -> WindowOptions {
 /// Manual WinitApp fixtures need the same owner signal as run_event_loop.
 fn install_test_owner_signal(platform: &WinitLoop, event_loop: &EventLoop<()>) {
     let proxy = event_loop.create_proxy();
-    *platform.owner_signal.lock() = Some(crate::shared::owner_signal::OwnerSignal::new(Arc::new(
+    *platform.owner_signal.lock() = Some(crate::owner::signal::OwnerSignal::new(Arc::new(
         move || {
             proxy
                 .send_event(())
@@ -313,7 +314,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let event_loop = build_test_event_loop();
     let proxy = event_loop.create_proxy();
     let owner_proxy = proxy.clone();
-    let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+    let signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
         owner_proxy
             .send_event(())
             .map_err(|error| crate::PlatformError::EventLoop {
@@ -624,7 +625,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let event_loop = build_test_event_loop();
     let proxy = event_loop.create_proxy();
     let owner_proxy = proxy.clone();
-    let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+    let signal = crate::owner::signal::OwnerSignal::new(Arc::new(move || {
         owner_proxy
             .send_event(())
             .map_err(|error| crate::PlatformError::EventLoop {

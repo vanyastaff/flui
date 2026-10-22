@@ -36,8 +36,8 @@ use flui_platform::text_store::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::ime_text::{document_text, scalar_spans};
-use crate::shared::panic_boundary::contain_owner_callback;
 use crate::shared::web_text::{diff, input_mode};
 
 use super::events::{KeyRoute, is_focus_handoff};

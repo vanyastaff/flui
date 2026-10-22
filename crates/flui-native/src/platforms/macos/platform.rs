@@ -14,9 +14,10 @@ use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
-    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::HostWindow,
-    traits::OpenWindowError, traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
-    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+    host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError, owner::OwnerHooks,
+    owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback, shared::PlatformHandlers,
+    shared::system_notice::SystemNotices,
 };
 use flui_platform::{
     DisplaySnapshot, PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice,
@@ -289,7 +290,7 @@ impl host::Loop for MacOSLoop {
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let previous = self.handlers.lock().exit_policy.replace(hook);
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn request_exit_policy_reevaluation(&self) {
@@ -392,7 +393,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         window.bind_displays(Arc::clone(&owner.displays));
         let callbacks = window.callbacks();
         callbacks.set_input_capabilities(crate::shared::input_availability::macos());
-        callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+        callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
             &owner.loop_control.owner_signal,
             callbacks,
         ));
@@ -472,7 +473,7 @@ impl host::Lifecycle<MacOSLoop> for MacOSLoop {
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
         let previous = owner.handlers.lock().session_end.replace(callback);
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn on_host_notice(owner: &MacOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {

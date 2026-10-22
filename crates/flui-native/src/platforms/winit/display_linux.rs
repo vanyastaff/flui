@@ -40,7 +40,7 @@ use super::super::linux::display::{
     source::{DisplayWatcher, LinuxDisplays},
 };
 use crate::error::PlatformError;
-use crate::shared::owner_signal::OwnerSignal;
+use crate::owner::signal::OwnerSignal;
 
 /// The platform's outputs, shared with every window.
 pub struct WinitDisplaySource {

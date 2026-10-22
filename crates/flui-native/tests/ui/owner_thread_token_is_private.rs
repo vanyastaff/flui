@@ -1,3 +1,3 @@
-use flui_native::traits::OwnerThreadToken;
+use flui_native::OwnerThreadToken;
 
 fn main() {}

@@ -17,9 +17,9 @@ use web_sys::{Event, EventTarget, MediaQueryList, Window};
 use super::platform::WebLoop;
 use crate::{
     PlatformError, host,
+    owner::signal::OwnerSignal,
     shared::{
         browser_preferences::{MediaFeature, MediaMatches},
-        owner_signal::OwnerSignal,
         preferred_locales,
     },
 };
@@ -207,7 +207,7 @@ impl Drop for WebPreferences {
                 target.remove_event_listener_with_callback(event, callback.as_ref().unchecked_ref())
             {
                 failed = true;
-                crate::shared::panic_boundary::contain_owner_callback(|| {
+                crate::owner::panic_boundary::contain_owner_callback(|| {
                     tracing::warn!(?error, event, "browser preference observer removal failed");
                 });
             }

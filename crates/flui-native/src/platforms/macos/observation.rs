@@ -13,7 +13,7 @@ use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol,
 };
 
-use crate::shared::panic_boundary::contain_owner_callback;
+use crate::owner::panic_boundary::contain_owner_callback;
 
 pub(super) struct Observation {
     center: Retained<NSNotificationCenter>,

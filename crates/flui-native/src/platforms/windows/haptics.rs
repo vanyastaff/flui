@@ -524,10 +524,10 @@ mod tests {
     use super::super::events::SURFACE;
     use super::super::platform::{WindowRef, with_window_context};
     use crate::WindowsPlatform;
+    use crate::platform::Platform as _;
     use crate::shared::pointer_assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
-    use crate::traits::Platform as _;
     use flui_platform::HapticFeedback;
     use flui_platform::WindowOptions;
 
@@ -620,7 +620,7 @@ mod tests {
                 .expect("window")
         };
         let (first, second) = (open("flui haptics a"), open("flui haptics b"));
-        let win32 = |window: &Arc<dyn crate::traits::HostWindow>| {
+        let win32 = |window: &Arc<dyn crate::host_window::HostWindow>| {
             let window = window
                 .as_any()
                 .downcast_ref::<WindowsWindow>()

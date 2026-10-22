@@ -416,6 +416,38 @@ graph LR
   проба собирается, рисует, `MediaQuery` получает отступы и живую смену `animator_duration_scale`
   (Full → Reduce → Full). Браузер: `flui build web` пробы — платформа стартует, canvas-окно, WebGPU
   инициализирован, ошибок нет. macOS и iOS — в очереди vanyastaff/flui#1840.
+- [x] **LY25** — ветка `platform/owner-module`. `traits/` исчез: `Platform`,
+  `PlatformReadyCallback`, `PlatformExecutor`, `PathPromptOptions` — в `platform.rs` рядом с
+  `HostPlatform<H>`; `HostWindow` и `OwnerThreadToken` — в `host_window.rs`; `traits/owner.rs` и
+  `shared/{owner_signal,owner_slot,panic_boundary}` — в `owner/{mod,signal,slot,panic_boundary}.rs`
+  (`git mv`). Корень крейта экспортирует те же имена, новых публичных нет; путей `traits::` вне ADR,
+  `docs/plans` и выпущенных фрагментов changelog не осталось. `Platform` и `HostWindow` запечатаны
+  приватным супертрейтом с `#[diagnostic::on_unimplemented]`; окна реализуют печать через
+  crate-private маркер `CoreHostWindow` и одну обобщённую реализацию с
+  `#[diagnostic::do_not_recommend]`, чтобы текст ошибки не зависел от цели и фич. trybuild
+  `platform_and_host_window_are_sealed`: внешние `impl Platform` и `impl HostWindow` со всеми
+  методами дают ровно по одной ошибке печати (одинаково на Windows и Linux, с `winit-backend` и без).
+  Случаи удалённых имён импортируют из корня (E0432); случай `owner_thread_token_has_no_default`
+  получил по снимку на написание `Default`: rustc пишет `std::default::Default` на Windows и
+  `Default` на Linux, и снимок с Windows с LY20 не совпадал в Linux-job trybuild (Linux-снимок
+  совпадает и с `winit-backend,a11y`; macOS не проверен — trybuild в CI идёт на Linux).
+  `owner_thread_token_is_private` теперь доказывает, что корень не реэкспортирует токен (E0432):
+  модуля `traits`, через который `pub(crate)`-реэкспорт давал E0603, нет. `globals`:
+  `owner::slot::{LAST_SLOT_KEY, OWNER_VALUES}`; из пяти записей под `shared::` переехали две,
+  три (`clipboard_lock::{CLIPBOARD, reentrancy::SESSION_OPEN}`, `pointer_assembly::capture::INSTALLED`)
+  принадлежат буферу обмена и вводу и переедут с ними (LY32, LY29); `module-dag`: `base = ["owner"]`.
+  Известные пределы: печать `Platform` держится и на том, что `HostPlatform::from_loop` —
+  `pub(crate)` (внешний `Host` реализуем, но платформу из него не построить); `owner/signal.rs`
+  называет `shared::{InputWake, WindowCallbacks}` — оконную машинерию: когда она уйдёт в `window/`
+  (LY28), `owner/` получит трейт-хук вместо этого ребра (ADR-0151 §10). Решения:
+  `panic_boundary` — `pub(crate)`, его тест переехал к модулю (AGENTS.md DoD); doctest удалённых
+  имён ушёл с `traits/mod.rs` (их держат четыре trybuild-случая). Проверки на Windows: clippy
+  `-p flui-native -p flui-app -p flui-testing --all-targets -D warnings` и с `winit-backend,a11y`;
+  nextest `-p flui-native -p flui-app` — 263, с `winit-backend` — 243; `compiler_guards`;
+  `wasm-check`; clippy Android, macOS lib, iOS lib (`DOCS_RS=1`); `doc-strict`, `checks`,
+  `module-dag` (243 модуля, 1 base), `globals` (55), `workspace`, `reach`, `file-length`. WSL:
+  clippy `winit-backend,a11y`, `linux_preferences` — 16, юнит-тесты `owner::` — 4,
+  `compiler_guards` — зелёный.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

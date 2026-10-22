@@ -39,12 +39,11 @@ use flui_semantics::platform::{
 };
 
 use crate::error::PlatformError;
+use crate::host_window::HostWindow;
+use crate::owner::OpenWindowError;
+use crate::platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
 use crate::storage::DataDirs;
 use crate::task::Task;
-use crate::traits::{
-    HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformExecutor,
-    PlatformReadyCallback,
-};
 
 /// One type for each position of the closed list (ADR-0151 §3).
 ///

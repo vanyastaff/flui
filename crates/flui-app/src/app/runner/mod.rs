@@ -102,7 +102,7 @@ use web::run_web;
 /// [`OwnerPlatform`](flui_native::OwnerPlatform); without one installed
 /// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
-    host: std::sync::Arc<dyn flui_native::traits::HostWindow>,
+    host: std::sync::Arc<dyn flui_native::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
@@ -116,7 +116,7 @@ pub(crate) fn presentation_window(
 }
 
 fn text_store_host_of(
-    window: &std::sync::Arc<dyn flui_native::traits::HostWindow>,
+    window: &std::sync::Arc<dyn flui_native::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }

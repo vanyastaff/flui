@@ -40,7 +40,7 @@ use std::sync::{
 
 use super::native_owner::NativeOwner;
 use super::scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId, SceneHandler};
-use crate::shared::owner_signal::OwnerSignal;
+use crate::owner::signal::OwnerSignal;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
@@ -58,9 +58,9 @@ use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
 use crate::{
-    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::Platform,
-    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
-    traits::owner::OwnerHooks,
+    host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError, owner::OwnerHooks,
+    owner::OwnerPlatform, platform::Platform, platform::PlatformExecutor,
+    platform::PlatformReadyCallback,
 };
 use flui_foundation::geometry::Size;
 use flui_platform::{
@@ -179,7 +179,7 @@ impl IOSLoop {
                         if quitting {
                             platform.finish_quit();
                         } else {
-                            crate::shared::panic_boundary::contain_owner_callback(|| {
+                            crate::owner::panic_boundary::contain_owner_callback(|| {
                                 platform.arm_deadline();
                             });
                         }
@@ -235,7 +235,7 @@ impl IOSLoop {
             state.registered = true;
             state.handler.replace(callback)
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(old));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
         Ok(())
     }
 
@@ -254,7 +254,7 @@ impl IOSLoop {
                 Some(handler)
             }
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(old));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(old));
         match result {
             Ok(result) => result,
             Err(payload) => {
@@ -280,10 +280,10 @@ impl IOSLoop {
     fn announce_session_end(&self) {
         let hook = self.handlers.lock().session_end.take();
         if let Some(mut hook) = hook {
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 let _ = hook(flui_platform::SessionEndPhase::Ending);
             });
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(hook));
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(hook));
         }
     }
 
@@ -299,8 +299,8 @@ impl IOSLoop {
     fn invoke_quit(&self) {
         let callback = self.handlers.lock().quit.take();
         if let Some(mut callback) = callback {
-            crate::shared::panic_boundary::contain_owner_callback(&mut callback);
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+            crate::owner::panic_boundary::contain_owner_callback(&mut callback);
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
         }
     }
 
@@ -325,7 +325,7 @@ impl IOSLoop {
         if !self.state().borrow().draining {
             self.invoke_quit();
             let callback = self.state().borrow_mut().handler.take();
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
         }
     }
 
@@ -357,7 +357,7 @@ impl IOSLoop {
         };
         let identity = Arc::clone(&self.identity);
         let _ = dispatch2::DispatchQueue::main().after(when, move || {
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 FluiAppDelegate::with_platform(|platform| {
                     if !Arc::ptr_eq(&platform.identity, &identity) {
                         return;
@@ -598,7 +598,7 @@ impl host::Lifecycle<IOSLoop> for IOSLoop {
         callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
     ) {
         let previous = owner.handlers.lock().session_end.replace(callback);
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn on_host_notice(owner: &IOSLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
@@ -654,7 +654,7 @@ fn run_pending_bootstrap() -> bool {
         Arc::clone(&platform.signal),
     ));
     if !platform.signal.accepting() {
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(on_ready));
+        crate::owner::panic_boundary::contain_owner_callback(|| drop(on_ready));
         platform.finish_quit();
         return false;
     }
@@ -666,11 +666,11 @@ fn run_pending_bootstrap() -> bool {
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            crate::shared::panic_boundary::contain_owner_callback(
+            crate::owner::panic_boundary::contain_owner_callback(
                 || tracing::error!(%error, "iOS bootstrap failed"),
             );
             platform.finish_quit();
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(error));
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(error));
             return false;
         }
         Err(payload) => {
@@ -680,7 +680,7 @@ fn run_pending_bootstrap() -> bool {
         }
     }
     if let Err(error) = platform.signal.start() {
-        crate::shared::panic_boundary::contain_owner_callback(
+        crate::owner::panic_boundary::contain_owner_callback(
             || tracing::error!(%error, "owner signal start failed"),
         );
         platform.finish_quit();
@@ -708,7 +708,7 @@ define_class!(
             _options: Option<&AnyObject>,
         ) -> bool {
             let mut ready = false;
-            crate::shared::panic_boundary::contain_owner_callback(|| { ready = run_pending_bootstrap(); });
+            crate::owner::panic_boundary::contain_owner_callback(|| { ready = run_pending_bootstrap(); });
             ready
         }
 
@@ -735,7 +735,7 @@ define_class!(
         /// "after `run`" for the runner to use.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _application: &UIApplication) {
-            crate::shared::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — ending the session, then firing the quit handler"));
+            crate::owner::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — ending the session, then firing the quit handler"));
             Self::with_platform(IOSLoop::announce_session_end);
             Self::with_platform(IOSLoop::finish_quit);
         }
@@ -763,7 +763,7 @@ impl FluiAppDelegate {
         // take: the lifecycle callbacks keep arriving for the whole session.
         let platform = DELEGATE_STATE.with(|state| state.borrow().platform.clone());
         if let Some(platform) = platform {
-            crate::shared::panic_boundary::contain_owner_callback(|| body(&platform));
+            crate::owner::panic_boundary::contain_owner_callback(|| body(&platform));
         }
     }
 }
@@ -976,14 +976,14 @@ impl IOSLoop {
         loop {
             let action = self.state().borrow_mut().pending.pop_front();
             let Some(action) = action else { break };
-            crate::shared::panic_boundary::contain_owner_callback(|| self.apply_scene(action));
+            crate::owner::panic_boundary::contain_owner_callback(|| self.apply_scene(action));
         }
         drop(guard);
         self.poll_scene_installation();
         if !self.running.load(Ordering::SeqCst) {
             self.invoke_quit();
             let callback = self.state().borrow_mut().handler.take();
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
         }
     }
 
@@ -1095,7 +1095,7 @@ impl IOSLoop {
                 }
                 let resource_generation = window.resource_generation();
                 let proxy = crate::PlatformProxy::new(Arc::new(
-                    crate::shared::owner_signal::SignalTransport::new(&self.signal),
+                    crate::owner::signal::SignalTransport::new(&self.signal),
                 ));
                 let (acknowledgement, completion) =
                     crate::shared::window_installation::WindowInstallation::channel(proxy);
@@ -1110,7 +1110,7 @@ impl IOSLoop {
                 let result = self.emit_scene(IOSSceneEvent::Connected {
                     session: origin.session.clone(),
                     attachment: IOSSceneAttachmentId(origin.attachment),
-                    window: Arc::clone(&window) as Arc<dyn crate::traits::HostWindow>,
+                    window: Arc::clone(&window) as Arc<dyn crate::host_window::HostWindow>,
                     reconnect,
                     installation: acknowledgement,
                 });
@@ -1318,7 +1318,7 @@ define_class!(
 );
 impl FluiSceneDelegate {
     fn send(&self, scene: &UIScene, action: impl FnOnce(SceneOrigin) -> SceneAction) {
-        crate::shared::panic_boundary::contain_owner_callback(|| {
+        crate::owner::panic_boundary::contain_owner_callback(|| {
             use objc2::DefinedClass;
             let origin = self
                 .ivars()

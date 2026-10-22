@@ -24,10 +24,10 @@ use parking_lot::Mutex;
 use super::AndroidLoop;
 use crate::host;
 use crate::{
-    shared::WindowCallbacks, shared::input_availability::AndroidInputApis,
-    shared::os_version::android::AndroidApi, shared::os_version::android::DragSource,
-    shared::os_version::android::GestureExclusion, shared::os_version::android::TouchpadGestures,
-    shared::owner_slot::OwnerSlot, shared::window_state::WindowStateCell, traits::OpenWindowError,
+    owner::OpenWindowError, owner::slot::OwnerSlot, shared::WindowCallbacks,
+    shared::input_availability::AndroidInputApis, shared::os_version::android::AndroidApi,
+    shared::os_version::android::DragSource, shared::os_version::android::GestureExclusion,
+    shared::os_version::android::TouchpadGestures, shared::window_state::WindowStateCell,
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -47,7 +47,7 @@ pub struct AndroidWindow {
     redraw_requested: Arc<AtomicBool>,
     activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
-    owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
@@ -88,7 +88,7 @@ impl AndroidWindow {
     pub(super) fn new(
         app: AndroidApp,
         activity: Arc<ActivityFlags>,
-        owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+        owner_signal: Weak<crate::owner::signal::OwnerSignal>,
         java_view: Arc<super::java_view::JavaView>,
         displays: Arc<super::display::AndroidDisplays>,
         api: AndroidApi,
@@ -113,7 +113,7 @@ impl AndroidWindow {
             api,
         ));
         if let Some(signal) = owner_signal.upgrade() {
-            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
                 &signal, &callbacks,
             ));
         }
@@ -432,10 +432,12 @@ fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_runn
     execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
-impl crate::traits::HostWindow for AndroidWindow {
+impl crate::host_window::CoreHostWindow for AndroidWindow {}
+
+impl crate::host_window::HostWindow for AndroidWindow {
     fn capture_text_sizing(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
         if self.owner != std::thread::current().id() {
             return Err(crate::TextSizingCaptureError::WrongThread);
@@ -457,7 +459,7 @@ impl crate::traits::HostWindow for AndroidWindow {
     /// `InputConnection` serves the focused field's store.
     fn text_store_host(
         &self,
-        _owner: crate::traits::OwnerThreadToken,
+        _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
         self.text_input()
             .map(|input| input as Rc<dyn flui_platform::text_store::TextStoreHost>)
@@ -468,7 +470,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     fn open(
         owner: &AndroidLoop,
         options: WindowOptions,
-    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+    ) -> Result<Arc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         if options.input_latency == flui_platform::InputLatency::Low {
             // NativeActivity takes touch from the native input queue, which
             // `requestUnbufferedDispatch` does not reach (docs/gaps.md).

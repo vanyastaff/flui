@@ -24,9 +24,9 @@ use objc2_foundation::{NSDistributedNotificationCenter, NSNotificationCenter, NS
 use flui_platform::SystemNotice;
 
 use super::{loop_control::LoopControl, observation::Observation};
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::{
     dispatch_memory_pressure::{SUBSCRIBED, level_of},
-    panic_boundary::contain_owner_callback,
     system_notice::SystemNotices,
 };
 

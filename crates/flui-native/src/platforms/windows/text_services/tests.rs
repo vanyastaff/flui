@@ -24,7 +24,7 @@ use windows_core::Interface as _;
 
 use super::document::{TsfStore, TsfStore_Impl, ts_status};
 use super::{Serving, TextServices, same_object};
-use crate::traits::Platform;
+use crate::platform::Platform;
 use flui_platform::WindowOptions;
 
 /// "ab" with "かな" composing after it, as the store sees it.
@@ -595,7 +595,7 @@ fn a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure(hwnd: HWND) {
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
-    crate::shared::panic_boundary::panic_payload_message(payload).to_owned()
+    crate::owner::panic_boundary::panic_payload_message(payload).to_owned()
 }
 
 /// The `ITextStoreACP` TSF holds for the focused document.
@@ -719,7 +719,7 @@ fn the_document_status_follows_the_store_status() {
 /// or skip the deactivation in `WM_DESTROY` (the host still serves).
 #[test]
 fn a_window_offers_its_text_services_as_its_host() {
-    use crate::traits::{HostWindow as _, OwnerThreadToken};
+    use crate::host_window::{HostWindow as _, OwnerThreadToken};
 
     let platform = crate::WindowsPlatform::new().expect("platform");
     let window = platform
@@ -822,7 +822,7 @@ impl tracing::Subscriber for SinkNotifications {
 /// window follows the text; with no field focused nothing is sent.
 #[test]
 fn a_moved_window_tells_tsf_its_layout_changed() {
-    use crate::traits::{HostWindow as _, OwnerThreadToken};
+    use crate::host_window::{HostWindow as _, OwnerThreadToken};
     use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
@@ -1251,7 +1251,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
     );
     super::super::window::BEFORE_TSF_ACTIVATION.set(None);
     assert!(
-        matches!(opened, Err(crate::traits::OpenWindowError::Backend { .. })),
+        matches!(opened, Err(crate::owner::OpenWindowError::Backend { .. })),
         "the open fails with a typed error, got {:?}",
         opened.map(|_| "a window")
     );

@@ -86,15 +86,15 @@ pub use window::AndroidWindow;
 use crate::host::{self, Host};
 use crate::platform::HostPlatform;
 use crate::{
-    error::BootstrapError, error::PlatformError, redraw_poll::RedrawPoll, shared::PlatformHandlers,
-    shared::android_display::LoopTurn, shared::android_display::poll_timeout,
-    shared::android_lifecycle::ActivityEvent, shared::android_lifecycle::ActivityLifecycle,
-    shared::android_lifecycle::ActivityTarget, shared::android_lifecycle::Reaction,
-    shared::android_ndk::LoadedLibraries, shared::android_ndk::SymbolSource,
-    shared::os_version::android::AndroidApi, shared::os_version::android::StylusHandwriting,
-    shared::owner_signal::OwnerSignal, traits::OwnerPlatform, traits::Platform,
-    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks,
-    traits::owner::OwnerHooks,
+    error::BootstrapError, error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks,
+    owner::OwnerPlatform, owner::signal::OwnerSignal, platform::Platform,
+    platform::PlatformExecutor, platform::PlatformReadyCallback, redraw_poll::RedrawPoll,
+    shared::PlatformHandlers, shared::android_display::LoopTurn,
+    shared::android_display::poll_timeout, shared::android_lifecycle::ActivityEvent,
+    shared::android_lifecycle::ActivityLifecycle, shared::android_lifecycle::ActivityTarget,
+    shared::android_lifecycle::Reaction, shared::android_ndk::LoadedLibraries,
+    shared::android_ndk::SymbolSource, shared::os_version::android::AndroidApi,
+    shared::os_version::android::StylusHandwriting,
 };
 use flui_platform::{Clipboard, PlatformWindow, data_transfer::DataTransferSource};
 

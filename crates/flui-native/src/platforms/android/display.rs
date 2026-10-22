@@ -47,13 +47,13 @@ use jni::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
+use crate::owner::signal::OwnerSignal;
 use crate::shared::android_display::{RawDisplay, max_refresh_hz, requested_frame_rate};
 use crate::shared::android_ndk::{
     AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
 };
 use crate::shared::display_source::DisplaySource;
 use crate::shared::os_version::android::{AndroidApi, ContextDisplay};
-use crate::shared::owner_signal::OwnerSignal;
 use flui_platform::PreferenceQueryError;
 
 /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`.

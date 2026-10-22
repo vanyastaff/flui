@@ -43,9 +43,9 @@ use windows::Win32::{
 use windows::core::{BOOL, PCWSTR};
 
 use super::platform::WindowsLoop;
+use crate::owner::panic_boundary::contain_owner_callback;
 use crate::shared::{
     PlatformHandlers,
-    panic_boundary::contain_owner_callback,
     system_notice::SystemNotices,
     windows_host_messages::{self, HostEvent, HostMessage, QueryAnswer},
     windows_memory_watch::{HOLD_INTERVAL, MemoryWatch},

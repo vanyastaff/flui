@@ -428,7 +428,7 @@ impl TsfStore {
                     tracing::error!(
                         target: "flui_native::tsf",
                         method,
-                        panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                        panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
                         "a TSF call into the text store panicked; the document is poisoned"
                     );
                 });

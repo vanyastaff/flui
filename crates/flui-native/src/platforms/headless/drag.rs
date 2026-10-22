@@ -29,7 +29,7 @@ use flui_platform::{DragDropEvent, PlatformInput, PlatformWindow, WindowId};
 use parking_lot::Mutex;
 
 use super::platform::HeadlessState;
-use crate::shared::owner_slot::OwnerSlot;
+use crate::owner::slot::OwnerSlot;
 
 /// One OS drag session in flight.
 struct Session {
@@ -140,7 +140,7 @@ impl DataTransferSource for DragDouble {
         }
         let result = served.unwrap_or_else(|payload| {
             std::mem::forget(payload);
-            crate::shared::panic_boundary::contain_owner_callback(|| {
+            crate::owner::panic_boundary::contain_owner_callback(|| {
                 tracing::error!("the drag's provider panicked; the request fails");
             });
             Err(TransferError::SourceGone)
