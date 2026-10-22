@@ -81,7 +81,7 @@ host, and the dev server answers 404 to any path that is not a file
 page on focus below 16 px, which Flutter documents and guards against:
 [flutter/flutter@6597889f57
 engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:12-46](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L12-L46)) and no
-`enterkeyhint` (`crates/flui-native/src/text/web/input.rs:558-589`).
+`enterkeyhint` (`crates/flui-native/src/text/web.rs:634-665`).
 
 The question this record answers: how do Android, iOS and the Web host FLUI, so that accessibility,
 back, insets, activity results, permissions, deep links and text input reach the framework from the
@@ -410,7 +410,7 @@ text-input paths its platform requires.
   | `platform-support.toml` and the generated floors | `targetSdk` |
   | `crates/flui-native/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
-  | `crates/flui-native/src/text/web/input.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
+  | `crates/flui-native/src/text/web.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
   | `crates/flui-native/src/platforms/web/` | The semantics host and ARIA DOM, the history strategy, ownership of the root element |
   | `crates/flui-cli/templates/platforms/web/index.html`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
 

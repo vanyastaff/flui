@@ -6,10 +6,11 @@
   window offers one only when a test asks).
 - **Date:** 2026-10-06
 - **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
-  §10, the text services are the text feature's (`crates/flui-native/src/text/windows/`: `tsf`,
-  and §6's pure `geometry` beside it, no longer in `flui_native::shared`), and a window's
-  connection is activated by the text feature's hook on FLUI's window class when the class
-  announces the created window, still once the window's context is installed (§3).
+  §10: TSF lives in `crates/flui-native/src/text/windows/tsf/`, §6's geometry is the pure
+  `geometry` module of `text/windows/mod.rs`, and the text feature's hook on FLUI's window class
+  activates a window's connection once its context is installed and tells it the window moved;
+  the teardown stays in the window procedure, between the close callbacks and the context's
+  retirement (§3).
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
 - **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract),
@@ -102,9 +103,9 @@ composition must still end somewhere.
    explicit `SetFocus`; a document is never closed under its own COM entry. Each COM entry catches
    panics; a `BUG:` panic inside the adapter poisons the document, and after three the window
    falls back to `WM_CHAR`.
-6. **Geometry and lock translation are pure functions** in `flui_native::shared`, with no
-   `windows` type, tested on every host: `text_geometry::range_rect_to_screen` with outward
-   rounding, and, once written, the ACP flag and error translation beside it.
+6. **Geometry and lock translation are pure functions** in `text::windows::geometry`, with no
+   `windows` type, tested on every host: `range_rect_to_screen` with outward rounding, and, once
+   written, the ACP flag and error translation beside it.
 7. **No IMM32.**
 
 ## Alternatives considered
