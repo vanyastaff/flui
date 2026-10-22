@@ -30,7 +30,8 @@ use winit::{
     window::WindowId as WinitWindowId,
 };
 
-use super::{SelfCloseRoute, WinitApp, WinitLoop, WinitRunState};
+use super::testing::{install_test_owner_signal, wait_for_running};
+use super::{SelfCloseRoute, WinitApp, WinitLoop};
 use crate::{
     WinitPlatform, host_window::HostWindow, owner::winit::control::control_lane, platform::Platform,
 };
@@ -41,35 +42,6 @@ fn options(title: impl Into<String>) -> WindowOptions {
         .with_title(title)
         .with_size(Size::new(320.0, 240.0))
         .with_visible(false)
-}
-
-/// Manual WinitApp fixtures need the same owner signal as run_event_loop.
-pub(super) fn install_test_owner_signal(platform: &WinitLoop, event_loop: &EventLoop<()>) {
-    let proxy = event_loop.create_proxy();
-    *platform.owner_signal.lock() = Some(crate::owner::signal::OwnerSignal::new(Arc::new(
-        move || {
-            proxy
-                .send_event(())
-                .map_err(|error| crate::PlatformError::EventLoop {
-                    message: error.to_string(),
-                })
-        },
-    )));
-}
-
-/// Polls (bounded, 2s) until the owner has reached `Running` — the point
-/// at which `resumed()` has returned and the owner lane accepts
-/// deferred, post-bootstrap requests. Real wall-clock, not simulated:
-/// these lane tests drive an actual winit event loop.
-pub(super) fn wait_for_running(platform: &WinitLoop) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !platform.with_state(|state| matches!(state.run_state, WinitRunState::Running { .. })) {
-        assert!(
-            Instant::now() < deadline,
-            "owner never reached Running within 2s"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
 }
 
 /// Polls (bounded, 2s) until `window_id_map.len() == expected`. Used

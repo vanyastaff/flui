@@ -14,6 +14,10 @@ mod probe;
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
 pub(crate) use probe::connect_window_manager;
 
+// The winit window on a real X server, over a running winit loop.
+#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
+mod tests;
+
 pub(crate) mod mode {
     //! The mode of an X11 window, from the two properties a window manager keeps
     //! for it.

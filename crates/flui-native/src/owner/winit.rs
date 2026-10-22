@@ -2864,8 +2864,8 @@ impl ProxyTransport for WinitProxyTransport {
 // rather than two segments below it.
 #[cfg(test)]
 mod real_loop_tests;
-// The real loop the host table's window tests run on.
-#[cfg(all(test, target_os = "linux"))]
+// The real loop the tests here and the window's tests run on.
+#[cfg(test)]
 pub(crate) mod testing;
 
 #[cfg(test)]

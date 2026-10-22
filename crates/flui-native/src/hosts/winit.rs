@@ -152,6 +152,3 @@ impl Default for HostPlatform<Winit> {
         Self::new()
     }
 }
-
-#[cfg(all(test, target_os = "linux"))]
-mod x11_window_tests;

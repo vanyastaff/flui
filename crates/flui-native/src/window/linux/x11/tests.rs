@@ -7,8 +7,9 @@
 //! server holds. The commands a server carries out alone (size, position,
 //! mapping) are checked as the commands themselves.
 //!
-//! The winit window on a running winit loop: the host table's tests, the one
-//! module that names the loop, the window and the platform together.
+//! The winit window runs on a real winit loop whose hooks report nothing
+//! (`owner::winit::testing::QuietHost`), under a table of its own
+//! ([`X11Windows`]): the window, its probe and the loop, without the host's.
 
 use std::{
     sync::{Arc, atomic::Ordering},
@@ -28,15 +29,47 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use crate::WinitPlatform;
+use crate::host::{Absent, Host, position};
 use crate::host_window::HostWindow;
-use crate::owner::winit::LoopWindow;
-use crate::owner::winit::testing::run_window_scenario;
-use crate::window::winit::WinitWindow;
+use crate::owner::winit::testing::{QuietHost, run_window_scenario};
+use crate::owner::winit::{LoopWindow, WinitLoop};
+use crate::platform::HostPlatform;
+use crate::window::linux::x11::connect_window_manager;
+use crate::window::winit::{WinitWindow, WinitWindows};
 use flui_platform::{
     WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowOptions, WindowReveal,
     WindowState,
 };
+
+/// The table these tests run: the winit window and its X11 probe over the
+/// winit loop, every position a window does not reach absent.
+struct X11Windows;
+
+impl Host for X11Windows {
+    const NAME: &'static str = "winit window on X11 (tests)";
+
+    type Loop = WinitLoop;
+    type Window = WinitWindow;
+    type Displays = WinitLoop;
+    type Input = WinitLoop;
+    type Text = Absent<position::Text>;
+    type Accessibility = Absent<position::Accessibility>;
+    type Clipboard = WinitLoop;
+    type Drag = WinitLoop;
+    type Haptics = Absent<position::Haptics>;
+    type Preferences = WinitLoop;
+    type Lifecycle = WinitLoop;
+    type Chrome = Absent<position::Chrome>;
+    type Storage = Absent<position::Storage>;
+}
+
+/// A platform of [`X11Windows`] whose windows attach the X11 probe.
+fn platform() -> Arc<HostPlatform<X11Windows>> {
+    Arc::new(HostPlatform::from_parts(
+        WinitWindows::new(connect_window_manager),
+        |windows| WinitLoop::new::<QuietHost>(Arc::clone(windows) as _),
+    ))
+}
 
 fn build_x11_event_loop() -> EventLoop<()> {
     use winit::platform::x11::EventLoopBuilderExtX11;
@@ -139,23 +172,19 @@ fn run_x11_scenario(
     opening: WindowOptions,
     scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
 ) {
-    run_x11_window(
-        Arc::new(WinitPlatform::new()),
-        opening,
-        move |window, server| {
-            let id = window
-                .as_any()
-                .downcast_ref::<WinitWindow>()
-                .and_then(LoopWindow::x11_id)
-                .expect("an X11 window has an id once the probe is attached");
-            scenario(window, id, server);
-        },
-    );
+    run_x11_window(platform(), opening, move |window, server| {
+        let id = window
+            .as_any()
+            .downcast_ref::<WinitWindow>()
+            .and_then(LoopWindow::x11_id)
+            .expect("an X11 window has an id once the probe is attached");
+        scenario(window, id, server);
+    });
 }
 /// [`run_x11_scenario`] on a platform the caller has prepared, for a
 /// scenario that needs no X11 id.
 fn run_x11_window(
-    host: Arc<WinitPlatform>,
+    host: Arc<HostPlatform<X11Windows>>,
     opening: WindowOptions,
     scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
 ) {
@@ -544,7 +573,7 @@ fn x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode() {
 /// that nothing would tell it of: winit sends no event for one on X11.
 #[test]
 fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
-    let host = Arc::new(WinitPlatform::new());
+    let host = platform();
     // The probe's connections failed: the platform remembers that.
     assert!(
         host.window_shared().window_manager.set(None).is_ok(),
