@@ -55,20 +55,11 @@ pub(crate) fn since<F: Gate>(version: F::Version) -> Option<Since<F>> {
         .map(|_| Since(PhantomData))
 }
 
-/// The Windows build this process runs on.
+/// The Windows build: its order and its floor. The build the process runs on is read by
+/// `read_build`, the one part that calls the system.
 #[cfg(any(windows, test))]
+#[forbid(unsafe_code)]
 pub(crate) mod windows {
-    #[cfg(windows)]
-    use windows::{
-        Wdk::System::SystemServices::RtlGetVersion,
-        Win32::{
-            Devices::Display::{
-                QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE, QUERY_DISPLAY_CONFIG_FLAGS,
-            },
-            System::SystemInformation::OSVERSIONINFOW,
-        },
-    };
-
     use crate::version::floor::WINDOWS_BUILD;
 
     use super::{Gate, OsVersion, Since};
@@ -78,36 +69,10 @@ pub(crate) mod windows {
     pub(crate) struct WindowsBuild(u32);
 
     impl WindowsBuild {
-        /// A build `RtlGetVersion` could not report, which unlocks nothing.
+        /// A build the system could not report, which unlocks nothing.
         pub(crate) const UNKNOWN: Self = Self(0);
 
-        /// Read the running build with `RtlGetVersion`, which, unlike `GetVersionExW`, does not
-        /// report the manifest's compatibility version. A failed read is
-        /// [`UNKNOWN`](Self::UNKNOWN).
-        #[cfg(windows)]
-        #[expect(
-            unsafe_code,
-            reason = "reads the build with RtlGetVersion; the block names its contract"
-        )]
-        pub(crate) fn read() -> Self {
-            let mut info = OSVERSIONINFOW {
-                dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
-                ..Default::default()
-            };
-            // SAFETY: `info` is an `OSVERSIONINFOW` whose size field holds its own
-            // size, which is what `RtlGetVersion` requires; it outlives the call.
-            let status = unsafe { RtlGetVersion(&raw mut info) };
-            if status.is_err() {
-                tracing::warn!(
-                    ?status,
-                    "the Windows build is unknown; gated flags stay off"
-                );
-                return Self::UNKNOWN;
-            }
-            Self(info.dwBuildNumber)
-        }
-
-        #[cfg(test)]
+        /// The build the system reported.
         pub(crate) const fn from_number(build: u32) -> Self {
             Self(build)
         }
@@ -115,15 +80,6 @@ pub(crate) mod windows {
         /// The proof that this build has feature `F`, or `None`.
         pub(crate) fn since<F: Gate<Version = Self>>(self) -> Option<Since<F>> {
             super::since::<F>(self)
-        }
-
-        /// The `QueryDisplayConfig` flags for the active paths on this build.
-        #[cfg(windows)]
-        pub(crate) fn display_config_flags(self) -> QUERY_DISPLAY_CONFIG_FLAGS {
-            match self.since::<QdcVirtualModeAware>() {
-                Some(proof) => QDC_ONLY_ACTIVE_PATHS | QUERY_DISPLAY_CONFIG_FLAGS::from(proof),
-                None => QDC_ONLY_ACTIVE_PATHS,
-            }
         }
     }
 
@@ -141,72 +97,57 @@ pub(crate) mod windows {
             write!(formatter, "build {}", self.0)
         }
     }
+}
 
-    /// `QDC_VIRTUAL_MODE_AWARE`, which `QueryDisplayConfig` accepts from Windows 10 1903 (build
-    /// 18362). Without it the active paths are queried without virtual-mode awareness.
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct QdcVirtualModeAware;
+/// Reading the build the process runs on, with `RtlGetVersion`.
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "reads the build with RtlGetVersion; the block names its contract"
+)]
+mod read_build {
+    use windows::{
+        Wdk::System::SystemServices::RtlGetVersion,
+        Win32::System::SystemInformation::OSVERSIONINFOW,
+    };
 
-    impl Gate for QdcVirtualModeAware {
-        type Version = WindowsBuild;
-        const SINCE: u64 = 18362;
-    }
+    use super::windows::WindowsBuild;
 
-    #[cfg(windows)]
-    impl From<Since<QdcVirtualModeAware>> for QUERY_DISPLAY_CONFIG_FLAGS {
-        fn from(_proof: Since<QdcVirtualModeAware>) -> Self {
-            QDC_VIRTUAL_MODE_AWARE
+    impl WindowsBuild {
+        /// Read the running build with `RtlGetVersion`, which, unlike `GetVersionExW`, does not
+        /// report the manifest's compatibility version. A failed read is
+        /// [`UNKNOWN`](Self::UNKNOWN).
+        pub(crate) fn read() -> Self {
+            let mut info = OSVERSIONINFOW {
+                dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: `info` is an `OSVERSIONINFOW` whose size field holds its own
+            // size, which is what `RtlGetVersion` requires; it outlives the call.
+            let status = unsafe { RtlGetVersion(&raw mut info) };
+            if status.is_err() {
+                tracing::warn!(
+                    ?status,
+                    "the Windows build is unknown; gated flags stay off"
+                );
+                return Self::UNKNOWN;
+            }
+            Self::from_number(info.dwBuildNumber)
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-
-        fn windows_build_below_18362_omits_the_virtual_mode_flag() {
-            let old = WindowsBuild::from_number(18361);
-            assert!(old.since::<QdcVirtualModeAware>().is_none());
-            #[cfg(windows)]
-            {
-                assert_eq!(old.display_config_flags(), QDC_ONLY_ACTIVE_PATHS);
-                assert_eq!(
-                    WindowsBuild::UNKNOWN.display_config_flags(),
-                    QDC_ONLY_ACTIVE_PATHS,
-                    "an unknown build unlocks nothing"
-                );
-            }
-            let new = WindowsBuild::from_number(18362);
-            assert!(new.since::<QdcVirtualModeAware>().is_some());
-            #[cfg(windows)]
-            assert_eq!(
-                new.display_config_flags(),
-                QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE
-            );
-        }
-
-        #[cfg(windows)]
-        fn the_running_build_is_read() {
-            assert!(
-                WindowsBuild::read().0 >= 10_000,
-                "RtlGetVersion reports the real build, not a manifest-compatible one"
-            );
-        }
+        use super::super::OsVersion;
+        use super::WindowsBuild;
 
         #[test]
-        fn os_capability_table() {
-            crate::table_test::run_table(
-                "os_capability_table",
-                &[
-                    (
-                        "windows_build_below_18362_omits_the_virtual_mode_flag",
-                        windows_build_below_18362_omits_the_virtual_mode_flag as fn(),
-                    ),
-                    #[cfg(windows)]
-                    (
-                        "the_running_build_is_read",
-                        the_running_build_is_read as fn(),
-                    ),
-                ],
+        fn the_running_build_is_read() {
+            assert!(
+                WindowsBuild::read()
+                    .ordinal()
+                    .is_some_and(|build| build >= 10_000),
+                "RtlGetVersion reports the real build, not a manifest-compatible one"
             );
         }
     }
@@ -616,10 +557,10 @@ mod tests {
         TextWeight, TouchpadGestures, VibrationTouchUsage,
     };
     use super::testing::row;
-    use super::windows::{QdcVirtualModeAware, WindowsBuild};
 
-    /// The markers declared here; the NDK's and the display link's are checked beside them
-    /// (`owner::android::ndk`, `display::apple::link_rate`).
+    /// The markers declared here; the NDK's, the display link's and the Windows display query's
+    /// are checked beside them (`owner::android::ndk`, `display::apple::link_rate`,
+    /// `display::windows::sample`).
     #[test]
     fn os_version_gate_table() {
         let api = AndroidApi::from_level;
@@ -712,12 +653,6 @@ mod tests {
             api(35),
             api(36),
             unknown,
-        ));
-        failures.extend(row::<QdcVirtualModeAware>(
-            "QdcVirtualModeAware",
-            WindowsBuild::from_number(18361),
-            WindowsBuild::from_number(18362),
-            WindowsBuild::UNKNOWN,
         ));
         assert!(failures.is_empty(), "{failures:#?}");
     }

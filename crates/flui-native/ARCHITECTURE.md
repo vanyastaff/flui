@@ -626,10 +626,14 @@ trait depends on `flui-platform` instead.
 - **An OS version is compared only inside `version::gate` (ADR-0244).**
   Windows, iOS and Android each have one version type (`WindowsBuild`,
   `AppleVersion`, `AndroidApi`), each in a module of `version/gate.rs` built
-  for its target and for tests, read once when the platform is built and kept
-  in it, with its number private; reading it is the one part that needs the
-  system (`WindowsBuild::read`, `AppleVersion::read`; the Android level is read
-  where the NDK is looked up, `owner::android::ndk`). The floors are
+  for its target and for tests and forbidding `unsafe`, read once when the
+  platform is built and kept in it, with its number private; reading it is the
+  one part that needs the system, under `cfg(<os>)` (`read_build`, the
+  `RtlGetVersion` call behind `WindowsBuild::read`; `AppleVersion::read`; the
+  Android level is read where the NDK is looked up, `owner::android::ndk`).
+  What a version unlocks lives with the code that uses it: the virtual-mode
+  display query's gate and its flags are the Windows display source's
+  (`display::windows`). The floors are
   `version/floor.rs`, generated from `platform-support.toml` by `cargo xtask
   platform-floor`. An API newer than the floor is a marker type implementing
   `Gate`, whose doc says what the code does without it; `version.since::<F>()`
@@ -639,10 +643,11 @@ trait depends on `flui-platform` instead.
   Clippy refuses `objc2::available!` and `AndroidApp::sdk_version`. `version`
   is a `base` of `module-dag`: it names no feature, in its tests too. Each
   module that declares markers checks them, at the version before `SINCE`, at
-  `SINCE` and at an unknown version, through `version::gate::testing::row`:
-  `os_version_gate_table` the markers of `version::gate`, `ndk_gate_table` the
-  NDK functions' (`owner::android::ndk`) and `frame_rate_range_gate_table` the
-  display link's (`display::apple::link_rate`).
+  `SINCE` and at an unknown version: `os_version_gate_table` the markers of
+  `version::gate`, `ndk_gate_table` the NDK functions' (`owner::android::ndk`)
+  and `frame_rate_range_gate_table` the display link's
+  (`display::apple::link_rate`), through `version::gate::testing::row`, and
+  `virtual_mode_gate_table` the display query's (`display::windows::sample`).
 
 ---
 

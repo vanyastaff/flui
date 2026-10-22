@@ -166,8 +166,9 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
      the version map agree, and a planted drift in each is reported;
    - `packaged_artifacts_carry_the_floor` (flui-cli): the generated `Info.plist`, Windows manifest,
      APK manifest and Gradle property carry the floor, and an application `min` below it is rejected;
-   - `os_version_gate_table` (flui-native), with `ndk_gate_table` and `frame_rate_range_gate_table`
-     for the markers declared beside the NDK lookup and the display link: one row per marker, at
+   - `os_version_gate_table` (flui-native), with `ndk_gate_table`, `frame_rate_range_gate_table`
+     and `virtual_mode_gate_table` for the markers declared beside the NDK lookup, the display link
+     and the Windows display query: one row per marker, at
      `SINCE` minus one (no proof) and at `SINCE` (proof), plus an unknown version that unlocks
      nothing;
    - `floor_refusal_contract` (flui-native, headless with an injected version and probe): a version

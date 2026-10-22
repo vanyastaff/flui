@@ -22,10 +22,25 @@ pub(crate) use source::WindowsDisplays;
 #[forbid(unsafe_code)]
 pub(crate) mod sample {
     //! The rules of the Windows display source that need no Win32 call: how a rate
-    //! the OS reports becomes a [`RefreshPeriod`], and which sampled display a
-    //! window's nearest monitor is. Every host runs their tests.
+    //! the OS reports becomes a [`RefreshPeriod`], which sampled display a
+    //! window's nearest monitor is, and from which build the display query is
+    //! virtual-mode aware. Every host runs their tests.
 
     use flui_platform::{DisplayId, DisplayKey, RefreshPeriod};
+
+    use crate::version::gate::Gate;
+    use crate::version::gate::windows::WindowsBuild;
+
+    /// `QDC_VIRTUAL_MODE_AWARE`, which `QueryDisplayConfig` accepts from Windows 10
+    /// 1903 (build 18362). Without it the active paths are queried without
+    /// virtual-mode awareness.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct QdcVirtualModeAware;
+
+    impl Gate for QdcVirtualModeAware {
+        type Version = WindowsBuild;
+        const SINCE: u64 = 18362;
+    }
 
     /// The period of the rational rate `QueryDisplayConfig` reports for a target
     /// (`DISPLAYCONFIG_RATIONAL`), kept exact: 60000/1001 stays 16.683 ms. `None`
@@ -84,7 +99,28 @@ pub(crate) mod sample {
 
         use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
-        use super::{SampledMonitor, frequency_period, rational_refresh_period, resolve_display};
+        use super::{
+            QdcVirtualModeAware, SampledMonitor, WindowsBuild, frequency_period,
+            rational_refresh_period, resolve_display,
+        };
+
+        /// The display query's gate, the row of `version::gate`'s table for the
+        /// marker declared here: no proof before build 18362, one from it on, and
+        /// none for a build the system could not report.
+        #[test]
+        fn virtual_mode_gate_table() {
+            for (build, aware) in [
+                (WindowsBuild::from_number(18361), false),
+                (WindowsBuild::from_number(18362), true),
+                (WindowsBuild::UNKNOWN, false),
+            ] {
+                assert_eq!(
+                    build.since::<QdcVirtualModeAware>().is_some(),
+                    aware,
+                    "{build}"
+                );
+            }
+        }
 
         fn target(target_id: u32) -> DisplayKey {
             DisplayKey::WindowsTarget {
@@ -257,7 +293,8 @@ pub(crate) mod source {
         Devices::Display::{
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
             DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
-            GetDisplayConfigBufferSizes, QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE,
+            QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
         },
         Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, RECT, TRUE},
         Graphics::Gdi::{
@@ -274,10 +311,12 @@ pub(crate) mod source {
     use windows::core::{BOOL, PCWSTR};
 
     use super::sample::{
-        SampledMonitor, frequency_period, rational_refresh_period, resolve_display,
+        QdcVirtualModeAware, SampledMonitor, frequency_period, rational_refresh_period,
+        resolve_display,
     };
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
+    use crate::version::gate::Since;
     use crate::version::gate::windows::WindowsBuild;
 
     /// One platform instance's monitors: the last sample, and whether anything has
@@ -437,7 +476,7 @@ pub(crate) mod source {
         /// Enumerate the monitors now: their displays and the handle-to-key pairs
         /// that resolve a window's nearest monitor.
         fn read(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
-            let paths = query_source_paths(self.build.display_config_flags()).unwrap_or_default();
+            let paths = query_source_paths(display_config_flags(self.build)).unwrap_or_default();
             let mut displays = Vec::new();
             let mut sampled = Vec::new();
             for monitor in enumerate_monitors() {
@@ -530,6 +569,21 @@ pub(crate) mod source {
             });
         }
         interface_path().map(DisplayKey::WindowsInterface)
+    }
+
+    /// The `QueryDisplayConfig` flags for the active paths on `build`:
+    /// virtual-mode aware where the build has it.
+    fn display_config_flags(build: WindowsBuild) -> QUERY_DISPLAY_CONFIG_FLAGS {
+        match build.since::<QdcVirtualModeAware>() {
+            Some(proof) => QDC_ONLY_ACTIVE_PATHS | QUERY_DISPLAY_CONFIG_FLAGS::from(proof),
+            None => QDC_ONLY_ACTIVE_PATHS,
+        }
+    }
+
+    impl From<Since<QdcVirtualModeAware>> for QUERY_DISPLAY_CONFIG_FLAGS {
+        fn from(_proof: Since<QdcVirtualModeAware>) -> Self {
+            QDC_VIRTUAL_MODE_AWARE
+        }
     }
 
     /// The attempts `QueryDisplayConfig` gets when the topology grows between
@@ -833,6 +887,25 @@ pub(crate) mod source {
                         a_monitor_without_a_config_path_uses_its_interface_path as fn(),
                     ),
                 ],
+            );
+        }
+
+        /// The display query asks for virtual-mode awareness from build 18362 on,
+        /// and an unknown build unlocks nothing.
+        #[test]
+        fn windows_build_below_18362_omits_the_virtual_mode_flag() {
+            assert_eq!(
+                display_config_flags(WindowsBuild::from_number(18361)),
+                QDC_ONLY_ACTIVE_PATHS
+            );
+            assert_eq!(
+                display_config_flags(WindowsBuild::UNKNOWN),
+                QDC_ONLY_ACTIVE_PATHS,
+                "an unknown build unlocks nothing"
+            );
+            assert_eq!(
+                display_config_flags(WindowsBuild::from_number(18362)),
+                QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE
             );
         }
     }
