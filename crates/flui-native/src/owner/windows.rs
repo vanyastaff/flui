@@ -70,7 +70,7 @@ use crate::{
     host,
     owner::OwnerHooks,
     owner::OwnerPlatform,
-    owner::handlers::{OpenWindows, PlatformHandlers},
+    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
     owner::hwnd_affinity::UserDataRefusal,
     platform::Platform,
     platform::PlatformExecutor,
@@ -86,6 +86,20 @@ use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
 
+/// The signed x coordinate a message packs in the low word of its `LPARAM`
+/// (`GET_X_LPARAM`): a mouse message's, a move's.
+#[inline]
+pub(crate) fn get_x_lparam(lparam: LPARAM) -> i32 {
+    (lparam.0 & 0xFFFF) as i16 as i32
+}
+
+/// The signed y coordinate a message packs in the high word of its `LPARAM`
+/// (`GET_Y_LPARAM`).
+#[inline]
+pub(crate) fn get_y_lparam(lparam: LPARAM) -> i32 {
+    ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
+}
+
 /// Windows' registration of FLUI's window class: the host whose hooks the
 /// class's procedure dispatches to, or why the registration failed. Windows
 /// holds the class, and the procedure it was registered with, once per
@@ -94,7 +108,102 @@ pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
 static WINDOW_CLASS: OnceLock<Result<TypeId, String>> = OnceLock::new();
 
 /// The hooks of FLUI's window class, in the order a message reaches them.
-pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
+pub(crate) type WindowHooks = Rc<[Rc<dyn WindowMessages>]>;
+
+/// FLUI's window class on one owner thread, as the host's table makes it
+/// ([`WindowsHost::window_class`]): the hooks its procedure offers each
+/// message of a window to, and what those hooks tell the window's other
+/// features of its input. A hook keeps what it needs of a window as its own
+/// state, keyed by the window's identity, from the window's announcement
+/// ([`WindowMessages::created`]) to its destruction.
+#[derive(Clone)]
+pub(crate) struct WindowClass {
+    /// The hooks, in the order a message reaches them.
+    pub(crate) hooks: WindowHooks,
+    /// The input those hooks keep, as the window, drag and drop and haptics
+    /// read it.
+    pub(crate) input: Rc<dyn WindowInputs>,
+}
+
+thread_local! {
+    /// FLUI's window class on this thread, by the host whose table made it:
+    /// what the class's procedure, which Win32 calls with a window's handle and
+    /// no pointer of FLUI's, reads to find the hooks of the window's owner
+    /// (ADR-0097's Win32 trampoline). A host's class is made the first time an
+    /// owner of that host opens on the thread and lives as long as the thread;
+    /// its hooks keep a window's state only while the window exists.
+    static CLASS_ON_THREAD: RefCell<Vec<(TypeId, WindowClass)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// FLUI's window class on this thread for host `H`, made on first use; `None`
+/// while the thread's storage is torn down, when no message is answered.
+pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
+    let host = TypeId::of::<H>();
+    let kept = CLASS_ON_THREAD
+        .try_with(|classes| {
+            classes
+                .borrow()
+                .iter()
+                .find(|(made_for, _)| *made_for == host)
+                .map(|(_, class)| class.clone())
+        })
+        .ok()?;
+    if let Some(class) = kept {
+        return Some(class);
+    }
+    // Made with no borrow held: the table's constructors are its own code.
+    let class = H::window_class();
+    CLASS_ON_THREAD
+        .try_with(|classes| classes.borrow_mut().push((host, class.clone())))
+        .ok()?;
+    Some(class)
+}
+
+/// What the input of FLUI's window class on this thread tells the other
+/// features of a window, for the host the process registered the class for;
+/// `None` on a thread no owner of that host opened on.
+pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+    let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
+    CLASS_ON_THREAD
+        .try_with(|classes| {
+            classes
+                .borrow()
+                .iter()
+                .find(|(made_for, _)| *made_for == host)
+                .map(|(_, class)| Rc::clone(&class.input))
+        })
+        .ok()
+        .flatten()
+}
+
+/// What the input of FLUI's window class tells the window's other features
+/// (the window itself, drag and drop, haptics) of a window, read-only. Each
+/// answers `None` for a window the input does not hold: one it was never told
+/// of, one already destroyed, or a reference whose handle now names another
+/// window.
+pub(crate) trait WindowInputs {
+    /// Whether the mouse is over the window's client area.
+    fn hovered(&self, window: WindowRef) -> Option<bool>;
+
+    /// The keyboard modifiers the window's last key message carried.
+    fn modifiers(&self, window: WindowRef) -> Option<flui_platform::Modifiers>;
+
+    /// The kind of the contact whose press began `pointer`'s sequence in the
+    /// window.
+    fn press_kind(
+        &self,
+        window: WindowRef,
+        pointer: flui_platform::PointerId,
+    ) -> Option<flui_platform::pointer::PointerKind>;
+
+    /// The OS's id of a pen contact in range of the window (touching or
+    /// hovering): `device`'s, or with `None` the pen read most recently.
+    fn pen_in_range(
+        &self,
+        window: WindowRef,
+        device: Option<flui_platform::pointer::DeviceId>,
+    ) -> Option<u64>;
+}
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
 /// hooks of FLUI's window class and the subscribers of the broadcast receiver,
@@ -102,9 +211,10 @@ pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 /// source, the notice channel, the lifecycle and the drag-and-drop transport
 /// the loop holds. The owner dispatches through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
-    /// The hooks of FLUI's window class; its procedure is
-    /// `window_proc::<Self>`.
-    const WINDOW_HOOKS: WindowHooks;
+    /// FLUI's window class on an owner thread: its hooks, whose procedure is
+    /// `window_proc::<Self>`, and their input. Made once per thread an owner
+    /// of this host opens on ([`window_class`]).
+    fn window_class() -> WindowClass;
 
     /// The system preference source the owner keeps for the table's
     /// preference position.
@@ -192,6 +302,22 @@ impl WindowRef {
     }
 }
 
+/// Whether `hwnd` is a live window of FLUI's class, the only class whose
+/// `GWLP_USERDATA` slot follows FLUI's protocol. Guards
+/// against handle recycling: a dead handle value can be reissued for an
+/// unrelated window.
+pub(crate) fn is_flui_window(hwnd: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    let mut name = [0_u16; 256];
+    // SAFETY: `GetClassNameW` writes at most `name.len()` UTF-16 units into the
+    // live stack buffer and returns the count copied without the terminator
+    // (0 for a dead handle); `WINDOW_CLASS_NAME` is a NUL-terminated static
+    // literal, whose length `as_wide` measures without the terminator too.
+    let (copied, expected) =
+        unsafe { (GetClassNameW(hwnd, &mut name), WINDOW_CLASS_NAME.as_wide()) };
+    crate::owner::hwnd_affinity::class_name_matches(&name, copied, expected)
+}
+
 /// The host's drag-and-drop transport as the loop, its owner window and the
 /// windows it opens reach it, which the table makes ([`WindowsHost::drag`]):
 /// the platform's one data-transfer source, and its part of the owner window's
@@ -236,7 +362,7 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 ///
 /// The class and its raw procedure are the owner's: the procedure holds the
 /// panic boundary and offers each message to the hooks in the order the host
-/// names them ([`WindowsHost::WINDOW_HOOKS`]); the first that answers ends the
+/// names them ([`WindowClass::hooks`]); the first that answers ends the
 /// message's dispatch, and a message no hook answers goes to `DefWindowProcW`.
 /// A window of the class, once created, is announced to every hook
 /// ([`Self::created`]).
@@ -246,9 +372,28 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 /// message in any order. A hook may also hear a message it does not answer
 /// and pass it on; the order then decides only that it hears the message
 /// before the hook that answers it.
+///
+/// A feature that answers a message whose handling is a step other features
+/// follow tells every hook of it ([`Self::step`]), and the window's own
+/// procedure tells them that the window is destroyed ([`Self::destroyed`]). A
+/// hook keeps what it needs of a window in itself, keyed by the window's
+/// identity: made when the window is announced, dropped when it is destroyed
+/// (and at `WM_NCDESTROY`, the window's last message, for one whose
+/// destruction was not announced), so no hook reaches another feature's state
+/// and a message for a window it does not hold finds none.
 pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
+
+    /// `window` took `step`, on its owner thread; told to every hook in order
+    /// at the point of the handling where the step is complete
+    /// ([`window_step`]).
+    fn step(&self, _window: WindowRef, _step: WindowStep) {}
+
+    /// `window` is destroyed (`WM_DESTROY`): its callbacks are still
+    /// registered and its handle still valid, and what a hook ends for it
+    /// reaches them. Told to every hook in order ([`window_destroyed`]).
+    fn destroyed(&self, _window: WindowRef) {}
 
     /// Whether this hook answers `msg`, with `wparam` telling apart the
     /// messages that share one number (the timer a `WM_TIMER` names, the
@@ -285,8 +430,69 @@ pub(crate) struct CreatedWindow {
     pub(crate) identity: WindowIdentity,
     /// Its client size in device pixels.
     pub(crate) client_size: (i32, i32),
+    /// Its DPI; a later change is a step ([`WindowStep::Rescaled`]).
+    pub(crate) dpi: u32,
+    /// Its callbacks, which a feature dispatches what it hears for the window
+    /// to.
+    pub(crate) callbacks: Arc<WindowCallbacks>,
+    /// The application's handlers, shared with every window of the loop.
+    pub(crate) handlers: Rc<RefCell<PlatformHandlers>>,
+    /// The system preference source the loop keeps, which measures the
+    /// system's mouse geometry at the window's scale.
+    pub(crate) preferences: Rc<dyn control::OwnerPreferences>,
+    /// The hooks of its class, which a feature tells a step of its own
+    /// ([`window_step`]).
+    pub(crate) hooks: WindowHooks,
     /// The owner thread's COM apartment, when the window was opened with it.
     pub(crate) apartment: Option<Rc<ComApartment>>,
+}
+
+impl CreatedWindow {
+    /// The window as an object that outlives this announcement names it.
+    pub(crate) fn window(&self) -> WindowRef {
+        WindowRef::new(self.hwnd, self.identity)
+    }
+}
+
+/// The scale a window at `dpi` draws at: its DPI over the 96 of 100%.
+pub(crate) fn dpi_scale(dpi: u32) -> f64 {
+    f64::from(dpi) / 96.0
+}
+
+/// A step of a window of FLUI's class that one feature handles and others
+/// follow, told to every hook ([`WindowMessages::step`]) where the step is
+/// complete: in the window's own procedure for its size, focus, paint, scale
+/// and settings, in the input's for a key the application let through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum WindowStep {
+    /// Its client area is now `(width, height)` device pixels; it is not
+    /// minimized.
+    Resized((i32, i32)),
+    /// It is minimized, and published so: what is held in it sees no release.
+    Minimized,
+    /// It lost the keyboard focus, and published so.
+    FocusLost,
+    /// It is about to paint a frame.
+    Painting,
+    /// The system's modal size-and-move loop starts for it.
+    SizeMoveStarted,
+    /// That loop ended.
+    SizeMoveEnded,
+    /// It is now at this DPI.
+    Rescaled {
+        /// Its DPI.
+        dpi: u32,
+    },
+    /// A system setting changed.
+    SettingChanged,
+    /// The application let a keydown through (did not prevent its default):
+    /// the window's own keys follow it. `repeat` when the key auto-repeats.
+    KeyLetThrough {
+        /// Its virtual-key code.
+        virtual_key: u16,
+        /// Whether it auto-repeats.
+        repeat: bool,
+    },
 }
 
 /// The window a hook was told of is gone: a message the hook dispatched
@@ -299,7 +505,7 @@ pub(crate) struct WindowGone;
 /// hook, `alive` says whether the window is still the one created; once it is
 /// not, no later hook hears of it, and the window is [`WindowGone`].
 pub(crate) fn window_created(
-    hooks: WindowHooks,
+    hooks: &[Rc<dyn WindowMessages>],
     window: &CreatedWindow,
     alive: impl Fn() -> bool,
 ) -> Result<(), WindowGone> {
@@ -312,8 +518,25 @@ pub(crate) fn window_created(
     Ok(())
 }
 
-/// Offers one message of a window of FLUI's class to `H`'s hooks, in order; a
-/// message no hook answers goes to `DefWindowProcW`.
+/// Tells `hooks`, in order, that `window` took `step`. A hook's handling may
+/// run user code that destroys the window: a later hook then holds no state
+/// for it and does nothing.
+pub(crate) fn window_step(hooks: &[Rc<dyn WindowMessages>], window: WindowRef, step: WindowStep) {
+    for hook in hooks {
+        hook.step(window, step);
+    }
+}
+
+/// Tells `hooks`, in order, that `window` is destroyed.
+pub(crate) fn window_destroyed(hooks: &[Rc<dyn WindowMessages>], window: WindowRef) {
+    for hook in hooks {
+        hook.destroyed(window);
+    }
+}
+
+/// Offers one message of a window of FLUI's class to the hooks of `H`'s
+/// class on this thread, in order; a message no hook answers goes to
+/// `DefWindowProcW`.
 ///
 /// # Safety
 ///
@@ -324,19 +547,24 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    for hook in H::WINDOW_HOOKS {
-        // SAFETY: the arguments as Win32 delivered them, per this function's
-        // `# Safety` contract.
-        if let Some(result) = unsafe { hook.message(hwnd, msg, wparam, lparam) } {
+    // A clone of the hooks: a hook's message may open or close windows, and
+    // nothing of the thread's class stays borrowed while it runs.
+    let hooks = window_class::<H>().map(|class| class.hooks);
+    let answered = hooks
+        .iter()
+        .flat_map(|hooks| hooks.iter())
+        .find_map(|hook| {
+            // SAFETY: the arguments as Win32 delivered them, per this function's
+            // `# Safety` contract.
+            let answer = unsafe { hook.message(hwnd, msg, wparam, lparam) };
             debug_assert!(
-                hook.answers(msg, wparam),
+                answer.is_none() || hook.answers(msg, wparam),
                 "BUG: a window hook answered message {msg:#x}, which its `answers` does not list"
             );
-            return result;
-        }
-    }
+            answer
+        });
     // SAFETY: forwards the message verbatim, as Win32 delivered it.
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
 }
 
 /// Load a cursor by style
@@ -365,7 +593,7 @@ unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
 /// window from one the OS built behind a recycled handle. The owner's
 /// message-only window has one too, drawn from the same source. Identities are
 /// minted in increasing order, so they order windows by when they opened.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {
@@ -1514,32 +1742,6 @@ impl host::Lifecycle<WindowsLoop> for WindowsLoop {
                 );
             }
         }
-    }
-}
-
-impl host::Input<WindowsLoop> for WindowsLoop {
-    fn keyboard_layout(_: &WindowsLoop) -> String {
-        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
-        // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
-        // sized to `KL_NAMELENGTH`, the exact size this API requires;
-        // `&mut buffer` gives it a valid, correctly-sized out-parameter, and
-        // it is only read (`is_ok()` branch) after the call reports success.
-        unsafe {
-            let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
-            if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
-                String::from_utf16_lossy(
-                    &buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())],
-                )
-            } else {
-                String::new()
-            }
-        }
-    }
-
-    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
-        });
     }
 }
 

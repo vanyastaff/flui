@@ -51,15 +51,44 @@ use flui_platform::{DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 /// What the headless host's table names for its loop (ADR-0151 §10): the
-/// displays a platform has before a test lays out its own, and the channel its
-/// system notices take. The loop holds the displays' snapshot, which is all
-/// the display double keeps, and names no feature.
+/// displays a platform has before a test lays out its own, the channel its
+/// system notices take and the simulated pointer devices. The loop holds the
+/// displays' snapshot, which is all the display double keeps, and names no
+/// feature.
 pub(crate) trait HeadlessHost: 'static {
     /// The snapshot of the displays every platform starts with.
     fn displays() -> DisplaySnapshot;
 
     /// The channel the system notices a test reports take to the application.
     fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel>;
+
+    /// The simulated system's pointer devices, none attached.
+    fn devices() -> Box<dyn SimulatedDevices>;
+}
+
+/// The pointer devices of the simulated system, which the input feature
+/// keeps ([`HeadlessHost::devices`]) and the loop holds with the rest of that
+/// system: a test attaches and removes them, and a window reads which kinds
+/// are present when it opens.
+pub(crate) trait SimulatedDevices: Send {
+    /// Attach a device of `kind` at `time`: the change every open window
+    /// hears, or `None` once device identities are exhausted.
+    fn attach(
+        &mut self,
+        kind: flui_platform::pointer::PointerKind,
+        time: flui_platform::EventTime,
+    ) -> Option<flui_platform::pointer::PointerDeviceChange>;
+
+    /// Remove the device `id` at `time`: the change every open window hears,
+    /// or `None` when no such device is attached.
+    fn remove(
+        &mut self,
+        id: flui_platform::pointer::DeviceId,
+        time: flui_platform::EventTime,
+    ) -> Option<flui_platform::pointer::PointerDeviceChange>;
+
+    /// The kinds of the devices attached now.
+    fn present(&self) -> flui_platform::input_capabilities::PointerKindSet;
 }
 
 /// The displays position is the loop's: the snapshot it holds.
@@ -180,10 +209,9 @@ pub(crate) struct HeadlessState {
     pub(crate) text_store_host: Option<TextStoreHostFactory>,
     /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
     pub(crate) input_availability: flui_platform::input_capabilities::InputCapabilities,
-    /// The attached input devices: presence and device ids from one registry.
-    pub(crate) devices: crate::shared::pointer_assembly::DeviceRegistry,
-    /// Issues each simulated device's native label, never one twice.
-    pub(crate) device_labels: flui_foundation::IdMint<std::num::NonZeroU64>,
+    /// The attached input devices, as the table made them
+    /// ([`HeadlessHost::devices`]).
+    pub(crate) devices: Box<dyn SimulatedDevices>,
     /// The displays this platform reports, which the table lays out
     /// ([`HeadlessHost::displays`]); replaced by
     /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
@@ -204,8 +232,9 @@ pub(crate) struct HeadlessState {
 }
 
 impl HeadlessLoop {
-    /// The loop of host `H`, whose table makes the displays and the notice
-    /// channel, and whose windows are `windows`, the window feature's.
+    /// The loop of host `H`, whose table makes the displays, the notice
+    /// channel and the simulated devices, and whose windows are `windows`, the
+    /// window feature's.
     pub(crate) fn new<H: HeadlessHost>(windows: Arc<dyn TrackedWindows>) -> Self {
         let state = HeadlessState {
             drags: Arc::default(),
@@ -223,8 +252,7 @@ impl HeadlessLoop {
             exit_reevaluation_requested: false,
             text_store_host: None,
             input_availability: default_input_availability(),
-            devices: crate::shared::pointer_assembly::DeviceRegistry::default(),
-            device_labels: flui_foundation::IdMint::new(),
+            devices: H::devices(),
             displays: H::displays(),
             notices: H::notices(),
             session_end_releases: 0,
@@ -801,8 +829,8 @@ mod tests {
     use super::*;
     use crate::host::Loop as _;
 
-    /// A host with no display and no notice, for a loop whose test reads
-    /// neither.
+    /// A host with no display, notice or device, for a loop whose test reads
+    /// none of them.
     struct EmptyHost;
 
     impl HeadlessHost for EmptyHost {
@@ -812,6 +840,35 @@ mod tests {
 
         fn notices() -> Arc<dyn crate::owner::notices::NoticeChannel> {
             Arc::new(NoNotices)
+        }
+
+        fn devices() -> Box<dyn SimulatedDevices> {
+            Box::new(NoDevices)
+        }
+    }
+
+    /// A system no device attaches to.
+    struct NoDevices;
+
+    impl SimulatedDevices for NoDevices {
+        fn attach(
+            &mut self,
+            _: flui_platform::pointer::PointerKind,
+            _: flui_platform::EventTime,
+        ) -> Option<flui_platform::pointer::PointerDeviceChange> {
+            None
+        }
+
+        fn remove(
+            &mut self,
+            _: flui_platform::pointer::DeviceId,
+            _: flui_platform::EventTime,
+        ) -> Option<flui_platform::pointer::PointerDeviceChange> {
+            None
+        }
+
+        fn present(&self) -> flui_platform::input_capabilities::PointerKindSet {
+            flui_platform::input_capabilities::PointerKindSet::empty()
         }
     }
 

@@ -470,18 +470,6 @@ impl host::Displays<MacOSLoop> for MacOSLoop {
     }
 }
 
-impl host::Input<MacOSLoop> for MacOSLoop {
-    fn keyboard_layout(_: &MacOSLoop) -> String {
-        // The host does not read AppKit's input source: the layout is unknown.
-        String::new()
-    }
-
-    fn on_keyboard_layout_change(_: &MacOSLoop, callback: Box<dyn FnMut() + Send>) {
-        // No layout is read, so no change is ever reported.
-        drop(callback);
-    }
-}
-
 /// The preference position is the loop's: it reads the source the table made
 /// ([`MacosHost::preferences`]).
 impl host::Preferences<MacOSLoop> for MacOSLoop {

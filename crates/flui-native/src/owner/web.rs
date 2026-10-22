@@ -1,8 +1,8 @@
 //! The web host's loop: the state every position of its table reads, and the
 //! `requestAnimationFrame` loop that drives its frames.
 //!
-//! Its `Send` and `Sync` claims rest on the page having one thread, which
-//! `platforms::web` enforces by refusing a `+atomics` build.
+//! Its `Send` and `Sync` claims rest on the page having one thread, which this
+//! module enforces by refusing a `+atomics` build.
 
 // This module is one of the workspace's sanctioned `unsafe` islands: the page
 // has one thread, so the loop and its executor claim `Send`/`Sync` by hand. The
@@ -10,10 +10,20 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
+// The host's `Send`/`Sync` claims rest on the page having one thread: the JS
+// handles and `RefCell`s it holds are never reached from another. A
+// shared-memory build (`+atomics`, wasm threads) breaks that, so it is refused
+// here rather than left to a data race.
+#[cfg(target_feature = "atomics")]
+compile_error!(
+    "the web backend assumes one thread; build wasm32 without the `atomics` target feature"
+);
+
+pub(crate) mod event;
 mod executor;
 pub(crate) mod listener;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -42,9 +52,9 @@ use crate::owner::watch::Watch;
 use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
-/// displays, the preference source, the page's lifecycle, the clipboard and
-/// the drag-and-drop transport the loop holds. The owner reaches them through
-/// the hooks and names no feature.
+/// displays, the preference source, the page's lifecycle, the clipboard, the
+/// drag-and-drop transport and the input the loop holds. The owner reaches
+/// them through the hooks and names no feature.
 pub(crate) trait WebHost: 'static {
     /// The displays, made once per loop: the loop holds them for the table's
     /// displays position and hands them to the window it opens.
@@ -72,6 +82,10 @@ pub(crate) trait WebHost: 'static {
     /// answers the table's drag position from it, and the window it opens
     /// registers its canvas through it.
     fn drag() -> Arc<dyn HostDrag>;
+
+    /// The page's input, made once per loop: the window it opens registers its
+    /// canvas's input through it.
+    fn input() -> Rc<dyn HostInput>;
 }
 
 /// The page's drag-and-drop transport as the loop and its window reach it,
@@ -87,14 +101,53 @@ pub(crate) trait HostDrag: DataTransferSource {
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
         callbacks: &Arc<WindowCallbacks>,
-        registration: &mut dyn CanvasListeners,
+        registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError>;
 }
 
-/// The DOM listeners a canvas's window keeps, which a feature listening beside
-/// the window adds to: they run only while the window accepts input, and go
-/// when it retires or its opening rolls back.
-pub(crate) trait CanvasListeners {
+/// The page's input as the window the loop opens reaches it, which the table
+/// makes ([`WebHost::input`]): the canvas's pointer, keyboard, wheel and
+/// gesture events, and what the page's input path delivers.
+pub(crate) trait HostInput {
+    /// What the page's input path delivers (ADR-0213), with no device present
+    /// yet: the window's first input capabilities.
+    fn availability(&self) -> flui_platform::input_capabilities::InputCapabilities;
+
+    /// Listen, in `registration`, for the input of `canvas`, dispatching to
+    /// the window's `callbacks`; `latency` picks the event a pointer's
+    /// movement arrives as. What the input keeps of the canvas lives in its
+    /// listeners, and goes with them.
+    ///
+    /// # Errors
+    /// What the registration of a listener reports.
+    fn register(
+        &self,
+        canvas: &web_sys::HtmlCanvasElement,
+        callbacks: &Arc<WindowCallbacks>,
+        latency: flui_platform::InputLatency,
+        registration: &mut dyn CanvasRegistration,
+    ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError>;
+}
+
+/// How a DOM key event reaches a canvas's window as the canvas's own: from
+/// the canvas, or from the editor its text input keeps beside it.
+pub(crate) trait CanvasKeys {
+    /// Deliver `event` as a key `state`, answering it with the result.
+    fn deliver(&self, event: &web_sys::Event, state: flui_platform::keyboard::KeyState);
+
+    /// Whether the window's text input composes now: a key delivered while it
+    /// does is the input method's.
+    fn composing(&self) -> bool;
+
+    /// The window's text input started or ended a composition.
+    fn set_composing(&self, composing: bool);
+}
+
+/// What a canvas's window keeps registered for the features listening beside
+/// it: DOM listeners and deadline timers that run only while the window
+/// accepts input and go when it retires or its opening rolls back, and the
+/// custody of the pointers the canvas captures.
+pub(crate) trait CanvasRegistration {
     /// Listen for `kind` events on `target` with `body`, handed over as
     /// `Rc::new(..)`: the listener keeps its only strong reference, and the
     /// browser's callback reaches it weakly, so a retired listener runs and
@@ -108,6 +161,75 @@ pub(crate) trait CanvasListeners {
         kind: &'static str,
         body: Rc<dyn Fn(web_sys::Event)>,
     ) -> Result<(), crate::OpenWindowError>;
+
+    /// Whether the registration accepts: what a feature keeps beside its
+    /// listeners reads it before it delivers.
+    fn accepting(&self) -> Accepting;
+
+    /// A deadline timer whose body runs only while the registration accepts;
+    /// its retirement clears it.
+    fn timer(&mut self, body: Box<dyn Fn()>) -> Rc<dyn CanvasTimer>;
+
+    /// Run `retire` when the registration retires, once it no longer
+    /// accepts and before its listeners go: what a feature holds of the
+    /// canvas beyond its listeners (the pointers it captured) ends there. A
+    /// registration whose opening rolls back retires too.
+    fn on_retire(&mut self, retire: Box<dyn FnOnce()>);
+
+    /// The custody of the canvas's pointer captures.
+    fn custody(&self) -> Rc<dyn PointerCustody>;
+
+    /// The canvas's focus area: the canvas and the editor its text input keeps
+    /// beside it.
+    fn focus(&self) -> Rc<dyn CanvasFocus>;
+}
+
+/// Whether a canvas's registration, or a source a window watches, still
+/// accepts, as its readers see it: they read it, and only its owner, which
+/// holds the flag itself, ends it.
+#[derive(Clone)]
+pub(crate) struct Accepting(Rc<Cell<bool>>);
+
+impl Accepting {
+    /// A reader of `flag`, which its owner keeps and ends.
+    pub(crate) fn reading(flag: &Rc<Cell<bool>>) -> Self {
+        Self(Rc::clone(flag))
+    }
+
+    /// Whether it still accepts.
+    pub(crate) fn get(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// A canvas's focus area ([`CanvasRegistration::focus`]).
+pub(crate) trait CanvasFocus {
+    /// Whether the canvas, or the editor beside it, has the page's focus.
+    fn has_focus(&self) -> bool;
+}
+
+/// A deadline timer of a canvas's registration
+/// ([`CanvasRegistration::timer`]): one pending run at a time, cleared when
+/// the registration retires.
+pub(crate) trait CanvasTimer {
+    /// Run the body once `delay` has passed, replacing a pending run.
+    fn arm(&self, delay: std::time::Duration);
+}
+
+/// The custody of a canvas's pointer captures
+/// ([`CanvasRegistration::custody`]): a capture belongs to the registration
+/// that admitted it, so a retired one cannot release a pointer a newer owner
+/// of the same canvas admitted.
+pub(crate) trait PointerCustody {
+    /// Take custody of pointer `id`; `false` when another registration holds
+    /// it.
+    fn admit(&self, id: i32) -> bool;
+
+    /// Give up custody of `id` without releasing its capture.
+    fn forget(&self, id: i32);
+
+    /// Give up custody of `id` and release its capture.
+    fn release(&self, id: i32);
 }
 
 /// What a canvas's drag registration leaves its window.
@@ -166,6 +288,23 @@ pub(crate) trait HostDisplays {
     /// Keep the snapshot current from the browser's events, each of which
     /// wakes the owner behind `signal`, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
+
+    /// Watch the device pixel ratio for a window's layout: `on_change` runs
+    /// each time it changes while `active` holds, until the watch is dropped.
+    /// `None` in a browser without media queries.
+    fn watch_pixel_ratio(
+        &self,
+        active: &Accepting,
+        on_change: Box<dyn Fn()>,
+    ) -> Option<Box<dyn PixelRatioWatch>>;
+}
+
+/// A window's watch of the device pixel ratio
+/// ([`HostDisplays::watch_pixel_ratio`]).
+pub(crate) trait PixelRatioWatch {
+    /// Arm now if the browser refused the last query, and report a change that
+    /// went unseen meanwhile.
+    fn arm_if_unarmed(&self);
 }
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
@@ -183,6 +322,9 @@ pub struct WebLoop {
     /// The one HTML drag-and-drop transport every canvas shares, as the table
     /// made it.
     pub(crate) drag: Arc<dyn HostDrag>,
+    /// The page's input, as the table made it: the window registers its
+    /// canvas's input through it.
+    pub(crate) input: Rc<dyn HostInput>,
     pub(crate) signal: Arc<OwnerSignal>,
     /// The system preference source the table made; present until the platform
     /// quits.
@@ -210,7 +352,7 @@ pub(crate) struct WebState {
     owner: Weak<WebLoop>,
 }
 
-// SAFETY: the page has one thread (`platforms::web` refuses `+atomics`), so the
+// SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
 // value is never reached from another.
 unsafe impl Send for WebLoop {}
 unsafe impl Sync for WebLoop {}
@@ -257,6 +399,7 @@ impl WebLoop {
         Ok(Self {
             state,
             drag: H::drag(),
+            input: H::input(),
             signal,
             preferences: RefCell::new(Some(preferences)),
             displays: H::displays(),
@@ -599,16 +742,5 @@ impl host::Lifecycle<WebLoop> for WebLoop {
 
     fn activate(_: &WebLoop, _: bool) {
         // A page cannot bring its tab to the front.
-    }
-}
-
-impl host::Input<WebLoop> for WebLoop {
-    fn keyboard_layout(_: &WebLoop) -> String {
-        "en-US".to_string()
-    }
-
-    fn on_keyboard_layout_change(_: &WebLoop, callback: Box<dyn FnMut() + Send>) {
-        // The layout is the fixed "en-US" above; nothing changes it.
-        drop(callback);
     }
 }

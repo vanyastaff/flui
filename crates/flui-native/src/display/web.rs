@@ -9,8 +9,6 @@
 //! and `events` call the browser and exist only on wasm32.
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use events::PixelRatioWatch;
-#[cfg(target_arch = "wasm32")]
 pub(crate) use source::WebDisplays;
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1186,6 +1184,15 @@ pub(crate) mod source {
         ) -> crate::owner::watch::Watch {
             crate::owner::watch::Watch::new(super::events::DisplayObservers::start(&self, signal))
         }
+
+        fn watch_pixel_ratio(
+            &self,
+            active: &crate::owner::web::Accepting,
+            on_change: Box<dyn Fn()>,
+        ) -> Option<Box<dyn crate::owner::web::PixelRatioWatch>> {
+            let watch = super::events::PixelRatioWatch::for_layout(active, on_change)?;
+            Some(Box::new(watch))
+        }
     }
 
     impl WebDisplays {
@@ -1616,13 +1623,17 @@ mod events {
                 let displays = Arc::downgrade(displays);
                 let signal = Arc::downgrade(signal);
                 // A new scale is a new snapshot and a new cadence to measure.
-                PixelRatioWatch::start(proof, &active, move || {
-                    if let Some(displays) = displays.upgrade() {
-                        displays.invalidate();
-                        displays.restart_estimate();
-                        wake(&signal);
-                    }
-                })
+                PixelRatioWatch::start(
+                    proof,
+                    &crate::owner::web::Accepting::reading(&active),
+                    move || {
+                        if let Some(displays) = displays.upgrade() {
+                            displays.invalidate();
+                            displays.restart_estimate();
+                            wake(&signal);
+                        }
+                    },
+                )
             });
             let visibility = visibility_listener(displays, &active);
             let ratio = pixel_ratio.as_ref().map(PixelRatioWatch::handle);
@@ -1774,7 +1785,7 @@ mod events {
         function: RefCell<Option<js_sys::Function>>,
         /// What a changed ratio means to whoever watches it.
         on_change: Box<dyn Fn()>,
-        active: Rc<Cell<bool>>,
+        active: crate::owner::web::Accepting,
         /// The callback that arms again on a frame after an arming that failed; it
         /// is owned here and never replaced while a frame may call it.
         retry: RefCell<Option<FrameCallback>>,
@@ -1892,17 +1903,11 @@ mod events {
         /// box misses it while the rounded size stays. `None` in a browser
         /// without media queries.
         pub(crate) fn for_layout(
-            active: &Rc<Cell<bool>>,
+            active: &crate::owner::web::Accepting,
             on_change: impl Fn() + 'static,
         ) -> Option<Self> {
             let proof = super::source::BrowserFeatures::detect().match_media?;
             Some(Self::start(proof, active, on_change))
-        }
-
-        /// Arm now if no query is armed (the browser refused the last one), and
-        /// report a change that went unseen meanwhile.
-        pub(crate) fn arm_if_unarmed(&self) {
-            self.shared.arm_if_unarmed();
         }
 
         fn handle(&self) -> std::rc::Weak<PixelRatioShared> {
@@ -1911,7 +1916,7 @@ mod events {
 
         fn start(
             proof: WebFeature<MatchMedia>,
-            active: &Rc<Cell<bool>>,
+            active: &crate::owner::web::Accepting,
             on_change: impl Fn() + 'static,
         ) -> Self {
             let shared = Rc::new(PixelRatioShared {
@@ -1920,7 +1925,7 @@ mod events {
                 query: RefCell::new(None),
                 function: RefCell::new(None),
                 on_change: Box::new(on_change),
-                active: Rc::clone(active),
+                active: active.clone(),
                 retry: RefCell::new(None),
                 retry_frame: Cell::new(None),
                 retries: Cell::new(0),
@@ -1963,6 +1968,14 @@ mod events {
                 shared,
                 callback: Some(callback),
             }
+        }
+    }
+
+    impl crate::owner::web::PixelRatioWatch for PixelRatioWatch {
+        /// Arm now if no query is armed (the browser refused the last one), and
+        /// report a change that went unseen meanwhile.
+        fn arm_if_unarmed(&self) {
+            self.shared.arm_if_unarmed();
         }
     }
 

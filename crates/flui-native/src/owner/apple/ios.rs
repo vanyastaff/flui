@@ -28,7 +28,7 @@
 //!
 //! The surface edges are what let the presentation drop and rebuild its
 //! `CAMetalLayer`-backed surface around a suspension, which is the same
-//! contract Android's `Pause`/`InitWindow` pair carries (`platforms/android`
+//! contract Android's `Pause`/`InitWindow` pair carries (`owner::android::looper`
 //! module doc, "Surface Lifecycle").
 //!
 //! # Frame source
@@ -729,18 +729,6 @@ impl host::Displays<IOSLoop> for IOSLoop {
             message: "UIKit display sampling must run on the main thread".into(),
         })?;
         owner.displays.snapshot(marker)
-    }
-}
-
-impl host::Input<IOSLoop> for IOSLoop {
-    fn keyboard_layout(_: &IOSLoop) -> String {
-        // The host does not read the active keyboard: the layout is unknown.
-        String::new()
-    }
-
-    fn on_keyboard_layout_change(_: &IOSLoop, callback: Box<dyn FnMut() + Send>) {
-        // No layout is read, so no change is ever reported.
-        drop(callback);
     }
 }
 

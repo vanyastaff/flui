@@ -131,7 +131,7 @@ kind = "double"
 names = ["ScriptedSession"]
 
 [[allow]]
-path = "crates/flui-native/src/platforms/windows/direct_manipulation/tests.rs"
+path = "crates/flui-native/src/input/windows/direct_manipulation/tests.rs"
 kind = "pump"
 names = ["pump"]
 

@@ -1086,20 +1086,14 @@ impl Win32DragSource {
     /// The kind of the contact whose press began `pointer`'s drag, as the
     /// window's pointer registry read it.
     fn contact_kind(&self, pointer: Option<flui_platform::PointerId>) -> Option<PointerKind> {
-        let pointer = pointer?;
-        self.window
-            .with_context("drag source", |context| {
-                let registry = context.pointer_registry.try_borrow().ok()?;
-                registry.origin(pointer).map(|origin| origin.kind)
-            })
-            .flatten()
+        crate::owner::windows::window_inputs()?.press_kind(self.window, pointer?)
     }
 }
 
 #[cfg(windows)]
 impl PlatformDragSource for Win32DragSource {
     fn start_timing(&self) -> OsDragStart {
-        crate::shared::input_availability::DESKTOP_DRAG_START
+        crate::input::availability::DESKTOP_DRAG_START
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
@@ -1168,14 +1162,14 @@ pub(crate) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDr
 /// state: the buttons whose release drops the session about to start.
 #[cfg(windows)]
 fn mouse_buttons_held() -> u32 {
-    crate::platforms::windows::events::MOUSE_BUTTONS
+    crate::input::keys::MOUSE_BUTTONS
         .iter()
-        .filter(|(key, _, _)| {
+        .filter(|codes| {
             // SAFETY: a query of this thread's key state by a constant code.
-            let state = unsafe { GetKeyState(i32::from(key.0)) };
+            let state = unsafe { GetKeyState(i32::from(codes.virtual_key)) };
             state < 0
         })
-        .fold(0, |held, (_, bit, _)| held | bit)
+        .fold(0, |held, codes| held | codes.key_state_bit)
 }
 
 /// The clipboard format `native` travels as; `None` when registration failed.

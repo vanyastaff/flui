@@ -11,10 +11,11 @@ use crate::drag::web::WebTransfer;
 use crate::error::PlatformError;
 use crate::haptics::web::WebHaptics;
 use crate::host::{Absent, Host, position};
+use crate::input::web::events::WebInput;
 use crate::lifecycle::web::PageSession;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
-use crate::owner::web::{HostDisplays, HostDrag, PageLifecycle, WebHost, WebLoop};
+use crate::owner::web::{HostDisplays, HostDrag, HostInput, PageLifecycle, WebHost, WebLoop};
 use crate::platform::HostPlatform;
 use crate::preferences::web::WebPreferences;
 use crate::storage::UserDataDirs;
@@ -66,6 +67,11 @@ impl WebHost for Web {
     /// HTML drag and drop.
     fn drag() -> Arc<dyn HostDrag> {
         Arc::new(WebTransfer::default())
+    }
+
+    /// The DOM's pointer, keyboard, wheel and gesture events on the canvas.
+    fn input() -> Rc<dyn HostInput> {
+        Rc::new(WebInput)
     }
 }
 

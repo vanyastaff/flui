@@ -29,10 +29,11 @@ use crate::owner::android::java_view::JavaView;
 use crate::owner::android::{ActivityFlags, ActivityWindow, AndroidLoop};
 use crate::owner::handlers::CallbackWindow;
 use crate::{
-    owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::slot::OwnerSlot,
-    shared::input_availability::AndroidInputApis, shared::os_version::android::AndroidApi,
-    shared::os_version::android::DragSource, shared::os_version::android::GestureExclusion,
-    shared::os_version::android::TouchpadGestures, window::state::WindowStateCell,
+    input::availability::AndroidInputApis, owner::OpenWindowError,
+    owner::handlers::WindowCallbacks, owner::slot::OwnerSlot,
+    shared::os_version::android::AndroidApi, shared::os_version::android::DragSource,
+    shared::os_version::android::GestureExclusion, shared::os_version::android::TouchpadGestures,
+    window::state::WindowStateCell,
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -379,7 +380,7 @@ fn input_capabilities(
     api: AndroidApi,
     java_view: bool,
 ) -> flui_platform::input_capabilities::InputCapabilities {
-    crate::shared::input_availability::android(AndroidInputApis {
+    crate::input::availability::android(AndroidInputApis {
         gesture_exclusion: api.since::<GestureExclusion>().is_some(),
         touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
         drag_source: java_view && api.since::<DragSource>().is_some(),
@@ -485,10 +486,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
                 "InputLatency::Low is not supported on Android yet; input stays batched"
             );
         }
-        let cancelled = owner
-            .input_state
-            .lock()
-            .cancel_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
+        let cancelled = owner.input.capture_lost();
         let window = Arc::new(AndroidWindow::new(
             owner.app.clone(),
             Arc::clone(&owner.activity),

@@ -16,13 +16,16 @@ use crate::display::windows::WindowsDisplays;
 use crate::display::winit::WinitDisplaySource;
 use crate::drag::winit::WinitDataTransfer;
 use crate::host::{Absent, Host, position};
+use crate::input::winit::WinitInput;
 #[cfg(target_os = "linux")]
 use crate::lifecycle::linux::WinitNotices;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::notices::NoticeChannel;
 #[cfg(target_os = "linux")]
 use crate::owner::winit::HostNoticeStart;
-use crate::owner::winit::{FileDrops, HostDisplays, PreferenceStart, WinitHost, WinitLoop};
+use crate::owner::winit::{
+    FileDrops, HostDisplays, LoopInput, PreferenceStart, WinitHost, WinitLoop,
+};
 use crate::platform::HostPlatform;
 #[cfg(target_os = "macos")]
 use crate::preferences::apple::macos::WinitSettings;
@@ -113,6 +116,11 @@ impl WinitHost for Winit {
     /// The files winit reports dragged and dropped.
     fn drag() -> Arc<dyn FileDrops> {
         Arc::new(WinitDataTransfer::new())
+    }
+
+    /// The translation of winit's pointer, device and key events.
+    fn input() -> Box<dyn LoopInput> {
+        Box::new(WinitInput::default())
     }
 }
 

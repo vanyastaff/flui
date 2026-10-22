@@ -9,7 +9,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use flui_native::shared::pointer_assembly::{
+use flui_native::input::assembly::{
     ContactRegistry, GestureComponent, GestureDelta, GesturePhase, GestureReading, MoveBatch,
     NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };

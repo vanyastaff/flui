@@ -19,7 +19,7 @@
 //! - ✅ Multi-display support with Retina/HiDPI
 //! - ✅ Event loop integration
 //! - ✅ raw-window-handle for wgpu/Metal
-//! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
+//! - ✅ Keyboard, mouse, scroll and hover events (`input::apple::macos`)
 //! - ✅ `NSPasteboard` clipboard, routed through the owner lane
 //!   (`clipboard/apple/macos.rs`)
 //! - ✅ IME composition via an `NSTextInputClient` conformance
@@ -50,22 +50,6 @@
 //!     Ok(())
 //! }))?;
 //! ```
-
-// The backend is on the `objc2` family (`objc2`/`objc2-app-kit`/
-// `objc2-foundation`): the `cocoa` 0.27 / `objc` 0.2 pair it used to carry is
-// gone entirely. `expect(deprecated)` stays because a handful of AppKit
-// accessors this backend uses (`UIScreen.mainScreen`'s macOS analogues, the
-// non-scene `NSApplication` entry points) are deprecated in the multi-scene
-// era, and the module documents each such use at its call site.
-#![expect(deprecated)]
-// This module (and its submodules) is one of the workspace's sanctioned
-// `unsafe` FFI islands — direct AppKit objc calls have no safe
-// wrapper. The workspace lint `unsafe_code = "warn"` is opted out here, at
-// the module boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
-
-mod events;
-pub(crate) mod view;
 
 // The window lives in the window feature; its public names stay here.
 pub use crate::window::apple::liquid_glass::{

@@ -4,39 +4,15 @@
 //!
 //! - `ime`: the decidable half, how the view's mirror and the field's store
 //!   stay one document while two threads own the session;
-//! - [`keys`]: which key belongs to the input method, built on every target and
-//!   public, hidden from the documentation, for the backend conformance table
-//!   in `tests/`, until that table reaches the hosts through the public API;
 //! - `input`: `AndroidTextInput`, the window's `TextStoreHost` over the view,
 //!   and `ViewInputMethod`, which answers the input method's calls through
 //!   `FluiView` (the host's table hands it the view through
 //!   `owner::android::AndroidHost`);
 //! - `sizing`: the system text size captured on the Java main thread, its
 //!   acquisition checked on every host.
-
-#[doc(hidden)]
-pub mod keys {
-    //! Which key the native queue delivers belongs to the input method.
-
-    #![forbid(unsafe_code)]
-
-    use flui_platform::keyboard::ImeComposition;
-
-    /// A key the native queue delivers while the input method composes belongs
-    /// to the input method. Android hands every key to the input method before
-    /// native code (`NativePreImeInputStage` pre-dispatches it), so a key that
-    /// reaches FLUI during a composition is one the input method passed on; it
-    /// arrives marked [`ImeComposition::Active`] so no shortcut, focus traversal
-    /// or drag cancellation takes it from the composition.
-    #[must_use]
-    pub const fn key_composition(composing: bool) -> ImeComposition {
-        if composing {
-            ImeComposition::Active
-        } else {
-            ImeComposition::Inactive
-        }
-    }
-}
+//!
+//! Which key the native queue delivers belongs to the input method is the key
+//! decoding's (`input::android::keys`).
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod ime {
@@ -461,6 +437,32 @@ mod input {
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
     use crate::window::android::AndroidWindow;
 
+    /// The key presses an input method's editor action arrives as: `key`
+    /// pressed and released at `uptime_ms`, with Shift when `shift`.
+    fn editor_action_keys(
+        key: flui_platform::keyboard::NamedKey,
+        shift: bool,
+        uptime_ms: i64,
+    ) -> [flui_platform::PlatformInput; 2] {
+        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers};
+        let time = flui_platform::EventTime::from_nanos(
+            u64::try_from(uptime_ms)
+                .unwrap_or(0)
+                .saturating_mul(1_000_000),
+        );
+        let modifiers = if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        };
+        [KeyState::Down, KeyState::Up].map(|state| {
+            flui_platform::PlatformInput::Keyboard(
+                KeyEvent::new(state, Key::Named(key), Code::Unidentified, time)
+                    .with_modifiers(modifiers),
+            )
+        })
+    }
+
     /// The text input of the window the owner runs an input method's work
     /// against: the Android window holds it.
     fn text_input_of(window: &dyn ActivityWindow) -> Option<Rc<AndroidTextInput>> {
@@ -512,9 +514,7 @@ mod input {
                     // The action arrives as the key it stands for, which a field
                     // answers as it answers a keyboard's.
                     let (key, shift) = editor_action_key(action);
-                    for key_input in
-                        crate::platforms::android::input::editor_action_keys(key, shift, uptime_ms)
-                    {
+                    for key_input in editor_action_keys(key, shift, uptime_ms) {
                         window.callbacks().dispatch_input(key_input);
                     }
                 }),

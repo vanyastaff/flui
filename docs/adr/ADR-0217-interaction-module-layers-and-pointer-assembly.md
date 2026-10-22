@@ -56,8 +56,8 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    and are keyed by `InputSurface` from their first version. Closing sets a flag; on leaving
    dispatch each service yields its retired state through `drain(&self)` (`RefCell::take`), and
    user code runs only after every borrow is released.
-3. **Shared pointer assembly.** `crates/flui-native/src/shared/` gains a `pointer_assembly`
-   module beside `events.rs`: `ContactRegistry`, `DeviceRegistry`, `HeldButtons`,
+3. **Shared pointer assembly.** The input feature of `flui-native` (`src/input/`) has an `assembly`
+   model beside its platform files: `ContactRegistry`, `DeviceRegistry`, `HeldButtons`,
    `ClickCounter` (thresholds from OS settings), `PanZoomAccumulator`, `MoveBatch`. They are
    plain structs driven by pure functions over plain readings:
 

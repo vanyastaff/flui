@@ -63,10 +63,9 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::android::java_view;
-use crate::owner::android::{ActivityPreferences, AndroidHost, HostDisplays};
+use crate::owner::android::{ActivityInput, ActivityPreferences, AndroidHost, HostDisplays};
 use crate::owner::handlers::CallbackWindow;
 use crate::platform::HostPlatform;
-use crate::platforms::android::input;
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -200,9 +199,10 @@ pub struct AndroidLoop {
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
-    pub(crate) input_state: Mutex<input::AndroidInputState>,
+    /// The input of the Activity's queue, as the table made it
+    /// ([`AndroidHost::input`]).
+    pub(crate) input: Box<dyn ActivityInput>,
     pub(crate) owner_signal: Arc<OwnerSignal>,
-    scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
     preferences: Box<dyn ActivityPreferences>,
@@ -242,8 +242,8 @@ impl AndroidLoop {
 
     /// The loop of host `H`, whose table makes the displays, the preference
     /// source, the notice channel, the meaning of the Activity's callbacks, the
-    /// clipboard and the drag-and-drop transport, and names what `FluiView`
-    /// reports to.
+    /// input, the clipboard and the drag-and-drop transport, and names what
+    /// `FluiView` reports to.
     pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
@@ -281,9 +281,8 @@ impl AndroidLoop {
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: H::clipboard(),
-            input_state: Mutex::new(input::AndroidInputState::default()),
+            input: H::input(),
             owner_signal,
-            scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preferences,
             displays: H::displays(api, library, owner),
             api,
@@ -337,15 +336,12 @@ impl AndroidLoop {
     }
 
     fn refresh_scroll_factors(&self) {
-        // Query outside the owner-local cache guard. A failed refresh keeps
-        // accepted logical factors; only the never-observed case uses authored
-        // line normalization for compatibility with supported API21 devices.
-        let reading = input::scroll_factors(&self.app, self.api).ok();
-        self.scroll_factors.lock().observe(reading);
+        self.input.refresh_scroll_factors(&self.app, self.api);
     }
 
-    fn cancel_input_contacts(&self, reason: crate::shared::pointer_assembly::NativeCancel) {
-        let events = self.input_state.lock().cancel_contacts(reason);
+    /// Deliver the cancellations of the contacts the input ended to the
+    /// window, if there is one.
+    fn end_input_contacts(&self, events: Vec<flui_platform::PlatformInput>) {
         let window = self.window.lock().clone();
         if let Some(window) = window {
             for event in events {
@@ -444,15 +440,10 @@ impl AndroidLoop {
 
     /// Process pending input events from the Android event queue.
     ///
-    /// Drains all buffered input events via `input_events_iter()` and
-    /// dispatches them through the window's callbacks as `PlatformInput`.
-    /// The first `MotionEvent` of the process is logged at `info`
-    /// (`FIRST_MOTION_SEEN`), every later one at `debug`.
+    /// Drains all buffered input events via `input_events_iter()`, has the
+    /// input the table made ([`AndroidHost::input`]) read each, and
+    /// dispatches what it means through the window's callbacks.
     fn process_input_events(&self) {
-        /// Whether any `MotionEvent` has reached this function in this
-        /// process.
-        static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
-
         let window_guard = self.window.lock();
         let Some(window) = window_guard.as_ref().cloned() else {
             // No window yet — still drain events to prevent ANR
@@ -466,7 +457,6 @@ impl AndroidLoop {
         drop(window_guard);
 
         let scale_factor = window.scale_factor();
-        let scroll_policy = self.scroll_factors.lock().policy();
         let callbacks = window.callbacks();
 
         match self.app.input_events_iter() {
@@ -476,51 +466,7 @@ impl AndroidLoop {
 
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
-                            let cached = self.input_state.lock().capabilities(motion.device_id());
-                            let device = input::motion_device(&self.app, motion, cached);
-                            let events = self.input_state.lock().convert_motion_event(
-                                motion,
-                                scale_factor,
-                                scroll_policy,
-                                device,
-                            );
-                            // The one place a touch is visible between the
-                            // OS and the framework: a tap that changes
-                            // nothing on screen is diagnosed from these
-                            // lines (present → the framework's hit test or
-                            // arena; absent → the queue never delivered
-                            // it). The FIRST motion event of the process is
-                            // an `info` line — a lifecycle fact like "first
-                            // frame rendered", visible under the default
-                            // `info` filter — and every one after it is
-                            // `debug`, so a drag does not flood logcat.
-                            let first = !FIRST_MOTION_SEEN.swap(true, Ordering::Relaxed);
-                            let pointer = motion.pointer_at_index(0);
-                            // One field list, two levels: `tracing`'s
-                            // callsite level must be a constant, so the
-                            // level is pasted by a local macro rather than
-                            // chosen at runtime.
-                            macro_rules! motion_event {
-                                ($level:expr) => {
-                                    tracing::event!(
-                                        target: "flui_native::android::input",
-                                        $level,
-                                        action = ?motion.action(),
-                                        pointers = motion.pointer_count(),
-                                        converted = events.len(),
-                                        x = pointer.x(),
-                                        y = pointer.y(),
-                                        scale_factor,
-                                        first,
-                                        "motion event reached the input queue"
-                                    )
-                                };
-                            }
-                            if first {
-                                motion_event!(tracing::Level::INFO);
-                            } else {
-                                motion_event!(tracing::Level::DEBUG);
-                            }
+                            let events = self.input.motion(&self.app, motion, scale_factor);
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {
@@ -537,7 +483,7 @@ impl AndroidLoop {
                         }
                         InputEvent::KeyEvent(key) => {
                             if let Some(platform_input) =
-                                input::convert_key_event(&self.app, key, self.java_view.composing())
+                                self.input.key(&self.app, key, self.java_view.composing())
                             {
                                 let result = callbacks.dispatch_input(platform_input);
                                 result.default_prevented
@@ -564,7 +510,7 @@ impl AndroidLoop {
             }
         }
         // A hover exit no press continued in this drain was a leave.
-        let held = self.input_state.lock().finish_drain();
+        let held = self.input.finish_drain();
         for event in held {
             callbacks.dispatch_input(event);
         }
@@ -808,7 +754,7 @@ impl host::Loop for AndroidLoop {
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
                             self.activity.resumed.store(false, Ordering::SeqCst);
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.end_input_contacts(self.input.focus_lost());
 
                             // Release BEFORE suspending: the drop is the one
                             // step here with a validity window behind it, and
@@ -862,7 +808,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
+                            self.end_input_contacts(self.input.capture_lost());
                             tracing::debug!(
                                 "Android: TerminateWindow — the native window is going away, \
                                  releasing the surface"
@@ -879,7 +825,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::Destroy => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.end_input_contacts(self.input.focus_lost());
                             tracing::info!("Android: Destroy — shutting down");
                             self.activity.resumed.store(false, Ordering::SeqCst);
 
@@ -918,7 +864,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::LostFocus => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.end_input_contacts(self.input.focus_lost());
                             tracing::debug!("Android: Lost focus");
                         }
                         MainEvent::ConfigChanged { .. } => {

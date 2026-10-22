@@ -41,14 +41,6 @@
 //! call takes the proof a version check hands out (`shared::os_version`).
 //! Before iOS 15 the link gets `preferredFramesPerSecond` instead.
 
-// This module (and its submodules) is the workspace's sanctioned `unsafe` FFI
-// island for UIKit — direct Objective-C calls have no safe wrapper. The
-// workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (the same shape `macos/mod.rs`
-// uses).
-#![expect(unsafe_code)]
-
-pub(crate) mod events;
 pub(crate) mod os_version;
 
 pub use crate::owner::apple::ios::{IOSExecutor, IOSSceneAttachmentId, IOSSceneSessionId};

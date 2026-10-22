@@ -406,12 +406,12 @@ text-input paths its platform requires.
   | `crates/flui-native/src/owner/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
   | `crates/flui-native/android/java/` | `FluiActivity`, the host queue, the accessibility delegate, back registration, the inset and IME-animation listeners |
   | `crates/flui-native/src/window/android.rs` (`safe_area`) | Event-driven, and includes the IME inset |
-  | `crates/flui-native/src/platforms/android/` | A `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
+  | `crates/flui-native/src/accessibility/` | An Android `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
   | `platform-support.toml` and the generated floors | `targetSdk` |
   | `crates/flui-native/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
   | `crates/flui-native/src/text/web.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
-  | `crates/flui-native/src/platforms/web/` | The semantics host and ARIA DOM, the history strategy, ownership of the root element |
+  | `crates/flui-native/src/accessibility/`, `crates/flui-native/src/window/web.rs` | The semantics host and ARIA DOM; the history strategy, ownership of the root element |
   | `crates/flui-cli/templates/platforms/web/index.html`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
 
 - Bad, because a packager other than `flui-cli` (cargo-apk, a hand-written Gradle project) must

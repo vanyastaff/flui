@@ -62,10 +62,11 @@ mod window_scenario {
     use flui_platform::data_transfer::{
         DropFeedback, RepresentationIndex, TransferLimits, TransferRequest,
     };
+    use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
     use flui_platform::{
         Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot,
-        DragDropEvent, InMemoryClipboard, NullDataTransferSource, SystemNotice, SystemPreferences,
-        WindowAppearance, WindowId, WindowOptions,
+        DragDropEvent, InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemNotice,
+        SystemPreferences, WindowAppearance, WindowId, WindowOptions,
     };
     use winit::event_loop::{ActiveEventLoop, EventLoop};
 
@@ -79,8 +80,8 @@ mod window_scenario {
     use crate::owner::watch::Watch;
     use crate::owner::winit::control::control_lane;
     use crate::owner::winit::{
-        FileDrops, HostDisplays, HostNoticeStart, HostNotices, PortalPreferences, PreferenceStart,
-        SelfCloseRoute, WinitApp, WinitHost, WinitLoop,
+        FileDrops, HostDisplays, HostNoticeStart, HostNotices, LoopInput, PortalPreferences,
+        PreferenceStart, SelfCloseRoute, WinitApp, WinitHost, WinitLoop,
     };
     use crate::platform::Platform;
 
@@ -174,6 +175,62 @@ mod window_scenario {
 
         fn drag() -> Arc<dyn FileDrops> {
             Arc::new(NoFileDrops)
+        }
+
+        fn input() -> Box<dyn LoopInput> {
+            Box::new(NoInput)
+        }
+    }
+
+    /// A translation that delivers no input and sees no device.
+    struct NoInput;
+
+    impl LoopInput for NoInput {
+        fn opening(&mut self, _: &ActiveEventLoop) -> InputCapabilities {
+            InputCapabilities::UNAVAILABLE
+        }
+
+        fn window_event(
+            &mut self,
+            _: WindowId,
+            _: &winit::event::WindowEvent,
+            _: f64,
+            _: winit::keyboard::ModifiersState,
+        ) -> Option<Vec<(WindowId, PlatformInput)>> {
+            None
+        }
+
+        fn device_event(
+            &mut self,
+            _: winit::event::DeviceId,
+            _: &winit::event::DeviceEvent,
+            _: &[WindowId],
+        ) -> Vec<(WindowId, PlatformInput)> {
+            Vec::new()
+        }
+
+        fn presence_change(&mut self) -> Option<PointerKindSet> {
+            None
+        }
+
+        fn flush(&mut self) -> Vec<(WindowId, PlatformInput)> {
+            Vec::new()
+        }
+
+        fn focus_lost(&mut self, _: WindowId) -> Vec<PlatformInput> {
+            Vec::new()
+        }
+
+        fn key(
+            &self,
+            _: winit::event::KeyEvent,
+            _: winit::keyboard::ModifiersState,
+        ) -> Option<PlatformInput> {
+            None
+        }
+
+        fn ime(&self, _: &winit::event::Ime) -> Option<PlatformInput> {
+            None
         }
     }
 

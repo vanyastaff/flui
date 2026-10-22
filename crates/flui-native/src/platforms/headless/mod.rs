@@ -5,7 +5,7 @@ mod platform;
 pub use crate::display::headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
 };
-pub use platform::HeadlessInputDevices;
+pub use crate::input::headless::HeadlessInputDevices;
 pub(crate) use platform::TextStoreHostFactory;
 
 pub use crate::lifecycle::headless::HeadlessHostEvents;

@@ -16,8 +16,7 @@
 //!
 //! The window is the window feature's (`window::android`): the loop holds it as
 //! an `ActivityWindow`, with the Activity's lifecycle facts (`ActivityFlags`)
-//! it records. Input and haptics stay in `platforms::android`; the loop
-//! reaches them there. The displays, the text input, the preferences, the
+//! it records. The input, the displays, the text input, the preferences, the
 //! lifecycle, the clipboard and drag and drop are their features': the loop
 //! holds what they made through the hooks the host's table fills
 //! (`AndroidHost`), and the view serves several features, so what it hands a
@@ -37,7 +36,7 @@ pub(crate) mod poll;
 pub(crate) use looper::{ActivityFlags, ActivityWindow, AndroidLoop};
 
 #[cfg(target_os = "android")]
-pub(crate) use hooks::{ActivityPreferences, AndroidHost, HostDisplays};
+pub(crate) use hooks::{ActivityInput, ActivityPreferences, AndroidHost, HostDisplays};
 
 /// What the host's table fills for the loop.
 #[cfg(target_os = "android")]
@@ -46,7 +45,7 @@ mod hooks {
 
     use android_activity::AndroidApp;
     use android_activity::ndk::native_window::NativeWindow;
-    use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
+    use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint, PlatformInput};
 
     use super::activity_callbacks::ActivityCallbacks;
     use super::java_view::{InputMethod, JavaView, ViewTransfer};
@@ -104,6 +103,48 @@ mod hooks {
 
         /// What each of the Activity's lifecycle callbacks means for `app`.
         fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks>;
+
+        /// The input of `app`'s queue: the loop hands it each event it
+        /// drains and answers the table's input position.
+        fn input() -> Box<dyn ActivityInput>;
+    }
+
+    /// The input the Activity's queue carries, which the table makes
+    /// ([`AndroidHost::input`]): the loop drains the queue and hands each
+    /// event here, dispatches what comes back to its window, and asks for
+    /// the contacts a lifecycle step strands to be ended. Nothing here runs
+    /// user code.
+    pub(crate) trait ActivityInput: Send + Sync {
+        /// What `event` means for a window at `scale`, read from `app`.
+        fn motion(
+            &self,
+            app: &AndroidApp,
+            event: &android_activity::input::MotionEvent<'_>,
+            scale: f64,
+        ) -> Vec<PlatformInput>;
+
+        /// What `event` means; `composing` says whether the input method
+        /// composes now, so a key it passed on is still its own.
+        fn key(
+            &self,
+            app: &AndroidApp,
+            event: &android_activity::input::KeyEvent<'_>,
+            composing: bool,
+        ) -> Option<PlatformInput>;
+
+        /// What the decoding held that is due by the end of a drain.
+        fn finish_drain(&self) -> Vec<PlatformInput>;
+
+        /// End every contact: the Activity paused, lost focus or is
+        /// destroyed.
+        fn focus_lost(&self) -> Vec<PlatformInput>;
+
+        /// End every contact: the native window it was drawn on is gone.
+        fn capture_lost(&self) -> Vec<PlatformInput>;
+
+        /// Read the system's scroll factors again for `app` at `api`: a
+        /// setting or the configuration changed, or the Activity resumed.
+        fn refresh_scroll_factors(&self, app: &AndroidApp, api: AndroidApi);
     }
 
     /// The system preference source the Android loop keeps (ADR-0172): read

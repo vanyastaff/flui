@@ -416,17 +416,12 @@ impl WindowsHaptics {
     /// window, else of the pen read most recently: `None` with no pen in
     /// range, off the window's owner thread, or after the window closed.
     fn pen_pointer(&self, source: Option<DeviceId>) -> Option<u32> {
-        let pointer = self
-            .window
-            .with_context("haptics", |context| {
-                let registry = context.pointer_registry.try_borrow().ok()?;
-                let actuator = actuator_for(source, |device| {
-                    registry.pen_contact(Some(device)).is_some()
-                });
-                registry.pen_contact(actuator)
-            })
-            .flatten()?;
-        u32::try_from(pointer.0).ok()
+        let inputs = crate::owner::windows::window_inputs()?;
+        let actuator = actuator_for(source, |device| {
+            inputs.pen_in_range(self.window, Some(device)).is_some()
+        });
+        let pointer = inputs.pen_in_range(self.window, actuator)?;
+        u32::try_from(pointer).ok()
     }
 
     /// The controller of [`Self::pen_pointer`]'s pen.
@@ -526,13 +521,13 @@ mod tests {
     use flui_platform::pointer::{PenTool, PointerKind};
 
     use crate::WindowsPlatform;
+    use crate::input::assembly::{
+        NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime,
+    };
+    use crate::input::windows::testing::decode_into;
+    use crate::owner::windows::{WindowRef, window_inputs};
     use crate::platform::Platform as _;
     use crate::platforms::windows::WindowsWindow;
-    use crate::platforms::windows::events::SURFACE;
-    use crate::shared::pointer_assembly::{
-        NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
-    };
-    use crate::window::windows::proc::{WindowRef, with_window_context};
     use flui_platform::HapticFeedback;
     use flui_platform::WindowOptions;
 
@@ -580,11 +575,11 @@ mod tests {
         let haptics = window.haptics().expect("a Win32 window has an actuator");
         assert_unavailable(haptics.as_ref(), "with no pen in range");
 
-        let hwnd = window
+        let win32 = window
             .as_any()
             .downcast_ref::<WindowsWindow>()
-            .expect("Win32 window")
-            .hwnd();
+            .expect("Win32 window");
+        let this = WindowRef::new(win32.hwnd(), win32.identity);
         let pen = PointerKind::Pen { tool: PenTool::Tip };
         let hovering = NativeReading::new(
             NativeContact(0x4242),
@@ -592,17 +587,15 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .on(SURFACE)
         .at(10.0, 10.0, 1.0)
         .from_device(NativeDevice(0x51));
-        with_window_context(hwnd, "test", |context| {
-            decode(&mut context.pointer_registry.borrow_mut(), &hovering).expect("a valid reading");
-            assert_eq!(
-                context.pointer_registry.borrow().pen_contact(None),
-                Some(NativeContact(0x4242))
-            );
-        })
-        .expect("the window's context");
+        decode_into(this.hwnd(), hovering).expect("a valid reading");
+        assert_eq!(
+            window_inputs()
+                .expect("the class's input")
+                .pen_in_range(this, None),
+            Some(0x4242)
+        );
         assert_unavailable(
             haptics.as_ref(),
             "for a pen pointer the OS has no pen device for",
@@ -639,13 +632,9 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .on(SURFACE)
         .at(10.0, 10.0, 1.0)
         .from_device(NativeDevice(0x51));
-        with_window_context(hwnd, "test", |context| {
-            decode(&mut context.pointer_registry.borrow_mut(), &hovering).expect("a valid reading");
-        })
-        .expect("the window's context");
+        decode_into(hwnd, hovering).expect("a valid reading");
 
         let own = super::WindowsHaptics::new(WindowRef::new(hwnd, identity));
         assert_eq!(own.pen_pointer(None), Some(0x4242));

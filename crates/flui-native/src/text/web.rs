@@ -2,54 +2,26 @@
 //! mirrored into an `EditContext` on the canvas, or a hidden textarea beside
 //! it where the browser has none, and served to the browser's input method.
 //!
-//! - [`ime`]: the decidable half, when a key belongs to the input method and
-//!   which virtual keyboard a field asks for; built on every target and
-//!   public, hidden from the documentation, for the backend conformance table
-//!   in `tests/`, until that table reaches the hosts through the public API;
+//! - `ime`: the decidable half, which virtual keyboard a field asks for;
+//!   pure, built for the web and for tests on every host;
 //! - `input`: `WebTextInput`, the window's `TextStoreHost` over the DOM.
 
-#[doc(hidden)]
-pub mod ime {
-    //! The decidable half of the web backend's text input (ADR-0090): when a key
-    //! belongs to an input method, and which virtual keyboard a field asks for.
-    //! What a hidden `<textarea>`'s change was is the mirror's one edit
-    //! ([`crate::text::ime::diff`]). Cfg-free plain functions over integers, so
-    //! Linux CI pins them; `text::web::input` reads the DOM.
+#[cfg(any(target_arch = "wasm32", test))]
+mod ime {
+    //! The decidable half of the web backend's text input (ADR-0090): which
+    //! virtual keyboard a field asks for. What a hidden `<textarea>`'s change
+    //! was is the mirror's one edit ([`crate::text::ime::diff`]); which key
+    //! belongs to the input method is `input::web::keys`'s. Cfg-free plain
+    //! functions, so Linux CI pins them; `text::web::input` reads the DOM.
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::keyboard::ImeComposition;
     use flui_platform::text_store::TextInputPurpose;
-
-    /// `KeyboardEvent.keyCode` of a key an input method processes: every
-    /// browser reports 229 for it, including WebKit for the key that commits a
-    /// composition, which it dispatches after `compositionend` with
-    /// `isComposing` already false.
-    pub const IME_PROCESS_KEY_CODE: u32 = 229;
-
-    /// Whether a DOM key event belongs to the input method: the event says it
-    /// composes, carries the input method's key code, or arrives while the
-    /// window's own text input composes. Such a key reaches the application
-    /// marked [`ImeComposition::Active`], which no shortcut, focus traversal or
-    /// drag cancellation takes, so the input method sees it first: Escape
-    /// cancels the composition, not a dialog.
-    #[must_use]
-    pub const fn key_composition(
-        is_composing: bool,
-        key_code: u32,
-        host_composing: bool,
-    ) -> ImeComposition {
-        if is_composing || key_code == IME_PROCESS_KEY_CODE || host_composing {
-            ImeComposition::Active
-        } else {
-            ImeComposition::Inactive
-        }
-    }
 
     /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
     /// browser's virtual keyboard for.
     #[must_use]
-    pub const fn input_mode(purpose: TextInputPurpose) -> &'static str {
+    pub(crate) const fn input_mode(purpose: TextInputPurpose) -> &'static str {
         match purpose {
             TextInputPurpose::Email => "email",
             TextInputPurpose::Url => "url",
@@ -81,7 +53,7 @@ mod input {
     //! through the store's observer. Offsets are UTF-16 code units on both sides.
     //!
     //! A key the input method processes stays the input method's (decided by
-    //! `text::web::ime::key_composition`): the window delivers it
+    //! `input::web::keys::key_composition`): the window delivers it
     //! marked composing while the surface composes, so no shortcut or drag
     //! cancellation takes Escape from the input method. Keys the application
     //! handles have their default prevented, so the browser does not also type
@@ -107,9 +79,9 @@ mod input {
 
     use super::ime::input_mode;
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::platforms::web::events::{KeyRoute, is_focus_handoff};
+    use crate::owner::web::{Accepting, CanvasKeys};
     use crate::text::ime::{diff, document_text, scalar_spans};
-    use crate::window::web::{EditorSlot, FocusSync, Listener};
+    use crate::window::web::{EditorSlot, FocusSync, Listener, is_focus_handoff};
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -205,8 +177,8 @@ mod input {
     pub struct WebTextInput {
         canvas: web_sys::HtmlCanvasElement,
         editor: EditorSlot,
-        accepting: Rc<Cell<bool>>,
-        keys: Rc<KeyRoute>,
+        accepting: Accepting,
+        keys: Rc<dyn CanvasKeys>,
         focus: Rc<FocusSync>,
         /// Whether this browser has `EditContext`, decided when the window
         /// opens.
@@ -274,8 +246,8 @@ mod input {
         pub(crate) fn new(
             canvas: &web_sys::HtmlCanvasElement,
             editor: EditorSlot,
-            accepting: Rc<Cell<bool>>,
-            keys: Rc<KeyRoute>,
+            accepting: Accepting,
+            keys: Rc<dyn CanvasKeys>,
             focus: Rc<FocusSync>,
         ) -> Rc<Self> {
             Rc::new_cyclic(|this| Self {
@@ -403,7 +375,7 @@ mod input {
                 }
                 // Detaching forgets the browser's composition, so the store's is
                 // committed in place, as when the host ends one.
-                let composing = this.keys.composing.get();
+                let composing = this.keys.composing();
                 // The browser has no call that replaces a surface's whole text
                 // and selection with exact offsets, so the surface is made anew.
                 this.detach();
@@ -424,7 +396,7 @@ mod input {
             else {
                 return;
             };
-            self.keys.composing.set(false);
+            self.keys.set_composing(false);
             // Listeners go first, so nothing the surface does while it is torn
             // down reaches the store.
             drop(listeners);
@@ -528,7 +500,7 @@ mod input {
                             update.update_selection_start(),
                             update.update_selection_end(),
                         );
-                        let composing = this.keys.composing.get();
+                        let composing = this.keys.composing();
                         this.edit(move |session| {
                             let replaced = clamped(replaced, session.document_len());
                             let inserted = len16(&text);
@@ -563,7 +535,7 @@ mod input {
                         let Some(this) = this.upgrade() else {
                             return;
                         };
-                        this.keys.composing.set(composing);
+                        this.keys.set_composing(composing);
                         if !composing {
                             this.edit(|session| {
                                 let _ = session.set_composition(None);
@@ -690,7 +662,7 @@ mod input {
                             return;
                         };
                         let composing = event.type_() == "compositionstart";
-                        this.keys.composing.set(composing);
+                        this.keys.set_composing(composing);
                         if !composing {
                             this.read_textarea(false);
                         }
@@ -704,7 +676,7 @@ mod input {
                     kind,
                     Box::new(move |_| {
                         if let Some(this) = this.upgrade() {
-                            this.read_textarea(this.keys.composing.get());
+                            this.read_textarea(this.keys.composing());
                         }
                     }),
                 )?);
@@ -1049,10 +1021,10 @@ mod input {
         /// no call that commits it, so its own is discarded by re-attaching the
         /// surface and the caller commits the store's in place.
         fn end_composition(&self) -> CompositionEnd {
-            if !self.keys.composing.get() {
+            if !self.keys.composing() {
                 return CompositionEnd::Committed;
             }
-            self.keys.composing.set(false);
+            self.keys.set_composing(false);
             let surface = self
                 .attached
                 .borrow()

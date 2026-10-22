@@ -9,12 +9,12 @@ use crate::display::headless::{DisplaySpec, laid_out};
 use crate::drag::headless::DragDouble;
 use crate::haptics::headless::FakeHaptics;
 use crate::host::Host;
+use crate::input::headless::{AttachedDevices, HeadlessInputDevices};
 use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
-use crate::owner::headless::{HeadlessHost, HeadlessLoop};
+use crate::owner::headless::{HeadlessHost, HeadlessLoop, SimulatedDevices};
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
-use crate::platforms::headless::HeadlessInputDevices;
 use crate::preferences::headless::HeadlessPreferences;
 use crate::storage::UserDataDirs;
 use crate::text::headless::FakeTextInput;
@@ -50,6 +50,10 @@ impl HeadlessHost for Headless {
 
     fn notices() -> Arc<dyn NoticeChannel> {
         Arc::new(SystemNotices::default())
+    }
+
+    fn devices() -> Box<dyn SimulatedDevices> {
+        Box::new(AttachedDevices::default())
     }
 }
 

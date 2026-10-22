@@ -7,9 +7,7 @@
 
 use std::sync::Arc;
 
-use flui_native::shared::pointer_assembly::capture::{
-    CaptureGuard, CaptureSource, Captured, capture,
-};
+use flui_native::input::assembly::capture::{CaptureGuard, CaptureSource, Captured, capture};
 use parking_lot::Mutex;
 
 use super::codec::{Backend, Header, NativeRecording, Row};

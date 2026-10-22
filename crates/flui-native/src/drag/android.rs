@@ -861,7 +861,7 @@ fn nullable<'local>(
 #[cfg(target_os = "android")]
 impl PlatformDragSource for AndroidDragSource {
     fn start_timing(&self) -> OsDragStart {
-        crate::shared::input_availability::DESKTOP_DRAG_START
+        crate::input::availability::DESKTOP_DRAG_START
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {

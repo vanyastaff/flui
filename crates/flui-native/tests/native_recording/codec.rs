@@ -15,15 +15,16 @@ use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
 use std::time::Duration;
 
-use flui_native::shared::direct_manipulation::{
-    ContentTransform, TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
-};
-use flui_native::shared::pointer_assembly::{
+use flui_native::input::assembly::{
     ClickSettings, ContactRegistry, ContactScroll, CounterAnchor, DecodeError, GestureComponent,
     GestureDelta, GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock,
     NativeContact, NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks,
     RawPoint, RawSensors, ReadingAction, ReadingTime, WheelAxis, WheelReading, decode,
 };
+use flui_native::input::assembly::{
+    ContentTransform, TouchpadFrame, ViewportReading, ViewportStatus,
+};
+use flui_native::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;

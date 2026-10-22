@@ -219,6 +219,7 @@ impl WindowsWindow {
             displays,
             notices,
             window_hooks,
+            preferences,
             ..
         } = shares;
         // Admission refuses identity exhaustion before creating an HWND
@@ -244,6 +245,7 @@ impl WindowsWindow {
             apartment,
             drag,
             window_hooks,
+            preferences,
         )
     }
 
@@ -346,6 +348,7 @@ impl WindowsWindow {
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
+        preferences: Rc<dyn crate::owner::windows::control::OwnerPreferences>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -443,13 +446,8 @@ impl WindowsWindow {
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
             // `window::visibility::win32_initial_visibility`'s doc.
-            let message_clock = crate::platforms::windows::events::MessageClock::new();
-            let pointer_registry =
-                std::cell::RefCell::new(crate::platforms::windows::events::pointer_registry(
-                    message_clock.native(),
-                    scale_factor,
-                ));
             let config = windows.config.clone();
+            let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
             let context = Box::new(WindowContext {
                 window_id,
                 windows: Arc::downgrade(&windows),
@@ -457,16 +455,13 @@ impl WindowsWindow {
                 snapshot: Arc::clone(&snapshot),
                 handlers: Rc::clone(&handlers),
                 exit_policy,
-                callbacks: WindowCallbacks::counting_frames(frames.counter()),
+                callbacks: Arc::clone(&callbacks),
+                hooks: Rc::clone(&window_hooks),
+                preferences: Rc::clone(&preferences),
                 scale_factor: std::cell::Cell::new(scale_factor),
-                message_clock,
-                pointer_registry,
-                touchpad: crate::platforms::windows::direct_manipulation::TouchpadSlot::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
-                is_hovered: std::cell::Cell::new(false),
-                modifiers: std::cell::Cell::new(flui_platform::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
@@ -496,11 +491,9 @@ impl WindowsWindow {
                         Rc::clone(&frames),
                     ),
                 ),
-                pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),
                 drag: Arc::clone(&drag),
-                held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
                 identity,
                 displays: Arc::clone(&displays),
@@ -534,8 +527,9 @@ impl WindowsWindow {
             // retires its context.
 
             // The hooks of the window class learn of the window: its text
-            // services activate, it takes drags from this process or another
-            // (ADR-0211), and the precision touchpad's viewport is created.
+            // services activate, its input is kept, it takes drags from this
+            // process or another (ADR-0211), and the precision touchpad's
+            // viewport is created.
             let mut client = windows::Win32::Foundation::RECT::default();
             let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 (client.right - client.left, client.bottom - client.top)
@@ -546,11 +540,20 @@ impl WindowsWindow {
             // later hook runs on the dead handle, and the open fails instead
             // of returning a wrapper around it.
             crate::owner::windows::window_created(
-                window_hooks,
+                &window_hooks,
                 &crate::owner::windows::CreatedWindow {
                     hwnd,
                     identity,
                     client_size: size,
+                    dpi: if native_dpi == 0 {
+                        USER_DEFAULT_SCREEN_DPI
+                    } else {
+                        native_dpi
+                    },
+                    callbacks,
+                    handlers: Rc::clone(&handlers),
+                    preferences,
+                    hooks: Rc::clone(&window_hooks),
                     apartment,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
@@ -714,6 +717,13 @@ impl WindowsWindow {
     /// Get the native HWND handle
     pub fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// Whether the mouse is over this window, as its input read it: `None`
+    /// off its owner thread, or once it closed.
+    fn hovered(&self) -> Option<bool> {
+        crate::owner::windows::window_inputs()?
+            .hovered(super::proc::WindowRef::new(self.hwnd, self.identity))
     }
 
     /// Installs a callback into this window's owner-thread context.
@@ -1358,11 +1368,15 @@ impl PlatformWindow for WindowsWindow {
         use crate::owner::hwnd_affinity::UserDataRefusal;
         use flui_platform::{GestureGeometry, PreferenceQueryError};
 
-        super::proc::with_window_context_checked(self.hwnd, "gesture geometry", |_| {
+        super::proc::with_window_context_checked(self.hwnd, "gesture geometry", |ctx| {
             // SAFETY: the checked owner context proves this is the still-live
             // owned HWND. The scalar DPI getter does not dispatch user code.
             let dpi = unsafe { GetDpiForWindow(self.hwnd) };
-            let native = crate::preferences::windows::mouse_geometry(dpi)?;
+            let native = ctx
+                .preferences
+                .mouse_gestures(dpi)?
+                .native_mouse_geometry()
+                .ok_or(PreferenceQueryError::Unavailable)?;
             Ok(Some(GestureGeometry::from_native_mouse(&native)?))
         })
         .map_err(|refusal| match refusal {
@@ -1396,7 +1410,7 @@ impl PlatformWindow for WindowsWindow {
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         super::proc::with_window_context(self.hwnd, "set_cursor", |ctx| {
             ctx.cursor.set(cursor);
-            if ctx.is_hovered.get() {
+            if self.hovered() == Some(true) {
                 Self::apply_native_cursor(cursor)?;
             }
             Ok(())
@@ -1483,9 +1497,10 @@ impl PlatformWindow for WindowsWindow {
         unsafe { GetForegroundWindow() == self.hwnd }
     }
 
+    /// `false` for a window its input does not hold (off its owner thread,
+    /// or closed).
     fn is_hovered(&self) -> bool {
-        super::proc::with_window_context(self.hwnd, "is_hovered", |ctx| ctx.is_hovered.get())
-            .unwrap_or(false)
+        self.hovered() == Some(true)
     }
 
     fn mouse_position(&self) -> Point<f64> {
@@ -1507,8 +1522,13 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    /// None held for a window its input does not hold (off its owner thread,
+    /// or closed).
     fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        super::proc::with_window_context(self.hwnd, "modifiers", |ctx| ctx.modifiers.get())
+        crate::owner::windows::window_inputs()
+            .and_then(|inputs| {
+                inputs.modifiers(super::proc::WindowRef::new(self.hwnd, self.identity))
+            })
             .unwrap_or(flui_platform::Modifiers::NONE)
     }
 
