@@ -55,8 +55,8 @@ use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger}
 use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 
+use crate::input::apple::macos::{ViewContext, get_context as get_view_context};
 use crate::owner::apple::macos::exec_on_owner;
-use crate::platforms::macos::view::{ViewContext, get_context as get_view_context};
 use flui_platform::PlatformTextInput;
 
 // ============================================================================
@@ -256,10 +256,7 @@ unsafe fn insert_text_argument_string(string: *mut AnyObject) -> Option<String> 
 /// event is ordered against pointer and keyboard events exactly as they are
 /// ordered against each other.
 fn emit_ime(ctx: &ViewContext, event: ImeEvent) {
-    crate::platforms::macos::view::dispatch_input_event(
-        ctx,
-        flui_platform::PlatformInput::Ime(event),
-    );
+    crate::input::apple::macos::dispatch_input_event(ctx, flui_platform::PlatformInput::Ime(event));
 }
 
 /// The empty rect AppKit is answered with when no cursor area has been set.
@@ -549,7 +546,7 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
             tracing::trace!("doCommandBySelector: outside a pending key press; command dropped");
             return;
         }
-        crate::platforms::macos::view::handle_input_event(
+        crate::input::apple::macos::handle_input_event(
             this,
             sel!(keyDown:),
             pending_key_event as *mut AnyObject,
@@ -725,7 +722,7 @@ impl MacOSTextInput {
             // dispatched onto the lane under the reentrancy guard — before the
             // view is touched. `with_view_context` checks the class before
             // reading the context ivar.
-            unsafe { crate::platforms::macos::view::with_view_context(this.view, body) }
+            unsafe { crate::input::apple::macos::with_view_context(this.view, body) }
         })
     }
 }

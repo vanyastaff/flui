@@ -53,13 +53,13 @@ use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, restore_rectangle,
 };
 use super::window::WindowsWindow;
+use crate::input::windows::raw::{get_x_lparam, get_y_lparam};
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
 use crate::owner::windows::{WINDOW_CLASS_NAME, WindowIdentity, WindowMessages};
-use crate::platforms::windows::events::{get_x_lparam, get_y_lparam};
 use crate::text::windows::TextServices;
 use crate::window::config::WindowConfiguration;
 use crate::window::state::WindowStateCell;
@@ -135,12 +135,12 @@ pub(crate) struct WindowContext {
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
-    pub(crate) message_clock: crate::platforms::windows::events::MessageClock,
-    pub pointer_registry: RefCell<crate::shared::pointer_assembly::ContactRegistry>,
+    pub(crate) message_clock: crate::input::windows::raw::MessageClock,
+    pub pointer_registry: RefCell<crate::input::assembly::ContactRegistry>,
     /// The precision touchpad's DirectManipulation viewport; `None` when it
     /// did not initialise (the window then has no precise scrolling or
     /// trackpad gestures) or after it failed.
-    pub(crate) touchpad: crate::platforms::windows::direct_manipulation::TouchpadSlot,
+    pub(crate) touchpad: crate::input::windows::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -231,7 +231,7 @@ pub(crate) struct WindowContext {
     pub(crate) drag: Arc<dyn crate::owner::windows::HostDrag>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
-    pub held_dead_keys: std::cell::RefCell<crate::platforms::windows::events::HeldDeadKeys>,
+    pub held_dead_keys: std::cell::RefCell<crate::input::windows::raw::HeldDeadKeys>,
     /// Borrow ledger deferring this context's free past every live borrow
     /// on the owner thread — see [`ContextLedger`] for the reentrancy
     /// hazard (a framework callback closing the window from inside a
@@ -1325,9 +1325,7 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         // Double-click time and size are settings too.
                         ctx.pointer_registry.borrow_mut().set_click_settings(
-                            crate::platforms::windows::events::click_settings(
-                                ctx.scale_factor.get(),
-                            ),
+                            crate::input::windows::raw::click_settings(ctx.scale_factor.get()),
                         );
                         let appearance = super::backdrop::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
@@ -1867,7 +1865,7 @@ impl WindowContext {
         self.displays.invalidate();
         self.pointer_registry
             .borrow_mut()
-            .set_click_settings(crate::platforms::windows::events::click_settings(new_scale));
+            .set_click_settings(crate::input::windows::raw::click_settings(new_scale));
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();

@@ -544,7 +544,7 @@ fn dispatch_platform_input(
 /// process event epoch when the frame is admitted. No backend reports the
 /// display's own vsync timestamp yet.
 pub(super) fn frame_vsync() -> flui_platform::EventTime {
-    flui_platform::EventTime::from_nanos(flui_native::shared::events::event_timestamp_ns())
+    flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(

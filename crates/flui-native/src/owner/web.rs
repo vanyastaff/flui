@@ -1,14 +1,23 @@
 //! The web host's loop: the state every position of its table reads, and the
 //! `requestAnimationFrame` loop that drives its frames.
 //!
-//! Its `Send` and `Sync` claims rest on the page having one thread, which
-//! `platforms::web` enforces by refusing a `+atomics` build.
+//! Its `Send` and `Sync` claims rest on the page having one thread, which this
+//! module enforces by refusing a `+atomics` build.
 
 // This module is one of the workspace's sanctioned `unsafe` islands: the page
 // has one thread, so the loop and its executor claim `Send`/`Sync` by hand. The
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
+
+// The host's `Send`/`Sync` claims rest on the page having one thread: the JS
+// handles and `RefCell`s it holds are never reached from another. A
+// shared-memory build (`+atomics`, wasm threads) breaks that, so it is refused
+// here rather than left to a data race.
+#[cfg(target_feature = "atomics")]
+compile_error!(
+    "the web backend assumes one thread; build wasm32 without the `atomics` target feature"
+);
 
 mod executor;
 pub(crate) mod listener;
@@ -210,7 +219,7 @@ pub(crate) struct WebState {
     owner: Weak<WebLoop>,
 }
 
-// SAFETY: the page has one thread (`platforms::web` refuses `+atomics`), so the
+// SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
 // value is never reached from another.
 unsafe impl Send for WebLoop {}
 unsafe impl Sync for WebLoop {}

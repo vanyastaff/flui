@@ -443,12 +443,10 @@ impl WindowsWindow {
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
             // `window::visibility::win32_initial_visibility`'s doc.
-            let message_clock = crate::platforms::windows::events::MessageClock::new();
-            let pointer_registry =
-                std::cell::RefCell::new(crate::platforms::windows::events::pointer_registry(
-                    message_clock.native(),
-                    scale_factor,
-                ));
+            let message_clock = crate::input::windows::raw::MessageClock::new();
+            let pointer_registry = std::cell::RefCell::new(
+                crate::input::windows::raw::pointer_registry(message_clock.native(), scale_factor),
+            );
             let config = windows.config.clone();
             let context = Box::new(WindowContext {
                 window_id,
@@ -461,7 +459,7 @@ impl WindowsWindow {
                 scale_factor: std::cell::Cell::new(scale_factor),
                 message_clock,
                 pointer_registry,
-                touchpad: crate::platforms::windows::direct_manipulation::TouchpadSlot::default(),
+                touchpad: crate::input::windows::direct_manipulation::TouchpadSlot::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,

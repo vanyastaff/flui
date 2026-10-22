@@ -46,6 +46,7 @@ use crate::display::apple::screen::change_screen;
 use crate::host;
 use crate::host::Host;
 use crate::host_window::HostWindow;
+use crate::input::apple::ios::TouchInputState;
 use crate::owner::OpenWindowError;
 use crate::owner::apple::IOSLoop;
 use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity};
@@ -57,7 +58,6 @@ use crate::owner::call_point::install;
 use crate::owner::handlers::WindowCallbacks;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
-use crate::platforms::ios::events::TouchInputState;
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::state::WindowStateCell;
 use crate::{BootstrapError, PlatformError, PlatformProxy};
@@ -637,12 +637,12 @@ impl FluiView {
 }
 
 impl TouchPhase {
-    fn as_pointer_phase(self) -> crate::platforms::ios::events::TouchPhase {
+    fn as_pointer_phase(self) -> crate::input::apple::ios::TouchPhase {
         match self {
-            TouchPhase::Began => crate::platforms::ios::events::TouchPhase::Down,
-            TouchPhase::Moved => crate::platforms::ios::events::TouchPhase::Move,
-            TouchPhase::Ended => crate::platforms::ios::events::TouchPhase::Up,
-            TouchPhase::Cancelled => crate::platforms::ios::events::TouchPhase::Cancel,
+            TouchPhase::Began => crate::input::apple::ios::TouchPhase::Down,
+            TouchPhase::Moved => crate::input::apple::ios::TouchPhase::Move,
+            TouchPhase::Ended => crate::input::apple::ios::TouchPhase::Up,
+            TouchPhase::Cancelled => crate::input::apple::ios::TouchPhase::Cancel,
         }
     }
 }
@@ -740,7 +740,7 @@ impl IOSWindow {
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(crate::shared::input_availability::ios());
+        callbacks.set_input_capabilities(crate::input::availability::ios());
         if let Some(owner) = signal.upgrade() {
             callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
                 &owner, &callbacks,

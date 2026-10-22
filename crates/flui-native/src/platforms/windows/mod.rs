@@ -1,25 +1,8 @@
-//! Windows platform implementation using Win32 API
-//!
-//! This module provides native Windows support without winit,
-//! using direct Win32 API calls for maximum control and performance.
+//! The Windows host's public names: the window and its extensions, at the
+//! paths applications name them by, and the raw Win32 types an embedder
+//! needs. The window, its input and every other feature live in their
+//! features' directories.
 
-// This module (and its submodules) is one of the workspace's sanctioned
-// `unsafe` FFI islands — direct Win32 calls have no safe wrapper. The
-// workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
-// block still carries its own `// SAFETY:` comment stating the invariant
-// that makes it sound.
-#![expect(unsafe_code)]
-
-pub(crate) mod direct_manipulation;
-pub(crate) mod events;
-pub(crate) mod input_messages;
-
-// The types the Windows host's table names: public where they are defined (a
-// table names only public types), and nameable only inside the crate.
-// The hooks the Windows host registers on FLUI's window class.
-pub(crate) use direct_manipulation::Touchpad;
-pub(crate) use input_messages::InputMessages;
 // The window feature's public types, at the paths applications name them by.
 pub use crate::window::windows::WindowsWindow;
 pub use crate::window::windows::backdrop::{

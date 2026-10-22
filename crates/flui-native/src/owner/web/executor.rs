@@ -10,7 +10,7 @@ use crate::platform::PlatformExecutor;
 
 pub struct WebExecutor;
 
-// SAFETY: the page has one thread (`platforms::web` refuses `+atomics`), so the
+// SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
 // value is never reached from another.
 unsafe impl Send for WebExecutor {}
 unsafe impl Sync for WebExecutor {}

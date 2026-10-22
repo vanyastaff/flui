@@ -526,12 +526,12 @@ mod tests {
     use flui_platform::pointer::{PenTool, PointerKind};
 
     use crate::WindowsPlatform;
-    use crate::platform::Platform as _;
-    use crate::platforms::windows::WindowsWindow;
-    use crate::platforms::windows::events::SURFACE;
-    use crate::shared::pointer_assembly::{
+    use crate::input::assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
+    use crate::input::windows::raw::SURFACE;
+    use crate::platform::Platform as _;
+    use crate::platforms::windows::WindowsWindow;
     use crate::window::windows::proc::{WindowRef, with_window_context};
     use flui_platform::HapticFeedback;
     use flui_platform::WindowOptions;

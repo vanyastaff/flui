@@ -24,15 +24,17 @@ use flui_native::haptics::degradation::{
     macos_pattern, web_feedback, web_pattern, windows_capabilities, windows_feedback,
     windows_pattern,
 };
-use flui_native::shared::input_availability::{self, AndroidInputApis, WinitSession};
-use flui_native::shared::keys::vk_to_key;
-use flui_native::shared::keys_macos::{keycode_to_key, kvk};
-use flui_native::shared::pointer_assembly::{
+use flui_native::input::apple::keys::{keycode_to_key, kvk};
+use flui_native::input::assembly::{
     ClockChoice, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice,
     NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
     ScrollReading, decode,
 };
+use flui_native::input::availability::{
+    self as input_availability, AndroidInputApis, WinitSession,
+};
+use flui_native::input::keys::vk_to_key;
 use flui_native::text::android::keys as android_keys;
 use flui_native::text::web::ime::key_composition;
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};

@@ -751,7 +751,7 @@ fn hold_mouse_buttons(buttons: u32) {
     let mut keys = [0_u8; 256];
     // SAFETY: `keys` is a live array of the 256 entries both calls take.
     unsafe { GetKeyboardState(&mut keys) }.expect("this thread's key state");
-    for (key, bit, _) in crate::platforms::windows::events::MOUSE_BUTTONS {
+    for (key, bit, _) in crate::input::windows::raw::MOUSE_BUTTONS {
         keys[usize::from(key.0)] = if buttons & bit == 0 { 0 } else { 0x80 };
     }
     // SAFETY: as above.
@@ -763,7 +763,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
     use flui_platform::EventTime;
     use flui_platform::pointer::{PenTool, PointerButton, PointerEvent, PointerKind};
 
-    use crate::shared::pointer_assembly::{
+    use crate::input::assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
     let press = NativeReading::new(
@@ -772,7 +772,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
         ReadingAction::Press(PointerButton::PRIMARY),
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .on(crate::platforms::windows::events::SURFACE)
+    .on(crate::input::windows::raw::SURFACE)
     .at(10.0, 10.0, 1.0)
     .from_device(NativeDevice(0x51));
     with_window_context(hwnd, "test", |context| {

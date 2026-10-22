@@ -12,8 +12,8 @@ use objc2::{ClassType, class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
+use crate::input::apple::macos as view;
 use crate::owner::apple::macos::HostDisplays;
-use crate::platforms::macos::view;
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
 /// window not on any screen) or the source leaves that screen out.

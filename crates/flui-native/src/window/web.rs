@@ -210,7 +210,7 @@ impl WebWindow {
     /// empty at construction (`display: none`, or not yet laid out) and are
     /// applied as its CSS size then; a caller that wants a fixed size
     /// otherwise sets it in CSS. The backing store follows the box at the
-    /// device pixel ratio, and `platforms::web::events` keeps both in step with the
+    /// device pixel ratio, and `input::web` keeps both in step with the
     /// layout afterwards (a `ResizeObserver` on the canvas plus the window's
     /// `resize` event for zoom), dispatching a resize to the embedder each
     /// time they change — so the first version of this backend, which
@@ -331,7 +331,7 @@ impl WebWindow {
         }
     }
 
-    /// A handle for the layout-tracking listeners `platforms::web::events` registers:
+    /// A handle for the layout-tracking listeners `input::web` registers:
     /// re-reads the canvas's CSS box and the device pixel ratio, and, when
     /// either or the backing size changed, resizes the backing store, updates
     /// the tracked size and dispatches a resize followed by a frame request.
@@ -369,7 +369,7 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        let services = crate::platforms::web::events::register_event_listeners(
+        let services = crate::input::web::events::register_event_listeners(
             self,
             input_latency,
             transfer,
@@ -393,7 +393,7 @@ impl WebWindow {
         }
     }
 
-    /// The handle by which the Page Lifecycle listeners `platforms::web::events`
+    /// The handle by which the Page Lifecycle listeners `input::web`
     /// registers set the window's execution state.
     pub(crate) fn execution_sync(&self) -> ExecutionSync {
         ExecutionSync {
@@ -697,8 +697,8 @@ impl host::Window<WebLoop> for WebWindow {
 
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
-        callbacks.set_input_capabilities(crate::shared::input_availability::web(
-            crate::platforms::web::events::has_gesture_events(),
+        callbacks.set_input_capabilities(crate::input::availability::web(
+            crate::input::web::events::has_gesture_events(),
         ));
         callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);

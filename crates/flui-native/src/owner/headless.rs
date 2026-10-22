@@ -181,7 +181,7 @@ pub(crate) struct HeadlessState {
     /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
     pub(crate) input_availability: flui_platform::input_capabilities::InputCapabilities,
     /// The attached input devices: presence and device ids from one registry.
-    pub(crate) devices: crate::shared::pointer_assembly::DeviceRegistry,
+    pub(crate) devices: crate::input::assembly::DeviceRegistry,
     /// Issues each simulated device's native label, never one twice.
     pub(crate) device_labels: flui_foundation::IdMint<std::num::NonZeroU64>,
     /// The displays this platform reports, which the table lays out
@@ -223,7 +223,7 @@ impl HeadlessLoop {
             exit_reevaluation_requested: false,
             text_store_host: None,
             input_availability: default_input_availability(),
-            devices: crate::shared::pointer_assembly::DeviceRegistry::default(),
+            devices: crate::input::assembly::DeviceRegistry::default(),
             device_labels: flui_foundation::IdMint::new(),
             displays: H::displays(),
             notices: H::notices(),

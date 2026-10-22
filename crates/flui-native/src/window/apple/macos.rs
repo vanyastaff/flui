@@ -161,11 +161,11 @@ const NO: Bool = Bool::NO;
 
 use crate::host;
 use crate::host_window::HostWindow;
+use crate::input::apple::macos as view;
 use crate::owner::apple::MacOSLoop;
 use crate::owner::apple::macos::{HostDisplays, WindowRegistry, debug_assert_appkit_main_thread};
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
-use crate::platforms::macos::view;
 use crate::{
     owner::OpenWindowError, owner::handlers::WindowCallbacks, window::config::WindowConfiguration,
     window::state::WindowStateCell,
@@ -1169,7 +1169,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         window.install_wake_pump(Arc::downgrade(&owner.wake_pump));
         window.bind_displays(Arc::clone(&owner.displays));
         let callbacks = window.callbacks();
-        callbacks.set_input_capabilities(crate::shared::input_availability::macos());
+        callbacks.set_input_capabilities(crate::input::availability::macos());
         callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
             &owner.loop_control.owner_signal,
             callbacks,

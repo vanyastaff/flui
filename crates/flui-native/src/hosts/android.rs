@@ -10,6 +10,7 @@ use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::{Absent, Host, position};
+use crate::input::android::AndroidInputState;
 use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::android::activity_callbacks::ActivityCallbacks;
@@ -19,7 +20,6 @@ use crate::owner::android::{ActivityPreferences, AndroidHost, AndroidLoop, HostD
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
-use crate::platforms::android::AndroidInputState;
 use crate::preferences::android::AndroidPreferences;
 use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};

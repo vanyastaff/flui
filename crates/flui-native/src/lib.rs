@@ -22,6 +22,9 @@
 //!   │                         point for handlers and the handler registry
 //!   ├─ display/             - The displays: the registry and snapshot model
 //!   │                         beside one file per platform
+//!   ├─ input/               - Pointer, touch, pen and keyboard input: the
+//!   │                         pointer assembly and key rules beside one
+//!   │                         file per platform
 //!   ├─ text/                - Text input and the system text size: the
 //!   │                         model and one module per platform
 //!   ├─ preferences/         - System preferences: the model and one source
@@ -33,7 +36,7 @@
 //!   │  accessibility/,        platform
 //!   │  haptics/
 //!   │
-//!   ├─ shared/              - Shared infrastructure
+//!   ├─ shared/              - The OS version gates and floors (ADR-0244)
 //!   │
 //!   └─ platforms/           - Concrete implementations
 //!       ├─ winit/           - Cross-platform (Windows/macOS/Linux)
@@ -201,12 +204,19 @@ pub mod haptics;
 pub mod host;
 mod host_window;
 mod hosts;
+// Reachable for the backend conformance table and the native recordings in
+// `tests/`, which decode through the pointer assembly and the key rules, and
+// for the allocation test, its own binary; not an embedding API. The event
+// timeline, which the composition root stamps frames on, is named at the root.
+#[doc(hidden)]
+pub mod input;
+pub use input::event_timestamp_ns;
 mod lifecycle;
 mod owner;
 mod platform;
 pub mod platforms;
 mod preferences;
-pub mod shared;
+mod shared;
 pub mod storage;
 #[cfg(test)]
 mod table_test;

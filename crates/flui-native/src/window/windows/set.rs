@@ -203,13 +203,14 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
                     context.callbacks.resume_input_delivery();
                 });
             });
-        let _ =
-            with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
-                context.callbacks.set_input_capabilities(
-                    crate::shared::input_availability::windows(context.has_touchpad()),
-                );
-                context.callbacks.set_input_wake(wake);
-            });
+        let _ = with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
+            context
+                .callbacks
+                .set_input_capabilities(crate::input::availability::windows(
+                    context.has_touchpad(),
+                ));
+            context.callbacks.set_input_wake(wake);
+        });
 
         // Store window
         let _prev = windows.by_handle.lock().insert(hwnd_value, window.clone());

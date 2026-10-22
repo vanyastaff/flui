@@ -581,7 +581,7 @@ globals = [
     { item = "window::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
     { item = "owner::apple::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
     { item = "owner::apple::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
-    { item = "platforms::macos::view::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
+    { item = "input::apple::macos::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "clipboard::windows::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
     { item = "window::apple::macos::delegate::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
@@ -591,7 +591,7 @@ globals = [
     { item = "owner::winit::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
     { item = "clipboard::lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
     { item = "clipboard::lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
-    { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
+    { item = "input::assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]
 
 [package.metadata.flui.modules]

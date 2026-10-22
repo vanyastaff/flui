@@ -303,10 +303,10 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use crate::{
     drag::offers::payload_of_bytes,
+    input::web::events::{answer, pointer_position},
     owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
     owner::web::{CanvasDrag, CanvasListeners, HostDrag},
-    platforms::web::events::{answer, pointer_position},
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -696,7 +696,7 @@ impl WebDragSource {
 #[cfg(target_arch = "wasm32")]
 impl PlatformDragSource for WebDragSource {
     fn start_timing(&self) -> OsDragStart {
-        crate::shared::input_availability::WEB_DRAG_START
+        crate::input::availability::WEB_DRAG_START
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {

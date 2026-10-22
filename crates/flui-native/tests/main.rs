@@ -19,16 +19,10 @@
 
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
-#[path = "android_keys.rs"]
-mod android_keys;
-#[path = "android_motion.rs"]
-mod android_motion;
 #[path = "backend_conformance.rs"]
 mod backend_conformance;
 #[path = "contract.rs"]
 mod contract;
-#[path = "direct_manipulation.rs"]
-mod direct_manipulation;
 #[path = "displays.rs"]
 mod displays;
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,12 +45,8 @@ mod input_capabilities;
 mod input_regions;
 #[path = "native_recording/mod.rs"]
 mod native_recording;
-#[path = "pointer_assembly.rs"]
-mod pointer_assembly;
 #[path = "preferences.rs"]
 mod preferences;
-#[path = "web_pinch.rs"]
-mod web_pinch;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;

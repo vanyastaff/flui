@@ -115,6 +115,7 @@ use winit::{
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::DataTransferSource;
 
+use crate::input::winit as winit_events;
 use crate::owner::call_point::{Field, Once, SharedField, call, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::signal::OwnerSignal;
@@ -122,7 +123,6 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 #[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
-use crate::platforms::winit::events as winit_events;
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -824,7 +824,7 @@ impl WinitLoop {
             window.observe_portal_appearance(source.appearance());
         }
         let session = winit_session(event_loop);
-        let availability = crate::shared::input_availability::winit(session);
+        let availability = crate::input::availability::winit(session);
         if let Some(signal) = signal {
             let resumed = Arc::downgrade(&window);
             window
@@ -1148,8 +1148,8 @@ pub(crate) struct WinitApp {
 }
 
 /// The OS session this event loop runs in.
-fn winit_session(event_loop: &ActiveEventLoop) -> crate::shared::input_availability::WinitSession {
-    use crate::shared::input_availability::WinitSession;
+fn winit_session(event_loop: &ActiveEventLoop) -> crate::input::availability::WinitSession {
+    use crate::input::availability::WinitSession;
     let _ = event_loop;
     #[cfg(target_os = "linux")]
     {
@@ -1512,10 +1512,9 @@ impl ApplicationHandler for WinitApp {
         self.flush_native_pointer();
         if matches!(event, WinitWindowEvent::Focused(false)) {
             let inputs = self.platform.with_state(|state| {
-                state.native_pointer.cancel_window(
-                    platform_id,
-                    crate::shared::pointer_assembly::NativeCancel::FocusLost,
-                )
+                state
+                    .native_pointer
+                    .cancel_window(platform_id, crate::input::assembly::NativeCancel::FocusLost)
             });
             if let Some(window) = window.as_ref() {
                 dispatch_native_inputs(
@@ -2155,10 +2154,9 @@ impl WinitApp {
         let window = self.platform.with_state(|state| {
             let window = state.windows.remove(&window_id);
             state.cursor_positions.remove(&window_id);
-            state.native_pointer.cancel_window(
-                window_id,
-                crate::shared::pointer_assembly::NativeCancel::FocusLost,
-            );
+            state
+                .native_pointer
+                .cancel_window(window_id, crate::input::assembly::NativeCancel::FocusLost);
             state.window_id_map.retain(|_, v| *v != window_id);
             window
         });
@@ -2313,10 +2311,9 @@ impl WinitApp {
             state.window_id_map.retain(|_, v| *v != platform_id);
             state.windows.remove(&platform_id);
             state.cursor_positions.remove(&platform_id);
-            state.native_pointer.cancel_window(
-                platform_id,
-                crate::shared::pointer_assembly::NativeCancel::FocusLost,
-            );
+            state
+                .native_pointer
+                .cancel_window(platform_id, crate::input::assembly::NativeCancel::FocusLost);
             if state.active_window == Some(platform_id) {
                 state.active_window = None;
             }

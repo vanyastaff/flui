@@ -106,8 +106,8 @@ mod input {
     use wasm_bindgen::{JsCast, prelude::*};
 
     use super::ime::input_mode;
+    use crate::input::web::events::{KeyRoute, is_focus_handoff};
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::platforms::web::events::{KeyRoute, is_focus_handoff};
     use crate::text::ime::{diff, document_text, scalar_spans};
     use crate::window::web::{EditorSlot, FocusSync, Listener};
 

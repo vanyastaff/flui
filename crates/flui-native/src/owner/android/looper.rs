@@ -62,11 +62,11 @@ use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowEx
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
+use crate::input::android as input;
 use crate::owner::android::java_view;
 use crate::owner::android::{ActivityPreferences, AndroidHost, HostDisplays};
 use crate::owner::handlers::CallbackWindow;
 use crate::platform::HostPlatform;
-use crate::platforms::android::input;
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -202,7 +202,7 @@ pub struct AndroidLoop {
     pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
     pub(crate) input_state: Mutex<input::AndroidInputState>,
     pub(crate) owner_signal: Arc<OwnerSignal>,
-    scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
+    scroll_factors: Mutex<crate::input::android::scroll::FactorCache>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
     preferences: Box<dyn ActivityPreferences>,
@@ -283,7 +283,7 @@ impl AndroidLoop {
             clipboard: H::clipboard(),
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
-            scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
+            scroll_factors: Mutex::new(crate::input::android::scroll::FactorCache::default()),
             preferences,
             displays: H::displays(api, library, owner),
             api,
@@ -344,7 +344,7 @@ impl AndroidLoop {
         self.scroll_factors.lock().observe(reading);
     }
 
-    fn cancel_input_contacts(&self, reason: crate::shared::pointer_assembly::NativeCancel) {
+    fn cancel_input_contacts(&self, reason: crate::input::assembly::NativeCancel) {
         let events = self.input_state.lock().cancel_contacts(reason);
         let window = self.window.lock().clone();
         if let Some(window) = window {
@@ -808,7 +808,7 @@ impl host::Loop for AndroidLoop {
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
                             self.activity.resumed.store(false, Ordering::SeqCst);
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.cancel_input_contacts(crate::input::assembly::NativeCancel::FocusLost);
 
                             // Release BEFORE suspending: the drop is the one
                             // step here with a validity window behind it, and
@@ -862,7 +862,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
+                            self.cancel_input_contacts(crate::input::assembly::NativeCancel::CaptureLost);
                             tracing::debug!(
                                 "Android: TerminateWindow — the native window is going away, \
                                  releasing the surface"
@@ -879,7 +879,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::Destroy => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.cancel_input_contacts(crate::input::assembly::NativeCancel::FocusLost);
                             tracing::info!("Android: Destroy — shutting down");
                             self.activity.resumed.store(false, Ordering::SeqCst);
 
@@ -918,7 +918,7 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::LostFocus => {
-                            self.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
+                            self.cancel_input_contacts(crate::input::assembly::NativeCancel::FocusLost);
                             tracing::debug!("Android: Lost focus");
                         }
                         MainEvent::ConfigChanged { .. } => {

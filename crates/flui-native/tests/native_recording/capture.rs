@@ -8,10 +8,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use flui_native::shared::pointer_assembly::capture::{
-    CaptureGuard, CaptureSource, Captured, capture,
-};
-use flui_native::shared::pointer_assembly::{
+use flui_native::input::assembly::capture::{CaptureGuard, CaptureSource, Captured, capture};
+use flui_native::input::assembly::{
     ContactRegistry, NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
 use flui_platform::EventTime;

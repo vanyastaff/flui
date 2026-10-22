@@ -1099,7 +1099,7 @@ impl Win32DragSource {
 #[cfg(windows)]
 impl PlatformDragSource for Win32DragSource {
     fn start_timing(&self) -> OsDragStart {
-        crate::shared::input_availability::DESKTOP_DRAG_START
+        crate::input::availability::DESKTOP_DRAG_START
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
@@ -1168,7 +1168,7 @@ pub(crate) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDr
 /// state: the buttons whose release drops the session about to start.
 #[cfg(windows)]
 fn mouse_buttons_held() -> u32 {
-    crate::platforms::windows::events::MOUSE_BUTTONS
+    crate::input::windows::raw::MOUSE_BUTTONS
         .iter()
         .filter(|(key, _, _)| {
             // SAFETY: a query of this thread's key state by a constant code.
