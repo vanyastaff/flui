@@ -776,7 +776,7 @@ graph LR
   в поле и эхе; три Backspace, затем « мир» — «hello  мир» в обоих; ошибок в консоли нет; набор
   `web_browser` не запускался — на хосте нет chromedriver. Не запускалось: `cross-typecheck`
   локально (нет `zig`; job — в CI); Mac и iPhone — в очереди vanyastaff/flui#1840.
-- [x] **LY32** — ветка `platform/services` (на `main` @ `f4af625af`, затем слияние с `56ad79c96`, LY31). Четыре каталога фич, модель рядом с файлом на
+- [x] **LY32** — ветка `platform/services` (на `main` @ `f4af625af`, затем слияния с `56ad79c96`, LY31, и `a0dd4ba01`, LY33). Четыре каталога фич, модель рядом с файлом на
   платформу, платформа — один файл. `clipboard/`: `lock.rs` (модель: замок сессий Win32, общий у
   Win32 и `arboard`), `windows.rs`, `apple/{macos,ios}.rs`, `android.rs` (внутрипроцессная
   заглушка; её делает `AndroidHost` таблицы до LY50), `web.rs`, `winit.rs`, `headless.rs`
@@ -810,7 +810,7 @@ graph LR
   `HostDrag::register(canvas, callbacks, registration) -> Box<dyn CanvasDrag>` (`source`,
   `arm`, `retire`). winit — `WinitHost::{clipboard, drag}` с `FileDrops` (шесть методов
   транспорта, `DataTransferSource` — супертрейт, позиция отдаёт upcast). Android —
-  `AndroidHost::{clipboard, transfer}` (в трейте рядом с `input_method` LY30 и `displays` LY31), `transfer(view)`
+  `AndroidHost::{clipboard, transfer}` (в трейте рядом с `input_method` LY30, `displays` LY31 и `preferences`, `notices`, `activity` LY33), `transfer(view)`
   делает транспорт `ViewTransfer` (`drag`, `drop_clip`, `set_own`, `take_local_drop`) для
   `FluiView`. Циклы берут хост: `WebLoop::new::<Web>()`, `WinitLoop::new::<Winit>()`,
   `AndroidLoop::new::<Android>(app)` (форма LY31). headless держит состояние drag
@@ -842,16 +842,16 @@ graph LR
   — теперь `Arc<dyn HostDrag>` цикла, а не `OleTransfer` — и регистрирует через
   `HostDrag::register_target`; окно, которое хук убил, следующие хуки не слышат
   (`window_created`, `WindowGone`). (6) Рёбра фич в `platforms/` названы механизмом LY31,
-  пришедшим с LY30 (`retiring = ["platforms"]`; одиннадцать исключений LY30 и LY31 рядом с
-  шестью этими), по исключению на ребро
+  пришедшим с LY30 (`retiring = ["platforms"]`; десять исключений LY30, LY31 и LY33 рядом с
+  пятью этими), по исключению на ребро
   (`exit = "ADR-0151"`, задача — словами в `reason`: идентификаторы задач
   в TOML запрещает `markers`). Кто снимает: LY28 — `drag::windows` →
   `platforms::windows::platform` (`WindowRef`, контекст окна: `drop_target`, `pointer_registry`,
   колбэки), `haptics::windows` → `platforms::windows::platform` (`WindowRef`), `drag::web` →
   `platforms::web::registration` (`Registration`); LY29 — `drag::windows` →
   `platforms::windows::events` (`MOUSE_BUTTONS`), `drag::web` → `platforms::web::events`
-  (`answer`, `pointer_position`); LY33 — `haptics::android` → `platforms::android::preferences`
-  (`with_activity`; то же ребро у `display::android`, LY31); LY34 снимает ключ `retiring`.
+  (`answer`, `pointer_position`); шестое, `haptics::android` → `platforms::android::preferences`
+  (`with_activity`), снято слиянием с LY33: помощник — `owner::android::activity`; LY34 снимает ключ `retiring`.
   Хуки drag владельца называют `WindowRef` и `Registration` (`owner` → `platforms`, как
   `WindowMap`), это записано в строке LY28. Обратные рёбра — из `platforms/` в фичи — `retiring`
   как источник не проверяет; их снимает подключение оконных позиций через таблицу (LY38, список в
@@ -873,7 +873,7 @@ graph LR
   (`FakeAccessibility`, `FakeHaptics`, `HeadlessDragAndDrop`) те же, `flui-app` не тронут.
   `globals`: `clipboard::lock::{CLIPBOARD, reentrancy::SESSION_OPEN}`,
   `clipboard::windows::owner_window::OWNER` (итого 55); `module-dag`: `features = ["clipboard",
-  "drag", "accessibility", "haptics"]`, `retiring = ["platforms"]`, 6 исключений (решение 6);
+  "drag", "accessibility", "haptics"]`, `retiring = ["platforms"]`, 5 исключений (решение 6);
   allowlist `testing` — путь `drag/windows/tests.rs`, `docs-paths` — ADR-0247 называет
   `tests/android_drag.rs` (запись не переписывается); `.config/nextest.toml` называет
   `src/clipboard/lock.rs`. Тесты: `ole_drag_drop_contracts` (`drag/windows/crossing/tests.rs`),
@@ -889,33 +889,33 @@ graph LR
   `every_owner_hook_hears_the_window_go_after_one_panics` (без раздельных границ второй хук не
   слышит — проверено откатом), `a_media_type_offers_its_transfer_format` и
   `bytes_carry_the_payload_of_their_format` (рядом с `drag::offers`). Проверки на слиянии с
-  `main` @ `56ad79c96` (LY31). Windows: `cargo fmt --check`; clippy `-p flui-native -p flui-app
+  `main` @ `a0dd4ba01` (LY33). Windows: `cargo fmt --check`; clippy `-p flui-native -p flui-app
   --all-targets -D warnings` и `-p flui-native --all-targets --features winit-backend,a11y`;
   nextest `-p flui-native -p flui-app` — 286 (2 пропущены), `-p flui-native --features
-  winit-backend` — 269 (1), `-p xtask` — 45 (до слияния); clippy Android (`-p flui-native -p
-  flui-app --all-targets`); macOS (и с `winit-backend,a11y`) и iOS (`DOCS_RS=1`) — только
-  `check --lib`: с `--all-targets` тесты для Apple с этого хоста не собираются (dev-зависимость
-  `flui-testing` → `flui-rendering` → `stacker` → `psm` требует C-компилятор цели);
-  `wasm-check`, `wasm-test` (50 утверждений); `module-dag` (280 модулей, 6 фич с 44 файлами
-  платформ, 1 base, 425 рёбер, 17 исключений) и самотест (54), `globals` (55), `file-length`,
-  `markers`, `testing`, `docs-paths`, `workspace`, `reach`; до слияния ещё `checks`,
-  `doc-strict` и rustdoc `--document-private-items` без фич и с `winit-backend,a11y` под `-D
-  warnings`. WSL Ubuntu 24.04: nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 174; командой CI
-  без `WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` (`FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0
-  1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features
-  --no-fail-fast`) — 263 из 263; clippy `-p flui-native -p flui-app --all-targets` без фич и `-p
-  flui-native` с `winit-backend,a11y` — до слияния. Galaxy S21 (Android 15), 2026-10-22, на
-  слиянии с LY31: проба `flui create --template counter --local` из этого дерева, в её `lib.rs`
-  (вне репозитория) — касание с `HapticsHandle::perform(LightImpact, Immediate)`, `Draggable` с
-  `DragTrigger::LongPress` и `DropTarget`, `RawTextField`. Касание «Increment» — счётчик 1,
-  исход хаптики `Submitted`; `input draganddrop` с долгим нажатием по карточке на цель —
-  «dropped 1»; в поле «clip»: Ctrl+A, Ctrl+C, End, Ctrl+V — «clipclip» (заглушка буфера);
-  `logcat -c` не вызывался, настройки устройства не менялись. Та же проба дала то же до rebase
-  на LY30; предупреждение `flui_interaction::haptics: a haptic outcome was not delivered before
-  its presentation closed` (тикеты `FramePresented` подъёма и броска drag), замеченное тогда, есть
-  и на базе `e86d0d5b4` с той же пробой. Не запускалось: `cross-typecheck` (нет `zig`; job CI),
-  набор `web_browser` (нет `chromedriver`; браузерная проба — у координатора), Mac и iPhone — в
-  очереди vanyastaff/flui#1840.
+  winit-backend` — 270 (1), `-p xtask` — 45 (до слияний); clippy Android (`-p flui-native -p
+  flui-app --all-targets`), macOS `--lib` (и с `winit-backend,a11y`) и iOS `--lib`
+  (`DOCS_RS=1`): с `--all-targets` тесты для Apple с этого хоста не собираются
+  (dev-зависимость `flui-testing` → `flui-rendering` → `stacker` → `psm` требует C-компилятор
+  цели); `wasm-check`, `wasm-test` (50 утверждений); `module-dag` (300 модулей, 8 фич с 59
+  файлами платформ, 1 base, 412 рёбер, 15 исключений) и самотест, `globals` (55),
+  `file-length`; на слиянии с LY31 ещё `markers`, `testing`, `docs-paths`, `workspace`, `reach`,
+  до слияний — `checks`, `doc-strict` и rustdoc `--document-private-items` без фич и с
+  `winit-backend,a11y` под `-D warnings`. WSL Ubuntu 24.04: nextest `-p flui-native`
+  (`FLUI_HEADLESS=1`) — 183; командой CI без `WAYLAND_DISPLAY` и `XDG_SESSION_TYPE`
+  (`FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p
+  flui-native --locked --all-features --no-fail-fast`) — 263 из 263. Galaxy S21 (Android 15),
+  2026-10-22, на слиянии с LY33 (проводка Android при слиянии изменилась: один `AndroidHost`,
+  конструктор лупера): проба `flui create --template counter --local` из этого дерева, в её
+  `lib.rs` (вне репозитория) — касание с `HapticsHandle::perform(LightImpact, Immediate)`,
+  `Draggable` с `DragTrigger::LongPress` и `DropTarget`, `RawTextField`. Касание «Increment» —
+  счётчик 1, исход хаптики `Submitted`; `input draganddrop` с долгим нажатием по карточке на цель
+  — «dropped 1»; в поле «clip»: Ctrl+A, Ctrl+C, End, Ctrl+V — «clipclip» (заглушка буфера);
+  `logcat -c` не вызывался, настройки устройства не менялись. Та же проба дала то же на слиянии с
+  LY31 и до rebase на LY30; предупреждение `flui_interaction::haptics: a haptic outcome was not
+  delivered before its presentation closed` (тикеты `FramePresented` подъёма и броска drag),
+  замеченное до rebase, есть и на базе `e86d0d5b4` с той же пробой. Не запускалось:
+  `cross-typecheck` (нет `zig`; job CI), набор `web_browser` (нет `chromedriver`; браузерная проба
+  — у координатора), Mac и iPhone — в очереди vanyastaff/flui#1840.
 - [x] **LY31** — ветка `platform/display`. Фича дисплеев — каталог `display/`; публичные пути не
   изменились (типы headless реэкспортирует `platforms::headless`), changelog не нужен, `flui-app`
   не тронут. Перенос — `git mv`; тела менялись только там, где это названо ниже (решения 1–6).
