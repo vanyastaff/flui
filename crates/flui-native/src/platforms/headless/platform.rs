@@ -3,7 +3,8 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments. Its loop and owner
 //! turns are in [`crate::owner::headless`]; this file holds the windows,
-//! devices, displays, preferences and host events a test drives.
+//! devices, preferences and host events a test drives; the displays are the
+//! display feature's (`display::headless`).
 
 use std::{
     rc::Rc,
@@ -22,8 +23,8 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInpu
 use flui_platform::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
-use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
+use crate::display::headless::{DisplayChangeError, LaidOutDisplays};
 use crate::host::{self, Host};
 use crate::owner::call_point::{Field, call, install};
 use crate::owner::headless::{HeadlessLoop, HeadlessState, consult_exit_policy, emit_window_event};
@@ -34,11 +35,11 @@ use crate::{
     owner::handlers::WindowCallbacks, shared::window_state::WindowStateCell,
 };
 use flui_platform::{
-    Clipboard, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot, PlatformHaptics,
-    PlatformInput, PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase,
-    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState, data_transfer::DataTransferSource,
+    Clipboard, CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput,
+    PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase, SizeConstraints,
+    SystemNotice, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowEvent, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowState, data_transfer::DataTransferSource,
 };
 
 /// Builds the text-store host a headless window offers
@@ -148,16 +149,6 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
         }
     }
 
-    /// Replace the displays this platform reports with `displays`, laid out
-    /// left to right; the first is primary. Windows opened afterwards start on
-    /// the primary display.
-    #[must_use]
-    pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
-        self.owner()
-            .with_state(|state| state.displays = HeadlessDisplays::new(displays));
-        self
-    }
-
     /// Make every window this platform opens from now on honour exactly
     /// `capabilities`, to test a caller against a host that cannot do
     /// everything. The default is [`WindowCapabilities::ALL`]. A command whose
@@ -193,17 +184,6 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn preference_source(&self) -> HeadlessPreferences {
         HeadlessPreferences {
-            signal: Arc::downgrade(&self.owner().signal),
-            state: Arc::downgrade(&self.owner().state),
-        }
-    }
-
-    /// Obtain the display controls before `run` consumes this platform: the
-    /// handle changes a display the way an operating system would, from any
-    /// thread. See [`HeadlessDisplayControls`].
-    #[must_use]
-    pub fn display_controls(&self) -> HeadlessDisplayControls {
-        HeadlessDisplayControls {
             signal: Arc::downgrade(&self.owner().signal),
             state: Arc::downgrade(&self.owner().state),
         }
@@ -264,12 +244,6 @@ impl host::Window<HeadlessLoop> for MockWindow {
             &Field::new(&*owner.state, |state| &mut state.handlers.window_event),
             callback,
         );
-    }
-}
-
-impl host::Displays<HeadlessLoop> for HeadlessDisplays {
-    fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
-        Ok(owner.with_state(|state| state.displays.snapshot()))
     }
 }
 
@@ -544,59 +518,6 @@ impl HeadlessHostEvents {
         self.state
             .upgrade()
             .map_or(0, |state| state.lock().session_end_releases)
-    }
-}
-
-/// Changes the headless platform's displays after `run` has consumed it —
-/// obtained from [`HeadlessPlatform::display_controls`](crate::HeadlessPlatform::display_controls) before `run`, the same
-/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`](crate::HeadlessPlatform::owner_turns).
-///
-/// A change commits to the platform's snapshot and then wakes the owner, as a
-/// native source does when the OS reports a mode switch, and so works from any
-/// thread: the owner re-samples `Platform::display_snapshot` on its next turn.
-#[derive(Clone)]
-pub struct HeadlessDisplayControls {
-    signal: Weak<crate::owner::signal::OwnerSignal>,
-    state: Weak<Mutex<HeadlessState>>,
-}
-
-impl std::fmt::Debug for HeadlessDisplayControls {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessDisplayControls")
-            .finish_non_exhaustive()
-    }
-}
-
-impl HeadlessDisplayControls {
-    /// The platform's current snapshot, `None` once the platform is gone.
-    #[must_use]
-    pub fn snapshot(&self) -> Option<DisplaySnapshot> {
-        let state = self.state.upgrade()?;
-        let snapshot = state.lock().displays.snapshot();
-        Some(snapshot)
-    }
-
-    /// Apply `change` to display `id` and wake the owner. A platform that is
-    /// gone applies nothing.
-    ///
-    /// # Errors
-    /// [`DisplayChangeError::UnknownDisplay`] for an id this platform does not
-    /// hold; [`DisplayChangeError::RevisionExhausted`] when the snapshot
-    /// revision cannot advance.
-    pub fn simulate_display_change(
-        &self,
-        id: DisplayId,
-        change: DisplayChange,
-    ) -> Result<(), DisplayChangeError> {
-        let Some(state) = self.state.upgrade() else {
-            return Ok(());
-        };
-        state.lock().displays.apply(id, change)?;
-        // A failed wake leaves the signal's pending debt for the next turn.
-        if let Some(signal) = self.signal.upgrade() {
-            let _ = signal.wake();
-        }
-        Ok(())
     }
 }
 

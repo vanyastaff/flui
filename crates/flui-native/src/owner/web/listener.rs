@@ -1,5 +1,5 @@
 //! One `addEventListener` that removes itself when dropped, for the observers
-//! on the page and its screen (`display_events`, `page_events`).
+//! on the page and its screen (`display::web::events`, `platforms::web::page_events`).
 
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Event, EventTarget};

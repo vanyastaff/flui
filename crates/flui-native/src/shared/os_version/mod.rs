@@ -71,10 +71,10 @@ mod tests {
     };
     use super::apple::AppleVersion;
     use super::{Gate, since};
+    use crate::display::apple::link_rate::FrameRateRangeProperty;
     use crate::owner::android::ndk::{
         ChoreographerInstance, RegisterRefreshRate, SetFrameRate, UnregisterRefreshRate,
     };
-    use crate::shared::display_link_rate::FrameRateRangeProperty;
 
     /// The failures of one marker's row: the version just before `SINCE` gets no proof, `SINCE`
     /// gets one, and an unknown version gets none.

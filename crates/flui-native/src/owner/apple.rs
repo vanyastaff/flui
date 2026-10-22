@@ -3,7 +3,9 @@
 //!
 //! - `macos`: the `NSApplication` loop, the owner lane every thread-affine
 //!   AppKit call travels through, and the wake pump;
-//! - `ios`: the UIKit loop, its delegates and the scene sessions they connect.
+//! - `ios`: the UIKit loop, its delegates and the scene sessions they connect;
+//! - `native_owner`: a value only the main thread may touch or release, held
+//!   by a loop that other threads share.
 //!
 //! On both, the owner thread is the process's main thread, which the operating
 //! system's application loop runs on.
@@ -18,6 +20,9 @@
 pub(crate) mod ios;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+mod native_owner;
+
+pub(crate) use native_owner::NativeOwner;
 
 #[cfg(target_os = "ios")]
 pub(crate) use ios::IOSLoop;

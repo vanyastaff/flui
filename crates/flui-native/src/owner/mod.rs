@@ -16,7 +16,10 @@
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
 //!   decision around one native poll. A loop that serves several features
 //!   through one operating-system object dispatches through hooks declared
-//!   beside it, which the host registers.
+//!   beside it, which the host registers; a feature's state the loop holds
+//!   (the displays) it holds through such a hook, which the host's table
+//!   fills, and an observation a feature starts for the loop it keeps as a
+//!   `watch::Watch`.
 //!
 //! [`OwnerPlatform`] carries every `Platform` operation that is owner-affine
 //! on at least one real OS: window creation, display queries, activation,
@@ -54,6 +57,14 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend")
+))]
+pub(crate) mod watch;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 #[cfg(windows)]

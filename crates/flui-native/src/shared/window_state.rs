@@ -1,6 +1,6 @@
 //! The window state every backend keeps: the snapshot it last published and
 //! the rule for when it is read from the OS again (ADR-0237), built like
-//! [`DisplaySource`](super::display_source).
+//! [`DisplaySource`](crate::display::source).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

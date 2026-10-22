@@ -48,7 +48,8 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use super::{display::MacosDisplays, view};
+use super::view;
+use crate::owner::apple::macos::HostDisplays;
 use crate::{
     config::WindowConfiguration, owner::OpenWindowError, owner::handlers::WindowCallbacks,
     shared::window_state::WindowStateCell,
@@ -136,7 +137,7 @@ pub struct MacOSWindow {
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
     /// the window position's `open` right after construction, like the wake
     /// pump; a window built without a platform names no display.
-    displays: std::sync::OnceLock<Arc<MacosDisplays>>,
+    displays: std::sync::OnceLock<Arc<dyn HostDisplays>>,
 
     /// The published window state (ADR-0237). Seeded from the creation
     /// options; the first read replaces it with what AppKit reports.
@@ -324,7 +325,7 @@ impl MacOSWindow {
     /// and before the window is handed to anyone. `pub(crate)` and a setter,
     /// like [`Self::install_wake_pump`], so a platform-internal type stays out
     /// of the public `MacOSWindow::new` signature.
-    pub(super) fn bind_displays(&self, displays: Arc<MacosDisplays>) {
+    pub(super) fn bind_displays(&self, displays: Arc<dyn HostDisplays>) {
         // First writer wins, like the wake pump: the slot is read on every
         // screen change and must not flip between registries.
         if self.displays.set(displays).is_ok() {
@@ -348,7 +349,7 @@ impl MacOSWindow {
         // answer is nil or a live `NSScreen*` for the duration of this call.
         let id = unsafe {
             let screen: ObjcId = msg_send![self.ns_window, screen];
-            display_of_screen(displays, screen)
+            display_of_screen(displays.as_ref(), screen)
         };
         let mut state = self.state.lock();
         let changed = state.display != id;
@@ -510,7 +511,10 @@ impl MacOSWindow {
                         cocoa_frame(at, size, height)
                     }
                     // Without a position the top-left corner stays where it is.
-                    _ => cocoa_frame_keeping_top(super::display::bounds_of(current), size),
+                    _ => cocoa_frame_keeping_top(
+                        crate::display::apple::macos::bounds_of(current),
+                        size,
+                    ),
                 };
                 let _: () = msg_send![
                     ns_window,
@@ -2002,7 +2006,7 @@ use std::sync::Weak;
 ///
 /// `screen` must be null or a live `NSScreen*`, and the call must run on the
 /// owner lane (this messages the screen).
-unsafe fn display_of_screen(displays: &MacosDisplays, screen: ObjcId) -> Option<DisplayId> {
+unsafe fn display_of_screen(displays: &dyn HostDisplays, screen: ObjcId) -> Option<DisplayId> {
     // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
     // lane; the borrow is scoped to the `and_then` closure.
     let screen = unsafe { screen.as_ref() }?;
@@ -2412,8 +2416,9 @@ impl MacOSWindow {
                 };
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 let mode = mode_of(flags);
-                let position = primary_screen_height()
-                    .and_then(|height| top_left_of_frame(super::display::bounds_of(frame), height));
+                let position = primary_screen_height().and_then(|height| {
+                    top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                });
                 WindowState::new(
                     WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
                     Size::new(content.size.width, content.size.height),
@@ -2466,7 +2471,7 @@ impl MacOSWindow {
                 let frame: NSRect = msg_send![self.ns_window, frame];
                 WindowGeometry::new(
                     primary_screen_height().and_then(|height| {
-                        top_left_of_frame(super::display::bounds_of(frame), height)
+                        top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
                     }),
                     Size::new(frame.size.width, frame.size.height),
                 )

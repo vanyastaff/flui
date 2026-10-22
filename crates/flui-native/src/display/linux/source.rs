@@ -43,10 +43,10 @@ use rustix::event::{EventfdFlags, eventfd};
 use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, connect};
 use super::view::{FreshIds, NativeIds, OutputView, display_of_native_number};
+use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::OwnerSignal;
-use crate::shared::display_source::DisplaySource;
 
 /// The displays of one platform instance.
 pub(crate) struct LinuxDisplays {

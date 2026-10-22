@@ -60,21 +60,6 @@ pub(crate) fn cocoa_frame_keeping_top(current: Bounds<f64>, size: Size<f64>) -> 
     }
 }
 
-/// A screen's frame in the display snapshot's terms: device pixels of that
-/// screen, measured from the top-left of the primary screen.
-pub(crate) fn device_bounds_of_screen(
-    frame: Bounds<f64>,
-    primary_height: f64,
-    scale: f64,
-) -> Bounds<i32> {
-    let top = primary_height - (frame.origin.y + frame.size.height);
-    let device = |points: f64| (points * scale).round() as i32;
-    Bounds {
-        origin: Point::new(device(frame.origin.x), device(top)),
-        size: Size::new(device(frame.size.width), device(frame.size.height)),
-    }
-}
-
 /// A position or size measured on `display` (from the origin of its usable
 /// area, in its logical pixels), as global logical pixels. With no display the
 /// point already is global.
@@ -222,44 +207,6 @@ mod tests {
                 resized.origin.y + resized.size.height,
                 800.0,
                 "the top edge"
-            );
-        }
-    }
-
-    #[test]
-    fn a_screen_is_published_in_device_pixels_from_the_top_left() {
-        // (name, cocoa frame, scale, device bounds as (x, y, width, height))
-        let rows = [
-            (
-                "the primary screen at 2x",
-                frame(0.0, 0.0, 1440.0, 900.0),
-                2.0,
-                (0, 0, 2880, 1800),
-            ),
-            (
-                "a 1x screen above the primary",
-                frame(0.0, 900.0, 1920.0, 1080.0),
-                1.0,
-                (0, -1080, 1920, 1080),
-            ),
-            (
-                "a 2x screen right of the primary",
-                frame(1440.0, 0.0, 1280.0, 720.0),
-                2.0,
-                (2880, 360, 2560, 1440),
-            ),
-        ];
-        for (name, input, scale, (x, y, width, height)) in rows {
-            let bounds = device_bounds_of_screen(input, PRIMARY, scale);
-            assert_eq!(
-                (
-                    bounds.origin.x,
-                    bounds.origin.y,
-                    bounds.size.width,
-                    bounds.size.height
-                ),
-                (x, y, width, height),
-                "{name}"
             );
         }
     }

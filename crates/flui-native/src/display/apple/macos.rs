@@ -14,6 +14,10 @@
 //! read again only after an event marked it stale: the screen-parameters
 //! notification, or a window learning its display or scale changed.
 
+// CoreGraphics and AppKit are reached through calls that have no safe
+// wrapper; each block states the invariant it relies on.
+#![expect(unsafe_code)]
+
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, Ordering},
@@ -36,12 +40,13 @@ use objc2_foundation::{
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
+use super::period::core_graphics_refresh_period;
+use super::screen::device_bounds_of_screen;
+use super::screen::{macos_display_key, macos_display_persistent_key};
+use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::signal::OwnerSignal;
-use crate::shared::appkit_window_geometry::device_bounds_of_screen;
-use crate::shared::apple_display_identity::{macos_display_key, macos_display_persistent_key};
-use crate::shared::display_period::core_graphics_refresh_period;
-use crate::shared::display_source::DisplaySource;
+use crate::owner::watch::Watch;
 
 // `CGDisplayCreateUUIDFromDisplayID` is declared by CoreGraphics but exported
 // by the ColorSync framework, which is why winit links the same one.
@@ -112,7 +117,7 @@ fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
 }
 
 /// An AppKit rectangle as the geometry type the shared rules take.
-pub(super) fn bounds_of(rect: NSRect) -> Bounds<f64> {
+pub(crate) fn bounds_of(rect: NSRect) -> Bounds<f64> {
     Bounds {
         origin: Point::new(rect.origin.x, rect.origin.y),
         size: Size::new(rect.size.width, rect.size.height),
@@ -121,7 +126,7 @@ pub(super) fn bounds_of(rect: NSRect) -> Bounds<f64> {
 
 impl crate::shared::system_notice::StaleOnWake for MacosDisplays {
     fn mark_stale(&self) {
-        self.invalidate();
+        self.source.invalidate();
     }
 }
 
@@ -142,30 +147,6 @@ impl MacosDisplays {
         Self {
             source: DisplaySource::new(),
         }
-    }
-
-    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
-    /// again. Any thread: this is one atomic store.
-    pub(crate) fn invalidate(&self) {
-        self.source.invalidate();
-    }
-
-    /// The displays now: the last sample while nothing has invalidated it,
-    /// otherwise a fresh one. Main thread.
-    pub(crate) fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
-        self.source.snapshot_with(|| Ok(self.read(mtm)))
-    }
-
-    /// The id of the display `screen` is on; `None` for a screen the source
-    /// leaves out. A display the published snapshot does not hold yet (a
-    /// monitor plugged in since the last sample) marks the snapshot stale, once
-    /// per revision.
-    pub(crate) fn id_of(&self, screen: &NSScreen) -> Option<DisplayId> {
-        let id = display_key_of(screen).and_then(|key| self.source.mint(&key))?;
-        if self.source.published().get(id).is_none() {
-            self.source.note_miss(id.get());
-        }
-        Some(id)
     }
 
     /// Read every screen (`+[NSScreen screens]`).
@@ -239,7 +220,7 @@ impl ScreenObserver {
                         return;
                     }
                     if let Some(displays) = displays.upgrade() {
-                        displays.invalidate();
+                        displays.source.invalidate();
                     }
                     if let Some(signal) = signal.upgrade() {
                         let _ = signal.wake();
@@ -274,5 +255,87 @@ impl Drop for ScreenObserver {
         unsafe {
             self.center.removeObserver(token.as_ref());
         }
+    }
+}
+
+impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
+    /// The last sample while nothing has invalidated it, otherwise a fresh
+    /// one.
+    fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
+        self.source.snapshot_with(|| Ok(self.read(mtm)))
+    }
+
+    /// One atomic store, so any thread may call it.
+    fn invalidate(&self) {
+        self.source.invalidate();
+    }
+
+    /// A display the published snapshot does not hold yet (a monitor plugged
+    /// in since the last sample) marks the snapshot stale, once per revision.
+    fn id_of(&self, screen: &NSScreen) -> Option<DisplayId> {
+        let id = display_key_of(screen).and_then(|key| self.source.mint(&key))?;
+        if self.source.published().get(id).is_none() {
+            self.source.note_miss(id.get());
+        }
+        Some(id)
+    }
+
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {
+        Watch::new(ScreenObserver::new(&self, signal))
+    }
+}
+
+/// The winit host's displays on macOS are these screens. winit enumerates
+/// monitors only through a live event loop and keys them by a
+/// `CGDirectDisplayID`; this source reads `NSScreen.screens`, keys each screen
+/// by its display UUID, takes the refresh period from the display's current
+/// mode and names a window's display by the window's `NSScreen`. winit's own
+/// monitor list is not read. The source is invalidated by
+/// `NSApplicationDidChangeScreenParametersNotification` (the watch the loop
+/// starts on resume) and by a window whose screen is one the last sample lacks.
+#[cfg(feature = "winit-backend")]
+impl crate::owner::winit::HostDisplays for MacosDisplays {
+    /// The current snapshot: the last sample unless something invalidated it.
+    /// [`PlatformError::Displays`] off the main thread, where `NSScreen` is
+    /// not read.
+    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "the screens are read on the main thread".into(),
+        })?;
+        crate::owner::apple::macos::HostDisplays::snapshot(self, mtm)
+    }
+
+    /// The display `window` is on, by the `NSScreen` of its native window.
+    /// `None` off the main thread, for a window on no screen, and for a screen
+    /// the source leaves out.
+    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
+        use objc2_app_kit::NSView;
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        // `NSView` is main-thread state.
+        MainThreadMarker::new()?;
+        let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+            return None;
+        };
+        // SAFETY: winit's AppKit handle is the window's content `NSView`, which
+        // the borrowed `window` keeps alive for this call, and the main-thread
+        // check above makes the message send legal.
+        let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+        let screen = view.window()?.screen()?;
+        crate::owner::apple::macos::HostDisplays::id_of(self, &screen)
+    }
+
+    /// Mark the screens stale; the sample the wake leads to reads them.
+    fn resample(
+        &self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        _signal: Option<&Arc<OwnerSignal>>,
+    ) -> bool {
+        self.source.invalidate();
+        true
+    }
+
+    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {
+        Watch::new(ScreenObserver::new(&self, signal))
     }
 }

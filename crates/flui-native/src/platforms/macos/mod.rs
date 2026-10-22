@@ -7,7 +7,7 @@
 //!
 //! - **NSApplication**: Main application and event loop
 //! - **NSWindow**: Window management
-//! - **NSScreen**: Display enumeration and info
+//! - **NSScreen**: Display enumeration and info (`display::apple::macos`)
 //! - **NSRunLoop**: Owner-thread application event loop
 //!   (`owner/apple/macos.rs`)
 //! - **GCD/Tokio**: Background task execution
@@ -65,7 +65,6 @@
 #[cfg(feature = "a11y")]
 mod accessibility;
 mod clipboard;
-pub(super) mod display;
 mod display_pass;
 mod events;
 mod haptics;
@@ -82,7 +81,6 @@ mod window_tiling;
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
-pub(crate) use display::{MacosDisplays, ScreenObserver};
 pub(crate) use haptics::MacHaptics;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub(crate) use preferences::{PreferenceObservers, PreferenceSource};

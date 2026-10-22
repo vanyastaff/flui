@@ -1,14 +1,20 @@
 //! The winit host: windows, input and the event loop from winit, on Windows,
 //! macOS and Linux.
 
+use std::sync::Arc;
+
+#[cfg(target_os = "macos")]
+use crate::display::apple::macos::MacosDisplays;
+#[cfg(windows)]
+use crate::display::windows::WindowsDisplays;
+#[cfg(target_os = "linux")]
+use crate::display::winit::WinitDisplaySource;
 use crate::host::{Absent, Host, position};
-use crate::owner::winit::WinitLoop;
+use crate::owner::winit::{HostDisplays, WinitHost, WinitLoop};
 use crate::platform::HostPlatform;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::platforms::linux::UnixAccessibility;
-use crate::platforms::winit::{
-    ArboardClipboard, WinitDataTransfer, WinitDisplaySource, WinitWindow,
-};
+use crate::platforms::winit::{ArboardClipboard, WinitDataTransfer, WinitWindow};
 use crate::storage::UserDataDirs;
 use crate::text::winit::WinitTextInput;
 
@@ -26,7 +32,7 @@ impl Host for Winit {
 
     type Loop = WinitLoop;
     type Window = WinitWindow;
-    type Displays = WinitDisplaySource;
+    type Displays = WinitLoop;
     type Input = WinitLoop;
     type Text = std::sync::Arc<WinitTextInput>;
     // The AT-SPI bridge exists on Linux with the `a11y` feature.
@@ -42,6 +48,22 @@ impl Host for Winit {
     type Lifecycle = WinitLoop;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
+}
+
+/// The winit host's display source: the native one of the operating system,
+/// the Win32 host's monitors, the AppKit host's screens, or the compositor's
+/// outputs on Linux.
+#[cfg(windows)]
+type NativeDisplays = WindowsDisplays;
+#[cfg(target_os = "macos")]
+type NativeDisplays = MacosDisplays;
+#[cfg(target_os = "linux")]
+type NativeDisplays = WinitDisplaySource;
+
+impl WinitHost for Winit {
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(NativeDisplays::new())
+    }
 }
 
 /// The winit platform: the Linux host until the native Wayland and X11 host
@@ -64,7 +86,7 @@ pub type WinitPlatform = HostPlatform<Winit>;
 impl HostPlatform<Winit> {
     /// Create a new winit platform
     pub fn new() -> Self {
-        Self::from_loop(WinitLoop::new())
+        Self::from_loop(WinitLoop::new::<Winit>())
     }
 }
 

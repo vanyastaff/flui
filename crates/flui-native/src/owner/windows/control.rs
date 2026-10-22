@@ -93,7 +93,7 @@ pub(crate) struct OwnerControlContext {
     window_hooks: super::WindowHooks,
     /// Where system notices go; see [`SystemNotices`].
     notices: Arc<SystemNotices>,
-    displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+    displays: Arc<dyn super::HostDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -131,7 +131,7 @@ pub(crate) struct OwnerShares {
     pub(crate) notices: Arc<SystemNotices>,
     /// The platform's monitors; a window invalidates them on a DPI change and
     /// names its display through them.
-    pub(crate) displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+    pub(crate) displays: Arc<dyn super::HostDisplays>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(crate) exit_policy: ExitPolicyRequest,
@@ -190,6 +190,11 @@ pub(crate) struct OwnerObjects<'a> {
     pub(crate) preferences: &'a Rc<crate::platforms::windows::preferences::PreferenceSource>,
     /// The session, power, lock and memory events of the lifecycle.
     pub(crate) lifecycle: &'a Rc<crate::platforms::windows::host_events::HostEvents>,
+    /// The displays the table made ([`WindowsHost::displays`](super::WindowsHost::displays)).
+    pub(crate) displays: &'a Arc<dyn super::HostDisplays>,
+    /// The owner's signal, which a subscriber wakes when what it heard needs
+    /// an owner turn.
+    pub(crate) signal: &'a Arc<OwnerSignal>,
 }
 
 pub(crate) struct OwnerControl {
@@ -206,7 +211,7 @@ impl OwnerControl {
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
         drag: Arc<crate::platforms::windows::drag::OleTransfer>,
-        displays: Arc<crate::platforms::windows::display::WindowsDisplays>,
+        displays: Arc<dyn super::HostDisplays>,
         notices: Arc<SystemNotices>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
@@ -254,12 +259,13 @@ impl OwnerControl {
             Rc::clone(&handlers),
             Arc::clone(&notices),
         ));
-        let preferences = Rc::new(
-            crate::platforms::windows::preferences::PreferenceSource::new(&signal, &displays)?,
-        );
+        let preferences =
+            Rc::new(crate::platforms::windows::preferences::PreferenceSource::new(&signal)?);
         let broadcasts = super::broadcast::Receiver::new(H::broadcast_subscribers(&OwnerObjects {
             preferences: &preferences,
             lifecycle: &host,
+            displays: &displays,
+            signal: &signal,
         }))
         .map_err(|error| PlatformError::Init {
             message: format!("the broadcast receiver: {error}"),

@@ -21,10 +21,8 @@ use flui_platform::{
     WindowMode, WindowOptions, WindowState,
 };
 
-use super::{
-    display::WebDisplays,
-    registration::{CanvasClaim, Registration, effective_focus},
-};
+use super::registration::{CanvasClaim, Registration, effective_focus};
+use crate::owner::web::HostDisplays;
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -37,7 +35,7 @@ pub struct WebWindow {
     drag: RefCell<Option<super::drag::CanvasDrag>>,
     text: RefCell<Option<Rc<crate::text::web::WebTextInput>>>,
     /// The platform's display state, which names the screen this window is on.
-    displays: Arc<WebDisplays>,
+    displays: Arc<dyn HostDisplays>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
 }
@@ -50,7 +48,7 @@ pub(super) struct StatePublisher {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
-    displays: Arc<WebDisplays>,
+    displays: Arc<dyn HostDisplays>,
 }
 
 impl StatePublisher {
@@ -216,7 +214,7 @@ impl WebWindow {
         title: &str,
         width: f64,
         height: f64,
-        displays: Arc<WebDisplays>,
+        displays: Arc<dyn HostDisplays>,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
