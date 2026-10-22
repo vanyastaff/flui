@@ -11,6 +11,8 @@
 //!   window handler, with no lock or borrow held;
 //! - [`handlers`]: the application's handler set and a window's callbacks,
 //!   called through it;
+//! - [`positions`]: the objects a host's positions keep for the life of its
+//!   loop, which the loop holds without naming them;
 //! - `windows`, `apple`, `android`, `web`, `winit` and [`headless`]: each
 //!   platform's loop, its wakes and what it owns of the thread, each on the
 //!   targets its host runs on (headless everywhere); `redraw_poll`, the redraw
@@ -50,6 +52,7 @@ pub(crate) mod call_point;
 pub mod handlers;
 pub(crate) mod headless;
 pub(crate) mod panic_boundary;
+pub(crate) mod positions;
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
@@ -58,6 +61,11 @@ pub(crate) mod slot;
 pub(crate) mod web;
 #[cfg(windows)]
 pub(crate) mod windows;
+// The modal pace is a pure rule of the Windows loop: `test` checks it on every
+// host.
+#[cfg(all(test, not(windows)))]
+#[path = "windows/modal_pace.rs"]
+mod windows_modal_pace;
 #[cfg(all(
     feature = "winit-backend",
     any(target_os = "windows", target_os = "macos", target_os = "linux")

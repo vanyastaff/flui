@@ -1,9 +1,12 @@
 //! The headless host: every position simulated in memory for tests.
 
+use std::sync::Arc;
+
 use flui_platform::{InMemoryClipboard, haptics::FakeHaptics};
 
 use crate::host::Host;
 use crate::owner::headless::HeadlessLoop;
+use crate::owner::positions::PositionObjects;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
     DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessDisplays, HeadlessHostEvents,
@@ -42,7 +45,11 @@ impl HostPlatform<Headless> {
     /// A headless platform with one display and every window capability.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_loop(HeadlessLoop::new())
+        let drag = Arc::new(DragDouble::new());
+        let owner = HeadlessLoop::new(PositionObjects::default().with(Arc::clone(&drag)));
+        // The double delivers a session's events to the loop's windows.
+        drag.attach(Arc::downgrade(&owner.state));
+        Self::from_loop(owner)
     }
 }
 

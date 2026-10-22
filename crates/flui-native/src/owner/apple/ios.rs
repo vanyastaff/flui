@@ -77,7 +77,7 @@ use crate::{
 use flui_platform::{PlatformWindow, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId};
 
 use crate::platforms::ios::{
-    IOSClipboard, IOSPreferences, IOSWindow, IosDisplays, LifecycleObservation, ScreenObserver,
+    IOSPreferences, IOSWindow, IosDisplays, LifecycleObservation, ScreenObserver,
 };
 
 #[derive(Clone)]
@@ -148,7 +148,6 @@ pub struct IOSLoop {
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
-    pub(crate) clipboard: Arc<IOSClipboard>,
     pub(crate) displays: Arc<IosDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
     /// notifications; main-thread owned like `preferences`.
@@ -218,7 +217,6 @@ impl IOSLoop {
             identity,
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
-            clipboard: Arc::new(IOSClipboard::new()),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: Arc::default(),

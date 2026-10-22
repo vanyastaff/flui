@@ -13,14 +13,15 @@
 //! still inside the window callback that decided the drag; a modal loop run
 //! there would hold that window's callbacks for its whole length. So the
 //! start only records the request and posts a message to the owner window:
-//! `DoDragDrop` runs from that message, on a fresh turn of the message loop
-//! with no window callback in progress, and everything the loop delivers
-//! reaches its window as a fresh callback. While it runs, the main loop that
-//! waits for wake deadlines and dispatches paints is suspended under OLE's,
-//! which dispatches neither while the pointer rests; a pacing thread
-//! ([`ModalPacer`]) has the owner window deliver due deadlines and paint every
-//! invalidated window instead, so every runtime on the thread keeps animating
-//! and a second window repaints.
+//! `DoDragDrop` runs from that message, which the owner hands to the
+//! transport's own hook on its window (`OwnerMessages`), on a fresh turn of
+//! the message loop with no window callback in progress, and everything the
+//! loop delivers reaches its window as a fresh callback. While it runs, the
+//! main loop that waits for wake deadlines and dispatches paints is suspended
+//! under OLE's, which dispatches neither while the pointer rests; a pacing
+//! thread ([`ModalPacer`]) has the owner window deliver due deadlines and
+//! paint every invalidated window instead, so every runtime on the thread
+//! keeps animating and a second window repaints.
 //!
 //! Reentrancy: user code runs inside `DoDragDrop` (every window callback, and
 //! the session's provider when a target fetches), so no `RefCell` borrow or
@@ -46,7 +47,7 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 use windows::Win32::{
-    Foundation::{DRAGDROP_S_DROP, GlobalFree, HGLOBAL, HWND, LPARAM, WPARAM},
+    Foundation::{DRAGDROP_S_DROP, GlobalFree, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM},
     System::{
         Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, STGMEDIUM, TYMED_HGLOBAL},
         DataExchange::{GetClipboardFormatNameW, RegisterClipboardFormatW},
@@ -60,7 +61,7 @@ use windows::Win32::{
         Input::KeyboardAndMouse::GetKeyState,
         WindowsAndMessaging::{
             MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
-            PostMessageW, QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW,
+            QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW,
         },
     },
 };
@@ -70,19 +71,22 @@ use super::platform::WindowRef;
 
 use crate::owner::panic_boundary::{contain_owner_callback, owner_callback_panicked};
 use crate::owner::slot::OwnerSlot;
+use crate::owner::windows::WindowsLoop;
+use crate::owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow};
+use crate::owner::windows::modal_pace::MODAL_FRAME_PACE_MS;
 use crate::shared::ole_drag_drop::{
-    HTML_FORMAT_NAME, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, decode, effect_bits,
-    offer_representations, os_loop_buttons,
+    HTML_FORMAT_NAME, NativeFormat, actions_of, decode, effect_bits, offer_representations,
+    os_loop_buttons,
 };
 use flui_platform::pointer::PointerKind;
 
 pub(super) use com::WindowDropTarget;
 
 /// Posted to the owner window: run the session [`OleTransfer::start`] recorded.
-pub(crate) const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
+const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
 /// Sent to the owner window while `DoDragDrop` runs: deliver the frames that
 /// are due; answered with the milliseconds until the next request.
-pub(crate) const MODAL_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 22;
+const MODAL_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 22;
 
 /// The offers minted for drags over this platform's windows.
 #[derive(Default)]
@@ -159,9 +163,8 @@ fn cancel_unstarted(request: OsDragRequest) {
 pub struct OleTransfer {
     offers: Mutex<Offers>,
     owner: OwnerSlot<Rc<OwnerDrag>>,
-    /// The owner window's address, shared with its control (`None` once it
-    /// is closed): where a session's start is posted.
-    owner_window: OnceLock<Arc<Mutex<Option<isize>>>>,
+    /// Where a session's start is posted: the owner window, once it exists.
+    owner_window: OnceLock<OwnerPost>,
 }
 
 impl std::fmt::Debug for OleTransfer {
@@ -184,9 +187,12 @@ impl OleTransfer {
         })
     }
 
-    /// Name the owner window a session's start is posted to.
-    pub(crate) fn attach_owner(&self, address: Arc<Mutex<Option<isize>>>) {
-        let _ = self.owner_window.set(address);
+    /// The transport of the loop the Windows table built.
+    pub(crate) fn of(owner: &WindowsLoop) -> Arc<Self> {
+        owner
+            .positions
+            .get::<Self>()
+            .expect("BUG: the Windows table builds its loop with the OLE transport")
     }
 
     /// The owner-thread state; `None` off the owner thread.
@@ -200,14 +206,14 @@ impl OleTransfer {
     /// The owner window is being destroyed: the session it was to start is
     /// cancelled now, on the owner thread, rather than whenever the last
     /// holder of this transport lets it go.
-    pub(crate) fn cancel_pending(&self) {
+    fn cancel_pending(&self) {
         if let Some(owner) = self.owner() {
             owner.cancel_pending();
         }
     }
 
     /// Whether `DoDragDrop` is running on this thread.
-    pub(crate) fn is_running(&self) -> bool {
+    fn is_running(&self) -> bool {
         self.owner().is_some_and(|owner| owner.running.get())
     }
 
@@ -288,22 +294,14 @@ impl OleTransfer {
     }
 
     fn post_start(&self) -> bool {
-        let Some(address) = self.owner_window.get() else {
-            return false;
-        };
-        let address = address.lock();
-        let Some(raw) = *address else {
-            return false;
-        };
-        // SAFETY: the address is read under the lock the owner control
-        // clears before destroying its window, so it names the live owner
-        // window; the message carries no pointer.
-        unsafe { PostMessageW(Some(HWND(raw as *mut _)), START_DRAG, WPARAM(0), LPARAM(0)) }.is_ok()
+        self.owner_window
+            .get()
+            .is_some_and(|owner| owner.post(START_DRAG))
     }
 
     /// Run the accepted session's `DoDragDrop`, from the owner window's
     /// [`START_DRAG`] message, and tell the session how it ended.
-    pub(crate) fn run_pending(&self, owner_window: HWND) {
+    fn run_pending(&self, owner_window: HWND) {
         let Some(owner) = self.owner() else {
             return;
         };
@@ -464,9 +462,40 @@ impl Drop for ModalPacer {
     }
 }
 
-impl crate::host::Drag<crate::owner::windows::WindowsLoop> for OleTransfer {
-    fn data_transfer(owner: &crate::owner::windows::WindowsLoop) -> Arc<dyn DataTransferSource> {
-        owner.drag.clone()
+/// Drag and drop's part of the owner window: a session runs from its
+/// [`START_DRAG`], its modal loop's frames come from its [`MODAL_FRAME`], and a
+/// session that has not started is cancelled as it is destroyed.
+impl OwnerMessages for OleTransfer {
+    fn attach(&self, owner: OwnerPost) {
+        let _ = self.owner_window.set(owner);
+    }
+
+    fn message(&self, owner: &OwnerWindow, message: u32) -> Option<LRESULT> {
+        match message {
+            START_DRAG => {
+                self.run_pending(owner.hwnd());
+                Some(LRESULT(0))
+            }
+            MODAL_FRAME => {
+                if !self.is_running() {
+                    return Some(LRESULT(0));
+                }
+                Some(LRESULT(
+                    owner.deliver_modal_frames().map_or(0, |wait| wait as isize),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn destroyed(&self) {
+        self.cancel_pending();
+    }
+}
+
+impl crate::host::Drag<WindowsLoop> for OleTransfer {
+    fn data_transfer(owner: &WindowsLoop) -> Arc<dyn DataTransferSource> {
+        Self::of(owner)
     }
 }
 

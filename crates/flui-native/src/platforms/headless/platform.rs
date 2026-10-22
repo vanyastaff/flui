@@ -105,7 +105,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_os_drag(self, timing: flui_platform::drag::OsDragStart) -> Self {
         self.owner().with_state(|state| {
-            state.drag.enable(timing);
+            super::drag::DragDouble::of(state).enable(timing);
             state.input_availability = state
                 .input_availability
                 .to_builder()
@@ -133,7 +133,8 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn drag_and_drop(&self) -> super::drag::HeadlessDragAndDrop {
         super::drag::HeadlessDragAndDrop::new(
-            self.owner().with_state(|state| Arc::clone(&state.drag)),
+            self.owner()
+                .with_state(|state| super::drag::DragDouble::of(state)),
         )
     }
 
@@ -298,7 +299,7 @@ impl host::Drag<HeadlessLoop> for super::drag::DragDouble {
     fn data_transfer(owner: &HeadlessLoop) -> Arc<dyn DataTransferSource> {
         // The headless backend's one source: it serves the drags the test plays
         // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
-        owner.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
+        owner.with_state(|state| super::drag::DragDouble::of(state) as Arc<dyn DataTransferSource>)
     }
 }
 
@@ -449,11 +450,10 @@ pub(crate) fn create_mock_window(
         },
     );
 
-    window.drag = state.drag.timing().map(|timing| {
-        Arc::new(super::drag::HeadlessDragSource::new(
-            Arc::clone(&state.drag),
-            timing,
-        )) as Arc<dyn flui_platform::drag::PlatformDragSource>
+    let double = super::drag::DragDouble::of(state);
+    window.drag = double.timing().map(|timing| {
+        Arc::new(super::drag::HeadlessDragSource::new(double, timing))
+            as Arc<dyn flui_platform::drag::PlatformDragSource>
     });
     // The initial snapshot reflects the devices already attached (ADR-0213 §3).
     window.callbacks.set_input_capabilities(

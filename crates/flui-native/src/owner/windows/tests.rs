@@ -13,11 +13,12 @@ use windows::core::w;
 use super::broadcast::Subscriber;
 use super::control::OwnerObjects;
 use super::{
-    CreatedWindow, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
+    CreatedWindow, LoopParts, WindowGone, WindowHooks, WindowIdentity, WindowMessages, WindowsHost,
     WindowsLoop, dispatch_window_message, window_created,
 };
 use crate::config::WindowConfiguration;
 use crate::error::PlatformError;
+use crate::owner::positions::PositionObjects;
 
 thread_local! {
     /// What the hooks heard, in order.
@@ -75,7 +76,8 @@ impl WindowMessages for Second {
     }
 }
 
-/// A host of the tests' own: two hooks and no broadcast subscriber.
+/// A host of the tests' own: two hooks, no broadcast subscriber and no
+/// position object or owner-window hook.
 pub(super) struct TestHost;
 
 impl WindowsHost for TestHost {
@@ -83,6 +85,13 @@ impl WindowsHost for TestHost {
 
     fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         Vec::new()
+    }
+
+    fn loop_parts() -> LoopParts {
+        LoopParts {
+            positions: PositionObjects::default(),
+            owner_hooks: Vec::new(),
+        }
     }
 }
 

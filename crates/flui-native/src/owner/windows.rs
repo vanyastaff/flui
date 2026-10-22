@@ -4,10 +4,13 @@
 //! procedure, and the hidden top-level window that hears the system's
 //! broadcasts ([`broadcast`]).
 //!
-//! The window class and the broadcast receiver serve several features, so they
-//! name none of them: the procedure offers each message to the
-//! [`WindowMessages`] hooks the host registers, and the receiver tells its
-//! [`broadcast::Subscriber`]s what the system broadcast (ADR-0151 §10).
+//! The window class, the broadcast receiver and the owner's message-only window
+//! serve several features, so they name none of them: the procedure offers each
+//! message to the [`WindowMessages`] hooks the host registers, the receiver
+//! tells its [`broadcast::Subscriber`]s what the system broadcast, and the owner
+//! window hands the messages a feature posts or sends it to that feature's
+//! [`control::OwnerMessages`] hook (ADR-0151 §10). What the host's positions
+//! keep for the loop's life, the loop holds as [`PositionObjects`].
 
 // This module (and its submodules) is one of the workspace's sanctioned
 // `unsafe` FFI islands — direct Win32 calls have no safe wrapper. The
@@ -22,6 +25,7 @@ pub(crate) mod control;
 #[cfg(test)]
 mod modal_frame_tests;
 pub(crate) mod modal_loop;
+pub(crate) mod modal_pace;
 #[cfg(test)]
 mod tests;
 mod wake_deadline;
@@ -59,6 +63,7 @@ use windows::{
 };
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
+use crate::owner::positions::PositionObjects;
 use crate::platforms::windows::{display::WindowsDisplays, platform::WindowMap};
 use crate::{
     config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
@@ -85,9 +90,10 @@ static WINDOW_CLASS: OnceLock<Result<TypeId, String>> = OnceLock::new();
 pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
-/// hooks of FLUI's window class and the subscribers of the broadcast receiver,
-/// each in the order a message reaches them. The owner dispatches through
-/// them and names no feature.
+/// hooks of FLUI's window class, the subscribers of the broadcast receiver and
+/// the hooks of the owner's message-only window, each in the order a message
+/// reaches them, and the objects its positions keep. The owner dispatches
+/// through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
     /// The hooks of FLUI's window class; its procedure is
     /// `window_proc::<Self>`.
@@ -95,6 +101,20 @@ pub(crate) trait WindowsHost: 'static {
 
     /// The broadcast receiver's subscribers, made from the owner's objects.
     fn broadcast_subscribers(owner: &control::OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>>;
+
+    /// What the host's positions give the loop, made on the owner thread as
+    /// the loop is built.
+    fn loop_parts() -> LoopParts;
+}
+
+/// What a Windows host's positions give its loop
+/// ([`WindowsHost::loop_parts`]).
+pub(crate) struct LoopParts {
+    /// The objects the positions keep for the loop's life.
+    pub(crate) positions: PositionObjects,
+    /// The hooks of the owner window's procedure, in the order a message
+    /// reaches them.
+    pub(crate) owner_hooks: Vec<Arc<dyn control::OwnerMessages>>,
 }
 
 /// One feature's part of the procedure of FLUI's window class.
@@ -366,8 +386,9 @@ impl WindowsLoop {
 /// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
 pub struct WindowsLoop {
     pub(crate) owner_control: control::OwnerControl,
-    /// OLE drag and drop: the platform's one data-transfer source.
-    pub(crate) drag: Arc<crate::platforms::windows::drag::OleTransfer>,
+    /// The objects the table's positions keep (OLE drag and drop: the
+    /// platform's one data-transfer source).
+    pub(crate) positions: PositionObjects,
     /// Message-only window for platform messages
     message_window: HWND,
 
@@ -421,7 +442,8 @@ pub struct WindowsLoop {
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate, and `drag` keeps its COM objects in an owner slot.
+// own owner-thread gate, and `positions` holds only `Send + Sync` objects (the
+// drag transport keeps its COM objects in an owner slot).
 unsafe impl Send for WindowsLoop {}
 // SAFETY: as for `Send` — `&WindowsLoop` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -502,14 +524,17 @@ impl WindowsLoop {
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
-        let drag = crate::platforms::windows::drag::OleTransfer::new();
+        let LoopParts {
+            positions,
+            owner_hooks,
+        } = H::loop_parts();
         let displays = Arc::new(WindowsDisplays::new());
         let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
         notices.mark_stale_on_wake(&displays);
         let owner_control = control::OwnerControl::new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
-            Arc::clone(&drag),
+            owner_hooks,
             Arc::clone(&displays),
             notices,
         )?;
@@ -553,7 +578,7 @@ impl WindowsLoop {
 
         let platform = Self {
             owner_control,
-            drag,
+            positions,
             message_window,
             windows,
             background_executor,
@@ -978,7 +1003,7 @@ impl WindowsLoop {
             // earlier paint fails the call harmlessly. Nothing is borrowed.
             let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
         }
-        crate::shared::ole_drag_drop::modal_frame_wait_ms(deadline, now)
+        modal_pace::modal_frame_wait_ms(deadline, now)
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.

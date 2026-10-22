@@ -18,10 +18,11 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
+use crate::owner::positions::PositionObjects;
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DisplaySpec, DragDouble, HeadlessDisplays, HeadlessWindowPolicy, MockWindow,
-    TextStoreHostFactory, create_mock_window,
+    DisplaySpec, HeadlessDisplays, HeadlessWindowPolicy, MockWindow, TextStoreHostFactory,
+    create_mock_window,
 };
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
@@ -49,9 +50,9 @@ pub struct HeadlessLoop {
 }
 
 pub(crate) struct HeadlessState {
-    /// The simulated OS drag session and the platform's one data-transfer
-    /// source (ADR-0211).
-    pub(crate) drag: Arc<DragDouble>,
+    /// The objects the table's positions keep: the simulated OS drag session
+    /// and the platform's one data-transfer source (ADR-0211).
+    pub(crate) positions: PositionObjects,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
@@ -118,9 +119,11 @@ pub(crate) struct HeadlessState {
 }
 
 impl HeadlessLoop {
-    pub(crate) fn new() -> Self {
+    /// A loop whose state keeps `positions`, the objects the table's
+    /// positions keep for its life.
+    pub(crate) fn new(positions: PositionObjects) -> Self {
         let state = HeadlessState {
-            drag: Arc::new(DragDouble::new()),
+            positions,
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
@@ -162,11 +165,7 @@ impl HeadlessLoop {
             })),
             state: Arc::new(Mutex::new(state)),
         };
-        {
-            let mut state = platform.state.lock();
-            state.owner_signal = Arc::downgrade(&platform.signal);
-            state.drag.attach(Arc::downgrade(&platform.state));
-        }
+        platform.state.lock().owner_signal = Arc::downgrade(&platform.signal);
         platform
     }
 
@@ -738,7 +737,7 @@ mod tests {
                     .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
             }
         }
-        let platform = Arc::new(HeadlessLoop::new());
+        let platform = Arc::new(HeadlessLoop::new(PositionObjects::default()));
         platform.state.lock().is_running = true;
         let calls = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicBool::new(false));

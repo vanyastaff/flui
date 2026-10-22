@@ -1,16 +1,16 @@
 //! The decidable half of the Win32 OLE drag and drop backend: format mapping,
-//! the bytes each clipboard format carries, `DROPEFFECT` mapping, when the
-//! drop source ends the modal loop and how often that loop asks for frames.
-//! The COM shell around it runs only on Windows (`platforms::windows::drag`).
+//! the bytes each clipboard format carries, `DROPEFFECT` mapping and when the
+//! drop source ends the modal loop. The COM shell around it runs only on
+//! Windows (`platforms::windows::drag`); how often that loop asks for frames
+//! is the owner's (`owner::windows::modal_pace`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use flui_native::shared::ole_drag_drop::{
-    DragContinuation, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, continue_drag, decode,
-    effect_bits, encode, encode_file_drop, encode_html, encode_text, identity_descriptor,
-    modal_frame_wait_ms, native_format, offer_representations, os_loop_buttons, transfer_format,
+    DragContinuation, NativeFormat, actions_of, continue_drag, decode, effect_bits, encode,
+    encode_file_drop, encode_html, encode_text, identity_descriptor, native_format,
+    offer_representations, os_loop_buttons, transfer_format,
 };
 use flui_platform::data_transfer::{
     Mime, TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
@@ -273,26 +273,6 @@ fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
     }
 }
 
-/// The modal loop asks for frames by the next deadline, at least every
-/// frame and never in a busy loop.
-fn the_modal_loop_waits_for_the_next_deadline_within_a_frame() {
-    let now = web_time::Instant::now();
-    let rows = [
-        (None, MODAL_FRAME_PACE_MS),
-        (Some(now), 1),
-        (Some(now + Duration::from_micros(200)), 1),
-        (Some(now + Duration::from_micros(4_200)), 5),
-        (Some(now + Duration::from_secs(3)), MODAL_FRAME_PACE_MS),
-    ];
-    for (deadline, wait) in rows {
-        assert_eq!(modal_frame_wait_ms(deadline, now), wait, "{deadline:?}");
-    }
-    let past = now
-        .checked_sub(Duration::from_millis(5))
-        .expect("past instant");
-    assert_eq!(modal_frame_wait_ms(Some(past), now), 1);
-}
-
 #[test]
 fn ole_drag_drop_contracts() {
     super::run_table(
@@ -322,10 +302,6 @@ fn ole_drag_drop_contracts() {
             (
                 "the_os_loop_carries_only_a_drag_a_mouse_button_holds",
                 the_os_loop_carries_only_a_drag_a_mouse_button_holds,
-            ),
-            (
-                "the_modal_loop_waits_for_the_next_deadline_within_a_frame",
-                the_modal_loop_waits_for_the_next_deadline_within_a_frame,
             ),
         ],
     );

@@ -50,6 +50,52 @@ const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
 /// The binary name of the view class.
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 
+/// The host's drag-and-drop transport as the view's drag callbacks reach it:
+/// `nativeDrag` and `nativeDrop` run on the Java main thread and must be
+/// answered at once, from what the owner published earlier (ADR-0211,
+/// ADR-0247). The transport is the host's one [`DataTransferSource`].
+///
+/// [`DataTransferSource`]: flui_platform::data_transfer::DataTransferSource
+pub(crate) trait ViewTransfer: flui_platform::data_transfer::DataTransferSource {
+    /// One `DragEvent` other than the drop, of `action`, at `position` in
+    /// logical pixels, offering `mime_types`; `local` is whether this activity
+    /// started the drag and `result` the event's result. Returns what the view
+    /// answers.
+    fn drag(
+        &self,
+        view: &JavaView,
+        action: i32,
+        position: (f64, f64),
+        mime_types: &[String],
+        local: bool,
+        result: bool,
+    ) -> bool;
+
+    /// The drop at `position`, whose clip carried `text`, `html` and `uris`:
+    /// the key of the offer the drop holds, which the view hands back, or 0
+    /// when the drop is refused.
+    fn drop_clip(
+        &self,
+        view: &JavaView,
+        position: (f64, f64),
+        local: bool,
+        text: Option<String>,
+        html: Option<String>,
+        uris: Vec<String>,
+    ) -> i64;
+
+    /// FLUI's own drag, which the view runs, advertises `allowed` to a target
+    /// of this activity, or has ended (`None`).
+    fn set_own(&self, allowed: Option<flui_platform::data_transfer::TransferActions>);
+
+    /// The action FLUI's target took when FLUI's own drag dropped on it, once.
+    fn take_local_drop(&self) -> Option<flui_platform::data_transfer::TransferActions>;
+}
+
+/// Makes the host's [`ViewTransfer`] for the view it is given, which it reaches
+/// back weakly.
+pub(crate) type TransferFor = fn(Weak<JavaView>) -> Arc<dyn ViewTransfer>;
+
 /// What the view reported, for the owner to deliver.
 pub(crate) enum ViewEvent {
     /// The view's installation finished, whether or not it worked.
@@ -144,7 +190,7 @@ pub(crate) struct JavaView {
     /// The device's API level, which picks the dex loader.
     api: AndroidApi,
     signal: Weak<OwnerSignal>,
-    transfer: Arc<AndroidTransfer>,
+    transfer: Arc<dyn ViewTransfer>,
     /// What answers the input method's calls through the view.
     input_method: Box<dyn InputMethod>,
     state: Mutex<State>,
@@ -162,18 +208,20 @@ impl std::fmt::Debug for JavaView {
 }
 
 impl JavaView {
-    /// The bridge, with the view's installation posted to the Java main thread.
+    /// The bridge, with the view's installation posted to the Java main thread
+    /// and the drag-and-drop transport `transfer` makes for it.
     pub(super) fn start(
         app: AndroidApp,
         signal: Weak<OwnerSignal>,
         api: AndroidApi,
         input_method: Box<dyn InputMethod>,
+        transfer: TransferFor,
     ) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
             app,
             api,
             signal,
-            transfer: Arc::new(AndroidTransfer::new(this.clone())),
+            transfer: transfer(this.clone()),
             input_method,
             state: Mutex::new(State {
                 install: Install::Pending,
@@ -190,7 +238,7 @@ impl JavaView {
     }
 
     /// The platform's drag-and-drop transport.
-    pub(crate) fn transfer(&self) -> &Arc<AndroidTransfer> {
+    pub(crate) fn transfer(&self) -> &Arc<dyn ViewTransfer> {
         &self.transfer
     }
 
@@ -687,25 +735,25 @@ extern "system" fn native_drop<'local>(
         };
         let read = env
             .with_env(|env| -> jni::errors::Result<_> {
-                Ok(crate::shared::android_drag::DroppedClip {
-                    text: string(env, &text)?,
-                    html: string(env, &html)?,
-                    uris: strings(env, &uris)?,
-                })
+                Ok((
+                    string(env, &text)?,
+                    string(env, &html)?,
+                    strings(env, &uris)?,
+                ))
             })
             .into_outcome();
-        let jni::Outcome::Ok(clip) = read else {
+        let jni::Outcome::Ok((text, html, uris)) = read else {
             return 0;
         };
         let scale = view.scale();
-        view.transfer
-            .drop_clip(
-                &view,
-                (f64::from(x) / scale, f64::from(y) / scale),
-                local,
-                &clip,
-            )
-            .map_or(0, crate::platforms::android::drag::java_key)
+        view.transfer.drop_clip(
+            &view,
+            (f64::from(x) / scale, f64::from(y) / scale),
+            local,
+            text,
+            html,
+            uris,
+        )
     })
 }
 

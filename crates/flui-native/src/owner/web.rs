@@ -31,11 +31,10 @@ use crate::{
     owner::signal::OwnerSignal, platform::Platform, platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{WindowEvent, WindowId};
+use flui_platform::{Clipboard, WindowEvent, WindowId};
 
-use crate::platforms::web::{
-    DisplayObservers, PageObservers, WebClipboard, WebDisplays, WebPreferences, WebTransfer,
-};
+use crate::owner::positions::PositionObjects;
+use crate::platforms::web::{DisplayObservers, PageObservers, WebDisplays, WebPreferences};
 use executor::WebExecutor;
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
@@ -50,6 +49,9 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 /// [`WebPlatform`](crate::WebPlatform) is its platform.
 pub struct WebLoop {
     pub(crate) state: Arc<Mutex<WebState>>,
+    /// The objects the table's positions keep: the one HTML drag-and-drop
+    /// transport every canvas shares.
+    pub(crate) positions: PositionObjects,
     pub(crate) signal: Arc<OwnerSignal>,
     pub(crate) preferences: RefCell<Option<WebPreferences>>,
     pub(crate) displays: Arc<WebDisplays>,
@@ -64,9 +66,7 @@ pub struct WebLoop {
 pub(crate) struct WebState {
     pub(crate) handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
-    pub(crate) clipboard: Arc<WebClipboard>,
-    /// The one HTML drag-and-drop transport every canvas shares.
-    pub(crate) transfer: Arc<WebTransfer>,
+    pub(crate) clipboard: Arc<dyn Clipboard>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
@@ -88,14 +88,18 @@ impl std::fmt::Debug for WebLoop {
 }
 
 impl WebLoop {
-    pub(crate) fn new() -> Result<Self, PlatformError> {
+    /// A loop over the page with the table's `clipboard`, and `positions`, the
+    /// objects the table's positions keep for its life.
+    pub(crate) fn new(
+        clipboard: Arc<dyn Clipboard>,
+        positions: PositionObjects,
+    ) -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
 
         let state = WebState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
-            clipboard: Arc::new(WebClipboard::new()),
-            transfer: Arc::default(),
+            clipboard,
             is_running: false,
             window_callbacks: None,
             owner: Weak::new(),
@@ -121,6 +125,7 @@ impl WebLoop {
         let preferences = WebPreferences::new(&signal)?;
         Ok(Self {
             state,
+            positions,
             signal,
             preferences: RefCell::new(Some(preferences)),
             displays: WebDisplays::new(),

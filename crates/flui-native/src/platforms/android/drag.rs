@@ -36,7 +36,7 @@ use jni::{Env, JValue, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use crate::owner::android::AndroidLoop;
-use crate::owner::android::java_view::{JavaView, ViewEvent};
+use crate::owner::android::java_view::{JavaView, ViewEvent, ViewTransfer};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerSlot;
 use crate::shared::android_drag::{
@@ -109,12 +109,14 @@ impl AndroidTransfer {
         offers.sources.remove(&id);
         offers.held.remove(&id);
     }
+}
 
+impl ViewTransfer for AndroidTransfer {
     /// One `DragEvent` other than the drop, on the Java main thread: what the
     /// view answers. `position` is in logical pixels; `local` is whether this
     /// activity started the drag (for `ACTION_DRAG_ENDED`, whether the view
     /// did).
-    pub(crate) fn drag(
+    fn drag(
         &self,
         view: &JavaView,
         action: i32,
@@ -188,12 +190,46 @@ impl AndroidTransfer {
         answer
     }
 
+    /// `ACTION_DROP`: the [`java_key`] of the offer the drop is taken as
+    /// ([`Self::take_drop`]), 0 when it is refused.
+    fn drop_clip(
+        &self,
+        view: &JavaView,
+        position: (f64, f64),
+        local: bool,
+        text: Option<String>,
+        html: Option<String>,
+        uris: Vec<String>,
+    ) -> i64 {
+        let clip = DroppedClip { text, html, uris };
+        self.take_drop(view, position, local, &clip)
+            .map_or(0, java_key)
+    }
+
+    fn set_own(&self, allowed: Option<TransferActions>) {
+        let mut offers = self.offers.lock();
+        offers.own = allowed;
+        offers.local_drop = None;
+    }
+
+    fn take_local_drop(&self) -> Option<TransferActions> {
+        self.offers.lock().local_drop.take()
+    }
+}
+
+impl AndroidTransfer {
+    /// The transport of `view`, which it reaches back weakly: the Android
+    /// table's [`ViewTransfer`].
+    pub(crate) fn for_view(view: Weak<JavaView>) -> Arc<dyn ViewTransfer> {
+        Arc::new(Self::new(view))
+    }
+
     /// `ACTION_DROP`, on the Java main thread: the offer the drop is taken
     /// as, from the target's cached feedback, or `None` when it is refused.
     /// A taken drop holds what the clip carried until the target concludes
     /// it; the view holds the drop's URI permissions under the offer's
     /// [`java_key`] until then.
-    pub(crate) fn drop_clip(
+    fn take_drop(
         &self,
         view: &JavaView,
         position: (f64, f64),
@@ -238,16 +274,6 @@ impl AndroidTransfer {
         };
         view.push_drag(event);
         taken
-    }
-
-    fn set_own(&self, allowed: Option<TransferActions>) {
-        let mut offers = self.offers.lock();
-        offers.own = allowed;
-        offers.local_drop = None;
-    }
-
-    fn take_local_drop(&self) -> Option<TransferActions> {
-        self.offers.lock().local_drop.take()
     }
 }
 
@@ -354,7 +380,7 @@ impl crate::host::Drag<AndroidLoop> for AndroidTransfer {
 /// The key `FluiView` holds a taken drop's URI permissions under: the
 /// offer's whole identity, generation included, so a concluded offer never
 /// releases a later one's. Never zero, which the view reads as refused.
-pub(crate) fn java_key(id: DataTransferId) -> i64 {
+fn java_key(id: DataTransferId) -> i64 {
     id.as_u64().cast_signed()
 }
 

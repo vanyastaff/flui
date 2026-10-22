@@ -44,6 +44,7 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use parking_lot::Mutex;
 
+use crate::owner::winit::file_drops::FileDrops;
 use flui_platform::{DragDropEvent, WindowId};
 use flui_platform::{
     data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
@@ -99,11 +100,13 @@ impl WinitDataTransfer {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+impl FileDrops for WinitDataTransfer {
     /// A `HoveredFile` event: accumulate into the live accepting session, or
     /// mint a new session (retiring any predecessor) and return the
     /// `Entered` event to dispatch.
-    pub(crate) fn note_hovered_file(
+    fn note_hovered_file(
         &self,
         window: WindowId,
         path: PathBuf,
@@ -116,7 +119,7 @@ impl WinitDataTransfer {
     /// arm the freeze, or — defensive minting — start a new session when
     /// none is accepting (no prior `HoveredFile`, or a straggler after the
     /// freeze), returning its `Entered` event.
-    pub(crate) fn note_dropped_file(
+    fn note_dropped_file(
         &self,
         window: WindowId,
         path: PathBuf,
@@ -129,7 +132,7 @@ impl WinitDataTransfer {
     /// its generation, so the id goes stale) and return the `Exited` event.
     /// A cancel after the freeze is ignored — the drop already completed and
     /// its offer stays redeemable.
-    pub(crate) fn note_hover_cancelled(&self, window: WindowId) -> Option<DragDropEvent> {
+    fn note_hover_cancelled(&self, window: WindowId) -> Option<DragDropEvent> {
         let (event, stale_pending) = {
             let mut state = self.state.lock();
             match state.sessions.get(&window) {
@@ -155,7 +158,7 @@ impl WinitDataTransfer {
 
     /// Windows whose drop burst is complete-so-far and awaiting the freeze.
     /// Cheap; empty in the steady state, so `about_to_wait` stays a no-op.
-    pub(crate) fn windows_awaiting_freeze(&self) -> Vec<WindowId> {
+    fn windows_awaiting_freeze(&self) -> Vec<WindowId> {
         self.state
             .lock()
             .sessions
@@ -170,7 +173,7 @@ impl WinitDataTransfer {
     /// the `Dropped` events to dispatch. The action is stamped
     /// [`TransferActions::COPY`] — winit cannot report the real effect
     /// (documented approximation).
-    pub(crate) fn freeze_completed(
+    fn freeze_completed(
         &self,
         positions: &HashMap<WindowId, Point<f64>>,
     ) -> Vec<(WindowId, DragDropEvent)> {
@@ -222,7 +225,7 @@ impl WinitDataTransfer {
 
     /// Tear down any session addressed at a closed window: retire the offer
     /// and let parked deliveries resolve `SourceGone`.
-    pub(crate) fn forget_window(&self, window: WindowId) {
+    fn forget_window(&self, window: WindowId) {
         let stale_pending = {
             let mut state = self.state.lock();
             state.sessions.remove(&window).map(|session| {
@@ -232,7 +235,9 @@ impl WinitDataTransfer {
         };
         drop(stale_pending);
     }
+}
 
+impl WinitDataTransfer {
     /// Shared body of the two path-bearing arms: accumulate into a live
     /// accepting session, or begin a new one and return its `Entered` event.
     fn accumulate_or_begin(

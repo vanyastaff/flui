@@ -65,9 +65,7 @@ use crate::host::{self, Host};
 use crate::owner::android::java_view;
 use crate::platform::HostPlatform;
 use crate::platforms::android::window::ActivityFlags;
-use crate::platforms::android::{
-    AndroidDisplays, AndroidWindow, MockClipboard, input, memory, preferences,
-};
+use crate::platforms::android::{AndroidDisplays, AndroidWindow, input, memory, preferences};
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -92,7 +90,7 @@ use crate::{
     shared::os_version::android::AndroidApi,
     shared::os_version::android::StylusHandwriting,
 };
-use flui_platform::{PlatformWindow, data_transfer::DataTransferSource};
+use flui_platform::PlatformWindow;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -137,7 +135,7 @@ pub struct AndroidLoop {
     notices: crate::shared::system_notice::SystemNotices,
     pub(crate) window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
-    pub(crate) clipboard: Arc<MockClipboard>,
+    pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
     pub(crate) input_state: Mutex<input::AndroidInputState>,
     pub(crate) owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
@@ -149,11 +147,10 @@ pub struct AndroidLoop {
 }
 
 // Opaque on purpose, matching `HeadlessLoop` and `WinitLoop`. A
-// derived `Debug` here traverses `Arc<MockClipboard>`'s
-// `Mutex<Option<String>>` and prints the user's entire clipboard contents
-// into whatever sink formatted the platform — a log line, a panic message,
-// a bug report. None of the remaining fields are useful to a reader either:
-// handles, an executor, and a capability set.
+// derived `Debug` here would format the clipboard, whose contents are the
+// user's, into whatever sink formatted the platform — a log line, a panic
+// message, a bug report. None of the remaining fields are useful to a reader
+// either: handles, an executor, and a capability set.
 impl std::fmt::Debug for AndroidLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AndroidLoop").finish_non_exhaustive()
@@ -176,8 +173,14 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    /// The loop of host `H`, whose table names what `FluiView` reports to.
-    pub(crate) fn new<H: super::AndroidHost>(app: AndroidApp) -> Self {
+    /// The loop of host `H`, whose table names what `FluiView` reports to,
+    /// over `app`, with the table's `clipboard`, and `transfer`, which makes
+    /// its drag-and-drop transport for the Java view.
+    pub(crate) fn new<H: super::AndroidHost>(
+        app: AndroidApp,
+        clipboard: Arc<dyn flui_platform::Clipboard>,
+        transfer: java_view::TransferFor,
+    ) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -198,6 +201,7 @@ impl AndroidLoop {
             Arc::downgrade(&owner_signal),
             api,
             H::input_method(),
+            transfer,
         );
         let owner = Arc::downgrade(&owner_signal);
         Self {
@@ -210,7 +214,7 @@ impl AndroidLoop {
             notices: crate::shared::system_notice::SystemNotices::default(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
-            clipboard: Arc::new(MockClipboard::new()),
+            clipboard,
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),

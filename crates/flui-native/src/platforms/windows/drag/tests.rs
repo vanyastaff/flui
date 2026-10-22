@@ -54,6 +54,7 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
+use crate::owner::windows::control::OwnerPost;
 use crate::platforms::windows::WindowsWindow;
 use crate::platforms::windows::platform::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};
@@ -513,14 +514,11 @@ fn raise(hwnd: HWND) -> POINTL {
 }
 
 fn owner_window(platform: &WindowsPlatform) -> HWND {
-    let raw = platform
-        .owner()
-        .drag
+    OleTransfer::of(platform.owner())
         .owner_window
         .get()
-        .and_then(|address| *address.lock())
-        .expect("the owner window is open");
-    HWND(raw as *mut _)
+        .and_then(OwnerPost::hwnd)
+        .expect("the owner window is open")
 }
 
 /// Every window registers its drop target with OLE as it is created.
@@ -795,7 +793,7 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     assert_eq!(pen_started, Err(DragError::Unavailable), "a pen contact");
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert_eq!(ended.get(), None, "a refused start is not told it ended");
-    assert!(!platform.owner().drag.is_running());
+    assert!(!OleTransfer::of(platform.owner()).is_running());
 }
 
 /// A window's drag source only accepts the session: `DoDragDrop` runs from
@@ -827,7 +825,7 @@ fn a_start_is_deferred_to_the_owner_turn() {
     );
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
     assert_eq!(second.get(), None, "a refused start is not told it ended");
-    assert!(!platform.owner().drag.is_running());
+    assert!(!OleTransfer::of(platform.owner()).is_running());
 }
 
 /// While `DoDragDrop` runs with the pointer resting, a due wake deadline
@@ -866,7 +864,9 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
         DRAGDROP_S_CANCEL
     };
     let ended = Rc::new(Cell::new(None));
-    let owner = platform.owner().drag.owner().expect("owner state");
+    let owner = OleTransfer::of(platform.owner())
+        .owner()
+        .expect("owner state");
     OleTransfer::run_session(
         &owner,
         owner_window(&platform),
@@ -913,7 +913,9 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     };
     let _poke = Poke::new(Arc::new(AtomicBool::new(true)), at);
     let ended = Rc::new(Cell::new(None));
-    let owner = platform.owner().drag.owner().expect("owner state");
+    let owner = OleTransfer::of(platform.owner())
+        .owner()
+        .expect("owner state");
     OleTransfer::run_session(
         &owner,
         owner_window(&platform),
@@ -992,7 +994,9 @@ fn a_provider_whose_capture_panics_on_drop_is_contained() {
 
     let at = raise(target.hwnd);
     let _poke = Poke::new(Arc::new(AtomicBool::new(true)), at);
-    let owner = platform.owner().drag.owner().expect("owner state");
+    let owner = OleTransfer::of(platform.owner())
+        .owner()
+        .expect("owner state");
     OleTransfer::run_session(
         &owner,
         owner_window(&platform),
@@ -1149,7 +1153,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     };
     let pen = pen_pressed(second.hwnd);
     let own = super::Win32DragSource::new(
-        Arc::clone(&platform.owner().drag),
+        OleTransfer::of(platform.owner()),
         WindowRef::new(second.hwnd, identity(&second)),
     );
     assert_eq!(
@@ -1159,7 +1163,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     // The second window's handle with the first's identity, as for a source
     // whose window closed and whose handle the OS recycled.
     let recycled = super::Win32DragSource::new(
-        Arc::clone(&platform.owner().drag),
+        OleTransfer::of(platform.owner()),
         WindowRef::new(second.hwnd, identity(&first)),
     );
     assert_eq!(recycled.contact_kind(Some(pen)), None);

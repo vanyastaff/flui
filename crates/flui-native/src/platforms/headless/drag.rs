@@ -81,6 +81,16 @@ impl DragDouble {
         }
     }
 
+    /// The double of the loop whose state is `state`, which the headless
+    /// table built.
+    pub(crate) fn of(state: &HeadlessState) -> Arc<Self> {
+        state
+            .positions
+            .get::<Self>()
+            .expect("BUG: the headless table builds its loop with the drag double")
+    }
+
+    /// Deliver the session's events to the windows of `platform`'s state.
     pub(crate) fn attach(&self, platform: Weak<Mutex<HeadlessState>>) {
         *self.windows.lock() = platform;
     }

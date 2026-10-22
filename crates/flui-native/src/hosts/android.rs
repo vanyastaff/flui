@@ -1,6 +1,8 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
+use std::sync::Arc;
+
 use android_activity::AndroidApp;
 
 use crate::host::{Absent, Host, position};
@@ -66,6 +68,10 @@ impl HostPlatform<Android> {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
-        Self::from_loop(AndroidLoop::new::<Android>(app))
+        Self::from_loop(AndroidLoop::new::<Android>(
+            app,
+            Arc::new(MockClipboard::new()),
+            AndroidTransfer::for_view,
+        ))
     }
 }

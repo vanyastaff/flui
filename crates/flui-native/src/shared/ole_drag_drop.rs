@@ -1,10 +1,11 @@
 //! The decidable half of the Win32 OLE drag-and-drop backend (ADR-0038,
 //! ADR-0211): which clipboard format carries each transfer format, how a
 //! payload is laid out in its `HGLOBAL`, how `DROPEFFECT` bits map to
-//! [`TransferActions`], when the drop source ends the modal loop, and how
-//! often that loop asks for frames. Cfg-free plain functions over bytes and
-//! integers, so Linux CI pins them; the COM objects in
-//! `platforms::windows::drag` only move bytes in and out of global memory.
+//! [`TransferActions`], and when the drop source ends the modal loop. Cfg-free
+//! plain functions over bytes and integers, so Linux CI pins them; the COM
+//! objects in `platforms::windows::drag` only move bytes in and out of global
+//! memory. How often that loop asks for frames is the owner's
+//! (`owner::windows::modal_pace`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -432,22 +433,4 @@ pub fn os_loop_buttons(kind: Option<PointerKind>, held: u32) -> Option<u32> {
         return None;
     }
     Some(held & MOUSE_BUTTONS).filter(|buttons| *buttons != 0)
-}
-
-/// The longest the modal loop waits before asking again whether a frame is
-/// due: one 60 Hz frame.
-pub const MODAL_FRAME_PACE_MS: u32 = 16;
-
-/// How long the modal loop's frame timer waits: until `deadline`, rounded up
-/// to a whole millisecond and at least one, but never longer than
-/// [`MODAL_FRAME_PACE_MS`], so a deadline set while it waits is seen within
-/// a frame.
-#[must_use]
-pub fn modal_frame_wait_ms(deadline: Option<web_time::Instant>, now: web_time::Instant) -> u32 {
-    deadline.map_or(MODAL_FRAME_PACE_MS, |deadline| {
-        let remaining = deadline.saturating_duration_since(now).as_nanos();
-        let millis = remaining.div_ceil(1_000_000);
-        u32::try_from(millis.clamp(1, u128::from(MODAL_FRAME_PACE_MS)))
-            .unwrap_or(MODAL_FRAME_PACE_MS)
-    })
 }

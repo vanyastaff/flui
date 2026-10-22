@@ -2,6 +2,8 @@
 //!
 //! Provides cross-platform clipboard access using the arboard library.
 
+use std::sync::Arc;
+
 use parking_lot::Mutex;
 
 use flui_platform::Clipboard;
@@ -48,6 +50,22 @@ impl ArboardClipboard {
         Self {
             clipboard: Mutex::new(None),
         }
+    }
+
+    /// The winit host's clipboard: the system's, or the inert one when its
+    /// initialization fails (a headless environment).
+    pub(crate) fn or_inert() -> Arc<Self> {
+        // `inert()` explicitly, not `default()`: init just failed, and
+        // `default()` would retry the same doomed backend init before
+        // falling back — the fallback for a KNOWN-failed init is the inert
+        // clipboard directly.
+        Self::new().map_or_else(
+            |err| {
+                tracing::warn!(?err, "Failed to initialize clipboard, using inert fallback");
+                Arc::new(Self::inert())
+            },
+            Arc::new,
+        )
     }
 }
 

@@ -1705,7 +1705,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             shares,
             owner.config.clone(),
             owner.apartment.share(),
-            Arc::clone(&owner.drag),
+            super::drag::OleTransfer::of(owner),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
         let this = WindowRef::new(window.hwnd(), window.identity);

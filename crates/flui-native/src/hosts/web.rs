@@ -1,7 +1,10 @@
 //! The web host: a canvas in the browser page, on the browser's own event loop.
 
+use std::sync::Arc;
+
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
+use crate::owner::positions::PositionObjects;
 use crate::owner::web::WebLoop;
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
@@ -43,6 +46,9 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WebLoop::new()?))
+        Ok(Self::from_loop(WebLoop::new(
+            Arc::new(WebClipboard::new()),
+            PositionObjects::default().with(Arc::new(WebTransfer::default())),
+        )?))
     }
 }

@@ -94,6 +94,14 @@ unsafe impl Send for WebTransfer {}
 unsafe impl Sync for WebTransfer {}
 
 impl WebTransfer {
+    /// The transport of the loop the web table built.
+    pub(crate) fn of(owner: &WebLoop) -> Arc<Self> {
+        owner
+            .positions
+            .get::<Self>()
+            .expect("BUG: the web table builds its loop with the HTML transport")
+    }
+
     fn open_offer(&self, offered: Vec<(DomSource, RepresentationDescriptor)>) -> DataTransferOffer {
         let (sources, representations): (Vec<_>, Vec<_>) = offered.into_iter().unzip();
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
@@ -184,7 +192,7 @@ impl host::Drag<WebLoop> for WebTransfer {
     fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
         // HTML drag and drop; `clipboard_offer` stays `None`, since the
         // clipboard reads only its own writes.
-        owner.with_state(|s| Arc::clone(&s.transfer)) as Arc<dyn DataTransferSource>
+        Self::of(owner)
     }
 }
 

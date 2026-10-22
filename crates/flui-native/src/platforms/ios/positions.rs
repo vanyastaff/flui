@@ -53,8 +53,9 @@ impl host::Displays<IOSLoop> for IosDisplays {
 }
 
 impl host::Clipboard<IOSLoop> for IOSClipboard {
-    fn clipboard(owner: &IOSLoop) -> Arc<dyn Clipboard> {
-        owner.clipboard.clone()
+    fn clipboard(_: &IOSLoop) -> Arc<dyn Clipboard> {
+        // Stateless: every handle reads and writes the general pasteboard.
+        Arc::new(IOSClipboard::new())
     }
 }
 

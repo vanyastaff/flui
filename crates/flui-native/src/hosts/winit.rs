@@ -1,6 +1,8 @@
 //! The winit host: windows, input and the event loop from winit, on Windows,
 //! macOS and Linux.
 
+use std::sync::Arc;
+
 use crate::host::{Absent, Host, position};
 use crate::owner::winit::WinitLoop;
 use crate::platform::HostPlatform;
@@ -64,7 +66,10 @@ pub type WinitPlatform = HostPlatform<Winit>;
 impl HostPlatform<Winit> {
     /// Create a new winit platform
     pub fn new() -> Self {
-        Self::from_loop(WinitLoop::new())
+        Self::from_loop(WinitLoop::new(
+            ArboardClipboard::or_inert(),
+            Arc::new(WinitDataTransfer::new()),
+        ))
     }
 }
 

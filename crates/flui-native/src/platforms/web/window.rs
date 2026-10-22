@@ -689,7 +689,7 @@ impl host::Window<WebLoop> for WebWindow {
         callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&owner.state);
-        let transfer = owner.with_state(|s| Arc::clone(&s.transfer));
+        let transfer = super::drag::WebTransfer::of(owner);
         window.install(options.input_latency, &transfer, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
