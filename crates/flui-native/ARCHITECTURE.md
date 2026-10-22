@@ -334,15 +334,19 @@ trait depends on `flui-platform` instead.
   owner's `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
   model is `display::source`, the id registry and last snapshot every native
-  source keeps, and the refresh period's one constructor and one publisher:
-  every source hands the rate or interval its platform reports to
-  `Refresh::period` (hertz, a rational hertz, millihertz or seconds between
-  frames, one check that the value is finite and above zero, then the
-  contract's 1 ms to 1 s), and the two that measure a cadence, the iOS
-  display link and the browser's frame estimate, publish through
-  `MeasuredPeriod`, which replaces the published period only when a
-  measurement leaves its band (`display::source::mapping` holds every source
-  to one table of cadences). Beside it is one file per platform: `windows.rs` (the
+  source keeps, and the one publisher of a measured refresh period. A period
+  is made by the contract's constructors alone: every source hands the rate
+  or interval its platform reports straight to the one for its unit
+  (`RefreshPeriod::{from_hz, from_ratio, from_millihertz, from_secs_f64}`),
+  whose one check refuses what describes no cadence, and the two that
+  measure a cadence, the iOS display link and the browser's frame estimate,
+  publish through `MeasuredPeriod::offer`, which replaces the published
+  period only when a measurement leaves its band (`outside_band`, the band
+  rule the estimate also judges its frames' agreement by).
+  `display::source::mapping` reads one table of cadences through the
+  Android sample, the Windows rule, the Wayland and RandR models, the
+  display link and the estimator; the macOS source hands CoreGraphics' rate
+  to `from_hz` from its FFI half. Beside it is one file per platform: `windows.rs` (the
   monitors, `source`; their pure `sample` rules; the `DisplayBroadcasts`
   subscriber, `broadcasts`), `apple/` (`macos.rs`, `ios.rs`, and in
   `mod.rs` the pure `screen` keys and bounds the two share and
@@ -453,16 +457,22 @@ trait depends on `flui-platform` instead.
   (`window::config`, public as `flui_native::config`) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
-  `PendingWindowInstallation`, `InstallationCancelled`). The table tests
-  `window::state::mapping` and `window::visibility::mapping` hold every
-  window system to the one rule. Each platform's
+  `PendingWindowInstallation`, `InstallationCancelled`).
+  `window::state::mapping` reads one table through winit's flags, the X11
+  window manager's properties, AppKit's raw flags (which keep full screen
+  above a miniaturized flag, a row of their own) and the Win32 tracked mode;
+  `window::visibility::mapping` reads one table through the Win32 surface
+  rules (`WM_SIZE`, `WM_SHOWWINDOW`) and AppKit's occlusion bit into the
+  rule, and through the rule itself for winit and the Web, whose answers
+  come from FFI. Each platform's
   window is one file beside it (`android`, `web`, `winit`, `headless`, and
   `linux/x11`, the live X11 layer the winit host uses), or a directory where
   its halves or one OS object need one: `windows/` (the pure `limits`, `mode`
   and `surface`, which says what `WM_SIZE`, `WM_SHOWWINDOW` and the creation
   style imply for the surface; the window, the set and position, the
   procedure and the backdrop under `cfg(windows)`) and `apple/` (the pure
-  `geometry`, `macos` with its `delegate` and its public `ext`, `ios`,
+  `geometry` with its `frame`, `mode`, `surface` (the occlusion bit) and
+  `screen_edges`, `macos` with its `delegate` and its public `ext`, `ios`,
   `liquid_glass`). The platform's system chrome (the table's `Chrome`
   position) is in the same file.
   - **The host seam.** The window position names what a platform's windows
@@ -523,21 +533,25 @@ trait depends on `flui-platform` instead.
   no platform file and forbids `unsafe`), `availability` (each backend's
   input capabilities table), `keys` (the Win32 virtual keys and the mouse
   buttons' codes, `MouseButtonCodes`, the `adapter` from `ui-events` key
-  results that Android and winit share, and the one table of key locations:
-  the number W3C UI Events gives each location, which the DOM and
-  keyboard-types report, and the codes that imply it, which Win32 and AppKit
-  read it from), `scroll` (the one wheel step: a platform's amounts in the
-  unit it picks, each axis turned to FLUI's direction by whether it moves
-  the offset or the content, an idle axis `+0.0`, a non-finite amount
-  refused, which winit and AppKit deliver as a zero step and the Web and
-  Android drop) and `event_timestamp_ns`
-  (public at the crate root); `input::keys::mapping` and
-  `input::scroll::mapping` hold every backend to them. Beside it, one file per platform, each pure
+  results that Android and winit share, with keyboard-types' locations
+  matched variant by variant, and the one table of key locations, whose
+  named rows give the number the DOM reports for each location and the
+  codes that imply it, which Win32 and AppKit read it from; a character no
+  key typed is `CHARACTER_WITHOUT_A_KEY`), `scroll` (the one wheel step: a
+  platform's amounts in the unit it picks, each axis turned to FLUI's
+  direction by whether it moves the offset or the content, an idle axis
+  `+0.0` whichever zero the platform reported, a non-finite amount refused,
+  which winit and AppKit deliver as a zero step and the Web and Android
+  drop) and `event_timestamp_ns` (public at the crate root).
+  `input::keys::mapping` reads one table of keys through the Win32 scancode
+  table, the AppKit keycode table, the DOM's number and the keyboard-types
+  adapter; `input::scroll::mapping` reads one table of turns through the
+  Win32 registry, the Web's, Android's, AppKit's and winit's steps. Beside it, one file per platform, each pure
   half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
   touchpad's DirectManipulation viewport, one OS object, with its pure
-  `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`, the AppKit
+  `manipulation` decoder), `apple.rs` (the pure `keys` and `wheel`; `macos`, the AppKit
   content view's class and its events; `ios`, the touches), `android.rs`
   (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
   pure `keys`, `wheel` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
@@ -2118,8 +2132,8 @@ determined must be reported as unknown rather than guessed at.
 
 **Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
 from `CGDisplayModeGetRefreshRate` over the display's *current* mode
-(`display/apple/macos.rs::refresh_of_screen`, made a period by
-`display::source::Refresh::period`), reached from the
+(`display/apple/macos.rs::refresh_rate_of_screen`, made a period by
+`RefreshPeriod::from_hz`), reached from the
 screen via `NSScreenNumber` — the same display id `display.rs` reads for its
 bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
 describe and some displays do, and a 0 turned into a period is infinite. The
@@ -2171,13 +2185,14 @@ written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
 such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`display::source::Refresh::Hertz`, the constructor every display source
-shares), pinned by `refresh_value_classification_table` (non-cadence inputs —
-zero, negative, NaN, ±infinity — are unknown rather than an infinite or
-panicking period), by `every_display_source_reads_a_cadence_alike`, whose
-CoreGraphics column reads every cadence as the other sources do, and by
+(`RefreshPeriod::from_hz`, the contract's constructor the macOS source hands
+CoreGraphics' rate to), pinned by `refresh_value_classification_table`
+(non-cadence inputs — zero, negative, NaN, ±infinity — are unknown rather
+than an infinite or panicking period) and by
 `macos_shim_keeps_the_period_it_reports_today`, which holds the common panel
-rates to the value this backend reported before the snapshot. The live path is
+rates to the value this backend reported before the snapshot. The read
+itself is FFI, so `every_display_source_reads_a_cadence_alike` has no macOS
+column. The live path is
 pinned behaviourally by the same manual run that pins the frame pump,
 which reported the refresh period from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
