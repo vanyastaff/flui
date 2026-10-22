@@ -31,7 +31,7 @@ mod tests;
 mod wake_deadline;
 
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     cell::RefCell,
     rc::Rc,
     sync::{Arc, OnceLock, Weak},
@@ -43,8 +43,8 @@ use flui_platform::drag::PlatformDragSource;
 use windows::{
     Win32::{
         Foundation::{
-            ERROR_CANCELLED, HANDLE, HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0,
-            WAIT_TIMEOUT, WPARAM,
+            ERROR_CANCELLED, HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            WPARAM,
         },
         Graphics::Gdi::HBRUSH,
         System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
@@ -52,10 +52,10 @@ use windows::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             WindowsAndMessaging::{
                 CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GetPropW, HCURSOR, HICON, HWND_MESSAGE, IDC_ARROW, LoadCursorW, MSG,
-                MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostQuitMessage, QS_ALLINPUT, RegisterClassW, RemovePropW, SW_SHOWNORMAL, SetPropW,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCDESTROY, WM_QUIT, WNDCLASSW,
+                HCURSOR, HICON, HWND_MESSAGE, IDC_ARROW, LoadCursorW, MSG, MWMO_INPUTAVAILABLE,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SW_SHOWNORMAL, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_QUIT, WNDCLASSW,
             },
         },
     },
@@ -108,7 +108,102 @@ pub(crate) fn get_y_lparam(lparam: LPARAM) -> i32 {
 static WINDOW_CLASS: OnceLock<Result<TypeId, String>> = OnceLock::new();
 
 /// The hooks of FLUI's window class, in the order a message reaches them.
-pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
+pub(crate) type WindowHooks = Rc<[Rc<dyn WindowMessages>]>;
+
+/// FLUI's window class on one owner thread, as the host's table makes it
+/// ([`WindowsHost::window_class`]): the hooks its procedure offers each
+/// message of a window to, and what those hooks tell the window's other
+/// features of its input. A hook keeps what it needs of a window as its own
+/// state, keyed by the window's identity, from the window's announcement
+/// ([`WindowMessages::created`]) to its destruction.
+#[derive(Clone)]
+pub(crate) struct WindowClass {
+    /// The hooks, in the order a message reaches them.
+    pub(crate) hooks: WindowHooks,
+    /// The input those hooks keep, as the window, drag and drop and haptics
+    /// read it.
+    pub(crate) input: Rc<dyn WindowInputs>,
+}
+
+thread_local! {
+    /// FLUI's window class on this thread, by the host whose table made it:
+    /// what the class's procedure, which Win32 calls with a window's handle and
+    /// no pointer of FLUI's, reads to find the hooks of the window's owner
+    /// (ADR-0097's Win32 trampoline). A host's class is made the first time an
+    /// owner of that host opens on the thread and lives as long as the thread;
+    /// its hooks keep a window's state only while the window exists.
+    static CLASS_ON_THREAD: RefCell<Vec<(TypeId, WindowClass)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// FLUI's window class on this thread for host `H`, made on first use; `None`
+/// while the thread's storage is torn down, when no message is answered.
+pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
+    let host = TypeId::of::<H>();
+    let kept = CLASS_ON_THREAD
+        .try_with(|classes| {
+            classes
+                .borrow()
+                .iter()
+                .find(|(made_for, _)| *made_for == host)
+                .map(|(_, class)| class.clone())
+        })
+        .ok()?;
+    if let Some(class) = kept {
+        return Some(class);
+    }
+    // Made with no borrow held: the table's constructors are its own code.
+    let class = H::window_class();
+    CLASS_ON_THREAD
+        .try_with(|classes| classes.borrow_mut().push((host, class.clone())))
+        .ok()?;
+    Some(class)
+}
+
+/// What the input of FLUI's window class on this thread tells the other
+/// features of a window, for the host the process registered the class for;
+/// `None` on a thread no owner of that host opened on.
+pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+    let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
+    CLASS_ON_THREAD
+        .try_with(|classes| {
+            classes
+                .borrow()
+                .iter()
+                .find(|(made_for, _)| *made_for == host)
+                .map(|(_, class)| Rc::clone(&class.input))
+        })
+        .ok()
+        .flatten()
+}
+
+/// What the input of FLUI's window class tells the window's other features
+/// (the window itself, drag and drop, haptics) of a window, read-only. Each
+/// answers `None` for a window the input does not hold: one it was never told
+/// of, one already destroyed, or a reference whose handle now names another
+/// window.
+pub(crate) trait WindowInputs {
+    /// Whether the mouse is over the window's client area.
+    fn hovered(&self, window: WindowRef) -> Option<bool>;
+
+    /// The keyboard modifiers the window's last key message carried.
+    fn modifiers(&self, window: WindowRef) -> Option<flui_platform::Modifiers>;
+
+    /// The kind of the contact whose press began `pointer`'s sequence in the
+    /// window.
+    fn press_kind(
+        &self,
+        window: WindowRef,
+        pointer: flui_platform::PointerId,
+    ) -> Option<flui_platform::pointer::PointerKind>;
+
+    /// The OS's id of a pen contact in range of the window (touching or
+    /// hovering): `device`'s, or with `None` the pen read most recently.
+    fn pen_in_range(
+        &self,
+        window: WindowRef,
+        device: Option<flui_platform::pointer::DeviceId>,
+    ) -> Option<u64>;
+}
 
 /// What a Windows host's table names for its owner thread (ADR-0151 §10): the
 /// hooks of FLUI's window class and the subscribers of the broadcast receiver,
@@ -116,9 +211,10 @@ pub(crate) type WindowHooks = &'static [&'static dyn WindowMessages];
 /// source, the notice channel, the lifecycle and the drag-and-drop transport
 /// the loop holds. The owner dispatches through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
-    /// The hooks of FLUI's window class; its procedure is
-    /// `window_proc::<Self>`.
-    const WINDOW_HOOKS: WindowHooks;
+    /// FLUI's window class on an owner thread: its hooks, whose procedure is
+    /// `window_proc::<Self>`, and their input. Made once per thread an owner
+    /// of this host opens on ([`window_class`]).
+    fn window_class() -> WindowClass;
 
     /// The system preference source the owner keeps for the table's
     /// preference position.
@@ -204,153 +300,10 @@ impl WindowRef {
     pub(crate) fn identity(self) -> WindowIdentity {
         self.identity
     }
-
-    /// Keep `state` for this window of FLUI's class, which this thread
-    /// created, until it is destroyed: a feature's per-window state, at most
-    /// one of each type. Nothing is kept for a window of another class or
-    /// thread.
-    pub(crate) fn attach<T: Any>(self, state: Rc<T>) {
-        let hwnd = self.hwnd();
-        if !on_owner_thread(hwnd) || !is_flui_window(hwnd) {
-            debug_assert!(
-                false,
-                "BUG: a state is attached to a window of FLUI's class, on its own thread"
-            );
-            return;
-        }
-        // SAFETY: the property is read on the window's thread, where only the
-        // class's procedure removes it (`WM_NCDESTROY`); no message is
-        // dispatched between the read and the use below.
-        let states = unsafe { GetPropW(hwnd, FEATURE_STATES) };
-        let states = if states.is_invalid() {
-            let fresh = Box::into_raw(Box::new(FeatureStates {
-                identity: self.identity,
-                states: RefCell::new(Vec::new()),
-            }));
-            // SAFETY: `fresh` is a live allocation this property owns from
-            // here on; the class's procedure reclaims it at `WM_NCDESTROY`.
-            if let Err(error) =
-                unsafe { SetPropW(hwnd, FEATURE_STATES, Some(HANDLE(fresh.cast()))) }
-            {
-                // SAFETY: the property did not take `fresh`, so this is its
-                // only owner.
-                drop(unsafe { Box::from_raw(fresh) });
-                tracing::warn!(%error, "a window's state could not be kept");
-                return;
-            }
-            fresh.cast_const()
-        } else {
-            states.0.cast_const().cast::<FeatureStates>()
-        };
-        // SAFETY: a property of FLUI's states, live on this thread until
-        // `WM_NCDESTROY` (see above).
-        let states = unsafe { &*states };
-        debug_assert_eq!(
-            states.identity, self.identity,
-            "BUG: a window keeps the states of the window it was created as"
-        );
-        let mut kept = states.states.borrow_mut();
-        debug_assert!(
-            !kept.iter().any(|kept| kept.is::<T>()),
-            "BUG: a window keeps one state of each type"
-        );
-        kept.push(state);
-    }
-
-    /// The state of type `T` kept for this window, on the window's thread and
-    /// while its handle still names it.
-    pub(crate) fn attached<T: Any>(self) -> Option<Rc<T>> {
-        with_feature_states(self.hwnd(), |states| {
-            (states.identity == self.identity)
-                .then(|| states.find::<T>())
-                .flatten()
-        })
-        .flatten()
-    }
-}
-
-/// The name of the property of a window of FLUI's class that holds the states
-/// its features keep for it ([`WindowRef::attach`]).
-const FEATURE_STATES: PCWSTR = w!("FLUI.FeatureStates");
-
-/// The states the features keep for one window of FLUI's class beside the
-/// window's own context (ADR-0151 §10), one of each type: a feature attaches
-/// its own once the window is created ([`WindowRef::attach`]) and reaches it
-/// by the window's handle in a message ([`attached`]) or by a [`WindowRef`]
-/// elsewhere ([`WindowRef::attached`]). They live in a property of the native
-/// window, which the class's procedure removes at `WM_NCDESTROY`, the
-/// window's last message, dropping every state with it.
-struct FeatureStates {
-    /// The window the states were kept for: a recycled handle names a new
-    /// window, which has a property list of its own.
-    identity: WindowIdentity,
-    states: RefCell<Vec<Rc<dyn Any>>>,
-}
-
-impl FeatureStates {
-    /// The state of type `T`, as an owner of its own: a message that destroys
-    /// the window drops the states, not a state one of its frames holds.
-    fn find<T: Any>(&self) -> Option<Rc<T>> {
-        let state = Rc::clone(self.states.borrow().iter().find(|state| state.is::<T>())?);
-        state.downcast::<T>().ok()
-    }
-}
-
-/// The state of type `T` a feature keeps for the window of FLUI's class that
-/// `hwnd` names, read on that window's thread: what a hook handed only the
-/// handle of the window its message is for reaches.
-pub(crate) fn attached<T: Any>(hwnd: HWND) -> Option<Rc<T>> {
-    with_feature_states(hwnd, FeatureStates::find::<T>).flatten()
-}
-
-/// Runs `f` with the states kept for the window of FLUI's class `hwnd` names:
-/// `None` off the window's thread, for a window of another class, or when no
-/// feature kept a state for it.
-fn with_feature_states<R>(hwnd: HWND, f: impl FnOnce(&FeatureStates) -> R) -> Option<R> {
-    if !on_owner_thread(hwnd) || !is_flui_window(hwnd) {
-        return None;
-    }
-    // SAFETY: the window is of FLUI's class, whose states property only
-    // `WindowRef::attach` sets, and is read on the window's thread, where only
-    // the class's procedure removes it (`WM_NCDESTROY`); `f` clones what it
-    // returns out of the states and runs no message dispatch.
-    let states = unsafe { GetPropW(hwnd, FEATURE_STATES) };
-    if states.is_invalid() {
-        return None;
-    }
-    // SAFETY: as above, the property is a live `FeatureStates` for the
-    // duration of `f`.
-    Some(f(unsafe {
-        &*states.0.cast_const().cast::<FeatureStates>()
-    }))
-}
-
-/// Drop the states the features kept for `hwnd`, which is handling
-/// `WM_NCDESTROY`, its last message.
-fn drop_feature_states(hwnd: HWND) {
-    // SAFETY: the class's procedure runs on the window's thread; the property,
-    // when present, is the `FeatureStates` allocation `WindowRef::attach`
-    // made, which only this removal reclaims.
-    let states = unsafe { RemovePropW(hwnd, FEATURE_STATES) };
-    if let Ok(states) = states
-        && !states.is_invalid()
-    {
-        // SAFETY: removed from the window, the allocation has no other owner.
-        drop(unsafe { Box::from_raw(states.0.cast::<FeatureStates>()) });
-    }
-}
-
-/// Whether the calling thread owns `hwnd`, a live window.
-fn on_owner_thread(hwnd: HWND) -> bool {
-    use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
-    // SAFETY: both take plain values; a dead handle reports thread 0.
-    let (owner, current) = unsafe { (GetWindowThreadProcessId(hwnd, None), GetCurrentThreadId()) };
-    owner != 0 && owner == current
 }
 
 /// Whether `hwnd` is a live window of FLUI's class, the only class whose
-/// `GWLP_USERDATA` slot and states property follow FLUI's protocol. Guards
+/// `GWLP_USERDATA` slot follows FLUI's protocol. Guards
 /// against handle recycling: a dead handle value can be reissued for an
 /// unrelated window.
 pub(crate) fn is_flui_window(hwnd: HWND) -> bool {
@@ -409,7 +362,7 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 ///
 /// The class and its raw procedure are the owner's: the procedure holds the
 /// panic boundary and offers each message to the hooks in the order the host
-/// names them ([`WindowsHost::WINDOW_HOOKS`]); the first that answers ends the
+/// names them ([`WindowClass::hooks`]); the first that answers ends the
 /// message's dispatch, and a message no hook answers goes to `DefWindowProcW`.
 /// A window of the class, once created, is announced to every hook
 /// ([`Self::created`]).
@@ -422,9 +375,12 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 ///
 /// A feature that answers a message whose handling is a step other features
 /// follow tells every hook of it ([`Self::step`]), and the window's own
-/// procedure tells them that the window is destroyed ([`Self::destroyed`]); a
-/// feature keeps what it needs of a window as its own state
-/// ([`WindowRef::attach`]), so no hook reaches another feature's.
+/// procedure tells them that the window is destroyed ([`Self::destroyed`]). A
+/// hook keeps what it needs of a window in itself, keyed by the window's
+/// identity: made when the window is announced, dropped when it is destroyed
+/// (and at `WM_NCDESTROY`, the window's last message, for one whose
+/// destruction was not announced), so no hook reaches another feature's state
+/// and a message for a window it does not hold finds none.
 pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
@@ -474,9 +430,8 @@ pub(crate) struct CreatedWindow {
     pub(crate) identity: WindowIdentity,
     /// Its client size in device pixels.
     pub(crate) client_size: (i32, i32),
-    /// Its scale, its DPI over 96; a later change is a step
-    /// ([`WindowStep::Rescaled`]).
-    pub(crate) scale: f64,
+    /// Its DPI; a later change is a step ([`WindowStep::Rescaled`]).
+    pub(crate) dpi: u32,
     /// Its callbacks, which a feature dispatches what it hears for the window
     /// to.
     pub(crate) callbacks: Arc<WindowCallbacks>,
@@ -499,6 +454,11 @@ impl CreatedWindow {
     }
 }
 
+/// The scale a window at `dpi` draws at: its DPI over the 96 of 100%.
+pub(crate) fn dpi_scale(dpi: u32) -> f64 {
+    f64::from(dpi) / 96.0
+}
+
 /// A step of a window of FLUI's class that one feature handles and others
 /// follow, told to every hook ([`WindowMessages::step`]) where the step is
 /// complete: in the window's own procedure for its size, focus, paint, scale
@@ -518,8 +478,11 @@ pub(crate) enum WindowStep {
     SizeMoveStarted,
     /// That loop ended.
     SizeMoveEnded,
-    /// Its scale is now this, its DPI over 96.
-    Rescaled(f64),
+    /// It is now at this DPI.
+    Rescaled {
+        /// Its DPI.
+        dpi: u32,
+    },
     /// A system setting changed.
     SettingChanged,
     /// The application let a keydown through (did not prevent its default):
@@ -542,7 +505,7 @@ pub(crate) struct WindowGone;
 /// hook, `alive` says whether the window is still the one created; once it is
 /// not, no later hook hears of it, and the window is [`WindowGone`].
 pub(crate) fn window_created(
-    hooks: WindowHooks,
+    hooks: &[Rc<dyn WindowMessages>],
     window: &CreatedWindow,
     alive: impl Fn() -> bool,
 ) -> Result<(), WindowGone> {
@@ -556,25 +519,24 @@ pub(crate) fn window_created(
 }
 
 /// Tells `hooks`, in order, that `window` took `step`. A hook's handling may
-/// run user code that destroys the window: a later hook then finds no state
-/// kept for it ([`WindowRef::attached`]) and does nothing.
-pub(crate) fn window_step(hooks: WindowHooks, window: WindowRef, step: WindowStep) {
+/// run user code that destroys the window: a later hook then holds no state
+/// for it and does nothing.
+pub(crate) fn window_step(hooks: &[Rc<dyn WindowMessages>], window: WindowRef, step: WindowStep) {
     for hook in hooks {
         hook.step(window, step);
     }
 }
 
 /// Tells `hooks`, in order, that `window` is destroyed.
-pub(crate) fn window_destroyed(hooks: WindowHooks, window: WindowRef) {
+pub(crate) fn window_destroyed(hooks: &[Rc<dyn WindowMessages>], window: WindowRef) {
     for hook in hooks {
         hook.destroyed(window);
     }
 }
 
-/// Offers one message of a window of FLUI's class to `H`'s hooks, in order; a
-/// message no hook answers goes to `DefWindowProcW`. Once the window's last
-/// message (`WM_NCDESTROY`) is handled, the states its features kept are
-/// dropped.
+/// Offers one message of a window of FLUI's class to the hooks of `H`'s
+/// class on this thread, in order; a message no hook answers goes to
+/// `DefWindowProcW`.
 ///
 /// # Safety
 ///
@@ -585,22 +547,24 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let answered = H::WINDOW_HOOKS.iter().find_map(|hook| {
-        // SAFETY: the arguments as Win32 delivered them, per this function's
-        // `# Safety` contract.
-        let answer = unsafe { hook.message(hwnd, msg, wparam, lparam) };
-        debug_assert!(
-            answer.is_none() || hook.answers(msg, wparam),
-            "BUG: a window hook answered message {msg:#x}, which its `answers` does not list"
-        );
-        answer
-    });
+    // A clone of the hooks: a hook's message may open or close windows, and
+    // nothing of the thread's class stays borrowed while it runs.
+    let hooks = window_class::<H>().map(|class| class.hooks);
+    let answered = hooks
+        .iter()
+        .flat_map(|hooks| hooks.iter())
+        .find_map(|hook| {
+            // SAFETY: the arguments as Win32 delivered them, per this function's
+            // `# Safety` contract.
+            let answer = unsafe { hook.message(hwnd, msg, wparam, lparam) };
+            debug_assert!(
+                answer.is_none() || hook.answers(msg, wparam),
+                "BUG: a window hook answered message {msg:#x}, which its `answers` does not list"
+            );
+            answer
+        });
     // SAFETY: forwards the message verbatim, as Win32 delivered it.
-    let answer = answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) });
-    if msg == WM_NCDESTROY {
-        drop_feature_states(hwnd);
-    }
-    answer
+    answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
 }
 
 /// Load a cursor by style
@@ -629,7 +593,7 @@ unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
 /// window from one the OS built behind a recycled handle. The owner's
 /// message-only window has one too, drawn from the same source. Identities are
 /// minted in increasing order, so they order windows by when they opened.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct WindowIdentity(std::num::NonZeroU64);
 
 impl WindowIdentity {

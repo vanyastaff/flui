@@ -21,6 +21,8 @@
 //! In debug builds with the `native-capture` feature, `capture` journals
 //! every registry call on a thread as a native recording (ADR-0215 §4).
 
+#![forbid(unsafe_code)]
+
 /// Report a registry call to the native capture, in builds that have one.
 macro_rules! journal {
     ($journal:expr, $call:expr) => {
@@ -37,6 +39,7 @@ mod clock;
 mod pan_zoom;
 mod registry;
 mod scroll;
+mod touchpad;
 mod wheel;
 
 use std::num::NonZeroU8;
@@ -55,6 +58,7 @@ pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumula
 pub(crate) use registry::decode_derived;
 pub use registry::{ContactRegistry, DeviceRegistry, decode};
 pub use scroll::{ContactScroll, ScrollPhases, ScrollReading};
+pub use touchpad::{ContentTransform, TouchpadFrame, ViewportReading, ViewportStatus};
 pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};
 
 use flui_platform::PlatformInput;

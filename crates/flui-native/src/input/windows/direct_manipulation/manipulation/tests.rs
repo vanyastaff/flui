@@ -6,11 +6,10 @@
 use std::time::Duration;
 
 use crate::input::assembly::{
-    ContactRegistry, CounterAnchor, NativeClock, NativeSurface, NativeTime, QpcTicks, ReadingTime,
+    ContactRegistry, ContentTransform, CounterAnchor, NativeClock, NativeSurface, NativeTime,
+    QpcTicks, ReadingTime, TouchpadFrame, ViewportReading, ViewportStatus,
 };
-use crate::input::windows::direct_manipulation::manipulation::{
-    ContentTransform, TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
-};
+use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;

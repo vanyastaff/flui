@@ -14,11 +14,11 @@
 //!
 //! A manual-update viewport only runs when asked: `IDirectManipulationUpdateManager::Update`
 //! processes the contacts seen since the last call and delivers the handler
-//! callbacks, synchronously, on the calling thread. The handler only appends a
-//! [`ViewportReading`](manipulation::ViewportReading) to a queue; the pump
-//! drains it after `Update` returned, so no user code runs inside a COM
-//! callback, and no `RefCell` borrow of the window's touchpad is held across a
-//! COM call or user code.
+//! callbacks, synchronously, on the calling thread. The handler only appends
+//! a [`ViewportReading`](crate::input::assembly::ViewportReading) to a queue;
+//! the pump drains it after `Update` returned, so no user code runs inside a
+//! COM callback, and no `RefCell` borrow of the window's touchpad is held
+//! across a COM call or user code.
 //!
 //! Delivery is ordered through the window's outbox: an input callback may run
 //! a nested message loop (a dialog, a menu) whose `WM_TIMER` or `WM_PAINT`
@@ -57,7 +57,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 #[cfg(windows)]
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 #[cfg(windows)]
 use windows::Win32::Graphics::DirectManipulation::{
     DIRECTMANIPULATION_CONFIGURATION_INTERACTION, DIRECTMANIPULATION_CONFIGURATION_SCALING,
@@ -79,7 +79,7 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Input::Pointer::GetPointerType;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    DM_POINTERHITTEST, GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer, WM_TIMER,
+    GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer,
 };
 
 #[cfg(windows)]
@@ -87,15 +87,15 @@ use super::InputWindow;
 #[cfg(windows)]
 use super::raw::SURFACE;
 #[cfg(windows)]
-use crate::input::assembly::{NativeTime, QpcTicks, ReadingTime};
+use crate::input::assembly::{
+    NativeTime, QpcTicks, ReadingTime, TouchpadFrame, ViewportReading, ViewportStatus,
+};
 #[cfg(windows)]
 use crate::owner::windows::com_apartment::ComApartment;
 #[cfg(windows)]
-use crate::owner::windows::{CreatedWindow, WindowMessages};
-#[cfg(windows)]
 use flui_platform::PlatformInput;
 #[cfg(windows)]
-use manipulation::{TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus};
+use manipulation::TouchpadAssembler;
 
 /// The timer that paces a window's viewport; the value spells "DM".
 #[cfg(windows)]
@@ -133,7 +133,7 @@ mod handler {
     };
     use windows_core::{Ref, implement};
 
-    use super::manipulation::{ContentTransform, ViewportReading, ViewportStatus};
+    use crate::input::assembly::{ContentTransform, ViewportReading, ViewportStatus};
     use crate::owner::panic_boundary::contain_os_entry;
 
     /// Readings the viewport reported during one `Update`.
@@ -469,7 +469,7 @@ impl InputWindow {
         Some(TouchpadFrame {
             time: now(),
             position,
-            scale: self.scale_factor.get(),
+            scale: self.scale_factor(),
             modifiers: super::raw::message_modifiers(),
         })
     }
@@ -547,7 +547,7 @@ impl InputWindow {
         let animating = {
             let mut host = self.touchpad.host.borrow_mut();
             let Some(host) = host.as_mut() else { return };
-            let mut registry = self.shared.registry.borrow_mut();
+            let mut registry = self.registry.borrow_mut();
             for reading in readings {
                 if let ViewportReading::Status(status) = reading {
                     host.status = status;
@@ -702,7 +702,7 @@ impl InputWindow {
             Some(frame) => {
                 let delivered = host
                     .assembler
-                    .abandon(&mut self.shared.registry.borrow_mut(), frame);
+                    .abandon(&mut self.registry.borrow_mut(), frame);
                 (delivered.inputs, delivered.reset)
             }
             None => (Vec::new(), true),
@@ -724,66 +724,11 @@ impl InputWindow {
     }
 }
 
-/// The precision touchpad's hook on FLUI's window class: a window it creates
-/// gets its DirectManipulation viewport, a contact the system offers the
-/// window goes to that viewport, and the viewport's pacing timer pumps it.
-#[cfg(windows)]
-pub(crate) struct Touchpad;
-
-#[cfg(windows)]
-impl WindowMessages for Touchpad {
-    fn answers(&self, msg: u32, wparam: WPARAM) -> bool {
-        match msg {
-            DM_POINTERHITTEST => true,
-            WM_TIMER => InputWindow::is_touchpad_timer(wparam.0),
-            _ => false,
-        }
-    }
-
-    unsafe fn message(
-        &self,
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        _lparam: LPARAM,
-    ) -> Option<LRESULT> {
-        if !self.answers(msg, wparam) {
-            return None;
-        }
-        if let Some(input) = crate::owner::windows::attached::<InputWindow>(hwnd) {
-            if msg == DM_POINTERHITTEST {
-                // The system offers a contact to the window under it; a
-                // touchpad's goes to the DirectManipulation viewport.
-                input.offer_touchpad_contact(hwnd, (wparam.0 & 0xffff) as u32);
-            } else {
-                input.pump_touchpad(hwnd);
-            }
-        }
-        Some(LRESULT(0))
-    }
-
-    /// The precision touchpad's viewport, in the window's input the input
-    /// hook made before this one; then the window's input capabilities,
-    /// which say whether it has one (`input::availability::windows`).
-    fn created(&self, window: &CreatedWindow) {
-        let Some(input) = window.window().attached::<InputWindow>() else {
-            debug_assert!(false, "BUG: the input hook keeps a window's input first");
-            return;
-        };
-        if let Some(host) = create_host(window.hwnd, window.client_size, window.apartment.clone()) {
-            input.touchpad.install(host);
-        }
-        input
-            .callbacks
-            .set_input_capabilities(crate::input::availability::windows(input.has_touchpad()));
-    }
-}
-
 /// Create the viewport for `hwnd`; `None` (logged) when DirectManipulation
 /// is unavailable, which leaves the window without precise scrolling and
 /// trackpad gestures.
 #[cfg(windows)]
-fn create_host(
+pub(super) fn create_host(
     hwnd: HWND,
     size: (i32, i32),
     apartment: Option<Rc<ComApartment>>,
@@ -868,17 +813,19 @@ pub mod manipulation {
     //! ([`Delivered::reset`]); the content update that reset causes arrives while
     //! no manipulation is open and is not input.
 
+    #![forbid(unsafe_code)]
+
     use flui_foundation::geometry::Point;
-    use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PointerEvent, PointerPosition, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
     };
     use smallvec::SmallVec;
 
     use crate::input::assembly::{
-        ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
-        GestureReading, NativeContact, NativeReading, NativeSurface, ReadingAction, ReadingTime,
-        ScrollPhases, ScrollReading, decode_derived,
+        ClockChoice, ContactRegistry, ContentTransform, DecodeError, GestureComponent,
+        GestureDelta, GesturePhase, GestureReading, NativeContact, NativeReading, NativeSurface,
+        ReadingAction, ScrollPhases, ScrollReading, TouchpadFrame, ViewportReading, ViewportStatus,
+        decode_derived,
     };
     use crate::input::primary_mouse_info;
     use flui_platform::PlatformInput;
@@ -892,114 +839,6 @@ pub mod manipulation {
     /// The trackpad contact every pinch of a window reads as: outside the 32-bit
     /// range of `WM_POINTER` ids.
     pub const PINCH_CONTACT: NativeContact = NativeContact(1 << 33);
-
-    /// `DIRECTMANIPULATION_STATUS`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[non_exhaustive]
-    pub enum ViewportStatus {
-        /// Being built.
-        Building,
-        /// Enabled and waiting for a contact.
-        Enabled,
-        /// Disabled; no input reaches it.
-        Disabled,
-        /// Fingers are manipulating it.
-        Running,
-        /// Coasting after the fingers lifted.
-        Inertia,
-        /// Stopped.
-        Ready,
-        /// Suspended by the system.
-        Suspended,
-    }
-
-    impl ViewportStatus {
-        /// The status a native `DIRECTMANIPULATION_STATUS` number names.
-        #[must_use]
-        pub const fn from_raw(raw: i32) -> Option<Self> {
-            Some(match raw {
-                0 => Self::Building,
-                1 => Self::Enabled,
-                2 => Self::Disabled,
-                3 => Self::Running,
-                4 => Self::Inertia,
-                5 => Self::Ready,
-                6 => Self::Suspended,
-                _ => return None,
-            })
-        }
-
-        /// Whether the viewport still moves, so its owner must keep updating it.
-        #[must_use]
-        pub const fn is_animating(self) -> bool {
-            matches!(self, Self::Running | Self::Inertia)
-        }
-    }
-
-    /// A viewport's content transform: a uniform scale and an offset in device
-    /// pixels.
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct ContentTransform {
-        scale: f64,
-        x: f64,
-        y: f64,
-    }
-
-    impl ContentTransform {
-        const IDENTITY: Self = Self {
-            scale: 1.0,
-            x: 0.0,
-            y: 0.0,
-        };
-
-        /// A transform; `None` when a component is not finite or `scale` is not
-        /// positive.
-        #[must_use]
-        pub fn try_new(scale: f64, x: f64, y: f64) -> Option<Self> {
-            (scale.is_finite() && scale > 0.0 && x.is_finite() && y.is_finite()).then_some(Self {
-                scale,
-                x,
-                y,
-            })
-        }
-
-        /// The transform of the six-number matrix `GetContentTransform` fills
-        /// (`[scale, 0, 0, scale, x, y]`); `None` when it is shorter or not a
-        /// finite positive scale with a finite offset.
-        #[must_use]
-        pub fn from_matrix(matrix: &[f32]) -> Option<Self> {
-            let [scale, _, _, _, x, y] = *matrix.first_chunk::<6>()?;
-            Self::try_new(f64::from(scale), f64::from(x), f64::from(y))
-        }
-
-        /// The uniform scale.
-        #[must_use]
-        pub const fn scale(&self) -> f64 {
-            self.scale
-        }
-
-        /// The horizontal offset, in device pixels.
-        #[must_use]
-        pub const fn x(&self) -> f64 {
-            self.x
-        }
-
-        /// The vertical offset, in device pixels.
-        #[must_use]
-        pub const fn y(&self) -> f64 {
-            self.y
-        }
-    }
-
-    /// One callback of a viewport's event handler, as plain data.
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    #[non_exhaustive]
-    pub enum ViewportReading {
-        /// `OnViewportStatusChanged`: the viewport's new status.
-        Status(ViewportStatus),
-        /// `OnContentUpdated`: the content's transform.
-        Content(ContentTransform),
-    }
 
     /// What the decoder publishes for a reading.
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1168,8 +1007,11 @@ pub mod manipulation {
         fn content(&mut self, transform: ContentTransform) -> SmallVec<[Manipulation; 3]> {
             use GesturePhase::{Began, Changed};
             let mut out = SmallVec::new();
-            let moved = (transform.x - self.anchor.x, transform.y - self.anchor.y);
-            let zoom = transform.scale / self.anchor.scale;
+            let moved = (
+                transform.x() - self.anchor.x(),
+                transform.y() - self.anchor.y(),
+            );
+            let zoom = transform.scale() / self.anchor.scale();
             // `0.0 -` also turns a negative zero into zero.
             let (dx, dy) = (0.0 - moved.0, 0.0 - moved.1);
             match self.state {
@@ -1206,20 +1048,6 @@ pub mod manipulation {
             }
             out
         }
-    }
-
-    /// Where and when a viewport reading happened.
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct TouchpadFrame {
-        /// The reading's clocks; the performance counter stamps it when present.
-        pub time: ReadingTime,
-        /// The cursor, in device pixels of the window's client area: a touchpad
-        /// manipulates what is under the cursor.
-        pub position: (f64, f64),
-        /// Device pixels per logical pixel.
-        pub scale: f64,
-        /// The modifiers held.
-        pub modifiers: Modifiers,
     }
 
     /// The input a viewport reading delivers.

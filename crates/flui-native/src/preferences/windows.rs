@@ -194,9 +194,20 @@ impl OwnerPreferences for PreferenceSource {
         Rc::new(PreferenceBroadcasts(Arc::clone(&self.invalidation)))
     }
 
-    fn mouse_geometry(&self, dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
-        mouse_geometry(dpi)
+    fn mouse_gestures(&self, dpi: u32) -> Result<GesturePreferences, PreferenceQueryError> {
+        mouse_gestures(dpi)
     }
+}
+
+/// The double-click interval and the mouse geometry at `dpi`, read together:
+/// what a window's clicks and gestures are measured with, and, at 96 DPI,
+/// the snapshot's window-independent reading.
+fn mouse_gestures(dpi: u32) -> Result<GesturePreferences, PreferenceQueryError> {
+    // SAFETY: this getter takes no pointers and only reads the system setting.
+    let double_click = unsafe { GetDoubleClickTime() };
+    Ok(GesturePreferences::default()
+        .with_double_click_interval(Duration::from_millis(u64::from(double_click)))
+        .with_native_mouse_geometry(mouse_geometry(dpi)?))
 }
 
 /// The source an owner keeps, as the type this file built: the tests reach
@@ -493,8 +504,6 @@ fn sample(
         MotionPreference::Reduce
     };
     let high_contrast = accessibility.HighContrast().map_err(native_error)?;
-    // SAFETY: this getter takes no pointers and only reads the system setting.
-    let double_click = unsafe { GetDoubleClickTime() };
     let snapshot = SystemPreferences::default()
         .with_text_scale(text_scale)
         .map_err(|error| PlatformError::Preferences {
@@ -503,16 +512,12 @@ fn sample(
         .with_motion(motion)
         .with_high_contrast(high_contrast)
         .with_locales(languages::sample()?)
+        // This window-independent reading detects changes. Exact
+        // presentation metrics are queried separately at its actual DPI.
         .with_gestures(
-            GesturePreferences::default()
-                .with_double_click_interval(Duration::from_millis(u64::from(double_click)))
-                // This window-independent reading detects changes. Exact
-                // presentation metrics are queried separately at its actual DPI.
-                .with_native_mouse_geometry(mouse_geometry(96).map_err(|error| {
-                    PlatformError::Preferences {
-                        message: error.to_string(),
-                    }
-                })?),
+            mouse_gestures(96).map_err(|error| PlatformError::Preferences {
+                message: error.to_string(),
+            })?,
         )
         .with_wheel(wheel_preferences(
             wheel_count(SPI_GETWHEELSCROLLLINES)?,

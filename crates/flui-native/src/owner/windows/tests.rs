@@ -24,9 +24,9 @@ use super::control::{
     OwnerSeeds, OwnerWindow,
 };
 use super::{
-    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity,
-    WindowMessages, WindowRef, WindowStep, WindowsHost, WindowsLoop, dispatch_window_message,
-    window_created, window_destroyed, window_step,
+    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowGone, WindowHooks,
+    WindowIdentity, WindowInputs, WindowMessages, WindowRef, WindowsHost, WindowsLoop,
+    dispatch_window_message, window_created,
 };
 use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
@@ -53,17 +53,6 @@ impl WindowMessages for First {
         hear("first created");
     }
 
-    fn step(&self, _window: WindowRef, step: WindowStep) {
-        hear(match step {
-            WindowStep::FocusLost => "first focus lost",
-            _ => "first stepped",
-        });
-    }
-
-    fn destroyed(&self, _window: WindowRef) {
-        hear("first destroyed");
-    }
-
     fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
         msg == BOTH_ANSWER
     }
@@ -85,17 +74,6 @@ struct Second;
 impl WindowMessages for Second {
     fn created(&self, _window: &CreatedWindow) {
         hear("second created");
-    }
-
-    fn step(&self, _window: WindowRef, step: WindowStep) {
-        hear(match step {
-            WindowStep::FocusLost => "second focus lost",
-            _ => "second stepped",
-        });
-    }
-
-    fn destroyed(&self, _window: WindowRef) {
-        hear("second destroyed");
     }
 
     fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
@@ -122,8 +100,47 @@ impl WindowMessages for Second {
 /// broadcast subscriber and a drag position that takes no drags.
 pub(super) struct TestHost;
 
+/// The test host's hooks, in order.
+fn test_hooks() -> WindowHooks {
+    Rc::new([Rc::new(First) as Rc<dyn WindowMessages>, Rc::new(Second)])
+}
+
+/// An input that holds no window.
+struct NoInputs;
+
+impl WindowInputs for NoInputs {
+    fn hovered(&self, _window: WindowRef) -> Option<bool> {
+        None
+    }
+
+    fn modifiers(&self, _window: WindowRef) -> Option<flui_platform::Modifiers> {
+        None
+    }
+
+    fn press_kind(
+        &self,
+        _window: WindowRef,
+        _pointer: flui_platform::PointerId,
+    ) -> Option<flui_platform::pointer::PointerKind> {
+        None
+    }
+
+    fn pen_in_range(
+        &self,
+        _window: WindowRef,
+        _device: Option<flui_platform::pointer::DeviceId>,
+    ) -> Option<u64> {
+        None
+    }
+}
+
 impl WindowsHost for TestHost {
-    const WINDOW_HOOKS: WindowHooks = &[&First, &Second];
+    fn window_class() -> WindowClass {
+        WindowClass {
+            hooks: test_hooks(),
+            input: Rc::new(NoInputs),
+        }
+    }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
         <crate::hosts::windows::Windows as WindowsHost>::preferences(owner)
@@ -269,7 +286,7 @@ fn a_window_message_reaches_the_hooks_in_order() {
     );
 
     assert_eq!(
-        window_created(TestHost::WINDOW_HOOKS, &created(hwnd), || true),
+        window_created(&test_hooks(), &created(hwnd), || true),
         Ok(()),
         "a window that lives through its hooks is announced to all of them"
     );
@@ -289,11 +306,11 @@ fn created(hwnd: HWND) -> CreatedWindow {
         hwnd,
         identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
         client_size: (0, 0),
-        scale: 1.0,
+        dpi: 96,
         callbacks: Arc::new(crate::owner::handlers::WindowCallbacks::default()),
         handlers: Rc::new(RefCell::new(crate::owner::handlers::PlatformHandlers::new())),
         preferences: Rc::new(NoPreferences),
-        hooks: TestHost::WINDOW_HOOKS,
+        hooks: test_hooks(),
         apartment: None,
     }
 }
@@ -328,10 +345,10 @@ impl OwnerPreferences for NoPreferences {
         Rc::new(Self)
     }
 
-    fn mouse_geometry(
+    fn mouse_gestures(
         &self,
         _: u32,
-    ) -> Result<flui_platform::NativeMouseGeometry, flui_platform::PreferenceQueryError> {
+    ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError> {
         Err(flui_platform::PreferenceQueryError::Unavailable)
     }
 }
@@ -353,7 +370,11 @@ impl WindowMessages for Destroys {
 /// fails the window's open.
 #[test]
 fn a_window_a_hook_destroyed_is_announced_to_no_later_hook() {
-    const HOOKS: WindowHooks = &[&First, &Destroys, &Second];
+    let hooks: WindowHooks = Rc::new([
+        Rc::new(First) as Rc<dyn WindowMessages>,
+        Rc::new(Destroys),
+        Rc::new(Second),
+    ]);
     // SAFETY: a message-only window of a system class, created on this
     // thread; the class name and title are static literals.
     let hwnd = unsafe {
@@ -378,7 +399,7 @@ fn a_window_a_hook_destroyed_is_announced_to_no_later_hook() {
     // SAFETY: `IsWindow` takes any handle and dereferences nothing.
     let alive = || unsafe { IsWindow(Some(hwnd)) }.as_bool();
     assert_eq!(
-        window_created(HOOKS, &created(hwnd), alive),
+        window_created(&hooks, &created(hwnd), alive),
         Err(WindowGone),
         "the announcement reports the window gone"
     );
@@ -386,31 +407,6 @@ fn a_window_a_hook_destroyed_is_announced_to_no_later_hook() {
         HEARD.with(RefCell::take),
         ["first created", "destroys created"],
         "no hook after the one that destroyed the window learns of it"
-    );
-}
-
-/// A step of a window, and its destruction, reach every hook of the class in
-/// the order the host names them: the window tells the class's hooks, and a
-/// feature that follows the window hears it wherever it stands in the table.
-#[test]
-fn a_window_step_and_its_destruction_reach_every_hook_in_order() {
-    let window = WindowRef::new(
-        HWND(std::ptr::null_mut()),
-        WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
-    );
-    HEARD.with(|heard| heard.borrow_mut().clear());
-
-    window_step(TestHost::WINDOW_HOOKS, window, WindowStep::FocusLost);
-    window_destroyed(TestHost::WINDOW_HOOKS, window);
-
-    assert_eq!(
-        HEARD.with(RefCell::take),
-        [
-            "first focus lost",
-            "second focus lost",
-            "first destroyed",
-            "second destroyed"
-        ]
     );
 }
 

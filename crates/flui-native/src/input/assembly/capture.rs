@@ -30,7 +30,7 @@ use super::{
     ClickSettings, ContactScroll, CounterAnchor, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, WheelReading,
 };
-use crate::input::windows::direct_manipulation::manipulation::{TouchpadFrame, ViewportReading};
+use super::{TouchpadFrame, ViewportReading};
 
 /// One registry call, as a native recording holds it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -101,9 +101,10 @@ pub enum Captured<'a> {
         /// Why.
         reason: NativeCancel,
     },
-    /// A precision touchpad's viewport reported `reading` at `frame`
-    /// ([`TouchpadAssembler::assemble`](crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler::assemble)). The pinch readings it derives are
-    /// not reported on their own: replaying this call derives them again.
+    /// A precision touchpad's viewport reported `reading` at `frame`, which
+    /// the touchpad's assembler decodes (`TouchpadAssembler::assemble`, the
+    /// Win32 input's). The pinch readings it derives are not reported on their
+    /// own: replaying this call derives them again.
     Viewport {
         /// What the viewport reported.
         reading: ViewportReading,
@@ -111,7 +112,7 @@ pub enum Captured<'a> {
         frame: TouchpadFrame,
     },
     /// A touchpad's open manipulation ended as cancelled at `frame`
-    /// ([`TouchpadAssembler::abandon`](crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler::abandon)).
+    /// (`TouchpadAssembler::abandon`, the Win32 input's).
     ViewportAbandoned {
         /// Where and when.
         frame: TouchpadFrame,

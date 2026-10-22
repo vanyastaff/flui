@@ -12,13 +12,15 @@ use crate::drag::windows::{DropTargetRegistration, OleTransfer};
 use crate::error::PlatformError;
 use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
-use crate::input::windows::{InputMessages, Touchpad};
+use crate::input::windows::InputWindows;
 use crate::lifecycle::notice::SystemNotices;
 use crate::lifecycle::windows::HostEvents;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
-use crate::owner::windows::{HostDisplays, HostDrag, WindowHooks, WindowsHost, WindowsLoop};
+use crate::owner::windows::{
+    HostDisplays, HostDrag, WindowClass, WindowHooks, WindowMessages, WindowsHost, WindowsLoop,
+};
 use crate::platform::HostPlatform;
 use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
@@ -55,19 +57,23 @@ impl Host for Windows {
 impl WindowsHost for Windows {
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
-    /// its input messages; the drop target, which only learns of each window
-    /// created; and the precision touchpad's (its hit test and pacing timer,
-    /// and the viewport each new window gets). The hooks list disjoint
-    /// messages (`the_window_hooks_answer_disjoint_messages`); what none
-    /// answers gets the default procedure. A created window activates TSF,
-    /// then registers its drop target, then gets its touchpad viewport.
-    const WINDOW_HOOKS: WindowHooks = &[
-        &Tsf,
-        &WindowProc,
-        &InputMessages,
-        &DropTargetRegistration,
-        &Touchpad,
-    ];
+    /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,
+    /// and the precision touchpad's hit test and pacing timer); and the drop
+    /// target, which only learns of each window created. The hooks list
+    /// disjoint messages (`the_window_hooks_answer_disjoint_messages`); what
+    /// none answers gets the default procedure. A created window activates
+    /// TSF, then gets its input with its touchpad viewport, then registers
+    /// its drop target.
+    fn window_class() -> WindowClass {
+        let input = InputWindows::new();
+        let hooks: WindowHooks = Rc::new([
+            Rc::new(Tsf) as Rc<dyn WindowMessages>,
+            Rc::new(WindowProc),
+            Rc::clone(&input) as Rc<dyn WindowMessages>,
+            Rc::new(DropTargetRegistration),
+        ]);
+        WindowClass { hooks, input }
+    }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
         Ok(Rc::new(PreferenceSource::new(owner.signal)?))
@@ -148,15 +154,17 @@ impl HostPlatform<Windows> {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use windows::Win32::Foundation::WPARAM;
     use windows::Win32::UI::WindowsAndMessaging::{DM_POINTERHITTEST, WM_SYSCOMMAND, WM_TIMER};
 
     use super::Windows;
-    use crate::owner::windows::WindowsHost;
+    use crate::owner::windows::{WindowMessages, WindowsHost};
 
-    /// How many of the table's window hooks answer `msg` with `wparam`.
-    fn answering(msg: u32, wparam: usize) -> usize {
-        <Windows as WindowsHost>::WINDOW_HOOKS
+    /// How many of `hooks` answer `msg` with `wparam`.
+    fn answering(hooks: &[Rc<dyn WindowMessages>], msg: u32, wparam: usize) -> usize {
+        hooks
             .iter()
             .filter(|hook| hook.answers(msg, WPARAM(wparam)))
             .count()
@@ -169,6 +177,8 @@ mod tests {
     /// that does not ask which timer fired would take the touchpad's.
     #[test]
     fn the_window_hooks_answer_disjoint_messages() {
+        let hooks = <Windows as WindowsHost>::window_class().hooks;
+        let answering = |msg, wparam| answering(&hooks, msg, wparam);
         for msg in 0..=0xFFFF_u32 {
             assert!(
                 answering(msg, 0) <= 1,
@@ -185,8 +195,9 @@ mod tests {
                 "system command {wparam:#06x} is answered by more than one hook"
             );
         }
-        // What the touchpad answers still reaches it: the hit test, and two
-        // timers in all, the window's modal deadline and the touchpad's pump.
+        // What the touchpad answers still reaches the input: the hit test,
+        // and two timers in all, the window's modal deadline and the
+        // touchpad's pump.
         assert_eq!(answering(DM_POINTERHITTEST, 0), 1);
         let timers = (0..=0xFFFF_usize)
             .filter(|&timer| answering(WM_TIMER, timer) == 1)

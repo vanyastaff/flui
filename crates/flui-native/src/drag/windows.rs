@@ -542,7 +542,6 @@ use windows_core::{ComObject, HSTRING};
 
 #[cfg(windows)]
 use crate::{
-    input::WindowInput,
     owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
@@ -1087,10 +1086,7 @@ impl Win32DragSource {
     /// The kind of the contact whose press began `pointer`'s drag, as the
     /// window's pointer registry read it.
     fn contact_kind(&self, pointer: Option<flui_platform::PointerId>) -> Option<PointerKind> {
-        let pointer = pointer?;
-        let input = self.window.attached::<WindowInput>()?;
-        let registry = input.registry.try_borrow().ok()?;
-        registry.origin(pointer).map(|origin| origin.kind)
+        crate::owner::windows::window_inputs()?.press_kind(self.window, pointer?)
     }
 }
 
@@ -1168,12 +1164,12 @@ pub(crate) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDr
 fn mouse_buttons_held() -> u32 {
     crate::input::keys::MOUSE_BUTTONS
         .iter()
-        .filter(|(key, _, _)| {
+        .filter(|codes| {
             // SAFETY: a query of this thread's key state by a constant code.
-            let state = unsafe { GetKeyState(i32::from(*key)) };
+            let state = unsafe { GetKeyState(i32::from(codes.virtual_key)) };
             state < 0
         })
-        .fold(0, |held, (_, bit, _)| held | bit)
+        .fold(0, |held, codes| held | codes.key_state_bit)
 }
 
 /// The clipboard format `native` travels as; `None` when registration failed.

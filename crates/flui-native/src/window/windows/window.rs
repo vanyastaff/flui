@@ -456,7 +456,7 @@ impl WindowsWindow {
                 handlers: Rc::clone(&handlers),
                 exit_policy,
                 callbacks: Arc::clone(&callbacks),
-                hooks: window_hooks,
+                hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(NativeMode::Normal),
@@ -540,16 +540,20 @@ impl WindowsWindow {
             // later hook runs on the dead handle, and the open fails instead
             // of returning a wrapper around it.
             crate::owner::windows::window_created(
-                window_hooks,
+                &window_hooks,
                 &crate::owner::windows::CreatedWindow {
                     hwnd,
                     identity,
                     client_size: size,
-                    scale: scale_factor,
+                    dpi: if native_dpi == 0 {
+                        USER_DEFAULT_SCREEN_DPI
+                    } else {
+                        native_dpi
+                    },
                     callbacks,
                     handlers: Rc::clone(&handlers),
                     preferences,
-                    hooks: window_hooks,
+                    hooks: Rc::clone(&window_hooks),
                     apartment,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
@@ -715,10 +719,11 @@ impl WindowsWindow {
         self.hwnd
     }
 
-    /// What the input keeps of this window that the window reads (its hover
-    /// and modifiers): `None` off its owner thread, or once it closed.
-    fn input(&self) -> Option<Rc<crate::input::WindowInput>> {
-        super::proc::WindowRef::new(self.hwnd, self.identity).attached()
+    /// Whether the mouse is over this window, as its input read it: `None`
+    /// off its owner thread, or once it closed.
+    fn hovered(&self) -> Option<bool> {
+        crate::owner::windows::window_inputs()?
+            .hovered(super::proc::WindowRef::new(self.hwnd, self.identity))
     }
 
     /// Installs a callback into this window's owner-thread context.
@@ -1367,7 +1372,11 @@ impl PlatformWindow for WindowsWindow {
             // SAFETY: the checked owner context proves this is the still-live
             // owned HWND. The scalar DPI getter does not dispatch user code.
             let dpi = unsafe { GetDpiForWindow(self.hwnd) };
-            let native = ctx.preferences.mouse_geometry(dpi)?;
+            let native = ctx
+                .preferences
+                .mouse_gestures(dpi)?
+                .native_mouse_geometry()
+                .ok_or(PreferenceQueryError::Unavailable)?;
             Ok(Some(GestureGeometry::from_native_mouse(&native)?))
         })
         .map_err(|refusal| match refusal {
@@ -1401,7 +1410,7 @@ impl PlatformWindow for WindowsWindow {
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         super::proc::with_window_context(self.hwnd, "set_cursor", |ctx| {
             ctx.cursor.set(cursor);
-            if self.input().is_some_and(|input| input.hovered.get()) {
+            if self.hovered() == Some(true) {
                 Self::apply_native_cursor(cursor)?;
             }
             Ok(())
@@ -1488,8 +1497,10 @@ impl PlatformWindow for WindowsWindow {
         unsafe { GetForegroundWindow() == self.hwnd }
     }
 
+    /// `false` for a window its input does not hold (off its owner thread,
+    /// or closed).
     fn is_hovered(&self) -> bool {
-        self.input().is_some_and(|input| input.hovered.get())
+        self.hovered() == Some(true)
     }
 
     fn mouse_position(&self) -> Point<f64> {
@@ -1511,11 +1522,14 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    /// None held for a window its input does not hold (off its owner thread,
+    /// or closed).
     fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        self.input()
-            .map_or(flui_platform::Modifiers::NONE, |input| {
-                input.modifiers.get()
+        crate::owner::windows::window_inputs()
+            .and_then(|inputs| {
+                inputs.modifiers(super::proc::WindowRef::new(self.hwnd, self.identity))
             })
+            .unwrap_or(flui_platform::Modifiers::NONE)
     }
 
     fn appearance(&self) -> WindowAppearance {

@@ -100,21 +100,52 @@ mod vk {
     pub const OEM_102: u16 = 0xE2;
 }
 
-/// Each mouse button: its virtual-key code, the `MK_*` bit a mouse message's
-/// `WPARAM` and OLE's key state carry for it, and the button it is. The Win32
-/// input reads the buttons a message holds from it, and OLE drag and drop the
-/// buttons whose release drops a session.
-pub const MOUSE_BUTTONS: [(u16, u32, PointerButton); 5] = [
+/// One mouse button as Win32 names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseButtonCodes {
+    /// Its virtual-key code (`VK_*`).
+    pub virtual_key: u16,
+    /// The `MK_*` bit a mouse message's `WPARAM` and OLE's key state carry
+    /// for it.
+    pub key_state_bit: u32,
+    /// The button it is.
+    pub button: PointerButton,
+}
+
+/// Each mouse button's Win32 codes. The Win32 input reads the buttons a
+/// message holds from it, and OLE drag and drop the buttons whose release
+/// drops a session.
+pub const MOUSE_BUTTONS: [MouseButtonCodes; 5] = [
     // VK_LBUTTON, MK_LBUTTON
-    (0x01, 0x0001, PointerButton::PRIMARY),
+    MouseButtonCodes {
+        virtual_key: 0x01,
+        key_state_bit: 0x0001,
+        button: PointerButton::PRIMARY,
+    },
     // VK_RBUTTON, MK_RBUTTON
-    (0x02, 0x0002, PointerButton::SECONDARY),
+    MouseButtonCodes {
+        virtual_key: 0x02,
+        key_state_bit: 0x0002,
+        button: PointerButton::SECONDARY,
+    },
     // VK_MBUTTON, MK_MBUTTON
-    (0x04, 0x0010, PointerButton::AUXILIARY),
+    MouseButtonCodes {
+        virtual_key: 0x04,
+        key_state_bit: 0x0010,
+        button: PointerButton::AUXILIARY,
+    },
     // VK_XBUTTON1, MK_XBUTTON1
-    (0x05, 0x0020, PointerButton::BACK),
+    MouseButtonCodes {
+        virtual_key: 0x05,
+        key_state_bit: 0x0020,
+        button: PointerButton::BACK,
+    },
     // VK_XBUTTON2, MK_XBUTTON2
-    (0x06, 0x0040, PointerButton::FORWARD),
+    MouseButtonCodes {
+        virtual_key: 0x06,
+        key_state_bit: 0x0040,
+        button: PointerButton::FORWARD,
+    },
 ];
 
 /// Split a `WM_KEYDOWN`/`WM_KEYUP` `lParam` into the fields the translation

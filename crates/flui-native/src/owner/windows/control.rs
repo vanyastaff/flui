@@ -321,16 +321,17 @@ pub(crate) trait OwnerPreferences: SystemPreferenceSource + std::any::Any {
     /// The source's subscriber to the system's broadcasts.
     fn broadcasts(&self) -> Rc<dyn super::broadcast::Subscriber>;
 
-    /// The system's mouse geometry at `dpi`, read now: the double-click
-    /// rectangle and the drag threshold a window's input and its gesture
+    /// The system's mouse gesture settings at `dpi`, read now and together:
+    /// the double-click interval and the mouse geometry (the double-click
+    /// rectangle and the drag threshold) a window's input and its gesture
     /// geometry are measured in.
     ///
     /// # Errors
     /// What the system's metrics refuse.
-    fn mouse_geometry(
+    fn mouse_gestures(
         &self,
         dpi: u32,
-    ) -> Result<flui_platform::NativeMouseGeometry, flui_platform::PreferenceQueryError>;
+    ) -> Result<flui_platform::GesturePreferences, flui_platform::PreferenceQueryError>;
 }
 
 /// The lifecycle the owner keeps for its host: the broadcast receiver's
@@ -404,6 +405,11 @@ impl OwnerControl {
             handlers: &handlers,
             notices: &notices,
         };
+        let window_hooks = super::window_class::<H>()
+            .ok_or_else(|| PlatformError::Init {
+                message: "FLUI's window class: the thread's storage is torn down".into(),
+            })?
+            .hooks;
         let lifecycle = H::lifecycle(&seeds);
         let preferences = H::preferences(&seeds)?;
         let broadcasts = super::broadcast::Receiver::new(H::broadcast_subscribers(&OwnerObjects {
@@ -426,7 +432,7 @@ impl OwnerControl {
             preferences,
             broadcasts,
             lifecycle,
-            window_hooks: H::WINDOW_HOOKS,
+            window_hooks,
             notices,
             displays,
             windows: windows.clone(),
@@ -587,7 +593,7 @@ impl OwnerGate {
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
                     lifecycle: Rc::clone(&context.lifecycle),
-                    window_hooks: context.window_hooks,
+                    window_hooks: Rc::clone(&context.window_hooks),
                     #[cfg(test)]
                     broadcast_receiver: context.broadcasts.hwnd_for_test(),
                     notices: Arc::clone(&context.notices),

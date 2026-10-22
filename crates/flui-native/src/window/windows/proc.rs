@@ -247,7 +247,8 @@ impl WindowContext {
     /// asks [`Self::still_owns`] first where the next step would act on the
     /// handle.
     pub(crate) fn step(&self, hwnd: HWND, step: WindowStep) {
-        window_step(self.hooks, WindowRef::new(hwnd, self.identity), step);
+        let hooks = Rc::clone(&self.hooks);
+        window_step(&hooks, WindowRef::new(hwnd, self.identity), step);
     }
 
     /// Tell the window's resize callback its client size, `device` pixels, at
@@ -739,7 +740,8 @@ impl WindowProc {
                         // What the input holds of the window ends as
                         // cancelled, and its touchpad viewport is released,
                         // while the window and its callbacks still exist.
-                        window_destroyed(ctx.hooks, WindowRef::new(hwnd, ctx.identity));
+                        let hooks = Rc::clone(&ctx.hooks);
+                        window_destroyed(&hooks, WindowRef::new(hwnd, ctx.identity));
 
                         // A drag over the window leaves it, and OLE no
                         // longer offers it one.
@@ -1854,7 +1856,12 @@ impl WindowContext {
         let old_scale = self.scale_factor.replace(new_scale);
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
-        self.step(hwnd, WindowStep::Rescaled(new_scale));
+        self.step(
+            hwnd,
+            WindowStep::Rescaled {
+                dpi: u32::from(dpi),
+            },
+        );
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();

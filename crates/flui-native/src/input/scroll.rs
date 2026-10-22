@@ -4,7 +4,9 @@
 //! Logical pixels, translated lines and pages retain their own units. Raw
 //! Win32 detents remain rotation until the consumer applies system preferences.
 
-use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+#[cfg(target_arch = "wasm32")]
+use flui_platform::pointer::InputValueError;
+use flui_platform::pointer::{ScrollDelta, ScrollUnit};
 
 /// A Win32 vertical wheel detent points away from the user, toward earlier
 /// content: invert its sign and divide by WHEEL_DELTA (120).
@@ -24,6 +26,7 @@ pub fn from_win32_hwheel(raw_distance: i16) -> ScrollDelta {
 /// DOM wheel values already use down/right-positive logical CSS units.
 /// Unknown modes follow DOM_DELTA_PIXEL; nonfinite deltas are refused.
 /// <https://w3c.github.io/uievents/#events-wheelevents>
+#[cfg(target_arch = "wasm32")]
 pub fn from_web(
     delta_mode: u32,
     delta_x: f64,

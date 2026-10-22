@@ -17,11 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::PUMP_TIMER;
 use crate::WindowsPlatform;
+use crate::input::assembly::{ContentTransform, ViewportReading, ViewportStatus};
 use crate::input::availability as input_availability;
 use crate::input::windows::InputWindow;
-use crate::input::windows::direct_manipulation::manipulation::{
-    ContentTransform, ViewportReading, ViewportStatus,
-};
 use crate::window::windows::WindowsWindow;
 use crate::{host_window::HostWindow, platform::Platform as _};
 use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
@@ -59,12 +57,12 @@ fn describe(input: &PlatformInput, scale: f64) -> Option<String> {
 }
 
 fn scale_of(hwnd: HWND) -> f64 {
-    input(hwnd).scale_factor.get()
+    input(hwnd).scale_factor()
 }
 
 /// What the input keeps of the fixture's window.
 fn input(hwnd: HWND) -> std::rc::Rc<InputWindow> {
-    crate::owner::windows::attached::<InputWindow>(hwnd).expect("the window's input")
+    crate::input::windows::testing::window_input(hwnd).expect("the window's input")
 }
 
 fn push(hwnd: HWND, readings: &[ViewportReading]) {
