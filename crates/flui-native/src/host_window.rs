@@ -84,7 +84,7 @@ pub(crate) use sealed::{CoreHostWindow, OwnerThreadToken};
 pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// Acquire this presentation's native numeric converter on the owner lane.
     /// Pending acquisition owns a completion wake obligation; no frame path waits.
-    /// The hidden token is minted by `OwnerPlatform::capture_text_sizing`.
+    /// The hidden token is minted by `capture_text_sizing`, which takes the owner.
     ///
     /// # Errors
     /// Refuses a closed presentation, wrong owner or failed native capture.

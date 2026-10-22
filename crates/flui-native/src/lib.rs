@@ -193,7 +193,9 @@ pub mod task;
 // Android and web rules; not an embedding API.
 #[doc(hidden)]
 pub mod text;
-pub use text::sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
+pub use text::sizing::{
+    CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState, capture_text_sizing,
+};
 
 // Re-export configuration types
 // ==================== Platform Detection ====================

@@ -315,7 +315,7 @@ impl NativeTextSizing {
                 return result;
             }
         }
-        self.owner.capture_text_sizing(&self.window)
+        flui_native::capture_text_sizing(&self.owner, &self.window)
     }
 
     pub(super) fn resolve(

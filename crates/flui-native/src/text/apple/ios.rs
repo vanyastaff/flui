@@ -18,8 +18,8 @@ pub(crate) struct Snapshot {
     pub(crate) traits: Retained<UITraitCollection>,
 }
 
-impl Snapshot {
-    pub(crate) fn query(&self, request: TextSizeRequest) -> Result<TextSize, Error> {
+impl crate::text::sizing::NativeTextSize for Snapshot {
+    fn query(&self, request: TextSizeRequest) -> Result<TextSize, Error> {
         // SAFETY: immutable SDK NSString constants, all available on iOS 11.
         let style = unsafe {
             match request.profile {

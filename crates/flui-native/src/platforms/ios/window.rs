@@ -381,9 +381,7 @@ impl FluiView {
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
         let capture = crate::CapturedTextSizing::new(
-            Arc::new(crate::text::sizing::NativeSizing::UIKit(
-                crate::text::apple::ios::Snapshot { traits },
-            )),
+            Arc::new(crate::text::apple::ios::Snapshot { traits }),
             authority,
             std::thread::current().id(),
         );

@@ -1038,7 +1038,7 @@ pub(crate) mod sizing {
 
     use crate::{
         CapturedTextSizing, TextSizingCaptureError as Error, TextSizingCaptureState as Capture,
-        owner::signal::OwnerSignal, text::sizing::NativeSizing,
+        owner::signal::OwnerSignal, text::sizing::NativeTextSize,
     };
     #[cfg(target_os = "android")]
     use android_activity::AndroidApp;
@@ -1051,16 +1051,19 @@ pub(crate) mod sizing {
     };
     use std::time::{Duration, Instant};
 
+    /// A captured converter, which the Java main thread hands the owner.
+    type Native = Arc<dyn NativeTextSize + Send + Sync>;
+
     #[cfg(target_os = "android")]
-    pub(crate) struct Snapshot {
+    struct Snapshot {
         vm: JavaVM,
         metrics: Global<JObject<'static>>,
         density: f64,
     }
 
     #[cfg(target_os = "android")]
-    impl Snapshot {
-        pub(crate) fn query(
+    impl NativeTextSize for Snapshot {
+        fn query(
             &self,
             request: flui_foundation::TextSizeRequest,
         ) -> Result<flui_foundation::TextSize, Error> {
@@ -1180,7 +1183,7 @@ pub(crate) mod sizing {
         })
     }
 
-    type NativeResult = Result<Arc<NativeSizing>, Error>;
+    type NativeResult = Result<Native, Error>;
 
     struct Completion {
         ticket: Arc<()>,
@@ -1205,7 +1208,7 @@ pub(crate) mod sizing {
         authority: Arc<AtomicBool>,
         flight: Option<Flight>,
         completed: Option<Completion>,
-        current: Option<Arc<NativeSizing>>,
+        current: Option<Native>,
         retry: Option<Instant>,
     }
 
@@ -1347,7 +1350,7 @@ pub(crate) mod sizing {
                 }
                 if let Some(native) = &state.current {
                     return Ok(Admission::Waiting(Capture::Ready(CapturedTextSizing::new(
-                        Arc::clone(native),
+                        Arc::clone(native) as Arc<dyn NativeTextSize>,
                         Arc::clone(&state.authority),
                         owner,
                     ))));
@@ -1418,9 +1421,7 @@ pub(crate) mod sizing {
                         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             capture(&activity)
                         })) {
-                            Ok(result) => {
-                                result.map(|snapshot| Arc::new(NativeSizing::Android(snapshot)))
-                            }
+                            Ok(result) => result.map(|snapshot| Arc::new(snapshot) as Native),
                             Err(payload) => {
                                 std::mem::forget(payload);
                                 Err(Error::Native {
@@ -1568,9 +1569,9 @@ pub(crate) mod sizing {
                     "an outstanding queued callback must not be reset or reposted"
                 );
             }
-            pending.complete(Ok(Arc::new(NativeSizing::Test(Box::new(|request| {
-                Ok(request.size)
-            })))));
+            pending.complete(Ok(Arc::new(crate::text::sizing::QueryWith(
+                |request: flui_foundation::TextSizeRequest| Ok(request.size),
+            ))));
             assert!(
                 matches!(
                     acquisition.admit(&Weak::new(), owner, now + Duration::from_secs(6)),
