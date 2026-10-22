@@ -185,6 +185,18 @@ impl PlatformWindow for OutsideWindow {
         Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

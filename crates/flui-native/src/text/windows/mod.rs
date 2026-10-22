@@ -188,9 +188,58 @@ use crate::window::windows::proc::{WindowRef, with_window_context};
 
 /// The text services' hook on FLUI's window class: each window the class
 /// creates gets its TSF connection, held in the window's context
-/// (ADR-0135 §3).
+/// (ADR-0135 §3). Public where it is defined, as the host's table names it
+/// as its text position, and nameable only inside the crate.
 #[cfg(windows)]
-pub(crate) struct Tsf;
+#[derive(Debug)]
+pub struct Tsf;
+
+/// The text position of the Windows table: each window holds a handle to its
+/// TSF connection, which serves the focused field's store (the pull model,
+/// ADR-0135), on the window's own thread only.
+#[cfg(windows)]
+impl crate::host::Text<WindowRef> for Tsf {
+    fn for_window(window: &WindowRef) -> std::sync::Arc<dyn crate::text::TextInput> {
+        std::sync::Arc::new(TsfWindow(*window))
+    }
+}
+
+/// One window's handle to its TSF connection.
+#[cfg(windows)]
+struct TsfWindow(WindowRef);
+
+#[cfg(windows)]
+impl crate::text::TextInput for TsfWindow {
+    /// The window's text-store host: its TSF connection, read on the thread
+    /// that created the window (any other gets `None`); `None` when TSF did
+    /// not activate for it, or once it is destroyed.
+    fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
+        let services = self
+            .0
+            .with_context("text_store_host", |context| {
+                context.text_services.borrow().clone()
+            })
+            .flatten()?;
+        Some(crate::text::WindowTextInput::Store(
+            services as Rc<dyn flui_platform::text_store::TextStoreHost>,
+        ))
+    }
+
+    /// Windows' text size is linear: there is nothing to capture.
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    /// The window's procedure deactivates TSF as the window is destroyed,
+    /// after its close callbacks (ADR-0135 §3): nothing is left to detach.
+    fn detach(&self) {}
+}
 
 #[cfg(windows)]
 #[expect(

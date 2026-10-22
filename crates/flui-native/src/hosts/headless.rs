@@ -31,7 +31,7 @@ impl Host for Headless {
     type Window = MockWindow;
     type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
-    type Text = std::sync::Arc<FakeTextInput>;
+    type Text = FakeTextInput;
     type Accessibility = FakeAccessibility;
     type Clipboard = InMemoryClipboard;
     type Drag = DragDouble;
@@ -65,7 +65,7 @@ impl HostPlatform<Headless> {
     /// A headless platform with one display and every window capability.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_parts(HeadlessWindows::default(), |windows| {
+        Self::from_parts(HeadlessWindows::new, |windows| {
             HeadlessLoop::new::<Headless>(Arc::clone(windows) as _)
         })
     }

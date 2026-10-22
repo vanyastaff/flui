@@ -809,14 +809,6 @@ impl std::fmt::Debug for TextServices {
     }
 }
 
-impl crate::text::TextInput for Rc<TextServices> {
-    fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
-        Some(crate::text::WindowTextInput::Store(
-            Rc::clone(self) as Rc<dyn TextStoreHost>
-        ))
-    }
-}
-
 impl TextStoreHost for TextServices {
     /// Queued when called under a TSF call into a store.
     ///

@@ -19,6 +19,13 @@ use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, Unsu
 #[derive(Debug, Default)]
 pub struct WebHaptics;
 
+/// Every canvas window plays on the page's one actuator.
+impl crate::host::Haptics<crate::owner::web::CanvasRef> for WebHaptics {
+    fn for_window(_: &crate::owner::web::CanvasRef) -> std::sync::Arc<dyn PlatformHaptics> {
+        std::sync::Arc::new(Self)
+    }
+}
+
 /// Whether the page can vibrate now, or why not: its browser has no
 /// `navigator.vibrate` (Safari, Firefox), or the page has had no user
 /// activation yet (`navigator.userActivation.hasBeenActive`, the sticky

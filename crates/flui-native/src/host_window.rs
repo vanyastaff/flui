@@ -85,6 +85,9 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// Acquire this presentation's native numeric converter on the owner lane.
     /// Pending acquisition owns a completion wake obligation; no frame path waits.
     /// The hidden token is minted by `capture_text_sizing`, which takes the owner.
+    /// Every window of this crate answers what its table's text position
+    /// answers; the body here is for the outside implementation the seal
+    /// refuses, which cannot name the token to write one.
     ///
     /// # Errors
     /// Refuses a closed presentation, wrong owner or failed native capture.
@@ -95,20 +98,19 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
         Ok(crate::TextSizingCaptureState::Unsupported)
     }
 
-    /// This window's accessibility bridge, if the backend exposes one.
-    ///
-    /// `None` for a backend with no accessibility integration — which is
-    /// every backend until its per-OS adapter is wired, and permanently for
-    /// one with no such platform API. A composition root that gets `None`
-    /// never enables semantics assembly, so the cost is not paid either.
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        None
-    }
+    /// This window's accessibility bridge: the one its table's accessibility
+    /// position made for it, which on a platform with no accessibility
+    /// integration is never active (`Absent`). `None` only from a window that
+    /// has no bridge at all; a composition root that gets `None` never
+    /// enables semantics assembly.
+    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>>;
 
     /// This window's text-store host (ADR-0135), for a backend whose input
     /// methods pull from the focused field's store; `None` for a push-model
     /// backend (it offers [`PlatformWindow::text_input`]) or one with no
-    /// input-method integration.
+    /// input-method integration. Every window of this crate answers what its
+    /// table's text position answers; the body here is for the outside
+    /// implementation the seal refuses, which cannot name the token.
     ///
     /// The token proves the platform's owner thread; an implementation whose
     /// windows are bound to their creating thread checks that the caller is

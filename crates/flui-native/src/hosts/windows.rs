@@ -24,7 +24,7 @@ use crate::owner::windows::{
 use crate::platform::HostPlatform;
 use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
-use crate::text::windows::{TextServices, Tsf};
+use crate::text::windows::Tsf;
 use crate::window::config::WindowConfiguration;
 use crate::window::windows::proc::WindowProc;
 use crate::window::windows::{WindowSet, WindowsWindow};
@@ -40,7 +40,7 @@ impl Host for Windows {
     type Window = WindowsWindow;
     type Displays = WindowsLoop;
     type Input = WindowsLoop;
-    type Text = Rc<TextServices>;
+    type Text = Tsf;
     #[cfg(feature = "a11y")]
     type Accessibility = WindowsAccessibility;
     #[cfg(not(feature = "a11y"))]
@@ -146,9 +146,10 @@ impl HostPlatform<Windows> {
     /// let platform = WindowsPlatform::with_config(config)?;
     /// ```
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
-        Self::try_from_parts(WindowSet::new(config), |windows| {
-            WindowsLoop::new::<Windows>(Arc::clone(windows) as _)
-        })
+        Self::try_from_parts(
+            |positions| WindowSet::new(config, positions),
+            |windows| WindowsLoop::new::<Windows>(Arc::clone(windows) as _),
+        )
     }
 }
 

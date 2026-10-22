@@ -523,7 +523,9 @@ fn raise(hwnd: HWND) -> POINTL {
 /// where the platform reaches it only as a `HostDrag`.
 fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     WindowsPlatform::try_from_parts(
-        crate::window::windows::WindowSet::new(WindowConfiguration::default()),
+        |positions| {
+            crate::window::windows::WindowSet::new(WindowConfiguration::default(), positions)
+        },
         |windows| {
             WindowsLoop::with_drag::<Windows>(
                 Arc::clone(windows) as _,

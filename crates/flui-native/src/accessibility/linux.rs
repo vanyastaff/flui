@@ -115,6 +115,23 @@ impl Default for UnixAccessibility {
     }
 }
 
+/// The adapter announces the window on the bus, not on the window: it leaves
+/// the bus when its last handle drops, and nothing of the window needs undoing.
+/// The bridge tells the bus nothing of the window's focus.
+impl crate::host::WindowAccessibility for UnixAccessibility {
+    fn detach(&self) {}
+
+    fn focus_changed(&self, _: bool) {}
+}
+
+/// Each winit window on Linux announces itself on the AT-SPI bus.
+#[cfg(feature = "winit-backend")]
+impl crate::host::Accessibility<Arc<winit::window::Window>> for UnixAccessibility {
+    fn for_window(_: &Arc<winit::window::Window>) -> Arc<dyn crate::host::WindowAccessibility> {
+        Arc::new(Self::new())
+    }
+}
+
 impl std::fmt::Debug for UnixAccessibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnixAccessibility")

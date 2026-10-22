@@ -94,11 +94,12 @@ pub enum WindowAt {
 ///
 /// ```
 /// use std::any::Any;
+/// use std::sync::Arc;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformWindow, Unsupported, UnsupportedReason,
-///     WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
-///     WindowShowError, WindowState,
+///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
+///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
 /// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
@@ -136,6 +137,15 @@ pub enum WindowAt {
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
+///     }
+///     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+///         None
+///     }
+///     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+///         None
+///     }
+///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+///         None
 ///     }
 ///     fn as_any(&self) -> &dyn Any {
 ///         self
@@ -152,11 +162,12 @@ pub enum WindowAt {
 ///
 /// ```compile_fail,E0407
 /// use std::any::Any;
+/// use std::sync::Arc;
 ///
 /// use flui_platform::{
-///     CursorError, CursorIcon, PlatformWindow, Unsupported, UnsupportedReason,
-///     WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
-///     WindowShowError, WindowState,
+///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
+///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
 /// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
@@ -194,6 +205,15 @@ pub enum WindowAt {
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
+///     }
+///     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+///         None
+///     }
+///     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+///         None
+///     }
+///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+///         None
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
 ///     fn as_any(&self) -> &dyn Any {
@@ -408,29 +428,27 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
-    /// Get this window's IME text-input capability, if the backend supports
-    /// it. `None` for backends that cannot honor IME composition (returned
-    /// by this trait's default so every non-desktop/no-IME backend does not
-    /// have to inherit unusable `set_ime_allowed`/`set_ime_cursor_area`
-    /// methods directly on `PlatformWindow`).
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        None
-    }
+    /// This window's IME text-input capability: the receiver of the
+    /// requests a field makes of the input method (whether it may compose,
+    /// where its caret is). `None` for a window whose input method reads the
+    /// field's store instead, or that has no input method. Every
+    /// implementation says which; there is no default (ADR-0151 §5).
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>>;
 
-    /// Get this window's haptic feedback capability, if the backend
-    /// supports it. `None` for backends with no haptic hardware (desktop
-    /// winit targets; a minimal future embedder) — see
-    /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
-    /// rationale.
-    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        None
-    }
+    /// This window's haptic feedback capability (see [`PlatformHaptics`]'s
+    /// module doc for why it is per window). A window of a platform with no
+    /// actuator hands out one that answers
+    /// [`HapticOutcome::Unsupported`](crate::haptics::HapticOutcome::Unsupported);
+    /// `None` is for a window that has no haptics facet at all (a test
+    /// double). Every implementation says which; there is no default.
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>>;
 
-    /// Get this window's system-chrome capability (system-bar overlay style),
-    /// if the backend draws system bars over its content. `None` on desktop.
-    fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>> {
-        None
-    }
+    /// This window's system-chrome capability (the system bars' overlay
+    /// style). A window of a platform that draws no system bars over its
+    /// content hands out one that styles nothing; `None` is for a window that
+    /// has no such facet at all (a test double). Every implementation says
+    /// which; there is no default.
+    fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>>;
 
     /// Get this window's OS drag source, if the backend can start OS drag
     /// sessions (ADR-0211). `None` for backends without one; their

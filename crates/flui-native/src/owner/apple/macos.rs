@@ -121,6 +121,36 @@ use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreference
 /// application stops.
 pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn CallbackWindow>>>>;
 
+/// A macOS window as the features beside it reach it (ADR-0151 §3): its
+/// content view, whether it has closed, and the owner lane every AppKit
+/// message to it travels through. The table's text, accessibility and haptics
+/// positions make the window's part of them from this, as the window opens.
+///
+/// Public where it is defined, so the host table can name it as the window's
+/// reference; the module is private, so it is nameable only inside the crate.
+#[derive(Clone)]
+pub struct ContentViewRef {
+    /// The window's content view. Not retained: it lives as long as its
+    /// window, and `closed` says when a late message to it would be one to a
+    /// window AppKit has been told to tear down.
+    pub(crate) view: *mut objc2::runtime::AnyObject,
+    /// Set once the window has closed; shared with the window.
+    pub(crate) closed: Arc<std::sync::atomic::AtomicBool>,
+    /// The lane every AppKit message to the view travels through.
+    pub(crate) owner: &'static dispatch::Queue,
+    /// Whether `owner` is the main queue, so the main thread is the lane.
+    pub(crate) owner_is_main: bool,
+}
+
+impl std::fmt::Debug for ContentViewRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContentViewRef")
+            .field("view", &self.view.addr())
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The macOS host's loop: the state every position of its table reads.
 ///
 /// [`MacOSPlatform`](crate::MacOSPlatform) is its platform.

@@ -430,12 +430,15 @@ mod input {
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
+    use crate::owner::signal::OwnerSignal;
+    use crate::owner::slot::OwnerSlot;
+    use crate::text::{TextInput, WindowTextInput};
     use crate::version::gate::Since;
     use crate::version::gate::android::{AndroidApi, StylusHandwriting};
 
-    use crate::owner::android::ActivityWindow;
+    use super::sizing::Acquisition;
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
-    use crate::window::android::AndroidWindow;
+    use crate::owner::android::{ActivityRef, ActivityWindow, ActivityWindowId};
 
     /// The key presses an input method's editor action arrives as: `key`
     /// pressed and released at `uptime_ms`, with Shift when `shift`.
@@ -463,28 +466,53 @@ mod input {
         })
     }
 
-    /// The text input of the window the owner runs an input method's work
-    /// against: the Android window holds it.
-    fn text_input_of(window: &dyn ActivityWindow) -> Option<Rc<AndroidTextInput>> {
-        window
-            .as_any()
-            .downcast_ref::<AndroidWindow>()?
-            .text_input()
-    }
-
     /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
     const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
     /// `InputConnection.CURSOR_UPDATE_MONITOR`: send it whenever it changes.
     const CURSOR_UPDATE_MONITOR: i32 = 2;
 
-    /// What answers the input method's calls through `FluiView`: the text the
-    /// view holds of the focused field, as the owner last published it or the
-    /// input method last reported it, against which each report becomes one
-    /// edit of the field; and the window's text input, which the work it hands
-    /// the owner reaches.
-    #[derive(Debug, Default)]
-    pub(crate) struct ViewInputMethod {
+    /// The field of one window: what the input method edits while the window
+    /// is open, kept on the owner thread.
+    struct Field {
+        window: ActivityWindowId,
+        input: OwnerSlot<Rc<AndroidTextInput>>,
+    }
+
+    /// The fields of the windows the loop opened, by window identity.
+    #[derive(Default)]
+    struct Fields(parking_lot::Mutex<Vec<Field>>);
+
+    impl Fields {
+        /// The field of `window`, held for no lock: running it runs the
+        /// field's store, which is user code. `None` off the owner thread and
+        /// for a window this does not hold.
+        fn of(&self, window: ActivityWindowId) -> Option<Rc<AndroidTextInput>> {
+            let fields = self.0.lock();
+            let field = fields.iter().find(|field| field.window == window)?;
+            let input = field.input.take()?;
+            let shared = Rc::clone(&input);
+            let _ = field.input.restore(input);
+            Some(shared)
+        }
+    }
+
+    /// The text position of the Android table: what answers the input
+    /// method's calls through `FluiView` — the text the view holds of the
+    /// focused field, as the owner last published it or the input method last
+    /// reported it, against which each report becomes one edit of the field —
+    /// and the field of each window, keyed by the window's identity, which
+    /// the work it hands the owner reaches. Public where it is defined, as the
+    /// host's table names it, and nameable only inside the crate.
+    #[derive(Default)]
+    pub struct ViewInputMethod {
         mirror: parking_lot::Mutex<Mirror>,
+        fields: Arc<Fields>,
+    }
+
+    impl std::fmt::Debug for ViewInputMethod {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ViewInputMethod").finish_non_exhaustive()
+        }
     }
 
     impl InputMethod for ViewInputMethod {
@@ -494,10 +522,11 @@ mod input {
 
         fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply> {
             let edit = self.mirror.lock().report(generation, &state)?;
+            let fields = Arc::clone(&self.fields);
             Some(InputMethodReply {
                 composing: Some(edit.composes()),
                 work: Box::new(move |window: &dyn ActivityWindow| {
-                    if let Some(input) = text_input_of(window) {
+                    if let Some(input) = fields.of(window.activity_id()) {
                         input.apply(edit);
                     }
                 }),
@@ -505,10 +534,11 @@ mod input {
         }
 
         fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply {
+            let fields = Arc::clone(&self.fields);
             InputMethodReply {
                 composing: None,
                 work: Box::new(move |window: &dyn ActivityWindow| {
-                    if let Some(input) = text_input_of(window) {
+                    if let Some(input) = fields.of(window.activity_id()) {
                         input.editor_action();
                     }
                     // The action arrives as the key it stands for, which a field
@@ -522,10 +552,11 @@ mod input {
         }
 
         fn cursor_updates(&self, mode: i32) -> InputMethodReply {
+            let fields = Arc::clone(&self.fields);
             InputMethodReply {
                 composing: None,
                 work: Box::new(move |window: &dyn ActivityWindow| {
-                    if let Some(input) = text_input_of(window) {
+                    if let Some(input) = fields.of(window.activity_id()) {
                         input.cursor_updates(mode);
                     }
                 }),
@@ -533,9 +564,115 @@ mod input {
         }
 
         fn pen_down(&self, window: &dyn ActivityWindow, at: Point<f64>) {
-            if let Some(input) = text_input_of(window) {
+            if let Some(input) = self.fields.of(window.activity_id()) {
                 input.offer_pen(at);
             }
+        }
+
+        fn window_opened(&self, window: ActivityWindowId, view: &Arc<JavaView>, api: AndroidApi) {
+            let input = OwnerSlot::new();
+            if input
+                .replace(AndroidTextInput::new(Arc::clone(view), api))
+                .is_err()
+            {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    "a window's field was made off its owner thread"
+                );
+                return;
+            }
+            let mut fields = self.fields.0.lock();
+            debug_assert!(
+                fields.iter().all(|field| field.window != window),
+                "BUG: a window identity is opened once"
+            );
+            fields.push(Field { window, input });
+        }
+
+        fn window_closed(&self, window: ActivityWindowId) {
+            let field = {
+                let mut fields = self.fields.0.lock();
+                fields
+                    .iter()
+                    .position(|field| field.window == window)
+                    .map(|index| fields.swap_remove(index))
+            };
+            // Detached and dropped with no lock held: the field's store is
+            // user code.
+            if let Some(field) = field
+                && let Some(input) = field.input.take()
+            {
+                input.retire();
+            }
+        }
+
+        fn store_host(&self, window: ActivityWindowId) -> Option<Rc<dyn TextStoreHost>> {
+            self.fields
+                .of(window)
+                .map(|input| input as Rc<dyn TextStoreHost>)
+        }
+    }
+
+    /// What one window holds of the text feature: its identity, by which the
+    /// input method keeps its field, and the capture of its system text size.
+    struct ActivityText {
+        window: ActivityWindowId,
+        view: Arc<JavaView>,
+        sizing: Arc<Acquisition>,
+        app: android_activity::AndroidApp,
+        signal: std::sync::Weak<OwnerSignal>,
+        owner: std::thread::ThreadId,
+    }
+
+    /// Each window of the Activity gets its field, which the input method
+    /// edits through `FluiView`, and the capture of its text size.
+    impl crate::host::Text<ActivityRef> for ViewInputMethod {
+        fn for_window(window: &ActivityRef) -> Arc<dyn TextInput> {
+            window
+                .view
+                .input_method()
+                .window_opened(window.id, &window.view, window.api);
+            Arc::new(ActivityText {
+                window: window.id,
+                view: Arc::clone(&window.view),
+                sizing: Acquisition::new(),
+                app: window.app.clone(),
+                signal: window.signal.clone(),
+                owner: window.owner,
+            })
+        }
+    }
+
+    impl TextInput for ActivityText {
+        /// The window's field, which serves the focused field to the input
+        /// method; on the owner thread only.
+        fn window_text_input(&self) -> Option<WindowTextInput> {
+            self.view
+                .input_method()
+                .store_host(self.window)
+                .map(WindowTextInput::Store)
+        }
+
+        fn capture_sizing(
+            &self,
+        ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+            self.sizing.poll(&self.app, &self.signal, self.owner)
+        }
+
+        fn invalidate_sizing(&self) {
+            self.sizing.invalidate();
+            if let Some(signal) = self.signal.upgrade() {
+                let _ = signal.wake();
+            }
+        }
+
+        fn fence_sizing(&self) {
+            self.sizing.fence();
+        }
+
+        /// The window is going away: its field is detached for good.
+        fn detach(&self) {
+            self.view.input_method().window_closed(self.window);
         }
     }
 
@@ -1007,14 +1144,6 @@ mod input {
             let end = self.end_composition(store);
             self.drain();
             Ok(end)
-        }
-    }
-
-    impl crate::text::TextInput for Rc<AndroidTextInput> {
-        fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
-            Some(crate::text::WindowTextInput::Store(
-                Rc::clone(self) as Rc<dyn TextStoreHost>
-            ))
         }
     }
 
@@ -1684,4 +1813,4 @@ pub(crate) mod sizing {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use input::{AndroidTextInput, ViewInputMethod};
+pub(crate) use input::ViewInputMethod;

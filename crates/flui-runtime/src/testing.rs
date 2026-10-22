@@ -260,6 +260,10 @@ impl PlatformWindow for TestWindow {
         self.system_chrome.clone()
     }
 
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
         Ok(())

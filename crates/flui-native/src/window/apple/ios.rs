@@ -44,12 +44,12 @@ use objc2_ui_kit::{
 use crate::display::apple::link_rate::LinkPeriod;
 use crate::display::apple::screen::change_screen;
 use crate::host;
-use crate::host::Host;
+use crate::host::{Host, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::input::apple::ios::TouchInputState;
 use crate::owner::OpenWindowError;
 use crate::owner::apple::IOSLoop;
-use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity};
+use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity, ViewRef};
 use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
     SceneInstallation, SceneWindow, SceneWindows,
@@ -723,9 +723,16 @@ pub struct IOSWindow {
         flui_platform::input_regions::ProjectedInputRegions,
         crate::window::apple::geometry::screen_edges::DeferredEdges,
     )>,
-    /// The haptic actuator, made on first use and shared, so its Core
-    /// Haptics engine lives as long as the window.
-    haptics: std::sync::OnceLock<Arc<crate::haptics::apple::IOSHaptics>>,
+    /// The actuator the table's haptics position made for this window, shared
+    /// so its Core Haptics engine lives as long as the window.
+    haptics: Arc<dyn flui_platform::PlatformHaptics>,
+    /// The system chrome the table's chrome position hands out.
+    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+    /// The text input the table's text position made for this window.
+    text: Arc<dyn crate::text::TextInput>,
+    /// The accessibility bridge the table's accessibility position made for
+    /// this window.
+    accessibility: Arc<dyn host::WindowAccessibility>,
     /// The published window state (ADR-0237).
     snapshot: WindowStateCell,
 }
@@ -737,6 +744,7 @@ impl IOSWindow {
         id: WindowId,
         signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
+        positions: &WindowPositions<ViewRef>,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());
@@ -764,7 +772,17 @@ impl IOSWindow {
                 window: id,
             },
         );
+        let status_bar = status_bar::StatusBar::new(mtm);
+        let this = ViewRef {
+            view: Retained::into_super(view.clone()),
+            marker: mtm,
+            chrome: Arc::new(IOSSystemChrome(Arc::clone(&status_bar))),
+        };
         Self {
+            haptics: positions.haptics(&this),
+            chrome: positions.chrome(&this),
+            text: positions.text(&this),
+            accessibility: positions.accessibility(&this),
             native: NativeOwner::new(
                 NativeWindow {
                     view,
@@ -772,14 +790,13 @@ impl IOSWindow {
                 },
                 mtm,
             ),
-            status_bar: status_bar::StatusBar::new(mtm),
+            status_bar,
             callbacks,
             metrics,
             dark,
             screen,
             id,
             input_regions: parking_lot::Mutex::default(),
-            haptics: std::sync::OnceLock::new(),
             snapshot: WindowStateCell::new(WindowState::new(
                 WindowGeometry::new(None, Size::new(0.0, 0.0)),
                 Size::new(0.0, 0.0),
@@ -964,6 +981,8 @@ impl SceneWindow for IOSWindow {
             .dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
+        self.text.detach();
+        self.accessibility.detach();
         if let Some(marker) = MainThreadMarker::new() {
             self.detach_native(marker);
         }
@@ -1098,9 +1117,20 @@ impl std::fmt::Debug for IOSWindow {
 }
 
 /// Makes the iOS windows: one per scene session, which a scene connection
-/// attaches. It holds nothing; the loop keeps the windows it made.
-#[derive(Debug, Default)]
-pub struct IOSWindows;
+/// attaches, each with what the table's window-level positions make for it.
+/// The loop keeps the windows it made.
+#[derive(Debug)]
+pub struct IOSWindows {
+    positions: WindowPositions<ViewRef>,
+}
+
+impl IOSWindows {
+    /// The windows of a platform whose table's window-level positions are
+    /// `positions`.
+    pub(crate) fn new(positions: WindowPositions<ViewRef>) -> Self {
+        Self { positions }
+    }
+}
 
 impl SceneWindows for IOSWindows {
     fn create(
@@ -1110,12 +1140,19 @@ impl SceneWindows for IOSWindows {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
     ) -> Arc<dyn SceneWindow> {
-        Arc::new(IOSWindow::new(marker, id, signal, displays))
+        Arc::new(IOSWindow::new(
+            marker,
+            id,
+            signal,
+            displays,
+            &self.positions,
+        ))
     }
 }
 
 impl host::Window<IOSLoop> for IOSWindow {
     type Shared = IOSWindows;
+    type Ref = ViewRef;
 
     fn open(
         _: &IOSLoop,
@@ -1149,6 +1186,10 @@ impl host::Window<IOSLoop> for IOSWindow {
 impl crate::host_window::CoreHostWindow for IOSWindow {}
 
 impl crate::host_window::HostWindow for IOSWindow {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as _)
+    }
+
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
@@ -1226,13 +1267,13 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        let marker = MainThreadMarker::new()?;
-        let haptics = self.haptics.get_or_init(|| {
-            let view: Retained<objc2_ui_kit::UIView> =
-                Retained::into_super(self.native.get(marker).view.clone());
-            Arc::new(crate::haptics::apple::IOSHaptics::new(view, marker))
-        });
-        Some(Arc::clone(haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+        Some(Arc::clone(&self.haptics))
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.text
+            .window_text_input()
+            .and_then(crate::text::WindowTextInput::ime)
     }
 
     /// UIKit defers system gestures per screen edge, not per rectangle: the window
@@ -1267,9 +1308,7 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::new(status_bar::IOSSystemChrome(Arc::clone(
-            &self.status_bar,
-        ))))
+        Some(Arc::clone(&self.chrome))
     }
 
     fn appearance(&self) -> WindowAppearance {
@@ -1700,6 +1739,15 @@ pub(crate) mod status_bar {
     impl std::fmt::Debug for IOSSystemChrome {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("IOSSystemChrome").finish_non_exhaustive()
+        }
+    }
+
+    /// UIKit asks a window's root controller for its status bar, so the
+    /// chrome is the window's own: the position hands out what the window
+    /// keeps.
+    impl crate::host::Chrome<crate::owner::apple::ios::ViewRef> for IOSSystemChrome {
+        fn for_window(window: &crate::owner::apple::ios::ViewRef) -> Arc<dyn PlatformSystemChrome> {
+            Arc::clone(&window.chrome)
         }
     }
 

@@ -2260,6 +2260,18 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         Ok(())
     }
 
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -2336,6 +2348,15 @@ impl flui_platform::PlatformWindow for RegionWindow {
     ) -> Result<(), flui_platform::WindowCommandError> {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
+    }
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

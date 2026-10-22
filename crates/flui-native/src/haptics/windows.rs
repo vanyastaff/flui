@@ -414,6 +414,13 @@ impl std::fmt::Debug for WindowsHaptics {
     }
 }
 
+/// Each Win32 window's actuator is the pen in range of it.
+impl crate::host::Haptics<WindowRef> for WindowsHaptics {
+    fn for_window(window: &WindowRef) -> Arc<dyn PlatformHaptics> {
+        WindowsHaptics::new(*window)
+    }
+}
+
 impl WindowsHaptics {
     pub(crate) fn new(window: WindowRef) -> Arc<Self> {
         Arc::new(Self {

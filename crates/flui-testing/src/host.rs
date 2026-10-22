@@ -257,6 +257,10 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
     }

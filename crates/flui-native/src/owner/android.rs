@@ -33,7 +33,7 @@ pub(crate) mod ndk;
 pub(crate) mod poll;
 
 #[cfg(target_os = "android")]
-pub(crate) use looper::{ActivityFlags, ActivityWindow, AndroidLoop};
+pub(crate) use looper::{ActivityFlags, ActivityRef, ActivityWindow, AndroidLoop};
 
 #[cfg(target_os = "android")]
 pub(crate) use hooks::{ActivityInput, ActivityPreferences, AndroidHost, HostDisplays};
@@ -95,7 +95,7 @@ mod hooks {
             app: &AndroidApp,
             api: AndroidApi,
             signal: &Arc<OwnerSignal>,
-        ) -> Box<dyn ActivityPreferences>;
+        ) -> Arc<dyn ActivityPreferences>;
 
         /// The channel the trim level and the low-memory call take to the
         /// application.
@@ -154,6 +154,33 @@ mod hooks {
         /// When a read that failed is due again; the looper polls no longer
         /// than that.
         fn retry_deadline(&self) -> Option<web_time::Instant>;
+
+        /// Whether the Activity's configuration is in night mode now (the
+        /// system dark theme, or the app's override of it), as the source
+        /// reads it; the window reports it as its appearance.
+        ///
+        /// # Errors
+        /// The Java read failed.
+        fn night_mode(&self) -> Result<bool, flui_platform::PreferenceQueryError>;
+
+        /// Device pixels per logical pixel, from the Activity's display
+        /// metrics, as the source reads them.
+        ///
+        /// # Errors
+        /// The Java read failed or reported no usable density.
+        fn pixel_ratio(
+            &self,
+        ) -> Result<flui_foundation::geometry::DevicePixelRatio, flui_platform::PreferenceQueryError>;
+
+        /// The touch gesture geometry the system's view configuration
+        /// reports now, which the window answers its presentation's query
+        /// with.
+        ///
+        /// # Errors
+        /// The Java read failed or reported an invalid geometry.
+        fn gesture_geometry(
+            &self,
+        ) -> Result<flui_platform::GestureGeometry, flui_platform::PreferenceQueryError>;
     }
 
     /// The device's displays as the loop and its window reach them, which the
@@ -205,4 +232,53 @@ pub(crate) struct EditorState {
     pub(crate) composition_start: i32,
     /// `BaseInputConnection.getComposingSpanEnd`.
     pub(crate) composition_end: i32,
+}
+
+/// The identity of one window of the Activity: the window the Activity's next
+/// surface brings never takes an earlier one's, so what a feature keeps of a
+/// window, or a reply made for it, cannot reach the window after it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ActivityWindowId(std::num::NonZeroU64);
+
+/// The identities the loop issues, in increasing order, without wrapping:
+/// once the last is issued, no window opens.
+#[derive(Debug, Default)]
+pub(crate) struct ActivityWindowIds(std::sync::atomic::AtomicU64);
+
+impl ActivityWindowIds {
+    /// The next identity; `None` once the space is used up.
+    pub(crate) fn next(&self) -> Option<ActivityWindowId> {
+        use std::sync::atomic::Ordering;
+        let previous = self
+            .0
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |issued| {
+                issued.checked_add(1)
+            })
+            .ok()?;
+        let issued = previous.checked_add(1)?;
+        std::num::NonZeroU64::new(issued).map(ActivityWindowId)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicU64;
+
+    use super::ActivityWindowIds;
+
+    /// Each window of the Activity gets an identity no other had, and the
+    /// last one is the last: the space is refused, never wrapped onto a
+    /// window a reply or a feature's state still names.
+    #[test]
+    fn activity_window_identities_never_repeat_or_wrap() {
+        let ids = ActivityWindowIds::default();
+        let first = ids.next().expect("the first identity");
+        let second = ids.next().expect("the second identity");
+        assert_ne!(first, second);
+
+        let near_the_end = ActivityWindowIds(AtomicU64::new(u64::MAX - 1));
+        assert!(near_the_end.next().is_some(), "the last identity is issued");
+        assert_eq!(near_the_end.next(), None, "and none after it");
+        assert_eq!(near_the_end.next(), None, "ever");
+    }
 }

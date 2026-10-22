@@ -236,6 +236,30 @@ pub(crate) trait SceneWindows: Send + Sync {
     ) -> Arc<dyn SceneWindow>;
 }
 
+/// An iOS window as the features beside it reach it (ADR-0151 §3), on the
+/// main thread: the view that outlives its scene attachments, and the system
+/// chrome its root controllers answer UIKit from, which the window keeps
+/// because UIKit asks the controller, not the application, for the status
+/// bar. The table's haptics and chrome positions make the window's part of
+/// them from this, as the window is made.
+///
+/// Public where it is defined, so the host table can name it as the window's
+/// reference; the module is private, so it is nameable only inside the crate.
+pub struct ViewRef {
+    /// The window's view.
+    pub(crate) view: Retained<objc2_ui_kit::UIView>,
+    /// The thread the reference is read on.
+    pub(crate) marker: MainThreadMarker,
+    /// The window's system chrome.
+    pub(crate) chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+}
+
+impl std::fmt::Debug for ViewRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewRef").finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone)]
 struct SceneOrigin {
     session: IOSSceneSessionId,

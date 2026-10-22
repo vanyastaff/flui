@@ -33,7 +33,7 @@ impl Host for Web {
     type Window = WebWindow;
     type Displays = WebLoop;
     type Input = WebLoop;
-    type Text = Rc<WebTextInput>;
+    type Text = WebTextInput;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WebLoop;
     type Drag = WebLoop;
@@ -86,6 +86,6 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts((), |_| WebLoop::new::<Web>())
+        Self::try_from_parts(|positions| positions, |_| WebLoop::new::<Web>())
     }
 }

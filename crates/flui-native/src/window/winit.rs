@@ -27,7 +27,7 @@ use winit::{
     window::{Fullscreen, Window, WindowAttributes},
 };
 
-use crate::host;
+use crate::host::{self, WindowAccessibility, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::install;
@@ -37,6 +37,7 @@ use crate::owner::winit::control::{ControlSendError, ControlSender};
 use crate::owner::winit::{
     ACTIVE_EVENT_LOOP, LoopWindow, LoopWindows, OpenWindowStateError, WindowSeed, WinitLoop,
 };
+use crate::text::{TextInput, WindowTextInput};
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
 use crate::window::state::{WindowStateCell, mode_of};
@@ -45,7 +46,6 @@ use flui_platform::{
     WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
     WindowMode, WindowOptions, WindowState,
 };
-#[cfg(all(target_os = "linux", feature = "a11y"))]
 use flui_semantics::platform::PlatformAccessibility;
 use plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
 
@@ -66,12 +66,17 @@ pub struct WinitWindow {
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
     callbacks: crate::owner::handlers::WindowCallbacks,
-    /// This window's AT-SPI announcement, created with the window so a
-    /// screen reader that attaches at any later point finds it on the bus.
-    /// Construction succeeds (and stays inert) with no session bus at all —
-    /// see [`UnixAccessibility::new`](crate::accessibility::linux::UnixAccessibility::new).
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
-    accessibility: Arc<crate::accessibility::linux::UnixAccessibility>,
+    /// This window's accessibility bridge, made by the table's position with
+    /// the window: on Linux its AT-SPI announcement, so a screen reader that
+    /// attaches at any later point finds it on the bus.
+    accessibility: Arc<dyn WindowAccessibility>,
+    /// This window's haptic actuator, made by the table's position: none on
+    /// desktop winit targets.
+    haptics: Arc<dyn flui_platform::PlatformHaptics>,
+    /// What this window holds of the text feature: winit's IME.
+    text: Arc<dyn TextInput>,
+    /// The system bars this window styles: none on desktop.
+    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
     /// The Settings portal's `color-scheme` as last delivered to this window.
     /// winit reports no theme on X11, nor on Wayland unless the app overrode
     /// it, so the portal is the Linux source.
@@ -174,7 +179,8 @@ impl WinitWindow {
     ///
     /// `plan` is what the window was created from, so its snapshot starts from
     /// the mode it opened in and, if it opened maximized, the rectangle it
-    /// returns to.
+    /// returns to; `windows` holds the frame inset it reports and the
+    /// positions that make what it hands out.
     pub(crate) fn new(
         id: WindowId,
         window: Arc<Window>,
@@ -182,9 +188,14 @@ impl WinitWindow {
         displays: Arc<dyn HostDisplays>,
         options: &WindowOptions,
         plan: &OpenPlan,
-        frame_inset: Arc<FrameInset>,
+        windows: &WinitWindows,
     ) -> Self {
+        let positions = &windows.positions;
         let shell = shell_of(&window);
+        let accessibility = positions.accessibility(&window);
+        let haptics = positions.haptics(&window);
+        let text = positions.text(&window);
+        let chrome = positions.chrome(&window);
         let capabilities = shell.capabilities();
         let constraints = SizeConstraints::new(options.min_size, options.max_size);
         let title = options.title.clone();
@@ -225,7 +236,7 @@ impl WinitWindow {
             ),
             reveal_pending: Mutex::new(plan.hidden_until_first_frame),
             minimize_on_map: AtomicBool::new(false),
-            frame_inset,
+            frame_inset: Arc::clone(&windows.frame_inset),
             #[cfg(target_os = "linux")]
             x11: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
@@ -238,8 +249,10 @@ impl WinitWindow {
             occluded: AtomicBool::new(false),
             reported_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::owner::handlers::WindowCallbacks::new(),
-            #[cfg(all(target_os = "linux", feature = "a11y"))]
-            accessibility: Arc::new(crate::accessibility::linux::UnixAccessibility::new()),
+            accessibility,
+            haptics,
+            text,
+            chrome,
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
@@ -807,34 +820,45 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        use crate::text::{TextInput as _, WindowTextInput};
-        Arc::new(crate::text::winit::WinitTextInput::new(Arc::clone(
-            &self.window,
-        )))
-        .window_text_input()
-        .and_then(WindowTextInput::ime)
+        self.text.window_text_input().and_then(WindowTextInput::ime)
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics))
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.chrome))
     }
 
     fn as_any(&self) -> &dyn Any {
         self
     }
-
-    // No `haptics()` override: desktop winit targets have no haptic
-    // hardware to drive, so the `PlatformWindow` trait default (`None`) is
-    // the permanent correct answer here, not a stub awaiting a backend.
 }
 
 impl crate::host_window::CoreHostWindow for WinitWindow {}
 
 impl HostWindow for WinitWindow {
-    /// The window's own AT-SPI bridge — the capability the composition
-    /// root's accessibility wire discovers. Without this override the trait
-    /// default (`None`) makes every real Linux window silently
-    /// screen-reader-invisible while the headless fake works, which is
-    /// exactly backwards.
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
+    /// The window's own bridge — the capability the composition root's
+    /// accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
+    }
+
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        self.text.capture_sizing()
+    }
+
+    fn text_store_host(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        self.text
+            .window_text_input()
+            .and_then(WindowTextInput::store_host)
     }
 }
 
@@ -962,6 +986,8 @@ pub(crate) type ConnectWindowManager =
 /// and nameable only inside the crate.
 pub struct WinitWindows {
     frame_inset: Arc<FrameInset>,
+    /// What every window hands out of the window-level positions.
+    positions: WindowPositions<Arc<Window>>,
     /// Connects the window manager's view, with the first X11 window.
     #[cfg(target_os = "linux")]
     connect_window_manager: ConnectWindowManager,
@@ -978,14 +1004,16 @@ impl std::fmt::Debug for WinitWindows {
 }
 
 impl WinitWindows {
-    /// What the winit host's windows open with. On Linux,
-    /// `connect_window_manager` connects the view of the window manager when
-    /// the first X11 window opens.
+    /// What the winit host's windows open with: each hands out `positions`.
+    /// On Linux, `connect_window_manager` connects the view of the window
+    /// manager when the first X11 window opens.
     pub(crate) fn new(
+        positions: WindowPositions<Arc<Window>>,
         #[cfg(target_os = "linux")] connect_window_manager: ConnectWindowManager,
     ) -> Self {
         Self {
             frame_inset: Arc::new(FrameInset::default()),
+            positions,
             #[cfg(target_os = "linux")]
             connect_window_manager,
             #[cfg(target_os = "linux")]
@@ -1078,7 +1106,7 @@ impl LoopWindows for WinitWindows {
             Arc::clone(seed.displays),
             &options,
             &plan,
-            Arc::clone(&self.frame_inset),
+            self,
         ));
         seed.notices.mark_stale_on_wake(window.state_cell());
         // Before the window is mapped: the window manager reads the mode a
@@ -1100,6 +1128,8 @@ impl LoopWindows for WinitWindows {
 
 impl host::Window<WinitLoop> for WinitWindow {
     type Shared = WinitWindows;
+    /// A window by the winit window it wraps.
+    type Ref = Arc<Window>;
 
     #[expect(
         unsafe_code,

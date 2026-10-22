@@ -406,7 +406,13 @@ mod tests {
     struct StubWindow;
 
     impl crate::host_window::CoreHostWindow for StubWindow {}
-    impl crate::host_window::HostWindow for StubWindow {}
+    impl crate::host_window::HostWindow for StubWindow {
+        fn accessibility(
+            &self,
+        ) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+            None
+        }
+    }
 
     impl flui_platform::PlatformWindow for StubWindow {
         fn id(&self) -> flui_platform::WindowId {
@@ -450,6 +456,18 @@ mod tests {
         ) -> Result<(), flui_platform::WindowCommandError> {
             command.admit(&flui_platform::WindowCapabilities::NONE)?;
             Ok(())
+        }
+
+        fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+            None
+        }
+
+        fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+            None
+        }
+
+        fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+            None
         }
 
         fn as_any(&self) -> &dyn std::any::Any {

@@ -49,7 +49,9 @@ use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, logical_to_device, open_spot,
     outer_size, placement_of, restore_rectangle, workspace_origin,
 };
+use crate::host::WindowAccessibility;
 use crate::owner::windows::WINDOW_CLASS_NAME;
+use crate::text::{TextInput, WindowTextInput};
 use crate::window::state::WindowStateCell;
 use crate::{
     owner::OpenWindowError, owner::call_point::install, owner::handlers::PlatformHandlers,
@@ -91,15 +93,22 @@ pub struct WindowsWindow {
     /// exactly why it must never be dereferenced here.
     context: *const super::proc::WindowContext,
 
-    /// This window's UIA bridge, subclassed onto `hwnd` at construction so
-    /// a UI Automation client that asks at any later point is answered.
-    /// Inert until one does — see
-    /// [`WindowsAccessibility::new`](crate::accessibility::windows::WindowsAccessibility::new).
-    #[cfg(feature = "a11y")]
-    accessibility: Arc<crate::accessibility::windows::WindowsAccessibility>,
+    /// This window's accessibility bridge, made by the table's position at
+    /// construction (UIA subclasses `hwnd` then, so a client that asks at any
+    /// later point is answered) and detached before the window is destroyed.
+    accessibility: Arc<dyn WindowAccessibility>,
 
-    /// This window's haptic actuator: the pen in range of it.
-    haptics: Arc<crate::haptics::windows::WindowsHaptics>,
+    /// This window's haptic actuator, made by the table's position: the pen
+    /// in range of it.
+    haptics: Arc<dyn flui_platform::PlatformHaptics>,
+
+    /// What this window holds of the text feature, made by the table's
+    /// position: its handle to the window's TSF connection.
+    text: Arc<dyn TextInput>,
+
+    /// The system bars this window styles, made by the table's position:
+    /// none on Windows.
+    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
 
     /// Starts this window's OS drag sessions through OLE (ADR-0211).
     drag_source: Arc<dyn flui_platform::drag::PlatformDragSource>,
@@ -504,6 +513,7 @@ impl WindowsWindow {
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
             let this = super::proc::WindowRef::new(hwnd, identity);
+            let positions = windows.positions;
 
             let window = Arc::new(Self {
                 hwnd,
@@ -515,11 +525,10 @@ impl WindowsWindow {
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
-                #[cfg(feature = "a11y")]
-                accessibility: Arc::new(crate::accessibility::windows::WindowsAccessibility::new(
-                    hwnd,
-                )),
-                haptics: crate::haptics::windows::WindowsHaptics::new(this),
+                accessibility: positions.accessibility(&this),
+                haptics: positions.haptics(&this),
+                text: positions.text(&this),
+                chrome: positions.chrome(&this),
                 drag_source: drag.drag_source(this),
             });
             // The wrapper owns the window from here: a panic out of a hook
@@ -1246,21 +1255,23 @@ impl WindowsWindow {
 impl crate::host_window::CoreHostWindow for WindowsWindow {}
 
 impl crate::host_window::HostWindow for WindowsWindow {
-    /// The window's own UIA bridge — the capability the composition root's
-    /// accessibility wire discovers. Without this override the trait
-    /// default (`None`) leaves every real Windows window silently invisible
-    /// to UI Automation clients.
-    #[cfg(feature = "a11y")]
+    /// The window's own bridge — the capability the composition root's
+    /// accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
     }
 
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        self.text.capture_sizing()
+    }
+
     /// The token proves the platform's owner thread, not this window's: an
-    /// HWND belongs to the thread that created it, and its text services
-    /// live in its `WindowContext` on that thread. So the host is read
-    /// through `with_window_context`, which refuses any other thread
-    /// (`owner::hwnd_affinity`), and a caller on one gets `None`. On the
-    /// creating thread it is the window's TSF connection (ADR-0135 §3):
+    /// HWND belongs to the thread that created it, and its text services live
+    /// on that thread, so the text position answers `None` on any other. On
+    /// the creating thread it is the window's TSF connection (ADR-0135 §3):
     /// `None` when TSF did not activate for it, or once the window is
     /// destroyed; a host read before that answers
     /// [`TextStoreHostError::Unsupported`] from then on.
@@ -1270,13 +1281,9 @@ impl crate::host_window::HostWindow for WindowsWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        use crate::text::{TextInput, WindowTextInput};
-        super::proc::with_window_context(self.hwnd, "text_store_host", |context| {
-            let services = context.text_services.borrow().clone();
-            services.as_ref().and_then(TextInput::window_text_input)
-        })
-        .flatten()
-        .and_then(WindowTextInput::store_host)
+        self.text
+            .window_text_input()
+            .and_then(WindowTextInput::store_host)
     }
 }
 
@@ -1285,8 +1292,16 @@ impl PlatformWindow for WindowsWindow {
         WindowId(self.hwnd.0 as u64)
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.text.window_text_input().and_then(WindowTextInput::ime)
+    }
+
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+        Some(Arc::clone(&self.haptics))
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.chrome))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1968,13 +1983,14 @@ impl Clone for WindowsWindow {
             snapshot: Arc::clone(&self.snapshot),
             // Same window, same identity token.
             context: self.context,
-            // The clone shares the same window, so it shares the same UIA
+            // The clone shares the same window, so it shares the same
             // bridge — one subclass hook per HWND, never two.
-            #[cfg(feature = "a11y")]
             accessibility: Arc::clone(&self.accessibility),
             // And its actuator, so a newer request replaces an older one
             // whichever wrapper made it.
             haptics: Arc::clone(&self.haptics),
+            text: Arc::clone(&self.text),
+            chrome: Arc::clone(&self.chrome),
             drag_source: Arc::clone(&self.drag_source),
         }
     }
@@ -1989,13 +2005,12 @@ impl Drop for WindowsWindow {
             use crate::owner::hwnd_affinity::TeardownRoute;
             match super::proc::teardown_route(self.hwnd, self.context) {
                 TeardownRoute::DestroyDirect => {
-                    // Unhook the UIA subclass BEFORE destroying the window —
-                    // Win32 wants subclasses removed while the window still
-                    // exists, and this is the owner-thread teardown path
-                    // subclassing requires. Any capability `Arc` still held
-                    // elsewhere degrades to a no-op.
-                    #[cfg(feature = "a11y")]
-                    self.accessibility.shutdown();
+                    // Detach the bridge (UIA's subclass) BEFORE destroying
+                    // the window — Win32 wants subclasses removed while the
+                    // window still exists, and this is the owner-thread
+                    // teardown path subclassing requires. Any capability
+                    // `Arc` still held elsewhere degrades to a no-op.
+                    self.accessibility.detach();
 
                     // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
                     // the route just established this is the owning thread
@@ -2017,7 +2032,7 @@ impl Drop for WindowsWindow {
                     // unhooking the UIA subclass would race the owner's
                     // message dispatch, so neither runs here: the close is
                     // posted to the owner's queue, and the subclass adapter
-                    // is left for `WindowsAccessibility`'s own drop guard
+                    // is left for the bridge's own drop guard
                     // (which leaks it, with a warning, rather than unhook
                     // cross-thread).
                     //

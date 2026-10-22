@@ -364,8 +364,16 @@ impl std::fmt::Debug for IOSHaptics {
     }
 }
 
+/// Each UIKit window gets an actuator bound to its view, whose Core Haptics
+/// engine starts on first use and lives as long as the window.
+impl crate::host::Haptics<crate::owner::apple::ios::ViewRef> for IOSHaptics {
+    fn for_window(window: &crate::owner::apple::ios::ViewRef) -> Arc<dyn PlatformHaptics> {
+        Arc::new(Self::new(window.view.clone(), window.marker))
+    }
+}
+
 impl IOSHaptics {
-    pub(crate) fn new(view: Retained<UIView>, mtm: MainThreadMarker) -> Self {
+    fn new(view: Retained<UIView>, mtm: MainThreadMarker) -> Self {
         Self {
             view: NativeOwner::new(view, mtm),
             core: Arc::new(CoreHaptics::new(mtm)),

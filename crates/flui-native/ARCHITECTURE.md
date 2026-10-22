@@ -49,14 +49,15 @@ trait depends on `flui-platform` instead.
   named, dated exception whose `reason` says what removes it: the winit host's
   displays on Linux reading `display::linux` (until the native Linux host,
   ADR-0151 §11), and edges between the window's file and another feature's of
-  one platform. Each of those goes one of three ways: a window that builds
-  another feature's window-level object gets it through the host table; a
-  feature that reaches into the window, or whose state of a window the window
-  keeps, keeps that state itself, keyed by the window's identity and set up
-  and dropped by its own window hooks; a window that reads a display,
-  preference or lifecycle fact with another feature's code gets the fact
-  through an owner hook. The features that share one AppKit or UIKit view
-  keep theirs until that view is an owner multiplexer they join.
+  one platform. A window's text input, accessibility bridge, actuator and
+  chrome reach it through the host table, so naming none of them is no edge.
+  Each remaining one goes one of two ways: a feature that reaches into the
+  window, or whose state of a window the window keeps, keeps that state
+  itself, keyed by the window's identity and set up and dropped by its own
+  window hooks; a window that reads a display, preference or lifecycle fact
+  with another feature's code gets the fact through an owner hook. The
+  features that share one AppKit or UIKit view keep theirs until that view is
+  an owner multiplexer they join.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
@@ -65,13 +66,27 @@ trait depends on `flui-platform` instead.
   and a table that leaves a position out does not compile
   (`tests/ui/host_table_names_every_position.rs`). A position a platform does
   not have is `Absent<F>`, which answers in that position's words for "not
-  here" (no drag offered, `HapticOutcome::Unavailable`, unknown preferences);
-  no position or service method falls back to an inert default (the
-  clipboard's `write` and `read` derive from its `clipboard`). `HostPlatform<H>`
-  implements `Platform` by asking the position that holds each method; the
-  application-level positions are static functions over the host's loop
-  (`O`), which owns what the operating system hands out once per process, and
-  the window-level positions are the types each window hands out. The public
+  here" (no drag offered, `Unsupported { NotOnThisPlatform }`, unknown
+  preferences); no position or service method falls back to an inert default
+  (the clipboard's `write` and `read` derive from its `clipboard`).
+  `HostPlatform<H>` implements `Platform` by asking the position that holds
+  each method; the application-level positions are static functions over the
+  host's loop (`O`), which owns what the operating system hands out once per
+  process, and the window-level positions (text, accessibility, haptics,
+  chrome) are what each window hands out. Each makes one window's part as the
+  window opens, `for_window(&Ref)`, from what the window position says its
+  features reach a window by (`host::Window::Ref`): owner vocabulary any
+  feature may name (`owner::windows::WindowRef`,
+  `owner::apple::macos::ContentViewRef`, `owner::apple::ios::ViewRef`,
+  `owner::android::ActivityRef`, `owner::web::CanvasRef`, the winit window,
+  `()` headless). `HostPlatform` builds the table's `host::WindowPositions`, one
+  function per position, and hands it to the window position's `Shared`, so a
+  window cannot make another type than its table names. The window keeps what
+  they made, hands it out through `PlatformWindow::{text_input, haptics,
+  system_chrome}` and `HostWindow::{accessibility, text_store_host,
+  capture_text_sizing}`, and tells the text input and the bridge when it goes
+  (`TextInput::detach`, `WindowAccessibility::detach`); a window whose table
+  leaves a position out hands out that position's `Absent`. The public
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
@@ -282,7 +297,12 @@ trait depends on `flui-platform` instead.
   its caret is: AppKit, winit, headless) or `Store` (the platform reads or
   mirrors the field's store: TSF, Android, web), and
   `Absent<position::Text>` answers none; each window's accessor goes through
-  it. Beside it, one file per platform with its pure half a module inside it:
+  it, as do its text sizing (`capture_sizing`, `invalidate_sizing`,
+  `fence_sizing`) and its going (`detach`). Where the text feature keeps a
+  window's state itself the handle is a key to it: Android's input method
+  keeps each window's field by `owner::android::ActivityWindowId`, and the
+  Web's text input lives in the canvas window's owner-thread slot. Beside it,
+  one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry`, the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
   `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
@@ -290,8 +310,7 @@ trait depends on `flui-platform` instead.
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
   item; each edge into another feature's platform file is a named exception
-  that goes when the feature keeps its own per-window state or the position
-  reaches the window through the table. The
+  that goes when the feature keeps its own per-window state. The
   pure halves are built for their target and for tests on every host; which
   key belongs to the input method is the input feature's
   (`input::android::keys`, `input::web::keys`), and a window's text input
@@ -319,13 +338,14 @@ trait depends on `flui-platform` instead.
   `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
 
-  The window still makes the accessibility adapter and the actuator it hands
-  out by naming the feature's platform file, as the Android and headless
-  windows make their drag source (the Win32 and Web windows reach theirs
-  through the loop's `HostDrag`). These are edges between two features'
-  platform files, each a named exception in `[package.metadata.flui.modules]`
-  that goes when the window-level positions reach the window through the
-  table. The Win32 drag transport and actuator name a window by
+  The table's positions make the accessibility adapter and the actuator a
+  window hands out (`host::Accessibility::for_window`,
+  `host::Haptics::for_window`); the Android window takes its drag source from
+  the loop's `ViewTransfer` hook (`drag_source`), and the Win32 and Web
+  windows reach theirs through the loop's `HostDrag`. The headless window
+  still takes its drag source from the drag file, and the Win32 window keeps
+  its drop target: edges between two features' platform files, each a named
+  exception in `[package.metadata.flui.modules]`. The Win32 drag transport and actuator name a window by
   `owner::windows::WindowRef`, the owner's vocabulary, and reach its context
   through the window's `WindowRef::with_context`, except what they read of the
   window's input (the kind of a press, the pen in range), which the input
@@ -450,12 +470,14 @@ trait depends on `flui-platform` instead.
     share, `host::Window::Shared`: the Win32 handle map and configuration
     (`WindowSet`), the macOS configuration, the UIKit window factory, the
     winit frame inset and window manager's view, the headless window model,
-    `()` on Android and the Web. The host's constructor builds it with
-    `HostPlatform::from_parts(shared, |shared| Loop::new(...))` (or
-    `try_from_parts` for a loop that can fail): the platform keeps the one
-    instance and the loop gets that instance as the hook it declares, so the
-    two cannot see different windows; the platform passes it to every call
-    of the position.
+    and on every host the table's window-level positions
+    (`host::WindowPositions`, all Android and the Web share). The host's
+    constructor builds it with
+    `HostPlatform::from_parts(|positions| shared, |shared| Loop::new(...))`
+    (or `try_from_parts` for a loop that can fail): the platform keeps the
+    one instance and the loop gets that instance as the hook it declares, so
+    the two cannot see different windows; the platform passes it to every
+    call of the position.
   - **The loops' hooks.** Each loop declares what it asks of its windows, and
     the window file implements it: `owner::handlers::{CallbackWindow,
     OpenWindows}` (a window's callbacks; whether any window is open), shared
@@ -483,17 +505,13 @@ trait depends on `flui-platform` instead.
     names the other.
   - What a window file still names of another feature, and what another
     feature's code names of the window, are the edges
-    `[package.metadata.flui.modules] exceptions` lists: into the
-    accessibility, haptics and drag files, and between the text and
-    window files of one platform (a window builds its text input and
-    captures its text sizing; the text input reaches the window that holds
-    it). A window that builds or keeps another feature's object of a
-    window-level position (its accessibility, haptics, drag source, text
-    input) keeps the edge until those positions reach the window through the
-    host table. The others go when that feature keeps its own per-window
-    state, keyed by the window's identity, set up by its window hook's
-    `created` and dropped when the window goes, and no longer reaches the
-    window's context, as the Win32 input does. The features that add methods
+    `[package.metadata.flui.modules] exceptions` lists: into the drag files
+    (the Win32 drop target, the headless drag source), between the Win32 TSF
+    connection and its window, and the iOS window's text sizing. Each goes
+    when that feature keeps its own per-window state, keyed by the window's
+    identity, set up by its window hook's `created` and dropped when the
+    window goes, and no longer reaches the window's context, as the Win32
+    input does. The features that add methods
     to one AppKit or UIKit view class (the input, the text input, the window's
     drawing) keep the edges between them until that class is the owner's,
     joined through hooks.

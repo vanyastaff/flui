@@ -80,6 +80,18 @@ impl PlatformWindow for Window {
         Ok(())
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -354,6 +366,12 @@ impl PlatformWindow for HapticWindow {
     }
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.inner.text_input()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.inner.system_chrome()
     }
 }
 

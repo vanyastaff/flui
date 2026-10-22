@@ -16,7 +16,7 @@ use flui_platform::{
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
     self, Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
-    Preferences as _, Services as _, Storage as _, Window as _,
+    Preferences as _, Services as _, Storage as _, Window as _, WindowPositions, WindowRefOf,
 };
 use crate::host_window::HostWindow;
 use crate::owner::{OpenWindowError, OwnerPlatform};
@@ -517,16 +517,18 @@ pub struct HostPlatform<H: Host> {
 pub(crate) type WindowShared<H> = <<H as Host>::Window as host::Window<<H as Host>::Loop>>::Shared;
 
 impl<H: Host> HostPlatform<H> {
-    /// The platform over `window_shared`, what the host's windows share, and
-    /// the loop `owner` builds over the same instance (the loop holds it as
-    /// the hook it declares): what each host's constructor returns. The loop
-    /// gets the one instance the platform keeps, so the two cannot see
-    /// different windows.
+    /// The platform over what the host's windows share, which
+    /// `window_shared` builds over the window-level positions of `H`'s table,
+    /// and the loop `owner` builds over the same instance (the loop holds it
+    /// as the hook it declares): what each host's constructor returns. The
+    /// loop gets the one instance the platform keeps, so the two cannot see
+    /// different windows; the positions are made here from `H`, so a window
+    /// holds what its own table names.
     pub(crate) fn from_parts(
-        window_shared: WindowShared<H>,
+        window_shared: impl FnOnce(WindowPositions<WindowRefOf<H>>) -> WindowShared<H>,
         owner: impl FnOnce(&Arc<WindowShared<H>>) -> H::Loop,
     ) -> Self {
-        let window_shared = Arc::new(window_shared);
+        let window_shared = Arc::new(window_shared(WindowPositions::of::<H>()));
         Self {
             owner: Arc::new(owner(&window_shared)),
             window_shared,
@@ -545,10 +547,10 @@ impl<H: Host> HostPlatform<H> {
         target_arch = "wasm32"
     ))]
     pub(crate) fn try_from_parts<E>(
-        window_shared: WindowShared<H>,
+        window_shared: impl FnOnce(WindowPositions<WindowRefOf<H>>) -> WindowShared<H>,
         owner: impl FnOnce(&Arc<WindowShared<H>>) -> Result<H::Loop, E>,
     ) -> Result<Self, E> {
-        let window_shared = Arc::new(window_shared);
+        let window_shared = Arc::new(window_shared(WindowPositions::of::<H>()));
         Ok(Self {
             owner: Arc::new(owner(&window_shared)?),
             window_shared,

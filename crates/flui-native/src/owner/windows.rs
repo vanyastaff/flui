@@ -280,9 +280,12 @@ pub(crate) trait HostDisplays: StaleOnWake {
 /// recycles handles, so a handle alone can name a later window; the window
 /// feature's `with_context` reaches only the context this window was created
 /// with. Plain values, so an `Arc`-shared object can hold one on any thread,
-/// and the owner's, so a hook that is handed a window names no feature.
+/// and the owner's, so a hook that is handed a window names no feature. The
+/// window-level positions of the Windows table are made for one
+/// ([`host::Window::Ref`](crate::host::Window::Ref)), so it is public where it
+/// is defined, and nameable only inside the crate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct WindowRef {
+pub struct WindowRef {
     hwnd: isize,
     identity: WindowIdentity,
 }

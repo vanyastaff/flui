@@ -56,7 +56,7 @@ use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 
 use crate::input::apple::macos::{ViewContext, get_context as get_view_context};
-use crate::owner::apple::macos::exec_on_owner;
+use crate::owner::apple::macos::{ContentViewRef, exec_on_owner};
 use flui_platform::PlatformTextInput;
 
 // ============================================================================
@@ -651,29 +651,21 @@ pub(crate) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
 /// window site) even though the state they touch is main-thread-only by AppKit's
 /// delivery contract.
 pub struct MacOSTextInput {
-    /// The window's `FLUIContentView`, which owns the composition state.
+    /// The window's `FLUIContentView`, which owns the composition state, with
+    /// its owner lane and whether it has closed.
     ///
-    /// Not retained: the capability borrows the window it was discovered from,
-    /// as every other per-window capability on this backend does, and the view
-    /// lives as long as that window. `closed` is what keeps a late call safe.
-    view: *mut AnyObject,
-
-    /// Set once the window has closed (see `MacOSWindow`): the same liveness
-    /// gate `HasWindowHandle::window_handle` consults, so a capability clone
-    /// retained past its window's close is a no-op rather than a message to an
-    /// NSWindow AppKit has already been told to tear down.
-    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-
-    /// The owner lane every AppKit message here travels through.
-    owner: &'static dispatch::Queue,
-
-    /// True when `owner` is the main queue, so "on the main thread" is
-    /// equivalent to "on the owner lane".
-    owner_is_main: bool,
+    /// The view is not retained: the capability borrows the window it was
+    /// made for, as every other per-window capability on this backend does,
+    /// and the view lives as long as that window. `closed`, the same liveness
+    /// gate `HasWindowHandle::window_handle` consults, is what keeps a late
+    /// call safe: a capability clone retained past its window's close is a
+    /// no-op rather than a message to an NSWindow AppKit has already been told
+    /// to tear down.
+    window: ContentViewRef,
 }
 
 // SAFETY: the same argument as `MacOSWindow`'s own `unsafe impl Send`/`Sync`:
-// `view` is a raw AppKit pointer that is only ever messaged from inside
+// the view is a raw AppKit pointer that is only ever messaged from inside
 // `exec_on_owner`, which runs the body on the window's owner lane; the
 // remaining fields are `Arc`/`&'static`/`bool`. The residual — a capability
 // clone outliving its window — is why `closed` is consulted in both bodies: the
@@ -686,30 +678,27 @@ unsafe impl Send for MacOSTextInput {}
 // mutation happens to the view's `RefCell` from inside the routed body.
 unsafe impl Sync for MacOSTextInput {}
 
-impl MacOSTextInput {
-    pub(crate) fn new(
-        view: *mut AnyObject,
-        closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        owner: &'static dispatch::Queue,
-        owner_is_main: bool,
-    ) -> Self {
-        Self {
-            view,
-            closed,
-            owner,
-            owner_is_main,
-        }
+/// A window's IME capability is made for it as it opens; the view's
+/// `NSTextInputClient` conformance is the input method's reach, so detaching
+/// it leaves nothing behind and sizing has no native converter.
+impl crate::host::Text<ContentViewRef> for MacOSTextInput {
+    fn for_window(window: &ContentViewRef) -> std::sync::Arc<dyn crate::text::TextInput> {
+        std::sync::Arc::new(std::sync::Arc::new(Self {
+            window: window.clone(),
+        }))
     }
+}
 
+impl MacOSTextInput {
     /// Whether this capability's window has closed.
     fn is_closed(&self) -> bool {
-        self.closed.load(std::sync::atomic::Ordering::SeqCst)
+        self.window.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Run `body` against the window's `FLUIContentView`.
     fn with_content_view<R: Send>(&self, body: impl FnOnce(&ViewContext) -> R + Send) -> Option<R> {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
+        let owner = self.window.owner;
+        let owner_is_main = self.window.owner_is_main;
         let this = self;
         exec_on_owner(owner, owner_is_main, move || {
             if this.is_closed() {
@@ -722,7 +711,7 @@ impl MacOSTextInput {
             // dispatched onto the lane under the reentrancy guard — before the
             // view is touched. `with_view_context` checks the class before
             // reading the context ivar.
-            unsafe { crate::input::apple::macos::with_view_context(this.view, body) }
+            unsafe { crate::input::apple::macos::with_view_context(this.window.view, body) }
         })
     }
 }
@@ -774,6 +763,19 @@ impl crate::text::TextInput for std::sync::Arc<MacOSTextInput> {
             std::sync::Arc::clone(self) as std::sync::Arc<dyn PlatformTextInput>,
         ))
     }
+
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        // AppKit has no system text-size converter a window could capture.
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    fn detach(&self) {}
 }
 
 impl std::fmt::Debug for MacOSTextInput {
@@ -781,7 +783,7 @@ impl std::fmt::Debug for MacOSTextInput {
     // and the dispatch lane have no useful Debug form.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSTextInput")
-            .field("view", &(self.view as usize))
+            .field("view", &self.window.view.addr())
             .field("closed", &self.is_closed())
             .finish_non_exhaustive()
     }

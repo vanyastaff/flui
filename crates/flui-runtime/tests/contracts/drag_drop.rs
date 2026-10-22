@@ -934,6 +934,15 @@ impl PlatformWindow for WithDragSource {
     ) -> Result<(), flui_platform::WindowCommandError> {
         self.window.apply(command)
     }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.window.text_input()
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        self.window.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.window.system_chrome()
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

@@ -208,6 +208,47 @@ pub(crate) trait CanvasFocus {
     fn has_focus(&self) -> bool;
 }
 
+/// Where a canvas's text input keeps its editor ([`CanvasRef::editor`]): the
+/// canvas's focus area, as the window follows it.
+pub(crate) trait CanvasEditor {
+    /// `editor` is now part of the canvas's focus area; `None` when none is.
+    fn set(&self, editor: Option<&web_sys::HtmlElement>);
+
+    /// Whether the canvas, or the editor beside it, has the page's focus.
+    fn has_focus(&self) -> bool;
+
+    /// Whether `event` only moves focus within the canvas's focus area
+    /// (between the canvas and its editor), which the window does not see as
+    /// a focus change.
+    fn is_handoff(&self, event: &web_sys::Event) -> bool;
+
+    /// The focus area's focus may have changed: the window reads it again.
+    fn sync(&self);
+}
+
+/// One canvas window as its window-level positions are made for it
+/// (`host::Window::Ref`): the canvas, whether its registration accepts, the
+/// key route its input keeps and the focus area its text input's editor
+/// joins. Public where it is defined, as the host's table names it, and
+/// nameable only inside the crate.
+pub struct CanvasRef {
+    /// The canvas.
+    pub(crate) canvas: web_sys::HtmlCanvasElement,
+    /// Whether the canvas's registration accepts.
+    pub(crate) accepting: Accepting,
+    /// The key route the canvas's input keeps, which a key the editor takes
+    /// reaches the window by.
+    pub(crate) keys: Rc<dyn CanvasKeys>,
+    /// The canvas's focus area, which the text input's editor joins.
+    pub(crate) editor: Rc<dyn CanvasEditor>,
+}
+
+impl std::fmt::Debug for CanvasRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CanvasRef").finish_non_exhaustive()
+    }
+}
+
 /// A deadline timer of a canvas's registration
 /// ([`CanvasRegistration::timer`]): one pending run at a time, cleared when
 /// the registration retires.

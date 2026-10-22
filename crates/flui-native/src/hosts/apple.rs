@@ -80,7 +80,7 @@ impl Host for Apple {
     type Input = IOSLoop;
 
     #[cfg(target_os = "macos")]
-    type Text = std::sync::Arc<MacOSTextInput>;
+    type Text = MacOSTextInput;
     #[cfg(target_os = "ios")]
     type Text = Absent<position::Text>;
 
@@ -213,7 +213,10 @@ impl HostPlatform<Apple> {
     pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         // The loop keeps the open windows itself; what they share is the
         // configuration they open with.
-        Self::try_from_parts(MacOSWindows::new(config), |_| MacOSLoop::new::<Apple>())
+        Self::try_from_parts(
+            |positions| MacOSWindows::new(config, positions),
+            |_| MacOSLoop::new::<Apple>(),
+        )
     }
 }
 
@@ -226,7 +229,7 @@ impl HostPlatform<Apple> {
     /// Returns [`PlatformError::Init`] if called off the main thread, which is
     /// where UIKit requires every window and view operation to run.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts(IOSWindows, |windows| {
+        Self::try_from_parts(IOSWindows::new, |windows| {
             IOSLoop::new::<Apple>(Arc::clone(windows) as _)
         })
     }
