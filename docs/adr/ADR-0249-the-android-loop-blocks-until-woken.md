@@ -24,7 +24,7 @@ poll into a 0 ms busy loop until `Resume`. The runner's backgrounded pump (frame
 1. **Every producer of work wakes the looper.** `AndroidWindow::request_redraw` wakes it on the
    request that sets the flag, from any thread. The owner signal, the Java view's event queue, the
    inset reply and the display watch already did.
-2. **The loop has no timer of its own.** `shared::android_display::poll_timeout` decides how long
+2. **The loop has no timer of its own.** `owner::android::poll::poll_timeout` decides how long
    `poll_events` blocks: not at all with a frame to deliver; while resumed, until the next wake
    deadline or the next preference sample; while paused, until a deadline that is still ahead, and
    otherwise until woken. A deadline already behind while paused was offered to the owner on that

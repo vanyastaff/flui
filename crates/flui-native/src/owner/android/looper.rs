@@ -63,11 +63,10 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::android::java_view;
+use crate::owner::android::{AndroidHost, HostDisplays};
 use crate::platform::HostPlatform;
 use crate::platforms::android::window::ActivityFlags;
-use crate::platforms::android::{
-    AndroidDisplays, AndroidWindow, MockClipboard, input, memory, preferences,
-};
+use crate::platforms::android::{AndroidWindow, MockClipboard, input, memory, preferences};
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -76,6 +75,8 @@ use crate::{
     owner::OwnerPlatform,
     owner::android::ndk::LoadedLibraries,
     owner::android::ndk::SymbolSource,
+    owner::android::poll::LoopTurn,
+    owner::android::poll::poll_timeout,
     owner::call_point::{Field, SharedField, call, install},
     owner::handlers::PlatformHandlers,
     owner::redraw_poll::RedrawPoll,
@@ -83,8 +84,6 @@ use crate::{
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
-    shared::android_display::LoopTurn,
-    shared::android_display::poll_timeout,
     shared::android_lifecycle::ActivityEvent,
     shared::android_lifecycle::ActivityLifecycle,
     shared::android_lifecycle::ActivityTarget,
@@ -144,7 +143,8 @@ pub struct AndroidLoop {
     preference_admission: crate::shared::preference_read::ReadAdmission,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
-    pub(crate) displays: Arc<AndroidDisplays>,
+    /// The displays, as the table made them; shared with the window.
+    pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
 }
 
@@ -176,8 +176,9 @@ impl AndroidLoop {
         call(&self.handler(|handlers| &mut handlers.quit), |quit| quit()).or_resume(());
     }
 
-    /// The loop of host `H`, whose table names what `FluiView` reports to.
-    pub(crate) fn new<H: super::AndroidHost>(app: AndroidApp) -> Self {
+    /// The loop of host `H`, whose table makes the displays and names what
+    /// `FluiView` reports to.
+    pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
@@ -215,7 +216,7 @@ impl AndroidLoop {
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
-            displays: Arc::new(AndroidDisplays::new(api, library, owner)),
+            displays: H::displays(api, library, owner),
             api,
         }
     }
@@ -583,7 +584,7 @@ impl host::Loop for AndroidLoop {
         let mut next_preference_sample = Some(web_time::Instant::now());
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
-        self.displays.watch_refresh_rate();
+        let refresh_rate = self.displays.observe();
 
         let mut on_ready = Some(on_ready);
         self.activity.resumed.store(false, Ordering::SeqCst);
@@ -955,7 +956,7 @@ impl host::Loop for AndroidLoop {
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Unregister the choreographer callback on the thread it was registered
         // on, before its data can be freed with the loop.
-        self.displays.stop_watching();
+        drop(refresh_rate);
         self.owner_signal.close();
 
         // The loop's one exit, reached by its three returning routes: a
@@ -1109,6 +1110,23 @@ impl host::Services for AndroidLoop {
 
     fn compositor_name(&self) -> &'static str {
         ""
+    }
+}
+
+/// The displays position is the loop's: it answers from the displays the table
+/// made ([`AndroidHost::displays`]).
+impl host::Displays<AndroidLoop> for AndroidLoop {
+    fn snapshot(owner: &AndroidLoop) -> Result<flui_platform::DisplaySnapshot, PlatformError> {
+        let snapshot = owner.displays.snapshot(&owner.app)?;
+        if owner.displays.take_max_rate_change() {
+            // A `High` hint skipped while the display's highest rate was
+            // unknown (or sent with an older one) is asked again.
+            let window = owner.window.lock().clone();
+            if let Some(window) = window {
+                window.apply_frame_rate_hint();
+            }
+        }
+        Ok(snapshot)
     }
 }
 

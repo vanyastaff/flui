@@ -1,11 +1,14 @@
 //! `WM_DISPLAYCHANGE` on the hidden settings receiver: the cached snapshot is
-//! sampled again, on the owner's turn and not inside the message.
+//! sampled again, on the owner's turn and not inside the message. The displays'
+//! and the preferences' subscribers only observe, so a work-area change reaches
+//! both in either order.
 
-use super::*;
 use crate::WindowsPlatform;
 use crate::owner::windows::broadcast::send_for_test;
 use crate::platform::Platform;
+use crate::platforms::windows::WindowsWindow;
 use flui_platform::WindowOptions;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_SETWORKAREA, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
@@ -109,6 +112,65 @@ fn work_area_change_invalidates_the_snapshot() {
     send_for_test(receiver, WM_SETTINGCHANGE, 0, 0);
     platform.display_snapshot().expect("cached answer");
     assert_eq!(platform.owner().displays.sample_count(), sampled + 1);
+}
+
+/// The displays' and the preferences' subscribers only observe, so each hears
+/// a setting change and a display change whichever the receiver lists first.
+/// One that answered either message would keep it from the other in one of the
+/// two orders.
+#[test]
+fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
+    use std::rc::Rc;
+
+    use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
+    use crate::owner::signal::OwnerSignal;
+    use crate::owner::windows::HostDisplays;
+    use crate::owner::windows::broadcast::{Receiver, Subscriber};
+    use crate::platforms::windows::PreferenceSource;
+
+    let samples_again = |displays: &Arc<dyn HostDisplays>| {
+        let before = displays.sample_count();
+        displays.snapshot().expect("a snapshot");
+        displays.sample_count() > before
+    };
+    for displays_first in [true, false] {
+        let order = if displays_first {
+            "displays first"
+        } else {
+            "preferences first"
+        };
+        let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+        signal.start().expect("the owner signal starts");
+        let displays: Arc<dyn HostDisplays> = Arc::new(WindowsDisplays::new());
+        let preferences = PreferenceSource::new(&signal).expect("native preference source");
+        let display_subscriber: Rc<dyn Subscriber> =
+            Rc::new(DisplayBroadcasts::new(&displays, &signal));
+        let preference_subscriber: Rc<dyn Subscriber> = Rc::new(preferences.broadcasts());
+        let subscribers = if displays_first {
+            [display_subscriber, preference_subscriber]
+        } else {
+            [preference_subscriber, display_subscriber]
+        };
+        let receiver = Receiver::new(subscribers).expect("a receiver");
+        preferences.sample().expect("the first preference read");
+        displays.snapshot().expect("the first sample");
+
+        receiver.send_with_for_test(WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize, 0);
+        assert!(
+            samples_again(&displays),
+            "{order}: the displays did not hear the work-area change"
+        );
+        assert!(
+            preferences.pending(),
+            "{order}: the preferences did not hear the work-area change"
+        );
+
+        receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
+        assert!(
+            samples_again(&displays),
+            "{order}: the displays did not hear the display change"
+        );
+    }
 }
 
 #[test]

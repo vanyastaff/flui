@@ -2,19 +2,21 @@
 //! Win32 message loop.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::config::WindowConfiguration;
+use crate::display::windows::{DisplayBroadcasts, WindowsDisplays};
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::OwnerObjects;
-use crate::owner::windows::{WindowHooks, WindowsHost, WindowsLoop};
+use crate::owner::windows::{HostDisplays, WindowHooks, WindowsHost, WindowsLoop};
 use crate::platform::HostPlatform;
 #[cfg(feature = "a11y")]
 use crate::platforms::windows::WindowsAccessibility;
 use crate::platforms::windows::{
     DropTargetRegistration, HostEvents, OleTransfer, PreferenceSource, Touchpad, WindowProc,
-    WindowsClipboard, WindowsDisplays, WindowsHaptics, WindowsWindow,
+    WindowsClipboard, WindowsHaptics, WindowsWindow,
 };
 use crate::storage::UserDataDirs;
 use crate::text::windows::{TextServices, Tsf};
@@ -28,7 +30,7 @@ impl Host for Windows {
 
     type Loop = WindowsLoop;
     type Window = WindowsWindow;
-    type Displays = WindowsDisplays;
+    type Displays = WindowsLoop;
     type Input = WindowsLoop;
     type Text = Rc<TextServices>;
     #[cfg(feature = "a11y")]
@@ -52,13 +54,20 @@ impl WindowsHost for Windows {
     /// touchpad viewport.
     const WINDOW_HOOKS: WindowHooks = &[&Tsf, &WindowProc, &DropTargetRegistration, &Touchpad];
 
-    /// The preferences (setting and display changes), then the lifecycle
-    /// (session, power, lock and memory).
+    /// The displays (display and work-area changes) and the preferences
+    /// (setting changes) only observe, so their order carries no meaning; the
+    /// lifecycle (session, power, lock and memory) answers the session-end
+    /// query and the power broadcast, which nothing else hears.
     fn broadcast_subscribers(owner: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         vec![
+            Rc::new(DisplayBroadcasts::new(owner.displays, owner.signal)),
             Rc::new(owner.preferences.broadcasts()),
             Rc::clone(owner.lifecycle) as Rc<dyn Subscriber>,
         ]
+    }
+
+    fn displays() -> Arc<dyn HostDisplays> {
+        Arc::new(WindowsDisplays::new())
     }
 }
 

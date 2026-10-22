@@ -1,16 +1,22 @@
 //! The Android host: NativeActivity through `android-activity`, and the
 //! `FluiView` it installs (ADR-0247).
 
+use std::sync::{Arc, Weak};
+
 use android_activity::AndroidApp;
 
+use crate::display::android::AndroidDisplays;
 use crate::host::{Absent, Host, position};
 use crate::owner::android::java_view::InputMethod;
-use crate::owner::android::{AndroidHost, AndroidLoop};
+use crate::owner::android::ndk::SymbolSource;
+use crate::owner::android::{AndroidHost, AndroidLoop, HostDisplays};
+use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::platforms::android::{
-    AndroidDisplays, AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer,
-    AndroidWindow, MockClipboard,
+    AndroidHaptics, AndroidInputState, AndroidSystemChrome, AndroidTransfer, AndroidWindow,
+    MockClipboard,
 };
+use crate::shared::os_version::android::AndroidApi;
 use crate::text::android::{AndroidTextInput, ViewInputMethod};
 
 /// The Android host's table.
@@ -22,7 +28,7 @@ impl Host for Android {
 
     type Loop = AndroidLoop;
     type Window = AndroidWindow;
-    type Displays = AndroidDisplays;
+    type Displays = AndroidLoop;
     type Input = AndroidInputState;
     type Text = std::rc::Rc<AndroidTextInput>;
     type Accessibility = Absent<position::Accessibility>;
@@ -39,6 +45,14 @@ impl AndroidHost for Android {
     /// The text feature's answer to the input method's calls.
     fn input_method() -> Box<dyn InputMethod> {
         Box::new(ViewInputMethod::default())
+    }
+
+    fn displays(
+        api: AndroidApi,
+        library: Arc<dyn SymbolSource>,
+        owner: Weak<OwnerSignal>,
+    ) -> Arc<dyn HostDisplays> {
+        Arc::new(AndroidDisplays::new(api, library, owner))
     }
 }
 

@@ -20,8 +20,7 @@ use crate::host::{self, Host};
 use crate::owner::call_point::{Field, Once, call, install};
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DisplaySpec, DragDouble, HeadlessDisplays, HeadlessWindowPolicy, MockWindow,
-    TextStoreHostFactory, create_mock_window,
+    DragDouble, HeadlessWindowPolicy, MockWindow, TextStoreHostFactory, create_mock_window,
 };
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
@@ -29,13 +28,29 @@ use crate::{
     owner::WindowOpen, owner::handlers::PlatformHandlers, platform::Platform,
     platform::PlatformExecutor, platform::PlatformReadyCallback,
 };
-use flui_platform::{WindowCapabilities, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{DisplaySnapshot, WindowCapabilities, WindowEvent, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
 /// (`owner/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
 type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
+
+/// What the headless host's table names for its loop (ADR-0151 §10): the
+/// displays a platform has before a test lays out its own. The loop holds
+/// their snapshot, which is all the display double keeps, and names no
+/// feature.
+pub(crate) trait HeadlessHost: 'static {
+    /// The snapshot of the displays every platform starts with.
+    fn displays() -> DisplaySnapshot;
+}
+
+/// The displays position is the loop's: the snapshot it holds.
+impl host::Displays<HeadlessLoop> for HeadlessLoop {
+    fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(owner.with_state(|state| state.displays.clone()))
+    }
+}
 
 /// The headless host's loop: the state every position of its table reads.
 ///
@@ -93,10 +108,11 @@ pub(crate) struct HeadlessState {
     pub(crate) devices: crate::shared::pointer_assembly::DeviceRegistry,
     /// Issues each simulated device's native label, never one twice.
     pub(crate) device_labels: flui_foundation::IdMint<std::num::NonZeroU64>,
-    /// The displays this platform reports; replaced by
+    /// The displays this platform reports, which the table lays out
+    /// ([`HeadlessHost::displays`]); replaced by
     /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
     /// [`HeadlessDisplayControls`](crate::platforms::headless::HeadlessDisplayControls).
-    pub(crate) displays: HeadlessDisplays,
+    pub(crate) displays: DisplaySnapshot,
     /// What every window opened from now on honours
     /// ([`HeadlessPlatform::with_window_capabilities`](crate::HeadlessPlatform::with_window_capabilities)).
     pub(crate) window_capabilities: WindowCapabilities,
@@ -118,7 +134,7 @@ pub(crate) struct HeadlessState {
 }
 
 impl HeadlessLoop {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new<H: HeadlessHost>() -> Self {
         let state = HeadlessState {
             drag: Arc::new(DragDouble::new()),
             owner_signal: Weak::new(),
@@ -138,7 +154,7 @@ impl HeadlessLoop {
             input_availability: default_input_availability(),
             devices: crate::shared::pointer_assembly::DeviceRegistry::default(),
             device_labels: flui_foundation::IdMint::new(),
-            displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
+            displays: H::displays(),
             window_capabilities: WindowCapabilities::ALL,
             window_policy: HeadlessWindowPolicy::default(),
             notices: Arc::default(),
@@ -738,7 +754,7 @@ mod tests {
                     .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
             }
         }
-        let platform = Arc::new(HeadlessLoop::new());
+        let platform = Arc::new(HeadlessLoop::new::<crate::hosts::headless::Headless>());
         platform.state.lock().is_running = true;
         let calls = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicBool::new(false));

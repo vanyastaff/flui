@@ -126,7 +126,7 @@ kind = "double"
 names = ["ScriptedAnimation"]
 
 [[allow]]
-path = "crates/flui-native/src/platforms/linux/display/source/tests.rs"
+path = "crates/flui-native/src/display/linux/source/tests.rs"
 kind = "double"
 names = ["ScriptedSession"]
 

@@ -91,23 +91,35 @@ trait depends on `flui-platform` instead.
     `a_second_host_is_refused_the_window_class`.
   - The owner control owns the broadcast receiver and builds it from the
     subscribers the host names over its objects (`OwnerObjects`): the
-    preference source's `PreferenceBroadcasts` (setting and display changes;
-    the displays share the source's admission until the display feature takes
-    its own state), then the lifecycle's `HostEvents`. The receiver tells them
-    a message in order until one answers; a subscriber's panic is contained,
-    and the message is answered what a subscriber gives for that case
-    (`answer_after_panic`: the lifecycle grants a session-end query), 0
-    otherwise. winit on Windows builds a receiver of its own for its
-    preference source. Test: `broadcast_subscribers_hear_a_message_in_order`.
+    displays' `DisplayBroadcasts` (`WM_DISPLAYCHANGE` and a work-area change,
+    `WM_SETTINGCHANGE` with `SPI_SETWORKAREA`), the preference source's
+    `PreferenceBroadcasts` (setting changes) and the lifecycle's `HostEvents`.
+    The receiver tells them a message in order until one answers; a
+    subscriber's panic is contained, and the message is answered what a
+    subscriber gives for that case (`answer_after_panic`: the lifecycle grants
+    a session-end query), 0 otherwise. Windows reads no result from a display
+    or setting broadcast, so the displays and the preferences only observe
+    (they answer nothing) and every subscriber hears those messages whatever
+    the order; only the lifecycle answers, the session-end query and the power
+    broadcast, which no other subscriber reads. Each subscriber admits wakes of
+    its own: the preferences' closes as their source drops, the displays' when
+    the receiver detaches it before destroying its window. winit on Windows
+    builds a receiver of its own for its displays and, when they open, its
+    preference source; a preference source that fails to open leaves the
+    displays subscribed. Tests: `broadcast_subscribers_hear_a_message_in_order`,
+    `the_displays_and_the_preferences_hear_every_change_in_either_order`,
+    `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`,
+    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
 
-  On Android the table implements `owner::android::AndroidHost`, which names
-  the features' objects `FluiView` hands its reports: today the text
-  feature's `InputMethod` (`input_method`), which answers the input method's
-  calls through the view.
+  On Android the table implements `owner::android::AndroidHost`, which makes
+  the displays the loop holds (`displays`) and names the features' objects
+  `FluiView` hands its reports: today the text feature's `InputMethod`
+  (`input_method`), which answers the input method's calls through the view.
 
   Until each feature takes its own state, a loop still holds the state the
-  table's positions read (windows, displays, preferences, drag, notices) and
-  calls that feature's code by name.
+  table's positions read (windows, preferences, drag, notices) and calls that
+  feature's code by name. The text input and the displays already took theirs
+  (below).
 - **A feature is a directory of `flui-native`: its model beside one file per
   platform (ADR-0151 §10).** `text` is the first. The model is `ime` (what
   the Android and web hosts mirror of a focused field, and the one edit
@@ -134,6 +146,48 @@ trait depends on `flui-platform` instead.
   tests on every host. Tests of the model and the pure halves sit beside
   them (`text::ime::tests`, `text::android::ime::tests`,
   `text::web::ime::tests`, `text::windows::geometry::tests`).
+- **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
+  model is `display::source`, the id registry and last snapshot every native
+  source keeps; beside it is one file per platform: `windows.rs` (the
+  monitors, `source`; their pure `sample` rules; the `DisplayBroadcasts`
+  subscriber, `broadcasts`), `apple/` (`macos.rs`, `ios.rs`, and in
+  `mod.rs` the pure `screen` keys and bounds the two share, `period` and
+  `link_rate`), `android.rs` (`source` and the pure `sample`), `web.rs`
+  (`source` with the capabilities it detects, `events`, and the pure
+  `capability`, `dppx_query`, `refresh_estimate`, `screen_identity`),
+  `linux/` (Wayland and X11 outputs), `winit.rs` (the source over
+  `display::linux` that the winit host reads on Linux) and `headless.rs`. The
+  halves of a platform file are inline modules: a pure one is
+  `cfg(any(<os>, test))` with `forbid(unsafe_code)`, so the Linux host runs
+  its tests, and the one that calls the operating system is `cfg(<os>)`. A
+  platform file has a child file only for a mechanism of one operating-system
+  object, for a split the 3 000-line limit forces, or for a module's tests
+  (`windows/message_tests.rs`); `linux/` is such a split, past the limit as
+  one file even without its tests, one file per protocol connection and per
+  pure model. A loop is
+  its table's displays position (`type Displays = <Loop>`) and holds its
+  displays through the hook its `owner` module declares
+  (`owner::<os>::HostDisplays`, on headless the snapshot itself), which the
+  table fills through the owner's host trait (`WindowsHost`, `MacosHost`,
+  `IosHost`, `AndroidHost`, `WebHost`, `WinitHost`, `HeadlessHost`); the
+  windows a loop opens reach the displays through the same hook, whose
+  implementations hold the bodies. Every observer a display source starts for
+  the loop (AppKit's and UIKit's screen notifications, Android's refresh-rate
+  callback, the browser's listeners, the Linux connection thread under winit)
+  comes back as an `owner::watch::Watch`, which is `#[must_use]` and which the
+  loop keeps until it stops, so an unwind cannot skip a stop; the macOS loop
+  keeps its watch in a `NativeOwner`, which releases it on the main thread.
+  The winit host on Windows and macOS reads the Win32 and AppKit hosts' own
+  sources, which implement `owner::winit::HostDisplays` beside their own
+  loop's hook; on Linux `display::winit` reads `display::linux`, the one edge
+  between platform files `module-dag` admits, by name, until winit goes
+  (ADR-0151 §11). The Android loop's poll rule is the loop's
+  (`owner::android::poll`).
+  `platforms` is `retiring` in `[package.metadata.flui.modules]`: a feature
+  reaches a module under it only through a named exception, and the display
+  feature has two, the Android source's `with_activity`
+  (`platforms::android::preferences`) and the iOS source's version read
+  (`platforms::ios::os_version`).
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -716,11 +770,11 @@ input method, candidate window or soft keyboard has run.
 The host reads the snapshot on every owner turn, and one sample costs an
 `EnumDisplayMonitors` pass, a `QueryDisplayConfig` and a few
 `DisplayConfigGetDeviceInfo` calls. `WindowsDisplays` therefore answers from its
-last sample until a flag set by `WM_DISPLAYCHANGE` (on the hidden settings
-receiver, which handles nothing else of the display: it sets the flag and
-wakes the owner, because the message can arrive inside a COM call), a
-`SPI_SETWORKAREA` setting change, or a window's `WM_DPICHANGED` says the displays
-may differ. The flag is cleared before the read, so an invalidation that lands
+last sample until a flag set by `WM_DISPLAYCHANGE` or a `SPI_SETWORKAREA`
+setting change (both on the hidden broadcast receiver, whose
+`DisplayBroadcasts` subscriber handles nothing else of the display: it sets
+the flag and wakes the owner, because the message can arrive inside a COM
+call), or a window's `WM_DPICHANGED` says the displays may differ. The flag is cleared before the read, so an invalidation that lands
 during a sample survives it. winit on Windows takes its snapshot from the same
 source (its monitor list and GDI-name key are not read) and re-samples where
 winit reports a move, a scale change or a resume.
@@ -1678,7 +1732,7 @@ determined must be reported as unknown rather than guessed at.
 
 **Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
 from `CGDisplayModeGetRefreshRate` over the display's *current* mode
-(`platforms/macos/display.rs::refresh_period_for_screen`), reached from the
+(`display/apple/macos.rs::refresh_period_for_screen`), reached from the
 screen via `NSScreenNumber` — the same display id `display.rs` reads for its
 bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
 describe and some displays do, and a 0 turned into a period is infinite. The
@@ -1720,7 +1774,7 @@ workspace's `Cargo.lock`, not recalled.
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
 refresh rate in System Settings) is observed too: `ScreenObserver`
-(`platforms/macos/display.rs`) marks the snapshot stale on
+(`display/apple/macos.rs`) marks the snapshot stale on
 `NSApplicationDidChangeScreenParametersNotification` and wakes the owner, and the
 host derives every window's display again on that wake. What stays open is a
 display whose current mode reports 0 Hz, which some built-in panels do: its period
@@ -1730,7 +1784,7 @@ written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
 such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
+(`RefreshPeriod::from_hz`, reached through `display::apple::period`), pinned by
 `refresh_value_classification_table` (non-cadence inputs — zero, negative, NaN,
 ±infinity — are unknown rather than an infinite or panicking period) and by
 `macos_shim_keeps_the_period_it_reports_today`, which holds the shim
@@ -2128,9 +2182,9 @@ backend reports one only as a measurement of what the page can see, says so, and
 reports unknown until it has measured. Capabilities are detected by asking for the
 function, never by reading a browser version.
 
-**Choice:** `platforms/web/display.rs` owns the snapshot. The period comes from the
+**Choice:** `display::web::source` owns the snapshot. The period comes from the
 timestamps `requestAnimationFrame` hands the platform's existing frame loop
-(`owner/web.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the trimmed
+(`owner/web.rs`), fed to `display::web::refresh_estimate::RefreshEstimator`: the trimmed
 mean (without the fastest and slowest tenth) of the last 30 intervals, with
 intervals longer than three times the window's lower quartile left out (a background
 tab, a debugger pause, throttled frames: a window that is mostly throttled has a slow
@@ -2157,7 +2211,7 @@ read from the browser again only after an event that can change it: a pixel-rati
 change, a published period, `change` on `window.screen`, a change of the screen list,
 of a listed screen or of the window's screen.
 The pixel ratio is watched with `matchMedia("(resolution: Xdppx)")`
-(`shared::dppx_query`): the query matches while the ratio is exactly `X`, so it
+(`display::web::dppx_query`): the query matches while the ratio is exactly `X`, so it
 fires on any change and is spent by it, and the next one is armed for the new ratio.
 Arming checks `matches()` and reads the ratio again, a bounded number of times, when
 it moved between the read and the listening (a query that does not match would never
@@ -2168,7 +2222,7 @@ miss every zoom and scale change (accepted work must stay deliverable). Every qu
 that is running never frees itself. `window.screen` raises `change` for a size, ratio
 or position change in Chromium without any permission, detected by `onchange` being
 present (`WebFeature<ScreenChange>`); the browser calls that need a capability are
-methods on its proof (`platforms/web/features.rs`).
+methods on its proof, defined in `display::web::source` beside `BrowserFeatures`.
 
 Several screens are listed only when `getScreenDetails` exists and the
 `window-management` permission already reads `granted` (the older
@@ -2176,7 +2230,7 @@ Several screens are listed only when `getScreenDetails` exists and the
 never requests the permission: a prompt is the application's explicit act, and a
 permission granted later is noticed through the `PermissionStatus` change event.
 Each `ScreenDetailed` object is the screen's identity, held in a retained list
-(`shared::screen_identity`): a screen found in the list keeps its `DisplayId`, an
+(`display::web::screen_identity`): a screen found in the list keeps its `DisplayId`, an
 object that matches nothing gets a fresh one, and an id leaves the list with its
 screen and is never issued again. Labels are not keys; two identical monitors share
 one. A `change` on a listed screen (it is followed with the list) refreshes the
@@ -2367,7 +2421,7 @@ message-protocol checks, not physical keyboard input or rendered application che
 
 ### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
 
-`platforms/linux/display/` reads the outputs of a Wayland compositor or an X
+`display/linux/` reads the outputs of a Wayland compositor or an X
 server without a window system: `wayland_model` and `x11_model` are pure (they
 take events or a RandR state and answer `OutputView`s, so every host checks
 them), `wayland.rs` and `x11.rs` are thin adapters behind the `wayland` and
@@ -3103,7 +3157,7 @@ them against a stand-in that runs one transaction at a time; with
 source costs a native round trip keeps the last snapshot and reads again only after
 something that can change it has announced itself. Nothing polls.
 
-**Choice:** `platforms/android/display.rs` reads every `Display`
+**Choice:** `display::android::source` reads every `Display`
 (`DisplayManager.getDisplays`): the real size and density (`getRealMetrics`,
 scale `densityDpi / 160`), the rate of the current `Display.Mode`
 (`getRefreshRate` when the mode is absent), the highest rate among

@@ -84,6 +84,10 @@ impl WindowsHost for TestHost {
     fn broadcast_subscribers(_: &OwnerObjects<'_>) -> Vec<Rc<dyn Subscriber>> {
         Vec::new()
     }
+
+    fn displays() -> std::sync::Arc<dyn super::HostDisplays> {
+        std::sync::Arc::new(crate::display::windows::WindowsDisplays::new())
+    }
 }
 
 /// The class's procedure offers a message to the hooks in order: the first

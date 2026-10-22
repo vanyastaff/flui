@@ -30,11 +30,11 @@ use windows::Win32::{
 };
 
 use super::{
-    display::WindowsDisplays,
     events::{get_x_lparam, get_y_lparam},
     window::{NativeMode, WindowsWindow},
 };
 use crate::owner::call_point::{Field, call};
+use crate::owner::windows::HostDisplays;
 use crate::owner::windows::{
     WINDOW_CLASS_NAME, WindowIdentity, WindowMessages, modal_loop::MODAL_DEADLINE_TIMER,
 };
@@ -59,10 +59,6 @@ use keystroke_queue::{
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
 mod preference_retry_tests;
-
-#[cfg(test)]
-#[path = "platform/display_message_tests.rs"]
-mod display_message_tests;
 
 /// One window as an object that outlives its borrow of the window names it:
 /// the handle and the identity of the context created with it. The OS
@@ -132,10 +128,10 @@ pub(crate) struct WindowContext {
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The platform's monitors: a DPI change invalidates their snapshot.
-    pub displays: Arc<WindowsDisplays>,
-    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
+    pub displays: Arc<dyn HostDisplays>,
+    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `None`
     /// before the first message; a change raises `on_display_changed`.
-    pub last_monitor: std::cell::Cell<isize>,
+    pub last_monitor: std::cell::Cell<Option<std::num::NonZeroIsize>>,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,
@@ -1176,7 +1172,7 @@ impl WindowProc {
                     // the monitor is checked once the move has landed.
                     let result = DefWindowProcW(hwnd, msg, wparam, lparam);
                     if let Some(ctx) = ctx {
-                        let monitor = super::display::nearest_monitor(hwnd);
+                        let monitor = ctx.displays.nearest_monitor(hwnd);
                         if ctx.last_monitor.replace(monitor) != monitor {
                             ctx.callbacks.dispatch_display_changed();
                         }

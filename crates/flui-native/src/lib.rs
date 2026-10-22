@@ -20,6 +20,8 @@
 //!   ├─ owner/               - Owner-thread capability (ADR-0039), its signal
 //!   │                         and slot, the panic boundary, the one call
 //!   │                         point for handlers and the handler registry
+//!   ├─ display/             - The displays: the registry and snapshot model
+//!   │                         beside one file per platform
 //!   ├─ text/                - Text input and the system text size: the
 //!   │                         model and one module per platform
 //!   │
@@ -155,9 +157,11 @@
 // crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
 // FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
 // `platforms::winit`, `platforms::android::memory`, the loops
-// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, and the text
-// services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios`) carries its
-// own module-level `#![expect(unsafe_code)]` where it is declared, and the two
+// `owner::windows`, `owner::apple`, `owner::web`, `owner::winit`, the display
+// sources `display::windows::source`, `display::apple::{macos, ios}`, and the
+// text services `text::windows::tsf`, `text::apple::macos`, `text::apple::ios`)
+// carries its own module-level `expect(unsafe_code)` where it is declared, and
+// the two
 // small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
 // `platforms::windows` and `owner::windows` are fully SAFETY-documented — every
 // `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
@@ -170,6 +174,7 @@
 #![deny(missing_docs)]
 
 pub mod config;
+mod display;
 pub mod error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;

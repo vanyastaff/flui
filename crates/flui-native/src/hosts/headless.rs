@@ -2,12 +2,13 @@
 
 use flui_platform::{InMemoryClipboard, haptics::FakeHaptics};
 
+use crate::display::headless::{DisplaySpec, laid_out};
 use crate::host::Host;
-use crate::owner::headless::HeadlessLoop;
+use crate::owner::headless::{HeadlessHost, HeadlessLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::headless::{
-    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessDisplays, HeadlessHostEvents,
-    HeadlessInputDevices, HeadlessPreferences, MockWindow,
+    DragDouble, FakeAccessibility, FakeSystemChrome, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessPreferences, MockWindow,
 };
 use crate::storage::UserDataDirs;
 use crate::text::headless::FakeTextInput;
@@ -21,7 +22,7 @@ impl Host for Headless {
 
     type Loop = HeadlessLoop;
     type Window = MockWindow;
-    type Displays = HeadlessDisplays;
+    type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
     type Text = std::sync::Arc<FakeTextInput>;
     type Accessibility = FakeAccessibility;
@@ -34,6 +35,13 @@ impl Host for Headless {
     type Storage = UserDataDirs;
 }
 
+impl HeadlessHost for Headless {
+    /// One display, 1920 by 1080 at scale 1.
+    fn displays() -> flui_platform::DisplaySnapshot {
+        laid_out(vec![DisplaySpec::default()])
+    }
+}
+
 /// The headless platform: no windowing system, no graphics context; for unit
 /// tests, CI without a display server and benchmarks without rendering.
 pub type HeadlessPlatform = HostPlatform<Headless>;
@@ -42,7 +50,7 @@ impl HostPlatform<Headless> {
     /// A headless platform with one display and every window capability.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_loop(HeadlessLoop::new())
+        Self::from_loop(HeadlessLoop::new::<Headless>())
     }
 }
 

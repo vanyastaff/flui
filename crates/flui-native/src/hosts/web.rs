@@ -1,11 +1,14 @@
 //! The web host: a canvas in the browser page, on the browser's own event loop.
 
+use std::sync::Arc;
+
+use crate::display::web::WebDisplays;
 use crate::error::PlatformError;
 use crate::host::{Absent, Host, position};
-use crate::owner::web::WebLoop;
+use crate::owner::web::{HostDisplays, WebHost, WebLoop};
 use crate::platform::HostPlatform;
 use crate::platforms::web::{
-    PageObservers, WebClipboard, WebDisplays, WebHaptics, WebPreferences, WebTransfer, WebWindow,
+    PageObservers, WebClipboard, WebHaptics, WebPreferences, WebTransfer, WebWindow,
 };
 use crate::storage::UserDataDirs;
 use crate::text::web::WebTextInput;
@@ -19,7 +22,7 @@ impl Host for Web {
 
     type Loop = WebLoop;
     type Window = WebWindow;
-    type Displays = WebDisplays;
+    type Displays = WebLoop;
     type Input = WebLoop;
     type Text = std::rc::Rc<WebTextInput>;
     type Accessibility = Absent<position::Accessibility>;
@@ -30,6 +33,12 @@ impl Host for Web {
     type Lifecycle = PageObservers;
     type Chrome = Absent<position::Chrome>;
     type Storage = UserDataDirs;
+}
+
+impl WebHost for Web {
+    fn displays() -> Arc<dyn HostDisplays> {
+        WebDisplays::new()
+    }
 }
 
 /// The web platform: a canvas window on the browser's event loop, over
@@ -43,6 +52,6 @@ impl HostPlatform<Web> {
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
     pub fn new() -> Result<Self, PlatformError> {
-        Ok(Self::from_loop(WebLoop::new()?))
+        Ok(Self::from_loop(WebLoop::new::<Web>()?))
     }
 }

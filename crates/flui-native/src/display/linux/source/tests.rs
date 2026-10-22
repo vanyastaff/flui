@@ -10,8 +10,8 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::DisplayKey;
 
 use super::*;
-use crate::platforms::linux::display::session::wait_readable;
-use crate::platforms::linux::display::view::Identity;
+use crate::display::linux::session::wait_readable;
+use crate::display::linux::view::Identity;
 
 enum Action {
     Change(Vec<OutputView>),
