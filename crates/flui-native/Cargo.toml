@@ -463,7 +463,7 @@ winit-backend = [
 web = []
 
 # Linux display server protocols: each connects to its compositor to read the
-# outputs and their refresh rates (`platforms::linux::display`). On other
+# outputs and their refresh rates (`display::linux`). On other
 # targets the features exist and add nothing.
 wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
 x11 = ["dep:x11rb", "dep:rustix"]
@@ -595,8 +595,13 @@ globals = [
 # `cargo xtask module-dag`: nothing names `hosts`, which names everything. A
 # feature directory and `version` join `features` and `base` when the
 # change that creates them lands.
-features = []
+features = ["display"]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
 hosts = "hosts"
+# The one edge between platform files: the winit host on Linux reads the
+# compositor's outputs through the Linux source, which leaves with winit.
+exceptions = [
+    { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
+]
