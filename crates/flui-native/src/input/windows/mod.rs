@@ -2046,7 +2046,7 @@ mod raw {
                 Code::Unidentified,
                 EventTime::from_nanos(time),
             )
-            .with_location(keys::location_for_code(Code::Unidentified))
+            .with_location(keys::CHARACTER_WITHOUT_A_KEY)
             .with_modifiers(modifiers),
         )
     }

@@ -50,12 +50,13 @@ impl WheelAmount {
         }
     }
 
-    /// The amount in FLUI's direction. A turned amount is subtracted from
-    /// zero rather than negated, so an axis that reports nothing is `+0.0`
-    /// whichever way the platform points.
+    /// The amount in FLUI's direction, with an axis that reports nothing
+    /// `+0.0` whichever way the platform points and whichever zero it
+    /// reports: a turned amount is subtracted from zero rather than negated,
+    /// and a kept one has zero added (`-0.0 + 0.0` is `+0.0`).
     fn in_flui_direction(self) -> f64 {
         match self.direction {
-            WheelDirection::Offset => self.amount,
+            WheelDirection::Offset => self.amount + 0.0,
             WheelDirection::Content => 0.0 - self.amount,
         }
     }
@@ -75,9 +76,9 @@ pub(crate) fn wheel_step(
 }
 
 /// The table of the one wheel rule, which every backend's wheel step is held
-/// to: one turn of a wheel, as each backend reports it, steps the row's
-/// amounts in FLUI's direction, and an axis that reports nothing steps
-/// `+0.0`.
+/// to: one turn of a wheel, as each backend reports it and read by that
+/// backend's own step, steps the row's amounts in FLUI's direction, and an
+/// axis that turned not at all steps `+0.0`.
 #[cfg(test)]
 mod mapping {
     use flui_platform::PlatformInput;
@@ -89,14 +90,50 @@ mod mapping {
         ContactRegistry, NativeClock, WHEEL_DETENT, WheelAxis, WheelReading,
     };
 
-    /// (case, the step in FLUI's direction: positive scrolls down and right)
-    const TURNS: [(&str, (f64, f64)); 6] = [
-        ("a notch down", (0.0, 1.0)),
-        ("a notch up", (0.0, -1.0)),
-        ("half a notch up", (0.0, -0.5)),
-        ("two notches right", (2.0, 0.0)),
-        ("a notch left", (-1.0, 0.0)),
-        ("down and right at once", (1.5, 3.0)),
+    /// One turn: how far it scrolls in FLUI's direction (positive scrolls down
+    /// and right), and the step every backend makes of it.
+    struct Turn {
+        case: &'static str,
+        amounts: (f64, f64),
+        step: (f64, f64),
+    }
+
+    const TURNS: [Turn; 7] = [
+        Turn {
+            case: "a notch down",
+            amounts: (0.0, 1.0),
+            step: (0.0, 1.0),
+        },
+        Turn {
+            case: "a notch up",
+            amounts: (0.0, -1.0),
+            step: (0.0, -1.0),
+        },
+        Turn {
+            case: "half a notch up",
+            amounts: (0.0, -0.5),
+            step: (0.0, -0.5),
+        },
+        Turn {
+            case: "two notches right",
+            amounts: (2.0, 0.0),
+            step: (2.0, 0.0),
+        },
+        Turn {
+            case: "a notch left",
+            amounts: (-1.0, 0.0),
+            step: (-1.0, 0.0),
+        },
+        Turn {
+            case: "down and right at once",
+            amounts: (1.5, 3.0),
+            step: (1.5, 3.0),
+        },
+        Turn {
+            case: "a still axis reported as negative zero",
+            amounts: (-0.0, 1.0),
+            step: (0.0, 1.0),
+        },
     ];
 
     /// Win32's wheel message for the turn: one axis, in `WHEEL_DELTA` units,
@@ -125,58 +162,69 @@ mod mapping {
     }
 
     /// The DOM's `WheelEvent` for the turn, in lines: its deltas point FLUI's
-    /// way.
+    /// way, and a still axis may be `-0`.
     fn dom((x, y): (f64, f64)) -> Option<ScrollDelta> {
         crate::input::web::wheel::step(1, x, y).ok()
     }
 
     /// An amount as a platform whose amounts move the content reports it: the
     /// other way round, and an axis that turned not at all as `+0.0`.
-    fn moving_the_content(amount: f64) -> f32 {
-        (0.0 - amount) as f32
+    fn moving_the_content(amount: f64) -> f64 {
+        0.0 - amount
     }
 
-    /// Android's scroll axes for the turn, before any factor is known: they
-    /// move the content.
+    /// Android's scroll axes for the turn, before any factor is known.
     fn android((x, y): (f64, f64)) -> Option<ScrollDelta> {
-        AxisPolicy::AuthoredLines.delta(moving_the_content(x), moving_the_content(y))
+        AxisPolicy::AuthoredLines.delta(moving_the_content(x) as f32, moving_the_content(y) as f32)
     }
 
-    /// winit's line delta for the turn: it moves the content.
+    /// AppKit's `scrollingDeltaX`/`Y` for the turn, from a notched wheel.
+    fn appkit((x, y): (f64, f64)) -> ScrollDelta {
+        crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y)).0
+    }
+
+    /// winit's line delta for the turn.
     #[cfg(all(
         feature = "winit-backend",
         any(target_os = "windows", target_os = "macos", target_os = "linux")
     ))]
     fn winit((x, y): (f64, f64)) -> ScrollDelta {
-        let delta =
-            winit::event::MouseScrollDelta::LineDelta(moving_the_content(x), moving_the_content(y));
+        let delta = winit::event::MouseScrollDelta::LineDelta(
+            moving_the_content(x) as f32,
+            moving_the_content(y) as f32,
+        );
         crate::input::winit::scroll_step(&delta, 1.0, false).delta
     }
 
-    /// Every backend whose wheel step runs on this host takes each turn alike;
-    /// AppKit's reads an `NSEvent` and runs only on a Mac.
+    /// Every backend whose wheel step runs on this host takes each turn alike.
     #[test]
     fn every_backend_steps_a_turn_alike() {
-        for (case, turn) in TURNS {
+        for Turn {
+            case,
+            amounts,
+            step,
+        } in TURNS
+        {
             let steps = [
-                ("Win32", win32(turn)),
-                ("DOM", dom(turn)),
-                ("Android", android(turn)),
+                ("Win32", win32(amounts)),
+                ("DOM", dom(amounts)),
+                ("Android", android(amounts)),
+                ("AppKit", Some(appkit(amounts))),
                 #[cfg(all(
                     feature = "winit-backend",
                     any(target_os = "windows", target_os = "macos", target_os = "linux")
                 ))]
-                ("winit", Some(winit(turn))),
+                ("winit", Some(winit(amounts))),
             ];
-            for (backend, step) in steps {
-                let Some(delta) = step else {
+            for (backend, delta) in steps {
+                let Some(delta) = delta else {
                     assert_eq!(backend, "Win32", "{backend}: {case} refused");
                     continue;
                 };
-                // Bit for bit: an axis that reports nothing is `+0.0`.
+                // Bit for bit: an axis that turned not at all is `+0.0`.
                 assert_eq!(
                     (delta.x().to_bits(), delta.y().to_bits()),
-                    (turn.0.to_bits(), turn.1.to_bits()),
+                    (step.0.to_bits(), step.1.to_bits()),
                     "{backend}: {case} stepped {delta:?}"
                 );
             }
@@ -184,12 +232,14 @@ mod mapping {
     }
 
     /// An amount that is not finite is refused: the Web and Android drop the
-    /// event, winit delivers a zero step in the event's unit.
+    /// event, winit and AppKit deliver a zero step in the event's unit.
     #[test]
     fn a_turn_that_is_not_finite_steps_nothing() {
         for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(dom((amount, 0.0)), None, "DOM: {amount}");
             assert_eq!(android((0.0, amount)), None, "Android: {amount}");
+            let zero = appkit((amount, 0.0));
+            assert_eq!((zero.x(), zero.y()), (0.0, 0.0), "AppKit: {amount}");
             #[cfg(all(
                 feature = "winit-backend",
                 any(target_os = "windows", target_os = "macos", target_os = "linux")
