@@ -666,6 +666,103 @@ graph LR
   — 2, Back — чистое завершение; ANR, `FATAL` и предупреждений `flui` нет, настройки устройства не
   менялись. Не запускалось: `cross-typecheck` локально (нет `zig`; его job — в CI); Mac и iPhone —
   в очереди vanyastaff/flui#1840.
+- [x] **LY31** — ветка `platform/display`. Фича дисплеев — каталог `display/`; публичные пути не
+  изменились (типы headless реэкспортирует `platforms::headless`), changelog не нужен, `flui-app`
+  не тронут. Перенос — `git mv`, тела — только пути, импорты и видимость. Модель:
+  `shared/display_source.rs` → `display/source.rs`. Файл платформы — корень-оглавление и листья,
+  как `owner/<os>` в LY27: чистый лист под `cfg(any(<os>, test))` с `forbid(unsafe_code)`, FFI —
+  под `cfg(<os>)` с `expect(unsafe_code)`. Windows: `windows/display.rs` → `display/windows/source.rs`,
+  `shared/windows_display.rs` → `display/windows/sample.rs`, `display_message_tests.rs` →
+  `display/windows/message_tests.rs`, новый `display/windows/broadcasts.rs`. Apple:
+  `shared/apple_display_identity.rs` → `display/apple/mod.rs` (общее; `forbid` на корне группы
+  невозможен — у детей FFI, его несут листья), `shared/{display_period,display_link_rate}.rs` →
+  `display/apple/{period,link_rate}.rs`, `{macos,ios}/display.rs` → `display/apple/{macos,ios}.rs`.
+  Android: `android/display.rs` → `display/android/source.rs`, `shared/android_display.rs` →
+  `display/android/sample.rs`. Web: `web/{display,display_events,features}.rs` →
+  `display/web/{source,events,browser}.rs`, `shared/{dppx_query,refresh_estimate,screen_identity,
+  web_feature}.rs` → `display/web/{dppx_query,refresh_estimate,screen_identity,feature}.rs`. winit:
+  `display_linux.rs` → `display/winit/linux.rs` под корнем `display/winit.rs`. Linux:
+  `linux/display/` → `display/linux/` (модуль `#[path]` для тестов не на Linux исчез: каталог
+  собирается под `cfg(any(linux, test))`). headless: `headless/display.rs` → `display/headless.rs`.
+  `display` вошёл в `features` `module-dag`; правила держатся как есть, `exceptions` — одна запись
+  `display::winit` → `display::linux` (выход ADR-0151 §11). Решения: (1) `owner/` не называет
+  дисплеи: каждый модуль владельца объявляет `HostDisplays` — что цикл и открытые им окна спрашивают
+  у дисплеев, — а таблица делает объект через трейт хоста владельца: `WindowsHost::displays`
+  (добавлен), `MacosHost`, `IosHost`, `AndroidHost::displays(api, library, owner)`, `WebHost`,
+  `WinitHost` (новые); окна получают дисплеи через тот же хук. Наблюдатель, который источник
+  запускает для цикла (экранные уведомления AppKit и UIKit, слушатели браузера), возвращается как
+  `owner::watch::Watch`, цикл его держит, время жизни прежнее. Цикл headless держит сам
+  `DisplaySnapshot` — `HeadlessDisplays` был только обёрткой снимка; `HeadlessHost::displays`
+  раскладывает дисплей по умолчанию, `with_displays`, `display_controls` и
+  `HeadlessDisplayControls` переехали в `display/headless.rs` (запросы двойников окна —
+  расширяющий трейт `LaidOutDisplays` над снимком). `SystemNotices::mark_held_stale_on_wake`
+  принимает кэш, который владелец держит трейт-объектом. (2) winit на Windows и macOS: строка
+  кладёт `display_{windows,macos}.rs` в `display/winit.rs`, но они называли `display::windows` и
+  `display::apple::macos` — ещё два ребра между файлами платформ, которых строка не считала.
+  Вместо этого источники Win32 и AppKit реализуют `owner::winit::HostDisplays` рядом с хуком
+  своего цикла (`cfg(feature = "winit-backend")`; туда ушли дисплей окна по сырому handle,
+  пересэмплирование, подписчик и наблюдатель экранов), а `display/winit.rs` держит тип позиции
+  `WinitDisplays` и на Linux `WinitDisplaySource` над `display::linux` — единственное поимённое
+  ребро. Пересэмплирование по ОС переехало из цикла winit в источники. (3) `LoopTurn`,
+  `poll_timeout` и их тест — правило цикла, а не дисплеев: `owner/android/poll.rs`; ADR-0249
+  называет новый путь. (4) Подписчик дисплеев, отложенный LY27: `DisplayBroadcasts` в таблице
+  Windows стоит перед предпочтениями, отвечает на `WM_DISPLAYCHANGE` и пропускает дальше
+  `WM_SETTINGCHANGE` с `SPI_SETWORKAREA`, так что предпочтения по-прежнему слышат каждый
+  `WM_SETTINGCHANGE` и отвечают на него. Порядок публикации тот же: обе отметки ставятся внутри
+  одного сообщения до любого хода владельца, ход берёт снимок дисплеев и предпочтения, как раньше.
+  Флаг приёма — свой: закрывается в `detach`, который приёмник зовёт перед `DestroyWindow`
+  (раньше — общий флаг источника предпочтений, закрывавшийся при его сбросе); пометка устаревания —
+  флаг — ставится всегда. Приёмник winit на Windows — те же два подписчика в том же порядке. Правка
+  файла предпочтений минимальна: `Invalidation` теряет `displays` и `notify_displays`,
+  `PreferenceBroadcasts` — ветки дисплеев, `PreferenceSource::new(&signal)`; их тесты теряют аргумент
+  дисплеев и вызов `notify_displays`. (5) iOS: `ScreenIdentity` — словарь хука, живёт в
+  `owner::apple::ios`; запрос частоты кадров display link (`request_frame_rate`,
+  `set_frame_rate_range`) переехал из окна в источник дисплеев. (6) `device_bounds_of_screen` и его
+  тест — из `shared/appkit_window_geometry.rs` в `display/apple` (кроме дисплеев его никто не
+  звал); `nearest_monitor` Windows — метод хука, процедура окна зовёт его через контекст.
+  (7) `iOS os_version::read` стал `pub(crate)`. Записи `globals` не менялись (статиков в дисплеях
+  нет, 55); путь в `tools/xtask/allowlists/testing.toml` (тесты источника Linux) перекодирован.
+  Остаются рёбра в чужие файлы платформ, которые `module-dag` увидит, когда фича войдёт в проверку
+  (сейчас `platforms/` — уровень крейта): окно → дисплеи — `platforms/macos/window.rs` →
+  `display::apple::macos::bounds_of` (NSRect в `Bounds`, 3 места), `platforms/ios/window.rs` →
+  `display::apple::{change_screen, link_rate::LinkPeriod}`, `platforms/web/events.rs` →
+  `display::web::PixelRatioWatch`, `platforms/headless/platform.rs` → `display::headless::
+  {DisplayChangeError, LaidOutDisplays}` — их снимает LY28; дисплеи → предпочтения —
+  `display/android/source.rs` → `platforms::android::preferences::with_activity` (JNI-помощник,
+  которым пользуются и `owner::android::java_view`, haptics, memory; его место — `owner/android`) —
+  LY33 или LY34. Тесты: перенесённые без правок смысла (`windows_display`, `monitor_key_table`,
+  `display_message_tests` — три строки, `apple_display_identity` и строка экранных границ,
+  `display_period`, `display_link_rate`, `android_display_table`, `a_paused_loop_blocks_until_it_is_woken`,
+  правила Web, модели Linux и `source/tests.rs`, `x11/tests.rs`, тесты `DisplaySource`);
+  `tests/displays.rs`, `wasm-test` и `web_browser` не тронуты. Новые:
+  `a_work_area_change_reaches_the_displays_and_then_the_preferences` и
+  `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`. Мутации: предпочтения перед
+  дисплеями — падают новый тест и `work_area_change_invalidates_the_snapshot` («the displays did not
+  hear the work-area change», left 1, right 2); без подписчика дисплеев — падают они же и
+  `display_change_message_invalidates_the_snapshot_and_wakes_the_owner`; подписчик, отвечающий на
+  рабочую область, — падает новый тест; `detach`, не закрывающий приём, — «a detached subscriber
+  woke the owner», left 3, right 2. Проверки на Windows: `cargo fmt --check`; clippy `-p flui-native
+  -p flui-app -p flui-testing --all-targets -D warnings` и `-p flui-native --all-targets --features
+  winit-backend,a11y`; nextest `-p flui-native -p flui-app` — 280 (2 пропущены), с
+  `flui-native/winit-backend` — 307 (2 пропущены); nextest `-p xtask` — 45; `wasm-check`,
+  `wasm-test` (49 утверждений); clippy Android (`-p flui-native -p flui-app --all-targets`), macOS
+  lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`); `module-dag` (260 модулей, 1 фича с 11
+  файлами платформ, 1 base, 106 рёбер, 1 исключение) и самотест (52), `globals` (55) и самотест
+  (15), `file-length`, `markers`, `testing`, `docs-paths`, `checks`, `doc-strict`, `workspace`,
+  `reach`, `android-dex`; rustdoc `--document-private-items` с `-D warnings`, с
+  `winit-backend,a11y` и без. WSL Ubuntu 24.04: clippy `-p flui-native -p flui-app --all-targets`
+  с `winit-backend,a11y` и без; nextest `-p flui-native` (`FLUI_HEADLESS=1`) — 170; с
+  `winit-backend` под xvfb — 256 из 257, падает `a_randr_reconfiguration_on_a_real_server_is_published`
+  (как на базе). Galaxy S21 (Android 15, проба `flui create --template counter --local` с этих
+  правок): первый снимок — `flui_native::display::android::source`, «revision=1 id=1 width=1080
+  height=2400 scale_factor=2.8125 refresh_period_us=8333»; с временно поднятым до `info` логом
+  последующих ревизий (правка не закоммичена): адаптивная частота 120 → 60 → 120 Гц (ревизии 2, 3:
+  16666 и 8333 мкс), поворот в ландшафт — ревизия 4, 2400×1080, id 1 тот же, обратно — ревизия 6,
+  1080×2400; Back — `Destroy`, «Android platform event loop finished»; `FATAL`, ANR и паник нет;
+  `accelerometer_rotation` и `user_rotation` восстановлены (1 и 0). Не запускалось: `cross-typecheck`
+  (нет `zig`; job в CI); `web_browser` и DOM-тесты `tests/wasm32` — нужен ChromeDriver под Chrome 155,
+  его здесь нет; смена масштаба или разрешения на Windows — системная настройка, её не меняли,
+  опора — тесты; Mac и iPhone — в очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
