@@ -38,6 +38,9 @@ pub mod android_drag;
 pub mod android_ime;
 // Rule module; consumers: the Android and web backends' text input.
 #[doc(hidden)]
+pub mod ime_text;
+// Rule module; consumer: the Android backend.
+#[doc(hidden)]
 pub mod android_keys;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_lifecycle;
@@ -45,8 +48,6 @@ pub(crate) mod android_lifecycle;
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;
-#[doc(hidden)]
-pub mod ime_text;
 // Rule module; consumer: the Android preference source.
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_contrast;

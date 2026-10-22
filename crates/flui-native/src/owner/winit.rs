@@ -151,6 +151,12 @@ pub(crate) trait WinitHost: 'static {
 /// The host's displays as the winit loop and the windows it opens reach them:
 /// the operating system's own source, never winit's monitor list (ADR-0236),
 /// which the table makes ([`WinitHost::displays`]).
+///
+/// Each operating system's source learns of a change its own way, so the
+/// methods past `resample` are each one system's: the Win32 source is a
+/// subscriber of the loop's broadcast receiver, the AppKit source a
+/// notification observer, the Linux source a thread on a connection of its
+/// own, which also says whether the windows are Wayland surfaces.
 pub(crate) trait HostDisplays: StaleOnWake {
     /// The current snapshot: the last sample unless something invalidated it.
     ///
@@ -165,6 +171,10 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// Bring the source up to date with `event_loop`, whose owner `signal` the
     /// source may wake from then on: `true` when the snapshot may have
     /// changed, so the owner is woken to sample it again.
+    ///
+    /// Only the Linux source reads the arguments: it follows the connection
+    /// winit opened. The Win32 and AppKit sources read the system apart from
+    /// winit, so they mark themselves stale and ignore both.
     fn resample(&self, event_loop: &ActiveEventLoop, signal: Option<&Arc<OwnerSignal>>) -> bool;
 
     /// The source's part of the system's broadcasts, a subscriber of the

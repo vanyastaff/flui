@@ -601,14 +601,14 @@ groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner"]
 hosts = "hosts"
 # `platforms/` is taken apart into the features (ADR-0151 §10): a feature
-# reaches a module under it only through an exception below, each with the task
-# that removes it.
+# reaches a module under it only through an exception below, each naming in
+# `reason` the move that removes it.
 retiring = ["platforms"]
 # The one edge between platform files (the winit host on Linux reads the
 # compositor's outputs through the Linux source, which leaves with winit), then
 # each edge from a feature into `platforms/`.
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
-    { from = "display::android", to = "platforms::android::preferences", exit = "ADR-0151", since = "2026-10-22", reason = "the Android display source samples through `with_activity`, the JNI Activity helper the preference file holds; it goes when the preferences become a feature directory, or sooner if the helper moves into owner/android when platforms/ is removed (ADR-0151 §10)" },
+    { from = "display::android", to = "platforms::android::preferences", exit = "ADR-0151", since = "2026-10-22", reason = "the Android display source samples through `with_activity`, the JNI Activity helper the preference file holds; it goes when the preferences become a feature directory and the helper moves into owner/android (ADR-0151 §10)" },
     { from = "display::apple::ios", to = "platforms::ios::os_version", exit = "ADR-0151", since = "2026-10-22", reason = "the iOS display source reads the OS version through `platforms::ios::os_version::read`, widened to `pub(crate)` for it; it goes when the version gates become `version/` (ADR-0151 §10)" },
 ]
