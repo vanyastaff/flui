@@ -5,11 +5,14 @@
 //! window itself (its size, place, mode, visibility, focus, paint, chrome and
 //! closing).
 //!
-//! Some of those messages carry a step of another feature: the precision
-//! touchpad follows the window's size and paint, focus loss and minimizing end
-//! the pointers held in it, a move and a DPI change move the input method's
-//! rectangles, and closing releases the touchpad, the drop target and the text
-//! services. Those steps run here, in the order the message needs them.
+//! Some of those messages carry a step another feature follows: the input
+//! follows the window's size, paint, focus loss, minimizing, scale, settings
+//! and modal size-and-move loop, a move and a DPI change move the input
+//! method's rectangles, and closing ends the input's contacts and releases the
+//! drop target and the text services. The window tells the class's hooks of
+//! each step where the message needs it (`owner::windows::window_step`,
+//! `window_destroyed`), and follows a step of the input's in turn: a key the
+//! application let through, which the window's own keys answer.
 
 use std::{
     cell::{Cell, RefCell},
@@ -35,9 +38,9 @@ use windows::Win32::{
         Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
         WindowsAndMessaging::{
             CHILDID_SELF, DefWindowProcW, DestroyWindow, EVENT_OBJECT_CLOAKED,
-            EVENT_OBJECT_UNCLOAKED, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClassNameW,
-            GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT,
-            IsIconic, IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, OBJID_WINDOW, PostMessageW,
+            EVENT_OBJECT_UNCLOAKED, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect,
+            GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
+            IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, OBJID_WINDOW, PostMessageW,
             SC_KEYMENU, SC_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE,
             SendMessageW, SetTimer, SetWindowLongPtrW, WINDOWPOS, WINEVENT_OUTOFCONTEXT, WM_APP,
             WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
@@ -53,13 +56,16 @@ use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, restore_rectangle,
 };
 use super::window::WindowsWindow;
-use crate::input::windows::raw::{get_x_lparam, get_y_lparam};
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::windows::HostDisplays;
+use crate::owner::windows::control::OwnerPreferences;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
-use crate::owner::windows::{WINDOW_CLASS_NAME, WindowIdentity, WindowMessages};
+use crate::owner::windows::{
+    WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed, window_step,
+};
+use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::text::windows::TextServices;
 use crate::window::config::WindowConfiguration;
 use crate::window::state::WindowStateCell;
@@ -123,9 +129,15 @@ pub(crate) struct WindowContext {
     /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `None`
     /// before the first message; a change raises `on_display_changed`.
     pub last_monitor: std::cell::Cell<Option<std::num::NonZeroIsize>>,
-    /// Per-window callbacks for event delivery, owned by this context and
-    /// released by `WM_DESTROY` on the owner thread.
-    pub callbacks: WindowCallbacks,
+    /// Per-window callbacks for event delivery, shared with the features the
+    /// class's hooks announced the window to and released by `WM_DESTROY` on
+    /// the owner thread.
+    pub callbacks: Arc<WindowCallbacks>,
+    /// The hooks of the window's class, which the window tells of its steps.
+    pub(crate) hooks: WindowHooks,
+    /// The system preferences: the window's gesture geometry is measured with
+    /// them.
+    pub(crate) preferences: Rc<dyn OwnerPreferences>,
     /// Scale factor for coordinate conversion.
     ///
     /// `Cell`, not a plain `f64`: `window_proc` only ever holds a shared
@@ -135,28 +147,18 @@ pub(crate) struct WindowContext {
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
-    pub(crate) message_clock: crate::input::windows::raw::MessageClock,
-    pub pointer_registry: RefCell<crate::input::assembly::ContactRegistry>,
-    /// The precision touchpad's DirectManipulation viewport; `None` when it
-    /// did not initialise (the window then has no precise scrolling or
-    /// trackpad gestures) or after it failed.
-    pub(crate) touchpad: crate::input::windows::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
     pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
-    /// Whether the mouse is over this window; see [`Self::set_hovered`].
-    pub is_hovered: std::cell::Cell<bool>,
     /// The system appearance last applied to this window's chrome and
     /// reported to `on_appearance_changed`.
     pub appearance: std::cell::Cell<WindowAppearance>,
     /// Whether the title bar follows the system theme; `false` once the app
     /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
     pub chrome_follows_system: std::cell::Cell<bool>,
-    /// Current keyboard modifiers.
-    pub modifiers: std::cell::Cell<flui_platform::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -209,12 +211,6 @@ pub(crate) struct WindowContext {
     pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
     /// Delivers wake deadlines while a modal loop runs for the window.
     pub modal_pacing: crate::owner::windows::modal_loop::ModalPacing,
-    /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
-    /// held until its low half arrives in the next message (Windows splits
-    /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
-    /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
-    /// burst at once and never needs cross-message state.
-    pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
     /// The window's TSF connection and text-store host (ADR-0135 §3),
     /// activated as the window is created, on its owner thread; `None` when
     /// activation failed, and text input takes the `WM_CHAR` path.
@@ -229,9 +225,6 @@ pub(crate) struct WindowContext {
     /// The platform's drag-and-drop transport, which the window's drop target
     /// serves; the window class's drop-target hook registers it from here.
     pub(crate) drag: Arc<dyn crate::owner::windows::HostDrag>,
-    /// Physical keys held down that were pressed as dead keys, so their
-    /// release reports `Dead` like the press.
-    pub held_dead_keys: std::cell::RefCell<crate::input::windows::raw::HeldDeadKeys>,
     /// Borrow ledger deferring this context's free past every live borrow
     /// on the owner thread — see [`ContextLedger`] for the reentrancy
     /// hazard (a framework callback closing the window from inside a
@@ -247,6 +240,14 @@ impl WindowContext {
     /// platform only if one is registered to run.
     pub(crate) fn request_frame(&self) {
         self.callbacks.dispatch_request_frame();
+    }
+
+    /// Tell the class's hooks that this window, `hwnd`, took `step`. A hook
+    /// may run user code, which may close the window: a caller that goes on
+    /// asks [`Self::still_owns`] first where the next step would act on the
+    /// handle.
+    pub(crate) fn step(&self, hwnd: HWND, step: WindowStep) {
+        window_step(self.hooks, WindowRef::new(hwnd, self.identity), step);
     }
 
     /// Tell the window's resize callback its client size, `device` pixels, at
@@ -333,14 +334,6 @@ impl WindowContext {
         );
     }
 
-    /// Dispatch a keyboard-layout change to the platform-level hook.
-    pub(crate) fn dispatch_keyboard_layout_change(&self) {
-        self.call_handler(
-            |handlers| &mut handlers.keyboard_layout_changed,
-            |handler| handler(),
-        );
-    }
-
     /// Runs one platform-level handler through the call point: out of its
     /// slot, so no `RefCell` borrow is held while it runs, then put back
     /// only if the slot is still empty. A handler registered while this one
@@ -364,23 +357,9 @@ impl WindowContext {
 
 /// Whether the live window behind `hwnd` is of this backend's registered
 /// window class — the only class whose `GWLP_USERDATA` slot holds a
-/// [`WindowContext`] pointer. Guards against OS handle recycling: a dead
-/// handle value can be reissued for an unrelated window whose user-data
-/// slot follows someone else's protocol entirely.
+/// [`WindowContext`] pointer (`owner::windows::is_flui_window`).
 fn hwnd_names_flui_class(hwnd: HWND) -> bool {
-    let mut name = [0_u16; 256];
-    // SAFETY: `GetClassNameW` writes at most `name.len()` UTF-16 units
-    // (including the terminator) into the live stack buffer the slice
-    // points at, and returns the count copied EXCLUDING the terminator (0
-    // on failure — a dead or foreign handle simply reports "not our class"
-    // here). `WINDOW_CLASS_NAME.as_wide()` walks our own `w!(..)` static
-    // literal, which is NUL-terminated by construction, and measures it
-    // with `wcslen` — so it also EXCLUDES the terminator, matching the
-    // length convention `class_name_matches` documents and its Linux tests
-    // pin.
-    let (copied, expected) =
-        unsafe { (GetClassNameW(hwnd, &mut name), WINDOW_CLASS_NAME.as_wide()) };
-    crate::owner::hwnd_affinity::class_name_matches(&name, copied, expected)
+    crate::owner::windows::is_flui_window(hwnd)
 }
 
 /// RAII borrow of a [`WindowContext`]: counts itself in the context's
@@ -595,6 +574,20 @@ pub(crate) unsafe fn with_message_context<R>(
 pub(crate) struct WindowProc;
 
 impl WindowMessages for WindowProc {
+    /// A key the application let through reaches the window's own keys (the
+    /// fullscreen hotkey); every other step is the window's own.
+    fn step(&self, window: WindowRef, step: WindowStep) {
+        if let WindowStep::KeyLetThrough {
+            virtual_key,
+            repeat,
+        } = step
+        {
+            window.with_context("window keys", |ctx| {
+                ctx.apply_window_hotkey(window.hwnd(), virtual_key, repeat);
+            });
+        }
+    }
+
     /// The window's own messages: its creation, closing and destruction, its
     /// size, place, limits, DPI, focus, paint, cursor and title, the modal
     /// size-move and menu loops with their deadline timer, the session and
@@ -743,10 +736,10 @@ impl WindowProc {
                     );
 
                     if let Some(ctx) = ctx {
-                        // Whatever the precision touchpad has open ends as
-                        // cancelled, and its viewport is released, while the
-                        // window and its callbacks still exist.
-                        ctx.release_touchpad(hwnd);
+                        // What the input holds of the window ends as
+                        // cancelled, and its touchpad viewport is released,
+                        // while the window and its callbacks still exist.
+                        window_destroyed(ctx.hooks, WindowRef::new(hwnd, ctx.identity));
 
                         // A drag over the window leaves it, and OLE no
                         // longer offers it one.
@@ -851,7 +844,7 @@ impl WindowProc {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
                     if let Some(ctx) = ctx {
-                        ctx.pause_touchpad(hwnd);
+                        ctx.step(hwnd, WindowStep::SizeMoveStarted);
                         ctx.in_size_move.set(true);
                         ctx.enter_modal_loop(hwnd);
                     }
@@ -862,7 +855,7 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
-                        ctx.resume_touchpad();
+                        ctx.step(hwnd, WindowStep::SizeMoveEnded);
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -893,7 +886,7 @@ impl WindowProc {
                 WM_PAINT => {
                     // The frame follows the scrolling it shows.
                     if let Some(ctx) = ctx {
-                        ctx.pump_touchpad_for_frame(hwnd);
+                        ctx.step(hwnd, WindowStep::Painting);
                     }
                     // SAFETY: `ps` is a stack-local `PAINTSTRUCT`; `&raw mut
                     // ps` gives `BeginPaint` a valid, correctly-sized
@@ -943,7 +936,7 @@ impl WindowProc {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
-                            ctx.resize_touchpad((width, height));
+                            ctx.step(hwnd, WindowStep::Resized((width, height)));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
                                     width as f64 / ctx.scale_factor.get(),
@@ -1059,7 +1052,7 @@ impl WindowProc {
                         // in it. After the mode is published, so input code
                         // reads the window as minimised.
                         if size_type == SIZE_MINIMIZED {
-                            ctx.cancel_pointers(hwnd);
+                            ctx.step(hwnd, WindowStep::Minimized);
                         }
 
                         // Hidden-surface gating, minimize/restore half: it
@@ -1302,7 +1295,7 @@ impl WindowProc {
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = false);
-                        ctx.cancel_pointers(hwnd);
+                        ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
@@ -1324,9 +1317,7 @@ impl WindowProc {
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx {
                         // Double-click time and size are settings too.
-                        ctx.pointer_registry.borrow_mut().set_click_settings(
-                            crate::input::windows::raw::click_settings(ctx.scale_factor.get()),
-                        );
+                        ctx.step(hwnd, WindowStep::SettingChanged);
                         let appearance = super::backdrop::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
                             if ctx.chrome_follows_system.get() {
@@ -1863,9 +1854,7 @@ impl WindowContext {
         let old_scale = self.scale_factor.replace(new_scale);
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
-        self.pointer_registry
-            .borrow_mut()
-            .set_click_settings(crate::input::windows::raw::click_settings(new_scale));
+        self.step(hwnd, WindowStep::Rescaled(new_scale));
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();

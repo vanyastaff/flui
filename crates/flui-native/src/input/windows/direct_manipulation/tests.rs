@@ -18,11 +18,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::PUMP_TIMER;
 use crate::WindowsPlatform;
 use crate::input::availability as input_availability;
+use crate::input::windows::InputWindow;
 use crate::input::windows::direct_manipulation::manipulation::{
     ContentTransform, ViewportReading, ViewportStatus,
 };
 use crate::window::windows::WindowsWindow;
-use crate::window::windows::proc::{WindowContext, with_window_context};
 use crate::{host_window::HostWindow, platform::Platform as _};
 use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
 
@@ -59,20 +59,23 @@ fn describe(input: &PlatformInput, scale: f64) -> Option<String> {
 }
 
 fn scale_of(hwnd: HWND) -> f64 {
-    with_window_context(hwnd, "test", |context| context.scale_factor.get()).expect("a context")
+    input(hwnd).scale_factor.get()
+}
+
+/// What the input keeps of the fixture's window.
+fn input(hwnd: HWND) -> std::rc::Rc<InputWindow> {
+    crate::owner::windows::attached::<InputWindow>(hwnd).expect("the window's input")
 }
 
 fn push(hwnd: HWND, readings: &[ViewportReading]) {
-    with_window_context(hwnd, "test", |context| {
-        let host = context.touchpad.host.borrow();
-        let host = host.as_ref().expect("the window's viewport initialised");
-        host.viewport.queue.borrow_mut().extend_from_slice(readings);
-    })
-    .expect("a context");
+    let input = input(hwnd);
+    let host = input.touchpad.host.borrow();
+    let host = host.as_ref().expect("the window's viewport initialised");
+    host.viewport.queue.borrow_mut().extend_from_slice(readings);
 }
 
 fn pump(hwnd: HWND) {
-    with_window_context(hwnd, "test", |context| context.pump_touchpad(hwnd)).expect("a context");
+    input(hwnd).pump_touchpad(hwnd);
 }
 
 /// Whether the pacing timer was set; clears it.
@@ -377,10 +380,7 @@ fn destroying_the_window_cancels_what_is_open_before_it_closes() {
 }
 
 fn capabilities(hwnd: HWND) -> InputCapabilities {
-    with_window_context(hwnd, "test", |context| {
-        context.callbacks.input_capabilities()
-    })
-    .expect("a context")
+    input(hwnd).callbacks.input_capabilities()
 }
 
 /// A viewport whose `Update` fails is released, what it had open is
@@ -395,16 +395,16 @@ fn a_failed_viewport_withdraws_the_touchpad_capabilities() {
     assert_eq!(capabilities(f.hwnd), input_availability::windows(true));
     push(f.hwnd, &[status(Running), content(-8.0)]);
     pump(f.hwnd);
-    with_window_context(f.hwnd, "test", |context| {
-        let host = context.touchpad.host.borrow();
+    {
+        let input = input(f.hwnd);
+        let host = input.touchpad.host.borrow();
         let host = host.as_ref().expect("the window's viewport initialised");
         host.viewport.fail_update.set(true);
-    })
-    .expect("a context");
+    }
     pump(f.hwnd);
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0"]);
     assert!(
-        !with_window_context(f.hwnd, "test", WindowContext::has_touchpad).expect("a context"),
+        !input(f.hwnd).has_touchpad(),
         "the failed viewport is released"
     );
     assert_eq!(capabilities(f.hwnd), input_availability::windows(false));
@@ -414,24 +414,20 @@ fn a_failed_viewport_withdraws_the_touchpad_capabilities() {
 /// Make the window's cursor unreadable, and forget where it was last read
 /// when `forget` is set.
 fn unreadable_cursor(hwnd: HWND, forget: bool) {
-    with_window_context(hwnd, "test", |context| {
-        let mut host = context.touchpad.host.borrow_mut();
-        let host = host.as_mut().expect("the window's viewport initialised");
-        host.cursor_unreadable = true;
-        if forget {
-            host.cursor = None;
-        }
-    })
-    .expect("a context");
+    let input = input(hwnd);
+    let mut host = input.touchpad.host.borrow_mut();
+    let host = host.as_mut().expect("the window's viewport initialised");
+    host.cursor_unreadable = true;
+    if forget {
+        host.cursor = None;
+    }
 }
 
 fn queued(hwnd: HWND) -> usize {
-    with_window_context(hwnd, "test", |context| {
-        let host = context.touchpad.host.borrow();
-        let host = host.as_ref().expect("the window's viewport initialised");
-        host.viewport.queue.borrow().len()
-    })
-    .expect("a context")
+    let input = input(hwnd);
+    let host = input.touchpad.host.borrow();
+    let host = host.as_ref().expect("the window's viewport initialised");
+    host.viewport.queue.borrow().len()
 }
 
 /// While the cursor cannot be read a manipulation is placed where it was

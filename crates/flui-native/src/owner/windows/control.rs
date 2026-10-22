@@ -320,6 +320,17 @@ pub(crate) trait OwnerPreferences: SystemPreferenceSource + std::any::Any {
 
     /// The source's subscriber to the system's broadcasts.
     fn broadcasts(&self) -> Rc<dyn super::broadcast::Subscriber>;
+
+    /// The system's mouse geometry at `dpi`, read now: the double-click
+    /// rectangle and the drag threshold a window's input and its gesture
+    /// geometry are measured in.
+    ///
+    /// # Errors
+    /// What the system's metrics refuse.
+    fn mouse_geometry(
+        &self,
+        dpi: u32,
+    ) -> Result<flui_platform::NativeMouseGeometry, flui_platform::PreferenceQueryError>;
 }
 
 /// The lifecycle the owner keeps for its host: the broadcast receiver's

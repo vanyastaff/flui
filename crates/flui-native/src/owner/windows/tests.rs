@@ -25,7 +25,8 @@ use super::control::{
 };
 use super::{
     ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowGone, WindowHooks, WindowIdentity,
-    WindowMessages, WindowRef, WindowsHost, WindowsLoop, dispatch_window_message, window_created,
+    WindowMessages, WindowRef, WindowStep, WindowsHost, WindowsLoop, dispatch_window_message,
+    window_created, window_destroyed, window_step,
 };
 use crate::display::windows::WindowsDisplays;
 use crate::error::PlatformError;
@@ -52,6 +53,17 @@ impl WindowMessages for First {
         hear("first created");
     }
 
+    fn step(&self, _window: WindowRef, step: WindowStep) {
+        hear(match step {
+            WindowStep::FocusLost => "first focus lost",
+            _ => "first stepped",
+        });
+    }
+
+    fn destroyed(&self, _window: WindowRef) {
+        hear("first destroyed");
+    }
+
     fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
         msg == BOTH_ANSWER
     }
@@ -73,6 +85,17 @@ struct Second;
 impl WindowMessages for Second {
     fn created(&self, _window: &CreatedWindow) {
         hear("second created");
+    }
+
+    fn step(&self, _window: WindowRef, step: WindowStep) {
+        hear(match step {
+            WindowStep::FocusLost => "second focus lost",
+            _ => "second stepped",
+        });
+    }
+
+    fn destroyed(&self, _window: WindowRef) {
+        hear("second destroyed");
     }
 
     fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
@@ -266,7 +289,50 @@ fn created(hwnd: HWND) -> CreatedWindow {
         hwnd,
         identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
         client_size: (0, 0),
+        scale: 1.0,
+        callbacks: Arc::new(crate::owner::handlers::WindowCallbacks::default()),
+        handlers: Rc::new(RefCell::new(crate::owner::handlers::PlatformHandlers::new())),
+        preferences: Rc::new(NoPreferences),
+        hooks: TestHost::WINDOW_HOOKS,
         apartment: None,
+    }
+}
+
+/// System preferences that are never read: the tests' hooks measure nothing.
+struct NoPreferences;
+
+impl crate::owner::sources::SystemPreferenceSource for NoPreferences {
+    fn sample(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        Ok(flui_platform::SystemPreferences::default())
+    }
+}
+
+impl Subscriber for NoPreferences {
+    fn message(&self, _: HWND, _: u32, _: WPARAM, _: LPARAM) -> Option<LRESULT> {
+        None
+    }
+}
+
+impl OwnerPreferences for NoPreferences {
+    fn pending(&self) -> bool {
+        false
+    }
+
+    fn retry_deadline(&self) -> Option<web_time::Instant> {
+        None
+    }
+
+    fn retry_if_due(&self) {}
+
+    fn broadcasts(&self) -> Rc<dyn Subscriber> {
+        Rc::new(Self)
+    }
+
+    fn mouse_geometry(
+        &self,
+        _: u32,
+    ) -> Result<flui_platform::NativeMouseGeometry, flui_platform::PreferenceQueryError> {
+        Err(flui_platform::PreferenceQueryError::Unavailable)
     }
 }
 
@@ -320,6 +386,31 @@ fn a_window_a_hook_destroyed_is_announced_to_no_later_hook() {
         HEARD.with(RefCell::take),
         ["first created", "destroys created"],
         "no hook after the one that destroyed the window learns of it"
+    );
+}
+
+/// A step of a window, and its destruction, reach every hook of the class in
+/// the order the host names them: the window tells the class's hooks, and a
+/// feature that follows the window hears it wherever it stands in the table.
+#[test]
+fn a_window_step_and_its_destruction_reach_every_hook_in_order() {
+    let window = WindowRef::new(
+        HWND(std::ptr::null_mut()),
+        WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
+    );
+    HEARD.with(|heard| heard.borrow_mut().clear());
+
+    window_step(TestHost::WINDOW_HOOKS, window, WindowStep::FocusLost);
+    window_destroyed(TestHost::WINDOW_HOOKS, window);
+
+    assert_eq!(
+        HEARD.with(RefCell::take),
+        [
+            "first focus lost",
+            "second focus lost",
+            "first destroyed",
+            "second destroyed"
+        ]
     );
 }
 

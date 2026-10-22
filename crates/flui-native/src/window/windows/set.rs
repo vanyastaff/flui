@@ -203,12 +203,9 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
                     context.callbacks.resume_input_delivery();
                 });
             });
-        let _ = with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
-            context
-                .callbacks
-                .set_input_capabilities(crate::input::availability::windows(
-                    context.has_touchpad(),
-                ));
+        // The input set the window's capabilities when the class announced
+        // it; the wake resumes the input held behind them.
+        let _ = with_window_context_checked(window.hwnd(), "input_wake", |context| {
             context.callbacks.set_input_wake(wake);
         });
 

@@ -1,10 +1,19 @@
-//! The input messages of FLUI's window class: the mouse and its buttons and
-//! wheel, the pointer messages, the keyboard and its characters, and the
-//! keyboard layout.
+//! The Win32 input: the input messages of FLUI's window class (the mouse and
+//! its buttons and wheel, the pointer messages, the keyboard and its
+//! characters, the keyboard layout), their decoding (`raw`) and the precision
+//! touchpad (`direct_manipulation`).
 //!
 //! [`InputMessages`] is the hook the Windows host registers on the class
-//! beside the window's own ([`WindowProc`](crate::window::windows::proc::WindowProc))
-//! and the precision touchpad's; each message reaches one of them.
+//! beside the window's own and the precision touchpad's ([`Touchpad`]); each
+//! message reaches one of them. What the input keeps of a window is its own
+//! ([`InputWindow`]): the hook makes it when the class announces the window
+//! and keeps it with the window (`WindowRef::attach`), and the steps of the
+//! window's own procedure the input follows (its size, focus, paint and
+//! scale, the modal size-and-move loop, a setting change, its destruction)
+//! reach the hook as the class's steps (`WindowMessages::step`,
+//! `WindowMessages::destroyed`). What the window, drag and drop and haptics
+//! read of a window's input is the model's `WindowInput`, which the input
+//! keeps beside its own state.
 
 // The FFI half calls Win32 directly: `unsafe` is expected on Windows only,
 // where it is compiled; the pure halves forbid it.
@@ -18,26 +27,42 @@ pub(crate) mod raw;
 pub(crate) use direct_manipulation::Touchpad;
 
 #[cfg(windows)]
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
+
+#[cfg(windows)]
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::{
         Controls::WM_MOUSELEAVE,
         Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         WindowsAndMessaging::{
-            DefWindowProcW, GWLP_USERDATA, GetWindowLongPtrW, ISMEX_NOSEND, InSendMessageEx,
-            WM_CAPTURECHANGED, WM_CHAR, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_POINTERCAPTURECHANGED, WM_POINTERDEVICECHANGE, WM_POINTERDOWN,
-            WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDOWN,
-            WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+            DefWindowProcW, ISMEX_NOSEND, InSendMessageEx, WM_CAPTURECHANGED, WM_CHAR,
+            WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+            WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_POINTERCAPTURECHANGED,
+            WM_POINTERDEVICECHANGE, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP,
+            WM_POINTERUPDATE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            WM_XBUTTONDOWN, WM_XBUTTONUP,
         },
     },
 };
 
 #[cfg(windows)]
-use crate::owner::windows::{WindowMessages, WindowsLoop};
+use crate::input::WindowInput;
 #[cfg(windows)]
-use crate::window::windows::proc::{WindowContext, with_message_context};
+use crate::owner::call_point::{Field, call};
+#[cfg(windows)]
+use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
+#[cfg(windows)]
+use crate::owner::windows::control::OwnerPreferences;
+#[cfg(windows)]
+use crate::owner::windows::{
+    CreatedWindow, WindowHooks, WindowMessages, WindowRef, WindowStep, WindowsLoop, attached,
+    window_step,
+};
 
 #[cfg(windows)]
 use keystroke_queue::{
@@ -74,13 +99,152 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
     }
 }
 
+/// What the input keeps of one window of FLUI's class, made when the class
+/// announces the window ([`InputMessages`]'s `created`) and kept with it
+/// until it is destroyed: the clock its messages are stamped on, its scale,
+/// the keys and characters a keystroke leaves behind, the precision
+/// touchpad's viewport, and what it shares with the window's other features
+/// ([`WindowInput`]). Reached only on the window's thread.
+#[cfg(windows)]
+struct InputWindow {
+    /// The window.
+    window: WindowRef,
+    /// The hooks of its class, which a key the application let through is
+    /// told to ([`WindowStep::KeyLetThrough`]).
+    hooks: WindowHooks,
+    /// Its callbacks, which its input is dispatched to.
+    callbacks: Arc<WindowCallbacks>,
+    /// The application's handlers: a keyboard layout change reaches theirs.
+    handlers: Rc<RefCell<PlatformHandlers>>,
+    /// The system preferences, which measure its double-click rectangle.
+    preferences: Rc<dyn OwnerPreferences>,
+    /// Its scale, its DPI over 96: positions arrive in device pixels.
+    scale_factor: Cell<f64>,
+    /// The clock its messages and readings are stamped on.
+    message_clock: raw::MessageClock,
+    /// Its hover, modifiers and contacts, which its other features read.
+    shared: Rc<WindowInput>,
+    /// The precision touchpad's DirectManipulation viewport; empty when it
+    /// did not initialise (the window then has no precise scrolling or
+    /// trackpad gestures), after it failed, or once the window is destroyed.
+    touchpad: direct_manipulation::TouchpadSlot,
+    /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
+    /// held until its low half arrives in the next message (Windows splits
+    /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
+    /// path uses this; the `WM_KEYDOWN` drain sees a whole burst at once and
+    /// never needs cross-message state.
+    pending_high_surrogate: Cell<Option<u16>>,
+    /// Physical keys held down that were pressed as dead keys, so their
+    /// release reports `Dead` like the press.
+    held_dead_keys: RefCell<raw::HeldDeadKeys>,
+}
+
+#[cfg(windows)]
+impl InputWindow {
+    /// The input of `window`, which its class just announced.
+    fn new(window: &CreatedWindow) -> Self {
+        let message_clock = raw::MessageClock::new();
+        let click_settings = raw::click_settings(&*window.preferences, window.scale);
+        let shared = Rc::new(WindowInput {
+            hovered: Cell::new(false),
+            modifiers: Cell::new(flui_platform::Modifiers::NONE),
+            registry: RefCell::new(raw::pointer_registry(
+                message_clock.native(),
+                click_settings,
+            )),
+        });
+        Self {
+            window: window.window(),
+            hooks: window.hooks,
+            callbacks: Arc::clone(&window.callbacks),
+            handlers: Rc::clone(&window.handlers),
+            preferences: Rc::clone(&window.preferences),
+            scale_factor: Cell::new(window.scale),
+            message_clock,
+            shared,
+            touchpad: direct_manipulation::TouchpadSlot::default(),
+            pending_high_surrogate: Cell::new(None),
+            held_dead_keys: RefCell::default(),
+        }
+    }
+
+    /// Whether the window is still the one this input was made for: a
+    /// callback can close it and let another window take its handle.
+    fn is_current(&self) -> bool {
+        self.window.attached::<Self>().is_some()
+    }
+
+    /// The window's scale changed or a system setting did: measure the
+    /// double-click rectangle again at the scale.
+    fn measure_clicks(&self) {
+        let settings = raw::click_settings(&*self.preferences, self.scale_factor.get());
+        self.shared
+            .registry
+            .borrow_mut()
+            .set_click_settings(settings);
+    }
+
+    /// Dispatch a keyboard-layout change to the platform-level hook, through
+    /// the call point: no borrow of the handlers is held while it runs.
+    fn dispatch_keyboard_layout_change(&self) {
+        call(
+            &Field::new(&*self.handlers, |handlers| {
+                &mut handlers.keyboard_layout_changed
+            }),
+            |handler| handler(),
+        )
+        .or_resume(());
+    }
+}
+
 /// The input part of FLUI's window procedure: it answers the input messages
-/// and passes every other message on.
+/// and passes every other message on, keeps a window's input from its
+/// creation, and follows the window's steps.
 #[cfg(windows)]
 pub(crate) struct InputMessages;
 
 #[cfg(windows)]
 impl WindowMessages for InputMessages {
+    fn created(&self, window: &CreatedWindow) {
+        let input = InputWindow::new(window);
+        // What the window's other features read, kept beside the input's own
+        // state.
+        window.window().attach(Rc::clone(&input.shared));
+        window.window().attach(Rc::new(input));
+    }
+
+    fn step(&self, window: WindowRef, step: WindowStep) {
+        let Some(input) = window.attached::<InputWindow>() else {
+            return;
+        };
+        let hwnd = window.hwnd();
+        match step {
+            WindowStep::Resized(size) => input.resize_touchpad(size),
+            // What is held in a window that loses focus or is minimised sees
+            // no release.
+            WindowStep::Minimized | WindowStep::FocusLost => input.cancel_pointers(hwnd),
+            // The frame follows the scrolling it shows.
+            WindowStep::Painting => input.pump_touchpad_for_frame(hwnd),
+            WindowStep::SizeMoveStarted => input.pause_touchpad(hwnd),
+            WindowStep::SizeMoveEnded => input.resume_touchpad(),
+            WindowStep::Rescaled(scale) => {
+                input.scale_factor.set(scale);
+                input.measure_clicks();
+            }
+            // Double-click time and size are settings too.
+            WindowStep::SettingChanged => input.measure_clicks(),
+            WindowStep::KeyLetThrough { .. } => {}
+        }
+    }
+
+    /// Whatever the precision touchpad has open ends as cancelled, and its
+    /// viewport is released, while the window and its callbacks still exist.
+    fn destroyed(&self, window: WindowRef) {
+        if let Some(input) = window.attached::<InputWindow>() {
+            input.release_touchpad(window.hwnd());
+        }
+    }
+
     fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
         matches!(
             msg,
@@ -123,22 +287,19 @@ impl WindowMessages for InputMessages {
         if !self.answers(msg, wparam) {
             return None;
         }
+        // Held for the whole message: a callback that closes the window drops
+        // the window's states, not the one this message reaches.
+        let input = attached::<InputWindow>(hwnd);
         // SAFETY: the arguments as Win32 delivered them to the class's
-        // procedure, which is `with_message_context`'s and `handle`'s
-        // contract too.
-        unsafe {
-            with_message_context(hwnd, |ctx, slot| {
-                Self::handle(hwnd, msg, wparam, lparam, ctx, slot)
-            })
-        }
+        // procedure, which is `handle`'s contract too.
+        unsafe { Self::handle(hwnd, msg, wparam, lparam, input.as_deref()) }
     }
 }
 
 #[cfg(windows)]
 impl InputMessages {
     /// The input messages ([`WindowMessages::message`]), with `ctx`, the
-    /// window's context borrowed for the message, and `slot`, the value its
-    /// `GWLP_USERDATA` slot held when the borrow began.
+    /// window's input, `None` before the class announced the window.
     ///
     /// # Safety
     ///
@@ -150,14 +311,12 @@ impl InputMessages {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-        ctx: Option<&WindowContext>,
-        slot: isize,
+        ctx: Option<&InputWindow>,
     ) -> Option<LRESULT> {
         // SAFETY: see the `# Safety` section above. This single `unsafe`
         // block covers every Win32 call in the `match` below:
-        // `GetWindowLongPtrW` takes `hwnd` and a plain index, no pointers;
         // `TrackMouseEvent` (`WM_MOUSEMOVE`) takes a `&raw` pointer to a
-        // stack-local, correctly-sized struct; `PostMessageW` and
+        // stack-local, correctly-sized struct; `InSendMessageEx` and
         // `DefWindowProcW` take plain values.
         unsafe {
             let answer = match msg {
@@ -176,14 +335,14 @@ impl InputMessages {
                         ctx.set_hovered(true);
 
                         let events = raw::mouse_move_input(
-                            &ctx.pointer_registry,
+                            &ctx.shared.registry,
                             wparam,
                             lparam,
                             ctx.scale_factor.get(),
                             time,
                         );
                         for event in events {
-                            if ctx.pointer_registry.borrow().delivers(&event) {
+                            if ctx.shared.registry.borrow().delivers(&event) {
                                 ctx.callbacks.dispatch_input(event);
                             }
                         }
@@ -207,7 +366,7 @@ impl InputMessages {
                     };
                     let timed_context = ctx.map(|ctx| (ctx, ctx.message_clock.message_time()));
                     // The capture follows the native button state even with
-                    // no context to deliver to, and is settled before user
+                    // no input to deliver to, and is settled before user
                     // code runs: a release outside the client area must
                     // still reach this window, and the sequence's own
                     // release must not read as a stolen capture.
@@ -218,7 +377,7 @@ impl InputMessages {
                     }
                     if let Some((ctx, time)) = timed_context {
                         let events = mouse_button_input(
-                            &ctx.pointer_registry,
+                            &ctx.shared.registry,
                             button,
                             is_down,
                             wparam,
@@ -227,7 +386,7 @@ impl InputMessages {
                             time,
                         );
                         for event in events {
-                            if ctx.pointer_registry.borrow().delivers(&event) {
+                            if ctx.shared.registry.borrow().delivers(&event) {
                                 ctx.callbacks.dispatch_input(event);
                             }
                         }
@@ -269,7 +428,7 @@ impl InputMessages {
                             hwnd,
                             lparam,
                             ctx.message_clock.message_time(),
-                            &ctx.pointer_registry,
+                            &ctx.shared.registry,
                         );
                         for cancel in cancels {
                             ctx.callbacks.dispatch_input(cancel);
@@ -288,7 +447,7 @@ impl InputMessages {
                         };
                         let time = ctx.message_clock.message_time();
                         let event = raw::mouse_wheel_input(
-                            &ctx.pointer_registry,
+                            &ctx.shared.registry,
                             hwnd,
                             axis,
                             wparam,
@@ -313,7 +472,7 @@ impl InputMessages {
                         let time = ctx.message_clock.message_time();
 
                         // Track modifiers.
-                        ctx.modifiers.set(raw::message_modifiers());
+                        ctx.shared.modifiers.set(raw::message_modifiers());
 
                         // Merge the fully-translated character(s) for this
                         // keystroke into the keydown. The message loop runs
@@ -367,19 +526,24 @@ impl InputMessages {
                         };
                         let result = ctx.callbacks.dispatch_input(event);
                         // A callback can close this window and create another
-                        // with a recycled HWND. The entry guard pins the old
-                        // context, so matching userdata proves the native
-                        // default still targets this exact live window.
-                        if result.default_prevented
-                            || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != slot
-                        {
+                        // with a recycled HWND: only while the window is the
+                        // one this input was made for does the native default
+                        // still target it.
+                        if result.default_prevented || !ctx.is_current() {
                             // Withdrawn with its keydown: the held
                             // characters are dropped here.
                             return Some(LRESULT(0));
                         }
                         // The window's own keys (the fullscreen hotkey) are a
                         // default the app can prevent.
-                        ctx.apply_window_hotkey(hwnd, vk, is_repeat);
+                        window_step(
+                            ctx.hooks,
+                            ctx.window,
+                            WindowStep::KeyLetThrough {
+                                virtual_key: vk,
+                                repeat: is_repeat,
+                            },
+                        );
                         let handled = DefWindowProcW(hwnd, msg, wparam, lparam);
                         restore_translated_sys_chars(hwnd, &held);
                         return Some(handled);
@@ -392,7 +556,7 @@ impl InputMessages {
                     if let Some(ctx) = ctx {
                         let time = ctx.message_clock.message_time();
                         // Track modifiers.
-                        ctx.modifiers.set(raw::message_modifiers());
+                        ctx.shared.modifiers.set(raw::message_modifiers());
 
                         use raw::key_up_event;
                         let event = {
@@ -400,9 +564,7 @@ impl InputMessages {
                             key_up_event(wparam, lparam, &mut held, time)
                         };
                         let result = ctx.callbacks.dispatch_input(event);
-                        if result.default_prevented
-                            || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != slot
-                        {
+                        if result.default_prevented || !ctx.is_current() {
                             return Some(LRESULT(0));
                         }
                     }
@@ -418,8 +580,8 @@ impl InputMessages {
                     // message — dispatched as its own key-down instead of
                     // being discarded, so the text lane still receives it.
                     // Astral-plane characters arrive as two WM_CHARs; the
-                    // high surrogate is parked in the context until its low
-                    // half arrives.
+                    // high surrogate is parked in the window's input until
+                    // its low half arrives.
                     if let Some(ctx) = ctx {
                         let (pending, text) = crate::input::keys::assemble_stray_wm_char(
                             ctx.pending_high_surrogate.get(),
@@ -577,151 +739,218 @@ mod keystroke_queue {
     }
 }
 
+/// The window's pointer messages: `WM_POINTER*`, device arrival and removal,
+/// the mouse's hover on either route, and the end of every open contact when
+/// the window loses focus or is minimised.
 #[cfg(windows)]
-mod pointer_messages {
-    //! The window's pointer messages: `WM_POINTER*`, device arrival and removal,
-    //! the mouse's hover on either route, and the end of every open contact when
-    //! the window loses focus or is minimised.
-
-    use flui_platform::{EventTime, pointer::PointerEvent};
-    use windows::Win32::{
-        Foundation::{HANDLE, HWND, LPARAM, WPARAM},
-        UI::WindowsAndMessaging::{
-            PDC_ARRIVAL, PDC_REMOVAL, WM_POINTERCAPTURECHANGED, WM_POINTERLEAVE,
-        },
-    };
-
-    use crate::input::assembly::NativeCancel;
-    use crate::input::windows::raw as events;
-    use crate::window::windows::proc::WindowContext;
-    use flui_platform::PlatformInput;
-
-    impl WindowContext {
-        /// Record whether the mouse is over the window, raising the hover change
-        /// only when it changed. Every route the mouse reaches the window by
-        /// reports through here: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`, and `WM_POINTER*`
-        /// for a mouse under `EnableMouseInPointer`.
-        pub(crate) fn set_hovered(&self, hovered: bool) {
-            if self.is_hovered.replace(hovered) != hovered {
-                self.callbacks.dispatch_hover_status_change(hovered);
-            }
-        }
-
-        /// A `WM_POINTER*` `message` for the pointer `wparam` names.
-        pub(crate) fn pointer_message(&self, hwnd: HWND, message: u32, wparam: WPARAM) {
-            let raw = (wparam.0 & 0xffff) as u32;
-            let mouse = events::is_mouse_pointer(raw);
-            // The mouse's hover follows the messages that carry it. A capture
-            // change says nothing about where it is, and no message follows it
-            // (a press dragged outside sends no leave while it is held), so the
-            // hover is read from the cursor once its input is delivered.
-            let hover = (mouse && message != WM_POINTERCAPTURECHANGED)
-                .then_some(message != WM_POINTERLEAVE);
-            let inputs = events::native_pointer_input(
-                hwnd,
-                message,
-                (raw, mouse),
-                self.scale_factor.get(),
-                &self.message_clock,
-                &self.pointer_registry,
-            );
-            // The hover is settled before any of the message's input reaches user
-            // code: a callback that pumps messages may see the cursor come back,
-            // and nothing written after it may undo that.
-            if let Some(hovered) = hover {
-                self.set_hovered(hovered);
-            }
-            for input in inputs {
-                let deliver = self.pointer_registry.borrow().delivers(&input);
-                if deliver {
-                    self.callbacks.dispatch_input(input);
-                }
-            }
-            if mouse && message == WM_POINTERCAPTURECHANGED {
-                self.reconcile_hover(hwnd);
-            }
-        }
-
-        /// The window lost the mouse capture: no message may say where the
-        /// cursor went, so the hover is what the cursor is over now.
-        fn reconcile_hover(&self, hwnd: HWND) {
-            self.set_hovered(cursor_over_client(hwnd));
-        }
-
-        /// `WM_POINTERDEVICECHANGE`: a removed device ends its contacts and
-        /// leaves; an arriving one is announced.
-        pub(crate) fn pointer_device_changed(&self, wparam: WPARAM, lparam: LPARAM) {
-            let device = events::native_device(lparam);
-            let time = EventTime::from_nanos(self.message_clock.message_time());
-            let mut inputs = Vec::new();
-            if wparam.0 == PDC_REMOVAL as usize {
-                let (ended, removed) = self
-                    .pointer_registry
-                    .borrow_mut()
-                    .remove_device(device, time);
-                inputs.extend(ended.into_iter().map(|(_, input)| input));
-                inputs.extend(
-                    removed
-                        .map(|change| PlatformInput::Pointer(PointerEvent::DeviceRemoved(change))),
-                );
-            } else if wparam.0 == PDC_ARRIVAL as usize
-                && let Some(kind) =
-                    events::native_device_kind(HANDLE(lparam.0 as *mut core::ffi::c_void))
-            {
-                let added = self
-                    .pointer_registry
-                    .borrow_mut()
-                    .add_device(device, kind, time);
-                inputs.extend(
-                    added.map(|change| PlatformInput::Pointer(PointerEvent::DeviceAdded(change))),
-                );
-            }
-            for input in inputs {
-                self.callbacks.dispatch_input(input);
-            }
-        }
-
-        /// End every open pointer sequence and touchpad manipulation as
-        /// `FocusLost`: the window lost focus or was minimised, so the releases
-        /// may never reach it. What still arrives for an ended contact is an
-        /// orphan and delivers nothing.
-        pub(crate) fn cancel_pointers(&self, hwnd: HWND) {
-            // The touchpad first: its manipulation ends through the registry.
-            self.cancel_touchpad(hwnd);
-            let time = EventTime::from_nanos(self.message_clock.message_time());
-            let cancels = self.pointer_registry.borrow_mut().cancel_surface(
-                events::SURFACE,
-                time,
-                NativeCancel::FocusLost,
-            );
-            for cancel in cancels {
-                self.callbacks.dispatch_input(cancel);
-            }
+impl InputWindow {
+    /// Record whether the mouse is over the window, raising the hover change
+    /// only when it changed. Every route the mouse reaches the window by
+    /// reports through here: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`, and `WM_POINTER*`
+    /// for a mouse under `EnableMouseInPointer`.
+    fn set_hovered(&self, hovered: bool) {
+        if self.shared.hovered.replace(hovered) != hovered {
+            self.callbacks.dispatch_hover_status_change(hovered);
         }
     }
 
-    /// Whether the cursor is over `hwnd`'s client area, the window on top there;
-    /// `false` when the cursor cannot be read.
-    fn cursor_over_client(hwnd: HWND) -> bool {
-        use windows::Win32::{
-            Foundation::{POINT, RECT},
-            Graphics::Gdi::ScreenToClient,
-            UI::WindowsAndMessaging::{GetClientRect, GetCursorPos, WindowFromPoint},
-        };
-        let mut cursor = POINT::default();
-        let mut client = RECT::default();
-        // SAFETY: every out pointer addresses a live local; `hwnd` is the window
-        // whose procedure is running.
-        unsafe {
-            if GetCursorPos(&raw mut cursor).is_err() || WindowFromPoint(cursor) != hwnd {
-                return false;
-            }
-            ScreenToClient(hwnd, &raw mut cursor).as_bool()
-                && GetClientRect(hwnd, &raw mut client).is_ok()
-                && cursor.x >= client.left
-                && cursor.x < client.right
-                && cursor.y >= client.top
-                && cursor.y < client.bottom
+    /// A `WM_POINTER*` `message` for the pointer `wparam` names.
+    fn pointer_message(&self, hwnd: HWND, message: u32, wparam: WPARAM) {
+        use windows::Win32::UI::WindowsAndMessaging::{WM_POINTERCAPTURECHANGED, WM_POINTERLEAVE};
+
+        let raw = (wparam.0 & 0xffff) as u32;
+        let mouse = raw::is_mouse_pointer(raw);
+        // The mouse's hover follows the messages that carry it. A capture
+        // change says nothing about where it is, and no message follows it
+        // (a press dragged outside sends no leave while it is held), so the
+        // hover is read from the cursor once its input is delivered.
+        let hover =
+            (mouse && message != WM_POINTERCAPTURECHANGED).then_some(message != WM_POINTERLEAVE);
+        let inputs = raw::native_pointer_input(
+            hwnd,
+            message,
+            (raw, mouse),
+            self.scale_factor.get(),
+            &self.message_clock,
+            &self.shared.registry,
+        );
+        // The hover is settled before any of the message's input reaches user
+        // code: a callback that pumps messages may see the cursor come back,
+        // and nothing written after it may undo that.
+        if let Some(hovered) = hover {
+            self.set_hovered(hovered);
         }
+        for input in inputs {
+            let deliver = self.shared.registry.borrow().delivers(&input);
+            if deliver {
+                self.callbacks.dispatch_input(input);
+            }
+        }
+        if mouse && message == WM_POINTERCAPTURECHANGED {
+            self.reconcile_hover(hwnd);
+        }
+    }
+
+    /// The window lost the mouse capture: no message may say where the
+    /// cursor went, so the hover is what the cursor is over now.
+    fn reconcile_hover(&self, hwnd: HWND) {
+        self.set_hovered(cursor_over_client(hwnd));
+    }
+
+    /// `WM_POINTERDEVICECHANGE`: a removed device ends its contacts and
+    /// leaves; an arriving one is announced.
+    fn pointer_device_changed(&self, wparam: WPARAM, lparam: LPARAM) {
+        use flui_platform::{EventTime, PlatformInput, pointer::PointerEvent};
+        use windows::Win32::{
+            Foundation::HANDLE,
+            UI::WindowsAndMessaging::{PDC_ARRIVAL, PDC_REMOVAL},
+        };
+
+        let device = raw::native_device(lparam);
+        let time = EventTime::from_nanos(self.message_clock.message_time());
+        let mut inputs = Vec::new();
+        if wparam.0 == PDC_REMOVAL as usize {
+            let (ended, removed) = self
+                .shared
+                .registry
+                .borrow_mut()
+                .remove_device(device, time);
+            inputs.extend(ended.into_iter().map(|(_, input)| input));
+            inputs.extend(
+                removed.map(|change| PlatformInput::Pointer(PointerEvent::DeviceRemoved(change))),
+            );
+        } else if wparam.0 == PDC_ARRIVAL as usize
+            && let Some(kind) = raw::native_device_kind(HANDLE(lparam.0 as *mut core::ffi::c_void))
+        {
+            let added = self
+                .shared
+                .registry
+                .borrow_mut()
+                .add_device(device, kind, time);
+            inputs.extend(
+                added.map(|change| PlatformInput::Pointer(PointerEvent::DeviceAdded(change))),
+            );
+        }
+        for input in inputs {
+            self.callbacks.dispatch_input(input);
+        }
+    }
+
+    /// End every open pointer sequence and touchpad manipulation as
+    /// `FocusLost`: the window lost focus or was minimised, so the releases
+    /// may never reach it. What still arrives for an ended contact is an
+    /// orphan and delivers nothing.
+    fn cancel_pointers(&self, hwnd: HWND) {
+        use crate::input::assembly::NativeCancel;
+        use flui_platform::EventTime;
+
+        // The touchpad first: its manipulation ends through the registry.
+        self.cancel_touchpad(hwnd);
+        let time = EventTime::from_nanos(self.message_clock.message_time());
+        let cancels = self.shared.registry.borrow_mut().cancel_surface(
+            raw::SURFACE,
+            time,
+            NativeCancel::FocusLost,
+        );
+        for cancel in cancels {
+            self.callbacks.dispatch_input(cancel);
+        }
+    }
+}
+
+/// Whether the cursor is over `hwnd`'s client area, the window on top there;
+/// `false` when the cursor cannot be read.
+#[cfg(windows)]
+fn cursor_over_client(hwnd: HWND) -> bool {
+    use windows::Win32::{
+        Foundation::{POINT, RECT},
+        Graphics::Gdi::ScreenToClient,
+        UI::WindowsAndMessaging::{GetClientRect, GetCursorPos, WindowFromPoint},
+    };
+    let mut cursor = POINT::default();
+    let mut client = RECT::default();
+    // SAFETY: every out pointer addresses a live local; `hwnd` is the window
+    // whose procedure is running.
+    unsafe {
+        if GetCursorPos(&raw mut cursor).is_err() || WindowFromPoint(cursor) != hwnd {
+            return false;
+        }
+        ScreenToClient(hwnd, &raw mut cursor).as_bool()
+            && GetClientRect(hwnd, &raw mut client).is_ok()
+            && cursor.x >= client.left
+            && cursor.x < client.right
+            && cursor.y >= client.top
+            && cursor.y < client.bottom
+    }
+}
+
+#[cfg(all(windows, test))]
+mod tests {
+    use std::rc::Rc;
+
+    use flui_foundation::geometry::Size;
+    use flui_platform::WindowOptions;
+    use windows::Win32::Foundation::HWND;
+
+    use super::InputWindow;
+    use crate::WindowsPlatform;
+    use crate::input::WindowInput;
+    use crate::owner::windows::{WindowIdentity, WindowRef, attached};
+    use crate::platform::Platform as _;
+    use crate::window::windows::WindowsWindow;
+
+    /// A window's input is kept with the window from its creation: reached on
+    /// its thread by its handle or by a reference to it, never by a reference
+    /// to another window behind the same handle nor from another thread, and
+    /// dropped with the window. Red-check: leave the states in place at
+    /// `WM_NCDESTROY`.
+    #[test]
+    fn a_windows_input_lives_as_long_as_its_window() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .with_title("flui input state")
+                    .with_size(Size::new(160.0, 120.0)),
+            )
+            .expect("window");
+        let (hwnd, identity) = {
+            let window = window
+                .as_any()
+                .downcast_ref::<WindowsWindow>()
+                .expect("Win32 window");
+            (window.hwnd(), window.identity)
+        };
+
+        let input = attached::<InputWindow>(hwnd).expect("the input kept the window's state");
+        assert!(
+            WindowRef::new(hwnd, identity)
+                .attached::<WindowInput>()
+                .is_some(),
+            "the window's other features reach what it shares"
+        );
+        let (stranger, ()) =
+            WindowIdentity::admit(&std::sync::atomic::AtomicU64::new(u64::MAX - 1), || ());
+        assert!(
+            WindowRef::new(hwnd, stranger)
+                .attached::<WindowInput>()
+                .is_none(),
+            "a reference to another window behind the handle reaches nothing"
+        );
+        let handle = hwnd.0 as isize;
+        let elsewhere = std::thread::spawn(move || {
+            attached::<WindowInput>(HWND(handle as *mut core::ffi::c_void)).is_none()
+        })
+        .join()
+        .expect("the probe thread");
+        assert!(elsewhere, "another thread reaches nothing");
+
+        let kept = Rc::downgrade(&input);
+        drop(input);
+        window.close();
+        assert!(
+            kept.upgrade().is_none(),
+            "the window's states are dropped with it"
+        );
     }
 }

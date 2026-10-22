@@ -3,11 +3,13 @@
 //! Everything the Win32 backend decides about a keystroke — which `Key` a
 //! virtual-key code falls back to, which W3C `Code` a scancode names, whether
 //! a `WM_CHAR` burst is typeable text, and how that text merges into the
-//! key-down event — lives here as pure functions over raw integers.
+//! key-down event — lives here as pure functions over raw integers, with the
+//! virtual keys and `MK_*` bits of the mouse buttons ([`MOUSE_BUTTONS`]),
+//! which OLE drag and drop reads too.
 //!
 //! This module is deliberately free of `cfg` gates and platform types so the
 //! per-decision tables compile — and their tests execute — on any host, even
-//! though the Win32 caller (`platforms/windows`) itself is only ever
+//! though the Win32 caller (`input::windows`) itself is only ever
 //! clippy-linted in CI, never linked or run.
 //!
 //! # The WM_CHAR pairing model
@@ -34,6 +36,7 @@
 //! [`assemble_stray_wm_char`] into its own event instead of being dropped.
 
 use flui_platform::keyboard::{Code, Key, Location, NamedKey};
+use flui_platform::pointer::PointerButton;
 
 // Virtual-key codes, from `winuser.h`. Raw `u16` rather than the `windows`
 // crate's `VIRTUAL_KEY` newtype so this module compiles on every host.
@@ -96,6 +99,23 @@ mod vk {
     pub const OEM_7: u16 = 0xDE;
     pub const OEM_102: u16 = 0xE2;
 }
+
+/// Each mouse button: its virtual-key code, the `MK_*` bit a mouse message's
+/// `WPARAM` and OLE's key state carry for it, and the button it is. The Win32
+/// input reads the buttons a message holds from it, and OLE drag and drop the
+/// buttons whose release drops a session.
+pub const MOUSE_BUTTONS: [(u16, u32, PointerButton); 5] = [
+    // VK_LBUTTON, MK_LBUTTON
+    (0x01, 0x0001, PointerButton::PRIMARY),
+    // VK_RBUTTON, MK_RBUTTON
+    (0x02, 0x0002, PointerButton::SECONDARY),
+    // VK_MBUTTON, MK_MBUTTON
+    (0x04, 0x0010, PointerButton::AUXILIARY),
+    // VK_XBUTTON1, MK_XBUTTON1
+    (0x05, 0x0020, PointerButton::BACK),
+    // VK_XBUTTON2, MK_XBUTTON2
+    (0x06, 0x0040, PointerButton::FORWARD),
+];
 
 /// Split a `WM_KEYDOWN`/`WM_KEYUP` `lParam` into the fields the translation
 /// needs: the 8-bit scancode (bits 16–23), the extended-key flag (bit 24,

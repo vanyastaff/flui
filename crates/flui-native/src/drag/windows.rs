@@ -542,6 +542,7 @@ use windows_core::{ComObject, HSTRING};
 
 #[cfg(windows)]
 use crate::{
+    input::WindowInput,
     owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
@@ -1087,12 +1088,9 @@ impl Win32DragSource {
     /// window's pointer registry read it.
     fn contact_kind(&self, pointer: Option<flui_platform::PointerId>) -> Option<PointerKind> {
         let pointer = pointer?;
-        self.window
-            .with_context("drag source", |context| {
-                let registry = context.pointer_registry.try_borrow().ok()?;
-                registry.origin(pointer).map(|origin| origin.kind)
-            })
-            .flatten()
+        let input = self.window.attached::<WindowInput>()?;
+        let registry = input.registry.try_borrow().ok()?;
+        registry.origin(pointer).map(|origin| origin.kind)
     }
 }
 
@@ -1168,11 +1166,11 @@ pub(crate) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDr
 /// state: the buttons whose release drops the session about to start.
 #[cfg(windows)]
 fn mouse_buttons_held() -> u32 {
-    crate::input::windows::raw::MOUSE_BUTTONS
+    crate::input::keys::MOUSE_BUTTONS
         .iter()
         .filter(|(key, _, _)| {
             // SAFETY: a query of this thread's key state by a constant code.
-            let state = unsafe { GetKeyState(i32::from(key.0)) };
+            let state = unsafe { GetKeyState(i32::from(*key)) };
             state < 0
         })
         .fold(0, |held, (_, bit, _)| held | bit)

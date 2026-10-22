@@ -66,3 +66,21 @@ pub(crate) fn primary_mouse_info() -> PointerInfo {
     )
     .with_role(PointerRole::Primary)
 }
+
+/// What the other features of a window read of its input, on the window's
+/// owner thread: whether the mouse is over it, the modifiers its last key
+/// carried, and the registry its pointer contacts are assembled in. The Win32
+/// input keeps one for each window of FLUI's class beside its own state
+/// (`owner::windows::WindowRef::attach`), where the class's procedure is
+/// shared between features: the window reads the hover and the modifiers,
+/// drag and drop the kind of the contact a drag began with, and haptics the
+/// pen in range.
+#[cfg(windows)]
+pub(crate) struct WindowInput {
+    /// Whether the mouse is over the window.
+    pub(crate) hovered: std::cell::Cell<bool>,
+    /// The modifiers held at the window's last key.
+    pub(crate) modifiers: std::cell::Cell<flui_platform::Modifiers>,
+    /// The window's pointer contacts and devices.
+    pub(crate) registry: std::cell::RefCell<assembly::ContactRegistry>,
+}

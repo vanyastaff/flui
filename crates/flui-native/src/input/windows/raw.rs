@@ -36,16 +36,12 @@ use flui_platform::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
     Graphics::Gdi::ScreenToClient,
-    System::{
-        SystemInformation::GetTickCount64,
-        SystemServices::{MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_XBUTTON1, MK_XBUTTON2},
-    },
+    System::SystemInformation::GetTickCount64,
     UI::{
         Input::{
             KeyboardAndMouse::{
                 GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
-                VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
-                VK_XBUTTON1, VK_XBUTTON2,
+                VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
             },
             Pointer::{
                 POINTER_BUTTON_CHANGE_TYPE, POINTER_CHANGE_FIFTHBUTTON_DOWN,
@@ -290,33 +286,14 @@ mod message_clock_contract {
     }
 }
 
-use crate::input::{event_timestamp_ns, keys};
+use crate::input::event_timestamp_ns;
+use crate::input::keys::{self, MOUSE_BUTTONS};
+use crate::owner::windows::control::OwnerPreferences;
+use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use flui_platform::PlatformInput;
-
-/// Convert LPARAM to X coordinate
-#[inline]
-pub(crate) fn get_x_lparam(lparam: LPARAM) -> i32 {
-    (lparam.0 & 0xFFFF) as i16 as i32
-}
-
-/// Convert LPARAM to Y coordinate
-#[inline]
-pub(crate) fn get_y_lparam(lparam: LPARAM) -> i32 {
-    ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
-}
 
 /// Every Win32 registry serves one window.
 pub(crate) const SURFACE: NativeSurface = NativeSurface(0);
-
-/// Each mouse button: its virtual key, the `MK_*` bit a mouse message's
-/// `WPARAM` and OLE's key state carry for it, and the button it is.
-pub(crate) const MOUSE_BUTTONS: [(VIRTUAL_KEY, u32, PointerButton); 5] = [
-    (VK_LBUTTON, MK_LBUTTON.0, PointerButton::PRIMARY),
-    (VK_RBUTTON, MK_RBUTTON.0, PointerButton::SECONDARY),
-    (VK_MBUTTON, MK_MBUTTON.0, PointerButton::AUXILIARY),
-    (VK_XBUTTON1, MK_XBUTTON1.0, PointerButton::BACK),
-    (VK_XBUTTON2, MK_XBUTTON2.0, PointerButton::FORWARD),
-];
 
 /// The button a pointer packet's `ButtonChangeType` names and whether it
 /// went down; `None` when no button changed.
@@ -354,16 +331,23 @@ fn pointer_contact(mouse: bool, raw: u32) -> NativeContact {
 }
 
 /// A window's pointer registry on `clock`, with the OS double-click
-/// thresholds at `scale`.
-pub(crate) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistry {
+/// thresholds `clicks`.
+pub(crate) fn pointer_registry(
+    clock: NativeClock,
+    clicks: Option<ClickSettings>,
+) -> ContactRegistry {
     let mut registry = ContactRegistry::new(clock).with_reserved_contact(MOUSE_CONTACT);
-    registry.set_click_settings(click_settings(scale));
+    registry.set_click_settings(clicks);
     registry
 }
 
-/// The OS double-click interval and rectangle at `scale`, in device pixels;
-/// `None` when the metrics cannot be read.
-pub(crate) fn click_settings(scale: f64) -> Option<ClickSettings> {
+/// The OS double-click interval and rectangle at `scale`, in device pixels,
+/// the rectangle as `preferences` measure it; `None` when the metrics cannot
+/// be read.
+pub(crate) fn click_settings(
+    preferences: &dyn OwnerPreferences,
+    scale: f64,
+) -> Option<ClickSettings> {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
     #[expect(
         clippy::cast_possible_truncation,
@@ -371,7 +355,8 @@ pub(crate) fn click_settings(scale: f64) -> Option<ClickSettings> {
         reason = "a finite positive scale times 96 is a small DPI"
     )]
     let dpi = (scale * 96.0).round() as u32;
-    let area = crate::preferences::windows::mouse_geometry(dpi)
+    let area = preferences
+        .mouse_geometry(dpi)
         .inspect_err(|error| tracing::debug!(%error, "double-click area unavailable"))
         .ok()?
         .double_click_area();
@@ -1472,7 +1457,7 @@ pub(super) fn capture_changed_input(
     let gaining = HWND(lparam.0 as *mut core::ffi::c_void);
     let held = MOUSE_BUTTONS
         .iter()
-        .any(|(key, _, _)| key_down_in_queue(*key));
+        .any(|(key, _, _)| key_down_in_queue(VIRTUAL_KEY(*key)));
     if gaining == hwnd || !held {
         return Vec::new();
     }
@@ -1742,5 +1727,33 @@ impl HeldDeadKeys {
         let before = self.0.len();
         self.0.retain(|held| *held != (scan_code, extended));
         self.0.len() != before
+    }
+}
+
+#[cfg(test)]
+mod mouse_button_codes {
+    use windows::Win32::System::SystemServices::{
+        MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_XBUTTON1, MK_XBUTTON2,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+    };
+
+    use super::MOUSE_BUTTONS;
+
+    /// The key model's mouse buttons, written out as integers so every host
+    /// builds them, carry Windows' own virtual keys and `MK_*` bits.
+    #[test]
+    fn the_mouse_buttons_carry_the_win32_codes() {
+        let win32 = [
+            (VK_LBUTTON, MK_LBUTTON),
+            (VK_RBUTTON, MK_RBUTTON),
+            (VK_MBUTTON, MK_MBUTTON),
+            (VK_XBUTTON1, MK_XBUTTON1),
+            (VK_XBUTTON2, MK_XBUTTON2),
+        ];
+        for ((key, bit, button), (vk, mk)) in MOUSE_BUTTONS.into_iter().zip(win32) {
+            assert_eq!((key, bit), (vk.0, mk.0), "{button:?}");
+        }
     }
 }

@@ -193,6 +193,10 @@ impl OwnerPreferences for PreferenceSource {
     fn broadcasts(&self) -> Rc<dyn Subscriber> {
         Rc::new(PreferenceBroadcasts(Arc::clone(&self.invalidation)))
     }
+
+    fn mouse_geometry(&self, dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
+        mouse_geometry(dpi)
+    }
 }
 
 /// The source an owner keeps, as the type this file built: the tests reach
@@ -452,7 +456,7 @@ fn drag_extent(metric: i32) -> Result<i32, PreferenceQueryError> {
 }
 
 /// Query mouse metrics at the consuming coordinate context, without subscribing.
-pub(crate) fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
+fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
     let ratio =
         DevicePixelRatio::new(f64::from(dpi) / 96.0).ok_or(PreferenceQueryError::Unavailable)?;
     let metric = |index: SYSTEM_METRICS_INDEX| -> Result<i32, PreferenceQueryError> {
