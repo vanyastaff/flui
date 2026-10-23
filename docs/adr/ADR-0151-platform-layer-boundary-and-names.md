@@ -8,11 +8,12 @@
   on for every Linux build; it becomes an unconditional Linux dependency together with `zbus` when
   the native Wayland and X11 host arrives. The Windows and macOS adapters compile always; the
   confirmation reads the same way.
-- **Amended:** 2026-10-22 — section 16: the boundary is `owner::panic_boundary::os_entry`
-  (`crates/flui-native/src/owner/panic_boundary.rs`), which every OS entry's body calls, and
-  `cargo xtask panic-boundary` is the gate. Out of an `extern "C"` frame a panic aborts the process
-  (since Rust 1.81, not undefined behaviour); out of an `extern "C-unwind"` one it unwinds through
-  frames not written for it. Containment buys a logged failure and an answer the OS understands.
+- **Amended:** 2026-10-22 — section 16: the boundary every OS entry's body calls is
+  `owner::panic_boundary::os_entry` (`crates/flui-native/src/owner/panic_boundary.rs`), and
+  `cargo xtask panic-boundary` is the gate. A panic out of an `extern "C"` frame is not undefined
+  behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
+  diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
+  for it. Containment buys a logged failure and an answer the OS understands.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -678,10 +679,9 @@ secrets in diagnostics) are decided by the records the table cites.
 - **Zero CPU when idle.** Every OS signal is a notification; a timer poll is a defect, not a
   fallback.
 - **A panic in user code never unwinds into the OS.** A gate checks that every `extern "C"`
-  function and every OS callback passes `os_entry`
-  (`crates/flui-native/src/owner/panic_boundary.rs`); without it a panic aborts the process
-  unannounced out of an `extern "C"` frame, or unwinds through foreign frames out of an
-  `extern "C-unwind"` one, and a missed boundary is invisible in review.
+  function and every OS callback passes `panic_boundary`
+  (`crates/flui-platform/src/shared/panic_boundary.rs`); an unwind into C is undefined behaviour,
+  and a missed boundary is invisible in review.
 - **One monotonic timeline** for input, frames and presentation: `EventTime` carries all three.
 - **Presentation feedback reaches the frame clock**, from the source each OS has: DXGI frame
   statistics on Windows, `addPresentedHandler` on Apple platforms, `wp_presentation_time` on
