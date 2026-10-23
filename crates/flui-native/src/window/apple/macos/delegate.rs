@@ -14,6 +14,7 @@ use objc2_foundation::NSRect;
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
 use crate::input::apple::macos as view;
 use crate::owner::apple::macos::HostDisplays;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
 /// window not on any screen) or the source leaves that screen out.
@@ -73,19 +74,27 @@ fn get_or_create_delegate_class() -> &'static Class {
         decl.add_ivar::<*mut std::ffi::c_void>(c"window_ptr");
 
         // windowDidResize:
+        // Each method runs its body in the panic boundary: a panic answers
+        // AppKit as if the window were gone (`()`, or the default of a
+        // `windowShould…:` question) rather than unwinding through it.
+
         extern "C-unwind" fn window_did_resize(this: &Object, _sel: Sel, _notification: ObjcId) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_resize();
-            }
+            os_entry("windowDidResize:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    window.handle_resize();
+                }
+            });
         }
 
         // windowDidMove:
         extern "C-unwind" fn window_did_move(this: &Object, _sel: Sel, _notification: ObjcId) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_move();
-            }
+            os_entry("windowDidMove:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    window.handle_move();
+                }
+            });
         }
 
         // windowDidBecomeKey:
@@ -94,10 +103,17 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_focus_gained();
-            }
+            os_entry(
+                "windowDidBecomeKey:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_focus_gained();
+                    }
+                },
+            );
         }
 
         // windowDidResignKey:
@@ -106,10 +122,17 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_focus_lost();
-            }
+            os_entry(
+                "windowDidResignKey:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_focus_lost();
+                    }
+                },
+            );
         }
 
         // The delegate callbacks below share one invariant: they run on the
@@ -124,11 +147,18 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: see the shared invariant above.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal();
-                window.handle_transition_started();
-            }
+            os_entry(
+                "windowWillMiniaturize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal();
+                        window.handle_transition_started();
+                    }
+                },
+            );
         }
 
         // windowWillEnterFullScreen: likewise; the full-screen bit may already
@@ -138,11 +168,18 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: see the shared invariant above.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal_entering_fullscreen();
-                window.handle_transition_started();
-            }
+            os_entry(
+                "windowWillEnterFullScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal_entering_fullscreen();
+                        window.handle_transition_started();
+                    }
+                },
+            );
         }
 
         // windowWillExitFullScreen:
@@ -151,10 +188,17 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: see the shared invariant above.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_transition_started();
-            }
+            os_entry(
+                "windowWillExitFullScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_transition_started();
+                    }
+                },
+            );
         }
 
         // windowShouldZoom:toFrame: is asked before a zoom, and a programmatic
@@ -165,11 +209,18 @@ fn get_or_create_delegate_class() -> &'static Class {
             _window: ObjcId,
             _new_frame: NSRect,
         ) -> BObjC {
-            // SAFETY: see the shared invariant above.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal();
-            }
-            YES
+            os_entry(
+                "windowShouldZoom:toFrame:",
+                (),
+                AfterPanic::Answer(|()| YES),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.record_normal();
+                    }
+                    YES
+                },
+            )
         }
 
         // windowDidMiniaturize:, windowDidDeminiaturize:,
@@ -180,44 +231,61 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: see the shared invariant above.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_transition_ended();
-            }
+            os_entry(
+                "a window transition's end",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_transition_ended();
+                    }
+                },
+            );
         }
 
-        // windowShouldClose:
+        // windowShouldClose: — a close request whose handling panicked is
+        // refused: the window stays, and the next request asks again.
         extern "C-unwind" fn window_should_close(
             this: &Object,
             _sel: Sel,
             _sender: ObjcId,
         ) -> BObjC {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                if window.handle_close_request() {
-                    YES
-                } else {
-                    NO
-                }
-            } else {
-                YES
-            }
+            os_entry(
+                "windowShouldClose:",
+                (),
+                AfterPanic::Answer(|()| NO),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        if window.handle_close_request() {
+                            YES
+                        } else {
+                            NO
+                        }
+                    } else {
+                        YES
+                    }
+                },
+            )
         }
 
         // windowWillClose:
         extern "C-unwind" fn window_will_close(this: &Object, _sel: Sel, _notification: ObjcId) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                // SAFETY: the wrapper retains this live NSWindow. Pin it before
-                // user callbacks can drop the final wrapper; transferring that
-                // extra retain to AppKit's surrounding autorelease pool keeps
-                // the receiver alive until the native close stack has returned.
-                // Nested callback pools cannot drain this already-enqueued pin.
-                if let Some(pin) = unsafe { objc2::rc::Retained::retain(window.ns_window) } {
-                    let _ = objc2::rc::Retained::autorelease_ptr(pin);
+            os_entry("windowWillClose:", (), AfterPanic::Answer(|()| ()), || {
+                // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                    // SAFETY: the wrapper retains this live NSWindow. Pin it before
+                    // user callbacks can drop the final wrapper; transferring that
+                    // extra retain to AppKit's surrounding autorelease pool keeps
+                    // the receiver alive until the native close stack has returned.
+                    // Nested callback pools cannot drain this already-enqueued pin.
+                    if let Some(pin) = unsafe { objc2::rc::Retained::retain(window.ns_window) } {
+                        let _ = objc2::rc::Retained::autorelease_ptr(pin);
+                    }
+                    window.handle_close();
                 }
-                window.handle_close();
-            }
+            });
         }
 
         // windowDidChangeBackingProperties: (Retina/DPI change)
@@ -226,10 +294,18 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_backing_properties_changed();
-            }
+            os_entry(
+                "windowDidChangeBackingProperties:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate
+                    // objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_backing_properties_changed();
+                    }
+                },
+            );
         }
 
         // windowDidChangeScreen: (moved to different monitor)
@@ -238,10 +314,17 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_screen_changed();
-            }
+            os_entry(
+                "windowDidChangeScreen:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_screen_changed();
+                    }
+                },
+            );
         }
 
         // windowDidChangeOcclusionState: (hidden-surface gating — fires on
@@ -253,26 +336,41 @@ fn get_or_create_delegate_class() -> &'static Class {
             _sel: Sel,
             _notification: ObjcId,
         ) {
-            // SAFETY: AppKit invokes delegate methods on live delegate objects.
-            if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.handle_occlusion_state_changed();
-            }
+            os_entry(
+                "windowDidChangeOcclusionState:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: AppKit invokes delegate methods on live delegate
+                    // objects.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_occlusion_state_changed();
+                    }
+                },
+            );
         }
 
         // dealloc — reclaim the boxed Weak<MacOSWindow>
         extern "C-unwind" fn delegate_dealloc(this: &Object, _sel: Sel) {
-            // SAFETY: the ivar holds either null or a Box<Weak<MacOSWindow>>
-            // leaked in `create_window_delegate`; reclaiming it exactly once
-            // on dealloc is the matching release. The super dealloc message
-            // is the mandatory NSObject teardown.
-            unsafe {
-                let window_ptr: *mut std::ffi::c_void = *this.get_ivar("window_ptr");
-                if !window_ptr.is_null() {
-                    drop(Box::from_raw(window_ptr.cast::<Weak<MacOSWindow>>()));
-                }
-                let superclass = class!(NSObject);
-                let _: () = msg_send![super(this, superclass), dealloc];
-            }
+            os_entry(
+                "FLUIWindowDelegate's dealloc",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: the ivar holds either null or a Box<Weak<MacOSWindow>>
+                    // leaked in `create_window_delegate`; reclaiming it exactly once
+                    // on dealloc is the matching release. The super dealloc message
+                    // is the mandatory NSObject teardown.
+                    unsafe {
+                        let window_ptr: *mut std::ffi::c_void = *this.get_ivar("window_ptr");
+                        if !window_ptr.is_null() {
+                            drop(Box::from_raw(window_ptr.cast::<Weak<MacOSWindow>>()));
+                        }
+                        let superclass = class!(NSObject);
+                        let _: () = msg_send![super(this, superclass), dealloc];
+                    }
+                },
+            );
         }
 
         // Add methods

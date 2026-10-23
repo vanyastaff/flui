@@ -343,9 +343,12 @@ impl TextServices {
         queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
 
-    /// A COM entry starts: host operations queue until it ends.
-    fn enter(&self) {
-        self.entry_depth.set(self.entry_depth.get() + 1);
+    /// A COM entry starts: host operations queue until the returned depth is
+    /// handed to [`Self::leave`], or dropped as a panic its entry did not
+    /// contain unwinds to the entry's boundary, so the depth never stays
+    /// raised and the queue is drained by the next host operation.
+    fn enter(&self) -> Depth<'_> {
+        self.enter_host_op()
     }
 
     /// A COM entry ended; the outermost one runs what was queued under it.
@@ -353,9 +356,8 @@ impl TextServices {
     /// it is logged, not raised. The log runs a user-installed subscriber,
     /// so it is contained too: nothing unwinds into TSF, and the failure's
     /// payload is retained whatever the subscriber does.
-    fn leave(&self) {
-        self.entry_depth
-            .set(self.entry_depth.get().saturating_sub(1));
+    fn leave(&self, entered: Depth<'_>) {
+        drop(entered);
         self.drain_pending();
         if self.entry_depth.get() == 0
             && let Some((payload, recovery)) = self.take_failure()

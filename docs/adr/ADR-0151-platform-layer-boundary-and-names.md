@@ -8,6 +8,12 @@
   on for every Linux build; it becomes an unconditional Linux dependency together with `zbus` when
   the native Wayland and X11 host arrives. The Windows and macOS adapters compile always; the
   confirmation reads the same way.
+- **Amended:** 2026-10-22 — section 16: the boundary every OS entry's body calls is
+  `owner::panic_boundary::os_entry` (`crates/flui-native/src/owner/panic_boundary.rs`), and
+  `cargo xtask panic-boundary` is the gate. A panic out of an `extern "C"` frame is not undefined
+  behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
+  diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
+  for it. Containment buys a logged failure and an answer the OS understands.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the

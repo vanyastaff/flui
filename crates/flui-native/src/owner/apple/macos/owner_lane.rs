@@ -33,6 +33,8 @@
 use objc2::msg_send;
 use objc2::runtime::AnyClass;
 
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+
 /// The production owner lane: the dispatch queue bound to the AppKit main
 /// thread. Calls from other threads are dispatched here synchronously.
 pub(crate) fn owner_queue() -> &'static dispatch::Queue {
@@ -149,17 +151,17 @@ pub(crate) fn exec_on_owner<R: Send>(
     if on_owner_thread(owner, owner_is_main) {
         f()
     } else {
-        // SAFETY: dispatch invokes the closure through an `extern "C"`
-        // trampoline with no panic catch, so a Rust panic unwinding through
-        // libdispatch's C frames would be undefined behaviour. The dispatched
-        // body is therefore catch_unwind-wrapped and the payload is replayed
-        // on the caller once `exec_sync` returns. The RAII guard and the
-        // `catch_unwind` call themselves sit in front of the panicking body,
-        // but both are infallible (`Cell::set` and a plain std call) while
-        // GCD is running the block.
+        // Dispatch invokes the closure through an `extern "C"` trampoline
+        // with no panic catch, so the closure is an OS entry: `f`'s own panic
+        // is caught inside it and replayed on the caller once `exec_sync`
+        // returns. Only the guard could panic outside that catch, and it is
+        // infallible (`Cell::set`); were it to, the lane's state is torn and
+        // the process ends.
         let result = owner.exec_sync(move || {
-            let _guard = OnOwnerQueueGuard::new(owner);
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            os_entry("the owner lane", (), AfterPanic::Abort, move || {
+                let _guard = OnOwnerQueueGuard::new(owner);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            })
         });
         match result {
             Ok(value) => value,
@@ -186,30 +188,21 @@ pub(crate) fn exec_async_guarded(
     owner: &'static dispatch::Queue,
     f: impl FnOnce() + Send + 'static,
 ) {
+    // The guard is installed before the body runs, so `on_owner_queue` reports
+    // on-lane for the body's lifetime; the boundary wraps both before any
+    // unwind could cross GCD's extern-"C" `exec_async` trampoline frames. A
+    // caught panic is logged there and swallowed: fire-and-forget has no
+    // caller frame to resume.
     owner.exec_async(move || {
-        // SAFETY: the guard is installed before the body runs, so
-        // `on_owner_queue` reports on-lane for the body's lifetime; the
-        // panic shield wraps `f` before any unwind could cross GCD's
-        // extern-"C" `exec_async` trampoline frames — the same reasoning as
-        // `exec_on_owner`'s dispatched arm. The post-catch log arm sits
-        // OUTSIDE the shield, but it is a plain-std statement (downcast +
-        // `tracing::warn!`) encased by the tracing subscriber's own panic
-        // containment, so no panic can escape this block.
-        let _guard = OnOwnerQueueGuard::new(owner);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        if let Err(payload) = result {
-            let message = if let Some(message) = payload.downcast_ref::<&str>() {
-                message
-            } else if let Some(message) = payload.downcast_ref::<String>() {
-                message.as_str()
-            } else {
-                "(a non-string panic payload)"
-            };
-            tracing::warn!(
-                "owner-lane teardown body panicked (swallowed; no caller frame to resume): \
-                 {message}"
-            );
-        }
+        os_entry(
+            "an owner-lane teardown tail",
+            (),
+            AfterPanic::Answer(|()| ()),
+            move || {
+                let _guard = OnOwnerQueueGuard::new(owner);
+                f();
+            },
+        );
     });
 }
 

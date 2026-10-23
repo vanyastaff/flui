@@ -33,6 +33,7 @@ use windows::{
 };
 
 use crate::clipboard::lock;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::Clipboard;
 
 /// Windows clipboard implementation
@@ -408,8 +409,14 @@ unsafe extern "system" fn owner_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // SAFETY: forwards Win32's own arguments unchanged.
-    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    os_entry(
+        "the clipboard owner's procedure",
+        (),
+        AfterPanic::Answer(|()| LRESULT(0)),
+        // SAFETY: forwards Win32's own arguments unchanged, on the thread
+        // Win32 delivers them on.
+        || unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    )
 }
 
 impl Drop for ClipboardSession {

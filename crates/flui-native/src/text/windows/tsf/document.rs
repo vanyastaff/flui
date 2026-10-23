@@ -3,12 +3,13 @@
 //! window's [`TextServices`].
 //!
 //! TSF calls in on the owner thread, from inside the window's message loop
-//! and from inside our own calls into TSF. Every vtable method goes through
-//! [`TsfStore::com_entry`], which keeps the document and the store alive for
-//! the call (clones on the stack), counts the call as a COM entry on the
-//! window's text services (so host operations arriving inside it are queued)
-//! and contains a panic: a panic never unwinds into TSF, it poisons the
-//! document instead.
+//! and from inside our own calls into TSF. Every vtable method that reads or
+//! edits the document goes through [`TsfStore::document_method`], which keeps
+//! the document and the store alive for the call (clones on the stack), counts
+//! the call as a COM entry on the window's text services (so host operations
+//! arriving inside it are queued) and contains a panic: a panic never unwinds
+//! into TSF, it poisons the document instead. A method whose answer reads no
+//! state goes through [`com_method`], the boundary alone.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -43,6 +44,7 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
 use super::{TextServices, input_scope};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::WindowRef;
 use crate::text::windows::geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
@@ -371,6 +373,21 @@ fn range_extent(range: &ITfRange) -> windows_core::Result<Utf16Range> {
 
 pub(super) use com_object::{TsfStore, TsfStore_Impl};
 
+/// The boundary of a vtable method whose answer reads no document state, so
+/// a poisoned or closed document answers it the same: a panic answers
+/// `E_UNEXPECTED`.
+fn com_method<R>(
+    method: &'static str,
+    body: impl FnOnce() -> windows_core::Result<R>,
+) -> windows_core::Result<R> {
+    os_entry(
+        method,
+        (),
+        AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
+        body,
+    )
+}
+
 /// The `#[implement]` expansion, in a module of its own so the lints its
 /// generated code trips are expected here and nowhere else.
 #[expect(
@@ -401,8 +418,24 @@ impl TsfStore {
         Self { state }
     }
 
-    /// The boundary every vtable method crosses; see the module doc.
-    fn com_entry<R>(
+    /// The boundary of a vtable method that reads or edits the document; see
+    /// the module doc. The method's own panic poisons the document; anything
+    /// else that panics here answers `E_UNEXPECTED` as well, and the services'
+    /// entry depth is restored by its guard as that panic unwinds.
+    fn document_method<R>(
+        &self,
+        method: &'static str,
+        body: impl FnOnce(&DocumentState) -> windows_core::Result<R>,
+    ) -> windows_core::Result<R> {
+        os_entry(
+            method,
+            (),
+            AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
+            move || self.run_document_method(method, body),
+        )
+    }
+
+    fn run_document_method<R>(
         &self,
         method: &'static str,
         body: impl FnOnce(&DocumentState) -> windows_core::Result<R>,
@@ -413,16 +446,14 @@ impl TsfStore {
             return Err(E_UNEXPECTED.into());
         }
         let services = state.services.upgrade();
-        if let Some(services) = &services {
-            services.enter();
-        }
+        let entered = services.as_deref().map(TextServices::enter);
         let result = match catch_unwind(AssertUnwindSafe(|| body(&state))) {
             Ok(result) => result,
             Err(payload) => {
                 state.poisoned.set(true);
                 // The log runs a user-installed subscriber: contained, so
-                // nothing it raises unwinds into TSF (a failure it raises
-                // is retained with the scope).
+                // nothing it raises unwinds into TSF (a failure it raises is
+                // retained with the scope).
                 let mut diagnostics = OwnerCalls::new();
                 diagnostics.run(|| {
                     tracing::error!(
@@ -441,8 +472,8 @@ impl TsfStore {
                 Err(E_UNEXPECTED.into())
             }
         };
-        if let Some(services) = &services {
-            services.leave();
+        if let (Some(services), Some(entered)) = (services.as_deref(), entered) {
+            services.leave(entered);
         }
         result
     }
@@ -455,7 +486,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         punk: Ref<'_, IUnknown>,
         dwmask: u32,
     ) -> windows_core::Result<()> {
-        self.com_entry("AdviseSink", |state| {
+        TsfStore::document_method(self, "AdviseSink", |state| {
             // SAFETY: TSF passes a valid IID pointer; null was checked.
             if riid.is_null() || unsafe { *riid } != ITextStoreACPSink::IID {
                 return Err(E_INVALIDARG.into());
@@ -485,7 +516,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn UnadviseSink(&self, punk: Ref<'_, IUnknown>) -> windows_core::Result<()> {
-        self.com_entry("UnadviseSink", |state| {
+        TsfStore::document_method(self, "UnadviseSink", |state| {
             let identity: IUnknown = punk.ok()?.cast()?;
             let removed = {
                 let mut advised = state.sink.borrow_mut();
@@ -504,14 +535,13 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn RequestLock(&self, dwlockflags: u32) -> windows_core::Result<HRESULT> {
-        self.com_entry("RequestLock", |state| {
+        TsfStore::document_method(self, "RequestLock", |state| {
             let timing = if dwlockflags & TS_LF_SYNC == 0 {
                 LockTiming::Async
             } else {
                 LockTiming::Sync
             };
-            let read_write =
-                dwlockflags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0;
+            let read_write = dwlockflags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0;
             let flags = dwlockflags & !TS_LF_SYNC;
             let session_result = Rc::new(Cell::new(None));
             let (grant_state, grant_result) = (Rc::clone(&self.state), Rc::clone(&session_result));
@@ -546,7 +576,9 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetStatus(&self) -> windows_core::Result<TS_STATUS> {
-        self.com_entry("GetStatus", |state| Ok(ts_status(state.opened_status())))
+        TsfStore::document_method(self, "GetStatus", |state| {
+            Ok(ts_status(state.opened_status()))
+        })
     }
 
     fn QueryInsert(
@@ -557,7 +589,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pacpresultstart: *mut i32,
         pacpresultend: *mut i32,
     ) -> windows_core::Result<()> {
-        self.com_entry("QueryInsert", |_| {
+        TsfStore::document_method(self, "QueryInsert", |_| {
             range(acpteststart, acptestend)?;
             put(pacpresultstart, acpteststart);
             put(pacpresultend, acptestend);
@@ -572,7 +604,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pselection: *mut TS_SELECTION_ACP,
         pcfetched: *mut u32,
     ) -> windows_core::Result<()> {
-        self.com_entry("GetSelection", |state| {
+        TsfStore::document_method(self, "GetSelection", |state| {
             if ulindex != 0 && ulindex != TS_DEFAULT_SELECTION {
                 return Err(E_INVALIDARG.into());
             }
@@ -607,7 +639,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         ulcount: u32,
         pselection: *const TS_SELECTION_ACP,
     ) -> windows_core::Result<()> {
-        self.com_entry("SetSelection", |state| {
+        TsfStore::document_method(self, "SetSelection", |state| {
             if ulcount != 1 || pselection.is_null() {
                 return Err(E_INVALIDARG.into());
             }
@@ -643,7 +675,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pcruninforet: *mut u32,
         pacpnext: *mut i32,
     ) -> windows_core::Result<()> {
-        self.com_entry("GetText", |state| {
+        TsfStore::document_method(self, "GetText", |state| {
             // Only what the caller's buffer can hold is read and encoded.
             let wanted = if pchplain.is_null() {
                 0
@@ -705,7 +737,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pchtext: &PCWSTR,
         cch: u32,
     ) -> windows_core::Result<TS_TEXTCHANGE> {
-        self.com_entry("SetText", |state| {
+        TsfStore::document_method(self, "SetText", |state| {
             let text = wide_text(pchtext, cch)?;
             let span = range(acpstart, acpend)?;
             tracing::debug!(target: "flui_native::tsf", acpstart, acpend, text, "SetText");
@@ -717,7 +749,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetFormattedText(&self, _acpstart: i32, _acpend: i32) -> windows_core::Result<IDataObject> {
-        Err(E_NOTIMPL.into())
+        com_method("GetFormattedText", || Err(E_NOTIMPL.into()))
     }
 
     fn GetEmbedded(
@@ -726,7 +758,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _rguidservice: *const GUID,
         _riid: *const GUID,
     ) -> windows_core::Result<IUnknown> {
-        Err(E_NOTIMPL.into())
+        com_method("GetEmbedded", || Err(E_NOTIMPL.into()))
     }
 
     fn QueryInsertEmbedded(
@@ -734,7 +766,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pguidservice: *const GUID,
         _pformatetc: *const FORMATETC,
     ) -> windows_core::Result<BOOL> {
-        Ok(false.into())
+        com_method("QueryInsertEmbedded", || Ok(false.into()))
     }
 
     fn InsertEmbedded(
@@ -744,7 +776,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _acpend: i32,
         _pdataobject: Ref<'_, IDataObject>,
     ) -> windows_core::Result<TS_TEXTCHANGE> {
-        Err(E_NOTIMPL.into())
+        com_method("InsertEmbedded", || Err(E_NOTIMPL.into()))
     }
 
     fn InsertTextAtSelection(
@@ -756,7 +788,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pacpend: *mut i32,
         pchange: *mut TS_TEXTCHANGE,
     ) -> windows_core::Result<()> {
-        self.com_entry("InsertTextAtSelection", |state| {
+        TsfStore::document_method(self, "InsertTextAtSelection", |state| {
             if dwflags & TS_IAS_QUERYONLY != 0 {
                 let span = state.slot.read(|session| Ok(session.selection().range()))?;
                 put(pacpstart, acp(span.start()));
@@ -783,7 +815,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pacpend: *mut i32,
         _pchange: *mut TS_TEXTCHANGE,
     ) -> windows_core::Result<()> {
-        Err(E_NOTIMPL.into())
+        com_method("InsertEmbeddedAtSelection", || Err(E_NOTIMPL.into()))
     }
 
     fn RequestSupportedAttrs(
@@ -792,7 +824,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         cfilterattrs: u32,
         pafilterattrs: *const GUID,
     ) -> windows_core::Result<()> {
-        self.com_entry("RequestSupportedAttrs", |state| {
+        TsfStore::document_method(self, "RequestSupportedAttrs", |state| {
             // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
             let request = unsafe {
                 input_scope::ScopeRequest::from_request(dwflags, cfilterattrs, pafilterattrs)
@@ -810,7 +842,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _dwflags: u32,
     ) -> windows_core::Result<()> {
         // The scope is one for the whole document, so it holds at any position.
-        self.com_entry("RequestAttrsAtPosition", |state| {
+        TsfStore::document_method(self, "RequestAttrsAtPosition", |state| {
             // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
             let request =
                 unsafe { input_scope::ScopeRequest::at_position(cfilterattrs, pafilterattrs) };
@@ -826,7 +858,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _pafilterattrs: *const GUID,
         _dwflags: u32,
     ) -> windows_core::Result<()> {
-        Ok(())
+        com_method("RequestAttrsTransitioningAtPosition", || Ok(()))
     }
 
     fn FindNextAttrTransition(
@@ -840,10 +872,12 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         pffound: *mut BOOL,
         plfoundoffset: *mut i32,
     ) -> windows_core::Result<()> {
-        put(pacpnext, acphalt);
-        put(pffound, false.into());
-        put(plfoundoffset, 0);
-        Ok(())
+        com_method("FindNextAttrTransition", || {
+            put(pacpnext, acphalt);
+            put(pffound, false.into());
+            put(plfoundoffset, 0);
+            Ok(())
+        })
     }
 
     fn RetrieveRequestedAttrs(
@@ -852,7 +886,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         paattrvals: *mut TS_ATTRVAL,
         pcfetched: *mut u32,
     ) -> windows_core::Result<()> {
-        self.com_entry("RetrieveRequestedAttrs", |state| {
+        TsfStore::document_method(self, "RetrieveRequestedAttrs", |state| {
             let scope = input_scope::scope_for(state.opened_status());
             let requested = state.scope_requested.take();
             match (scope, requested) {
@@ -869,13 +903,13 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetEndACP(&self) -> windows_core::Result<i32> {
-        self.com_entry("GetEndACP", |state| {
+        TsfStore::document_method(self, "GetEndACP", |state| {
             state.slot.read(|session| Ok(acp(session.document_len())))
         })
     }
 
     fn GetActiveView(&self) -> windows_core::Result<u32> {
-        Ok(0)
+        com_method("GetActiveView", || Ok(0))
     }
 
     fn GetACPFromPoint(
@@ -884,7 +918,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         ptscreen: *const POINT,
         dwflags: u32,
     ) -> windows_core::Result<i32> {
-        self.com_entry("GetACPFromPoint", |state| {
+        TsfStore::document_method(self, "GetACPFromPoint", |state| {
             if ptscreen.is_null() {
                 return Err(E_POINTER.into());
             }
@@ -916,11 +950,11 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         prc: *mut RECT,
         pfclipped: *mut BOOL,
     ) -> windows_core::Result<()> {
-        self.com_entry("GetTextExt", |state| {
+        TsfStore::document_method(self, "GetTextExt", |state| {
             let span = range(acpstart, acpend)?;
-            let rect = state.slot.read(|session| {
-                session.rect_for_range(span).map_err(store_error)
-            });
+            let rect = state
+                .slot
+                .read(|session| session.rect_for_range(span).map_err(store_error));
             let rect = match rect {
                 Ok(rect) => rect,
                 Err(error) => {
@@ -956,7 +990,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetScreenExt(&self, _vcview: u32) -> windows_core::Result<RECT> {
-        self.com_entry("GetScreenExt", |state| {
+        TsfStore::document_method(self, "GetScreenExt", |state| {
             let (scale, origin) = state.screen_frame();
             let bounds = state
                 .slot
@@ -985,7 +1019,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetWnd(&self, _vcview: u32) -> windows_core::Result<HWND> {
-        self.com_entry("GetWnd", |state| Ok(state.window.hwnd()))
+        TsfStore::document_method(self, "GetWnd", |state| Ok(state.window.hwnd()))
     }
 }
 
@@ -994,7 +1028,7 @@ impl ITfContextOwnerCompositionSink_Impl for TsfStore_Impl {
         &self,
         pcomposition: Ref<'_, ITfCompositionView>,
     ) -> windows_core::Result<BOOL> {
-        self.com_entry("OnStartComposition", |state| {
+        TsfStore::document_method(self, "OnStartComposition", |state| {
             // SAFETY: a plain COM call on the view TSF passed.
             let range = unsafe { pcomposition.ok()?.GetRange() }?;
             let span = range_extent(&range)?;
@@ -1009,7 +1043,7 @@ impl ITfContextOwnerCompositionSink_Impl for TsfStore_Impl {
         pcomposition: Ref<'_, ITfCompositionView>,
         prangenew: Ref<'_, ITfRange>,
     ) -> windows_core::Result<()> {
-        self.com_entry("OnUpdateComposition", |state| {
+        TsfStore::document_method(self, "OnUpdateComposition", |state| {
             let range = match prangenew.as_ref() {
                 Some(range) => range.clone(),
                 // SAFETY: a plain COM call on the view TSF passed.
@@ -1025,7 +1059,7 @@ impl ITfContextOwnerCompositionSink_Impl for TsfStore_Impl {
         &self,
         _pcomposition: Ref<'_, ITfCompositionView>,
     ) -> windows_core::Result<()> {
-        self.com_entry("OnEndComposition", |state| {
+        TsfStore::document_method(self, "OnEndComposition", |state| {
             tracing::debug!(target: "flui_native::tsf", "OnEndComposition");
             set_composition(state, None)
         })

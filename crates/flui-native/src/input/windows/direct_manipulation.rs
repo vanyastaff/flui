@@ -134,7 +134,7 @@ mod handler {
     use windows_core::{Ref, implement};
 
     use crate::input::assembly::{ContentTransform, ViewportReading, ViewportStatus};
-    use crate::owner::panic_boundary::contain_os_entry;
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
     /// Readings the viewport reported during one `Update`.
     pub(in super::super) type ReadingQueue = Rc<RefCell<Vec<ViewportReading>>>;
@@ -152,15 +152,26 @@ mod handler {
             Self { queue }
         }
 
-        /// The boundary every callback crosses: a panic must not unwind into
-        /// the system, and a queue borrowed elsewhere drops the reading.
-        fn entry(&self, body: impl FnOnce(&mut Vec<ViewportReading>)) -> windows_core::Result<()> {
-            contain_os_entry("a DirectManipulation viewport handler", || {
-                if let Ok(mut queue) = self.queue.try_borrow_mut() {
-                    body(&mut queue);
-                }
-            })
-            .ok_or_else(|| E_UNEXPECTED.into())
+        /// The boundary every callback crosses: `read` makes the reading the
+        /// callback reports, if any, and a panic must not unwind into the
+        /// system. A queue borrowed elsewhere drops the reading.
+        fn com_method(
+            &self,
+            read: impl FnOnce() -> Option<ViewportReading>,
+        ) -> windows_core::Result<()> {
+            os_entry(
+                "a DirectManipulation viewport handler",
+                (),
+                AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
+                || {
+                    if let Some(reading) = read()
+                        && let Ok(mut queue) = self.queue.try_borrow_mut()
+                    {
+                        queue.push(reading);
+                    }
+                    Ok(())
+                },
+            )
         }
     }
 
@@ -171,10 +182,8 @@ mod handler {
             current: DIRECTMANIPULATION_STATUS,
             _previous: DIRECTMANIPULATION_STATUS,
         ) -> windows_core::Result<()> {
-            self.entry(|queue| {
-                if let Some(status) = ViewportStatus::from_raw(current.0) {
-                    queue.push(ViewportReading::Status(status));
-                }
+            Handler::com_method(self, || {
+                ViewportStatus::from_raw(current.0).map(ViewportReading::Status)
             })
         }
 
@@ -182,7 +191,7 @@ mod handler {
             &self,
             _viewport: Ref<'_, IDirectManipulationViewport>,
         ) -> windows_core::Result<()> {
-            Ok(())
+            Handler::com_method(self, || None)
         }
 
         fn OnContentUpdated(
@@ -190,18 +199,16 @@ mod handler {
             _viewport: Ref<'_, IDirectManipulationViewport>,
             content: Ref<'_, IDirectManipulationContent>,
         ) -> windows_core::Result<()> {
-            let mut matrix = [0.0_f32; 6];
-            if let Some(content) = content.as_ref() {
-                // SAFETY: `matrix` is a live, writable array of the six
-                // floats `GetContentTransform` fills.
-                if unsafe { content.GetContentTransform(&mut matrix) }.is_err() {
-                    return Ok(());
+            Handler::com_method(self, || {
+                let mut matrix = [0.0_f32; 6];
+                if let Some(content) = content.as_ref() {
+                    // SAFETY: `matrix` is a live, writable array of the six
+                    // floats `GetContentTransform` fills.
+                    if unsafe { content.GetContentTransform(&mut matrix) }.is_err() {
+                        return None;
+                    }
                 }
-            }
-            self.entry(|queue| {
-                if let Some(transform) = ContentTransform::from_matrix(&matrix) {
-                    queue.push(ViewportReading::Content(transform));
-                }
+                ContentTransform::from_matrix(&matrix).map(ViewportReading::Content)
             })
         }
     }

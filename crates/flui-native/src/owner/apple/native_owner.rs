@@ -29,7 +29,12 @@ impl<T: 'static> Drop for NativeOwner<T> {
             // MainThreadBound's default Drop synchronously waits on main. A
             // joining owner must not deadlock against this worker's final drop.
             DispatchQueue::main().exec_async(move || {
-                crate::owner::panic_boundary::contain_owner_callback(|| drop(value));
+                crate::owner::panic_boundary::os_entry(
+                    "a native owner's drop on main",
+                    (),
+                    crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
+                    move || drop(value),
+                );
             });
         }
     }

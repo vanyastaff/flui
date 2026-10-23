@@ -1647,6 +1647,133 @@ graph LR
   и без дисплея — 198 (тест моста AT-SPI теперь идёт с `winit-backend`), `--all-features` под xvfb
   — 279 (с новым тестом), новый тест под xvfb — 5 из 5; `checks`, `module-dag`, `facade-combos`,
   `deps --only policy`, `docs-paths`, `markers`.
+- [x] **LY90** — ветка `platform/panic-boundary-gate`, на LY34 (`dbbb8d7d9`); слиты `fc8f8ebaa`,
+  LY88 (`ccda248ee`, признака `a11y` больше нет), `59e63b27c` и LY35 (`5cf18f936`). Граница —
+  одна функция: `owner::panic_boundary::os_entry<A: Copy + Debug, R>(entry: &'static str, args: A,
+  after_panic: AfterPanic<A, R>, body: impl FnOnce() -> R) -> R`,
+  `AfterPanic::{Answer(fn(A) -> R), Abort}`.
+  `args` — то, с чем ОС вызвала вход (сообщение и окно, делегат): лог паники несёт их (кроме
+  ZST) и текст паники под именем входа, ответ строится из них. Ответ — `fn`-указатель: ничего не
+  захватывает и создаётся только после паники (ошибка COM читает `GetErrorInfo` потока в момент
+  создания). Порядок: лог (погашен — подписчик лога пользовательский), удержание нагрузки, ответ;
+  `Abort` и ответ, который сам паникует, завершают процесс (`end_process`), так что первый отказ
+  всегда в логе раньше. `Abort` — где состояние может быть порвано посреди диспетчеризации:
+  процедура окна Win32 (в логе снова `msg` и `hwnd`), хук cloak (`hwnd`), `configuration` и
+  `init` UIKit, страж полосы владельца macOS; на Android и Linux его нет
+  (`cfg_attr(…, expect(dead_code))`). Шаги внутри входа гасятся порознь, каждый с текстом паники
+  под именем входа: `contain_os_entry(entry, body) -> Option<R>` (Windows, macOS) — каждый
+  подписчик широковещательного приёмника, каждый хук окна владельца, провайдер drag, ветка `Now`
+  `loop_control`; `contain_owner_callback` тоже логирует текст. Ответы после паники:
+  широковещательный приёмник — TRUE на `WM_QUERYENDSESSION` (и запрос, оставленный без ответа
+  паникующим подписчиком, разрешается: паника не держит выход из сеанса), иначе 0; окно
+  владельца — 0; `applicationShouldTerminate:` — `TerminateNow`, пока идёт завершение сеанса
+  (`terminate_gate::session_ending`), иначе Cancel; `windowShouldClose:` NO; reopen и
+  `didFinishLaunching` false; диапазоны `NSTextInputClient` `{NSNotFound, 0}`; COM —
+  `E_UNEXPECTED`; перечисления — FALSE; делегаты WinRT — `Ok(())`; JNI — `T::default()`. Шесть
+  входов — константа (тело — литерал или путь, код не выполняется): `GiveFeedback`,
+  `accepts_first_responder`, `is_opaque`, `accepts_touch_events`, `character_index_for_point`,
+  `takes_focus`. TSF: `TextServices::enter` возвращает гард `Depth`, `leave(entered)` его
+  отпускает — глубина снимается и при панике мимо отравления документа (раньше оставалась 1, и
+  каждая следующая операция хоста вставала в очередь навсегда). Тела GCD — `move`: захваты
+  уничтожаются внутри границы. Wake pump: тик с поколением (`Tick`), страж
+  `StopUnlessFinished(Option<Tick>)` снимает `pending_at` через `compare_exchange`, только если
+  хук не запланировал новый тик до паники (старое пробуждение не стирает новое обязательство).
+  Адаптеры (8, по виду объекта ОС): `com_method` (drag, input scope, TSF без состояния),
+  `com_hresult` (drag), `TsfStore::document_method`, `Handler::com_method` (DirectManipulation),
+  `jni_native`, `Self::scene_event` (сцены UIKit). Гейт — `cargo xtask panic-boundary`
+  (`tools/xtask/src/panic_boundary{.rs,/scan.rs,/fixture.rs,/tests.rs}`); дерево модулей, cfg с
+  тремя значениями, атрибуты и источники `Disk`/`Memory` — общий `tools/xtask/src/source_tree.rs`,
+  им же читает `globals`. Код под cfg, ложным в любой сборке (`test`), не читается. Точки входа:
+  fn с чужим ABI — свободная, метод `impl` или умолчание трейта (процедуры, колбэки
+  перечисления, JNI, методы `ClassBuilder`, NDK); метод `define_class!` с
+  `#[unsafe(method(…))]`/`method_id`; метод `impl I…_Impl for …` (vtable COM); методы
+  `ActionHandler`/`ActivationHandler`/`DeactivationHandler` (AccessKit зовёт их из своих входов
+  UIA, NSAccessibility, AT-SPI); замыкание, отданное ОС, — любой литерал замыкания в вызове
+  функции или конструктора крейта привязок ОС (`windows`, `objc2*`, `block2`, `dispatch*`, `jni`,
+  `ndk`, `android_activity`, …) по пути или по импортированному имени, так что незнакомая функция
+  ОС не проходит молча; конструкторы блоков и делегатов по имени (14 типов) — где их прячет
+  glob-импорт; методы GCD по имени (`exec_async`, `exec_sync`, `exec_after`, `after`,
+  `barrier_async`, `barrier_sync`), их тело обязано быть `move`; синхронный `autoreleasepool` —
+  не вход. Правило: тело — одно выражение: константа, вызов `os_entry` (`…panic_boundary::os_entry`
+  или импортированный оттуда) или адаптера — свободной функции того же файла, определённой один
+  раз на уровне модуля и не затенённой импортом (`name(…)`), либо метода того же файла,
+  определённого один раз на `Self` или названном типе (`Self::name(…)`, `Type::name(…)`); вызов
+  `self.name(…)` — не адаптер (тип получателя гейту не виден). Аргументы вычисляются до границы,
+  поэтому каждый — литерал, путь, замыкание, кортеж, ссылка, поле, приведение, скобки от них или
+  `AfterPanic::Answer(…)` от такого. Идентичность: `fn os_entry` один, в `owner::panic_boundary`;
+  другой элемент, модуль или импорт под именем `os_entry`/`panic_boundary` — находка. Тело
+  `define_class!` разбирается (атрибуты класса до `struct Name;` отброшены: `#[ivars = Weak<T>]`
+  не синтаксис атрибута Rust); в токенах других макросов определение `extern fn`, конструктор
+  блока или делегата и метод GCD — находка. Вид находки — `Problem::{Unguarded, Argument,
+  Identity, Unread}`. Allowlist нет. Пределы (в доке гейта и ARCHITECTURE.md): методы ОС
+  узнаются по имени — новый метод, берущий замыкание, вносится в список GCD, конструктор за
+  glob-импортом — в список типов колбэков; захваты блока или делегата живут, пока ОС его держит, и
+  уничтожаются вне любого вызова, поэтому это значения без пользовательского `Drop`. Вне охвата по
+  виду: замыкания `wasm_bindgen` (wasm32 всегда `panic=abort`), процедуры winit и
+  android-activity (своя граница: winit поднимает панику в `run_app`, android-activity —
+  `abort_on_panic`), ABI плагинов `flui-hot-reload` (`flui_scene_build`, `flui_app_build` из
+  `scene_plugin!`/`app_plugin!`: их зовёт процесс-хост в плагине, вне `flui-native`; граница там
+  нужна та же, но своя — крейт строится на `flui-sdk`, отдельной задачей), тестовый код (паника
+  заглушки роняет процесс теста). Самотест — 30 посаженных находок, по одной на правило и вид
+  (среди них: метод с чужим ABI в `impl` и умолчание трейта, адаптер, затенённый импортом,
+  `self.name`, метод чужого типа, вычисление внутри `AfterPanic::Answer`, тело `exec_after` без
+  `move`, блок и метод GCD в токенах макроса, незнакомая функция ОС с замыканием), и тихие случаи
+  (`#[cfg(test)]`, блок `extern {}`, тип указателя, константное тело, `autoreleasepool`,
+  адаптеры); таблица `panic_boundary_contract` — 13 строк. Подключён в `checks`
+  (`panic-boundary --self-test`, `panic-boundary`), значит и в job `checks` CI. Сверка «210 мест»:
+  это число строк с `panic_boundary|catch_unwind` в `crates/flui-platform/src` на `b4ff641e5`
+  (импорты, тесты, внутренние гашения), а не мест входа. Перепись гейта — 169 точек входа: 57
+  extern fn, 26 методов Objective-C, 56 методов COM, 7 обработчиков AccessKit, 23 замыкания; 163 —
+  через `os_entry` (67 из них — через 8 адаптеров), 6 — константы; 205 файлов. До исправления 63
+  гасили всё тело, 12 — часть, 94 — ничего. Без границы были: Win32 — процедура окна-владельца
+  буфера обмена, `enum_proc` мониторов, `first_visible`, `low_memory_fired`; COM — 12 методов OLE
+  drag (`GetDataHere`, `GetCanonicalFormatEtc`, `SetData`, три `*Advise`, четыре
+  `IEnumFORMATETC`, `QueryContinueDrag`, `GiveFeedback`), `OnViewportUpdated`, 8 методов TSF с
+  постоянным ответом (без проверки отравления — ответ не читает документ) и 5 методов input scope;
+  AccessKit — 7 (Windows 2, macOS 2, Linux 3); AppKit — 41 (14 методов вида ввода, 11
+  `NSTextInputClient`, 15 делегата окна, `takes_focus`); GCD macOS — тик wake pump (хук дедлайна
+  поднимал панику через `or_resume` в трамплин `extern "C"` — abort) и пробуждение повтора
+  предпочтений; UIKit — 14 (`configuration`, `init` делегата сцены, hover, четыре touches,
+  display link, два метода контроллера, четыре блока Core Haptics). Частично: 6 входов iOS через
+  `with_platform` (заём `DELEGATE_STATE` вне гашения), 4 метода вида iOS (pin и super вне
+  гашения), `OnContentUpdated` (`GetContentTransform` до границы), status bar iOS. Ещё: `dealloc`
+  вида macOS гасит разбор контекста отдельно, и super `dealloc` идёт и после его паники;
+  завершение перезапуска Core Haptics снимает `restart_in_flight` до лога; `exec_async_guarded`
+  и исполнитель iOS логируют через `os_entry`; `LoopControl::after` стал `run_after` (имя `after`
+  — метод GCD). Тесты: `owner::panic_boundary::tests::an_os_entry_logs_the_first_failure_then_answers`,
+  `an_os_entry_answers_from_its_arguments_and_logs_them` (без аргументов в логе — падает),
+  `a_contained_callback_is_logged_with_its_text` (без текста — падает),
+  `a_panicking_log_stays_inside_the_entry` (лог вне гашения — падает);
+  `owner::windows::tests::a_failing_subscriber_is_logged_and_a_session_end_still_granted` (с
+  прежним общим гашением — ответ 0, выход из сеанса отклонён); строка TSF
+  `a_tsf_call_failing_past_its_poisoning_leaves_no_depth` (с ручными enter/leave — глубина 1);
+  `accessibility::windows::tests::a_panicking_listener_stays_inside_its_handler` и
+  `accessibility::linux::…` (с откатом обработчика — «a listener's panic unwound out of its
+  handler»); только macOS — `owner::apple::macos::wake_pump::tests::a_tick_whose_hook_panics_leaves_no_tick_queued`,
+  `a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick`,
+  `owner::apple::terminate_gate::tests::a_session_end_is_under_way_from_its_announcement_to_its_answer`
+  (здесь модули Apple не собираются в тестах: `psm` требует `cc`); xtask `panic_boundary_contract`
+  и самотест, мутации ветвей гейта (разрешение адаптера мимо импорта, `move`, `Answer`, ABI в
+  `impl`) — «MISSED». Исключения `module-dag` — 33, `globals` — 56, как было. Проверки на Windows:
+  `cargo fmt`; clippy `-D warnings` `-p flui-native -p flui-app --all-targets` и с
+  `flui-native/winit-backend`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app` — 317
+  (2 пропущены), с `winit-backend` — 350 (2), `-p xtask` — 46; clippy Android `--all-targets`
+  (`-p flui-native -p flui-app`), macOS lib `-p flui-native` и с `winit-backend` (`flui-app` под
+  macOS требует `cc`: `psm` через `flui-rendering`), iOS lib (`DOCS_RS=1`), wasm32 lib;
+  `wasm-check`, `wasm-test` — 51; `checks` целиком: `module-dag` (295 модулей, 325 рёбер, 33
+  исключения) и самотест (54), `globals` (56) и самотест (15), `panic-boundary` (169) и самотест
+  (30), `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`, `changelog`;
+  `doc-strict`; rustdoc `--document-private-items -D warnings`. WSL Ubuntu 24.04
+  (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE` сняты): clippy с `winit-backend` и без; nextest
+  `FLUI_HEADLESS=1` — 335: 334, падает `x11_window_takes_commands_and_publishes_what_the_server_holds`
+  на X-сервере WSLg (как на `origin/main`, см. LY34; в прогоне до слияния LY35 однажды упал и
+  `x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`, отдельно он прошёл 5
+  из 5); `--all-features` под xvfb — 291 из 291; `accessibility::linux` и `owner::panic_boundary`
+  с `winit-backend` — 7; rustdoc с `winit-backend` и без. Не запускалось: Mac и iPhone — 41 вход
+  AppKit, 14 UIKit и блоки только собраны (библиотека), тесты wake pump и terminate gate не
+  собирались, в очереди vanyastaff/flui#1840 (пункт 4 `docs/gaps.md`);
+  `cross-typecheck` (нет `zig`; job в CI); устройство Android (JNI-методы меняют только имя входа
+  в логе и ответ по умолчанию). Браузер: проверять нечего — Web входов не имеет.
 - [x] **LY35** — ветка `platform/duplicates` (vanyastaff/flui#1873), начата на вершине LY34
   `dbbb8d7d9`, перенесена на `main` @ `fc8f8ebaa` после его слияния (дерево то же), после ревью —
   слияние `main` @ `ccda248ee` (LY88). Слияния дублей внутри моделей фич; `flui-app` не тронут.

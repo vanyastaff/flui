@@ -60,6 +60,7 @@ use super::window::WindowsWindow;
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::control::OwnerPreferences;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
@@ -2111,29 +2112,19 @@ unsafe extern "system" fn cloak_changed(
     _thread: u32,
     _time: u32,
 ) {
-    if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
-        return;
-    }
-    // The visibility callback is user code. As in `window_proc`, a panic must
-    // not unwind across the `extern "system"` boundary: it is logged, then the
-    // process aborts. `AssertUnwindSafe` is sound because nothing observes
-    // the state the unwind tore.
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // The visibility callback is user code. As in `window_proc`, the state
+    // behind a panic mid-dispatch may be torn: it is logged, then the process
+    // aborts.
+    os_entry("the cloak-change hook", hwnd, AfterPanic::Abort, || {
+        if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
+            return;
+        }
         let _ = with_window_context(hwnd, "cloak change", |ctx| {
             if ctx.cloak_watch.is(hook) {
                 ctx.refresh_cloaked(hwnd);
             }
         });
-    }));
-    if let Err(payload) = outcome {
-        tracing::error!(
-            hwnd = ?hwnd,
-            panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
-            "panic in a cloak-change callback; aborting — it must not unwind across \
-             the extern \"system\" boundary"
-        );
-        std::process::abort();
-    }
+    });
 }
 
 /// Wake deadlines while the system runs a modal loop for the window (moving

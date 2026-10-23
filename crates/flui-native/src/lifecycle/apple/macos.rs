@@ -52,7 +52,7 @@ mod notices {
     use crate::owner::apple::macos::NoticeSources;
     use crate::owner::apple::macos::observation::Observation;
     use crate::owner::notices::NoticeChannel;
-    use crate::owner::panic_boundary::contain_owner_callback;
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::watch::Watch;
 
     /// The distributed notification the lock screen posts when the session
@@ -86,13 +86,18 @@ mod notices {
             // which libdispatch releases the handler.
             let in_handler = source.clone();
             let handler = RcBlock::new(move || {
-                contain_owner_callback(|| {
-                    if let Some(level) = level_of(in_handler.data())
-                        && let Some(notices) = notices.upgrade()
-                    {
-                        notices.dispatch(SystemNotice::MemoryPressure(level));
-                    }
-                });
+                os_entry(
+                    "the memory-pressure source",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    || {
+                        if let Some(level) = level_of(in_handler.data())
+                            && let Some(notices) = notices.upgrade()
+                        {
+                            notices.dispatch(SystemNotice::MemoryPressure(level));
+                        }
+                    },
+                );
             });
             // SAFETY: the block is copied by libdispatch when set, and it is
             // `Fn()` as the parameter requires.

@@ -11,6 +11,8 @@ mod table_test;
 
 mod tasks;
 
+mod source_tree;
+
 mod android_dex;
 mod api_closure;
 mod bench;
@@ -26,6 +28,7 @@ mod globals;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
+mod panic_boundary;
 mod perf;
 mod platform_floor;
 mod ratchet;
@@ -106,6 +109,8 @@ enum Command {
     Wgsl(wgsl::WgslArgs),
     /// Check that every process-global has a reviewed entry (ADR-0097).
     Globals(globals::GlobalsArgs),
+    /// Check that every OS entry into flui-native goes through the panic boundary (ADR-0151 §16).
+    PanicBoundary(panic_boundary::PanicBoundaryArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -183,6 +188,7 @@ fn main() -> ExitCode {
         Command::Toolchain(args) => toolchain::toolchain(&args),
         Command::Wgsl(args) => wgsl::wgsl(&args),
         Command::Globals(args) => globals::globals(&args),
+        Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
