@@ -14,6 +14,152 @@
 
 #[cfg(windows)]
 pub(crate) use host_events::HostEvents;
+#[cfg(windows)]
+pub(crate) use session::SessionWindows;
+
+#[cfg(windows)]
+mod session {
+    //! The lifecycle's hook on FLUI's window class: each window hears its
+    //! session lock and unlock, decoded by [`messages`](super::messages), and
+    //! the hook tells the class's hooks of it as the window's step, which the
+    //! window follows (a locked session hides it).
+
+    // Win32 calls: each window's session notification. Each `unsafe` block
+    // states its invariant.
+    #![expect(unsafe_code)]
+
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::{Rc, Weak};
+
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::RemoteDesktop::{
+        NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY;
+
+    use super::messages::{HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify};
+    use crate::owner::windows::{
+        CreatedWindow, WindowIdentity, WindowMessages, WindowRef, WindowStep, window_step,
+    };
+
+    /// The session's part of FLUI's window class: what it keeps of each
+    /// window, by the window's identity, from the window's creation to its
+    /// destruction (or `WM_NCDESTROY` for a window whose destruction was not
+    /// announced).
+    #[derive(Default)]
+    pub(crate) struct SessionWindows {
+        windows: RefCell<HashMap<WindowIdentity, SessionWindow>>,
+    }
+
+    /// One window as the session's hook keeps it.
+    #[derive(Clone)]
+    struct SessionWindow {
+        window: WindowRef,
+        /// The hooks of its class, which its lock and unlock are told to;
+        /// weak, since this hook is one of them.
+        hooks: Weak<[Rc<dyn WindowMessages>]>,
+        /// Whether the system took its subscription, which its destruction
+        /// gives back.
+        subscribed: bool,
+    }
+
+    impl SessionWindows {
+        /// The window `hwnd` names, with its class's hooks.
+        fn by_handle(&self, hwnd: HWND) -> Option<SessionWindow> {
+            self.windows
+                .borrow()
+                .values()
+                .find(|kept| kept.window.hwnd() == hwnd)
+                .cloned()
+        }
+
+        /// Forget the window `identity` names and give its subscription back.
+        fn forget(&self, identity: WindowIdentity) {
+            let removed = self.windows.borrow_mut().remove(&identity);
+            if let Some(kept) = removed.filter(|kept| kept.subscribed) {
+                // SAFETY: the subscription this hook made on the window, which
+                // is still being destroyed; a handle already gone only makes
+                // the call fail.
+                if let Err(error) = unsafe { WTSUnRegisterSessionNotification(kept.window.hwnd()) }
+                {
+                    tracing::debug!(%error, "the session notification was already gone");
+                }
+            }
+        }
+    }
+
+    impl WindowMessages for SessionWindows {
+        /// Subscribe the window to its session's lock and unlock.
+        fn created(&self, window: &CreatedWindow) {
+            // SAFETY: the live window its class just created on this thread;
+            // the flag asks for this session's notifications only.
+            let subscribed = match unsafe {
+                WTSRegisterSessionNotification(window.hwnd, NOTIFY_FOR_THIS_SESSION)
+            } {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "session notifications unavailable: a locked session leaves the window visible"
+                    );
+                    false
+                }
+            };
+            let replaced = self.windows.borrow_mut().insert(
+                window.identity,
+                SessionWindow {
+                    window: window.window(),
+                    hooks: Rc::downgrade(&window.hooks),
+                    subscribed,
+                },
+            );
+            drop(replaced);
+        }
+
+        fn destroyed(&self, window: WindowRef) {
+            self.forget(window.identity());
+        }
+
+        fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
+            msg == WM_WTSSESSION_CHANGE
+        }
+
+        /// The session locked or unlocked: the window takes the step. A
+        /// window's last message forgets what is left of a window whose
+        /// destruction was not announced (heard, not answered).
+        unsafe fn message(
+            &self,
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> Option<LRESULT> {
+            if msg == WM_NCDESTROY {
+                let identity = self.by_handle(hwnd).map(|kept| kept.window.identity());
+                if let Some(identity) = identity {
+                    self.forget(identity);
+                }
+                return None;
+            }
+            if msg != WM_WTSSESSION_CHANGE {
+                return None;
+            }
+            let locked = match classify(msg, wparam.0, lparam.0) {
+                HostMessage::Event(HostEvent::SessionLocked) => Some(true),
+                HostMessage::Event(HostEvent::SessionUnlocked) => Some(false),
+                _ => None,
+            };
+            if let Some(locked) = locked
+                && let Some(kept) = self.by_handle(hwnd)
+                && let Some(hooks) = kept.hooks.upgrade()
+            {
+                window_step(&hooks, kept.window, WindowStep::SessionLocked(locked));
+            }
+            Some(LRESULT(0))
+        }
+    }
+}
 
 #[cfg(windows)]
 mod host_events {

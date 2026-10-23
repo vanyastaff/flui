@@ -452,11 +452,7 @@ fn text_services_probe() {
             .text_store_host(OwnerThreadToken::new())
             .expect("(1) the window offers its text-store host")
     };
-    let services: Rc<TextServices> =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |context| {
-            context.text_services.borrow().clone()
-        })
-        .flatten()
+    let services: Rc<TextServices> = crate::text::windows::testing::services_of(hwnd)
         .expect("(1) the window holds its text services");
     println!(
         "PROBE (1) the window's host is its TSF connection: {}; TfClientId = {:#x}",

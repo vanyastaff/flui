@@ -162,22 +162,26 @@ trait depends on `flui-platform` instead.
     timers and system commands that share a message) and answers no other;
     the procedure asserts it in debug builds. A hook may hear a message it
     does not answer and pass it on. The hooks are, in order, the text services
-    (`text::windows::Tsf`: a new window's TSF connection, and the window's
-    moves, which TSF hears before the procedure answers them; it answers
-    nothing), the window's own procedure (`window::windows::proc::WindowProc`:
-    creation, close and destruction, size, position and their limits, DPI,
-    focus, paint, the cursor, the title, the modal size-move and menu loops
-    with their deadline timer, the session and setting changes, the frame and
-    fullscreen requests posted to it and the keyboard's system-menu command),
-    the input (`input::windows::InputWindows`: mouse, pointer, wheel,
-    keyboard, characters and the keyboard layout, and the precision
-    touchpad's hit test and pacing timer, with the DirectManipulation
-    viewport it gives each new window) and the drop target
-    (`drag::windows::DropTargetRegistration`, which only hears each window
-    created and registers it with the transport its context holds, the
-    loop's `HostDrag`). The reference a hook is handed a window by,
+    (`text::windows::Tsf`: a new window's TSF connection, its scale, and the
+    window's moves, which TSF hears before the procedure answers them; it
+    answers nothing), the window's own procedure
+    (`window::windows::proc::WindowProc`: creation, close and destruction,
+    size, position and their limits, DPI, focus, paint, the cursor, the
+    title, the modal size-move and menu loops with their deadline timer, the
+    setting changes, the frame and fullscreen requests posted to it and the
+    keyboard's system-menu command), the input
+    (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
+    characters and the keyboard layout, and the precision touchpad's hit
+    test and pacing timer, with the DirectManipulation viewport it gives each
+    new window), the session (`lifecycle::windows::SessionWindows`: each
+    window's session notification, and the lock and unlock it answers as the
+    window's step) and the drop target
+    (`drag::windows::DropTargetRegistration`, which registers each window
+    created with the loop's `HostDrag` the announcement carries, tells it
+    the window's scale and revokes the target as the window is destroyed;
+    it answers nothing). The reference a hook is handed a window by,
     `owner::windows::WindowRef` (the handle and the identity of its context),
-    is the owner's; the window feature reaches the context through it
+    is the owner's; only the window feature reaches the context through it
     (`WindowRef::with_context`), and the window's own procedure borrows it for
     its own messages only.
   - A hook keeps what it needs of a window in itself, keyed by the window's
@@ -188,16 +192,21 @@ trait depends on `flui-platform` instead.
     another process may write, and a message, step or read for a window a
     hook does not hold finds nothing. The hooks hear the window's steps
     (`WindowMessages::step`, a `WindowStep`: its size, minimizing, focus
-    loss, paint, modal size-and-move loop, DPI and setting changes, and a key
-    the application let through), which the window's procedure announces in
-    hook order where it handles them. The input's state of a window (its
-    message clock, pointer registry, touchpad viewport, hover, modifiers,
-    dead keys and a pending surrogate) is its own; what the window, drag and
-    drop and haptics read of it the owner names (`WindowInputs`: the hover,
-    the modifiers, the kind of a press, a pen in range), read-only, through
-    the class on their thread (`owner::windows::window_inputs`). A keydown
+    loss, paint, modal size-and-move loop, DPI change and the rectangle it
+    asks for applied, setting changes, its close callbacks having run, the
+    session's lock and a key the application let through), which the hook
+    that handles each announces in hook order where it is complete. The
+    input's state of a window (its message clock, pointer registry, touchpad
+    viewport, hover, modifiers, dead keys and a pending surrogate) is its
+    own; what the window, drag and drop and haptics read of it the owner
+    names (`WindowInputs`: the hover, the modifiers, the kind of a press, a
+    pen in range), read-only, through the class on their thread
+    (`owner::windows::window_inputs`). The text services' state of a window
+    is theirs too; the window hands out its text-store host through the
+    class's text (`WindowTexts`, `owner::windows::window_texts`). A keydown
     the application lets through is a step, which the window answers with its
-    own keys, the fullscreen hotkey. Tests:
+    own keys, the fullscreen hotkey; the session's lock is a step the window
+    answers by hiding. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class` (two instances of the owner's
@@ -342,14 +351,17 @@ trait depends on `flui-platform` instead.
   window hands out (`host::Accessibility::for_window`,
   `host::Haptics::for_window`); the Android window takes its drag source from
   the loop's `ViewTransfer` hook (`drag_source`), and the Win32 and Web
-  windows reach theirs through the loop's `HostDrag`. The headless window
-  still takes its drag source from the drag file, and the Win32 window keeps
-  its drop target: edges between two features' platform files, each a named
-  exception in `[package.metadata.flui.modules]`. The Win32 drag transport and actuator name a window by
-  `owner::windows::WindowRef`, the owner's vocabulary, and reach its context
-  through the window's `WindowRef::with_context`, except what they read of the
-  window's input (the kind of a press, the pen in range), which the input
-  answers read-only (`owner::windows::WindowInputs`). The Web drag answers
+  windows reach theirs through the loop's `HostDrag`; the headless window
+  takes its drag source from its loop, which the table's
+  `HeadlessHost::drag_source` tells how to make it. The Win32 transport keeps
+  each window's drop target by the window's identity, which the drop-target
+  hook registers as the window is created, rescales and revokes as it is
+  destroyed. The Win32 drag transport and actuator name a window by
+  `owner::windows::WindowRef`, the owner's vocabulary, and never reach its
+  context: the drop target keeps the window's callbacks and DPI from the
+  announcement, and what they read of the window's input (the kind of a
+  press, the pen in range) the input answers read-only
+  (`owner::windows::WindowInputs`). The Web drag answers
   its events and reads their position as the input does, through the
   owner's `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
@@ -505,13 +517,15 @@ trait depends on `flui-platform` instead.
     names the other.
   - What a window file still names of another feature, and what another
     feature's code names of the window, are the edges
-    `[package.metadata.flui.modules] exceptions` lists: into the drag files
-    (the Win32 drop target, the headless drag source), between the Win32 TSF
-    connection and its window, and the iOS window's text sizing. Each goes
-    when that feature keeps its own per-window state, keyed by the window's
-    identity, set up by its window hook's `created` and dropped when the
-    window goes, and no longer reaches the window's context, as the Win32
-    input does. The features that add methods
+    `[package.metadata.flui.modules] exceptions` lists: the iOS window's text
+    sizing, which goes when the text feature keeps it by the window's
+    identity, as the Win32 text services, drop target and session already
+    keep theirs (each set up by its window hook's `created` and dropped when
+    the window goes, none reaching the window's context), and the AppKit and
+    UIKit windows' screen rules, which go when the loop's display hook hands
+    them the facts, as the headless loop hands its windows the laid-out
+    displays and the drag source (`HeadlessState::window_display`,
+    `display_bounds`, `window_drag_source`). The features that add methods
     to one AppKit or UIKit view class (the input, the text input, the window's
     drawing) keep the edges between them until that class is the owner's,
     joined through hooks.

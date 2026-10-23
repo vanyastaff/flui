@@ -128,23 +128,24 @@ impl DocumentState {
     }
 
     /// The window's scale and client origin in physical screen pixels; both
-    /// read only while the handle still names this document's window, else
-    /// the default scale at (0, 0), which the caller reports as no better
-    /// than that.
+    /// read only while the window's text services are serving, which they
+    /// stop doing before the window is destroyed, else the default scale at
+    /// (0, 0), which the caller reports as no better than that.
     fn screen_frame(&self) -> (DevicePixelRatio, DevicePoint) {
-        let hwnd = self.window.hwnd();
-        let (scale, origin) = self
-            .window
-            .with_context("text_services", |context| {
-                let mut origin = POINT::default();
-                // SAFETY: `origin` is a live, writable local; `ClientToScreen`
-                // only writes through the pointer it is given.
-                let _ = unsafe { ClientToScreen(hwnd, &raw mut origin) };
-                (context.scale_factor.get(), origin)
-            })
-            .unwrap_or_default();
+        let Some(services) = self
+            .services
+            .upgrade()
+            .filter(|services| !services.is_shut_down())
+        else {
+            return (DevicePixelRatio::default(), DevicePoint::new(0, 0));
+        };
+        let mut origin = POINT::default();
+        // SAFETY: the window is live while its services serve; `origin` is a
+        // live, writable local, and `ClientToScreen` only writes through the
+        // pointer it is given.
+        let _ = unsafe { ClientToScreen(self.window.hwnd(), &raw mut origin) };
         (
-            DevicePixelRatio::new(scale).unwrap_or_default(),
+            DevicePixelRatio::new(services.scale()).unwrap_or_default(),
             DevicePoint::new(origin.x, origin.y),
         )
     }

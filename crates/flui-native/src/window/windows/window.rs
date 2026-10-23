@@ -500,9 +500,6 @@ impl WindowsWindow {
                         Rc::clone(&frames),
                     ),
                 ),
-                text_services: std::cell::RefCell::new(None),
-                drop_target: std::cell::RefCell::new(None),
-                drag: Arc::clone(&drag),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
                 identity,
                 displays: Arc::clone(&displays),
@@ -529,7 +526,7 @@ impl WindowsWindow {
                 haptics: positions.haptics(&this),
                 text: positions.text(&this),
                 chrome: positions.chrome(&this),
-                drag_source: drag.drag_source(this),
+                drag_source: Arc::clone(&drag).drag_source(this),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -564,6 +561,7 @@ impl WindowsWindow {
                     preferences,
                     hooks: Rc::clone(&window_hooks),
                     apartment,
+                    drag,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
             )

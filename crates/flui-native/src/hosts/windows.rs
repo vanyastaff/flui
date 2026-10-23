@@ -14,7 +14,7 @@ use crate::haptics::windows::WindowsHaptics;
 use crate::host::{Absent, Host, position};
 use crate::input::windows::InputWindows;
 use crate::lifecycle::notice::SystemNotices;
-use crate::lifecycle::windows::HostEvents;
+use crate::lifecycle::windows::{HostEvents, SessionWindows};
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
@@ -58,21 +58,25 @@ impl WindowsHost for Windows {
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
     /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,
-    /// and the precision touchpad's hit test and pacing timer); and the drop
-    /// target, which only learns of each window created. The hooks list
-    /// disjoint messages (`the_window_hooks_answer_disjoint_messages`); what
-    /// none answers gets the default procedure. A created window activates
-    /// TSF, then gets its input with its touchpad viewport, then registers
-    /// its drop target.
+    /// and the precision touchpad's hit test and pacing timer); the session,
+    /// whose lock and unlock it answers; and the drop target, which answers
+    /// nothing. The hooks list disjoint messages
+    /// (`the_window_hooks_answer_disjoint_messages`); what none answers gets
+    /// the default procedure. A created window activates TSF, then gets its
+    /// input with its touchpad viewport, then hears its session, then
+    /// registers its drop target. The text services are the class's text,
+    /// which the window hands out.
     fn window_class() -> WindowClass {
         let input = InputWindows::new();
+        let text = Tsf::new();
         let hooks: WindowHooks = Rc::new([
-            Rc::new(Tsf) as Rc<dyn WindowMessages>,
+            Rc::clone(&text) as Rc<dyn WindowMessages>,
             Rc::new(WindowProc),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
-            Rc::new(DropTargetRegistration),
+            Rc::new(SessionWindows::default()),
+            Rc::new(DropTargetRegistration::default()),
         ]);
-        WindowClass { hooks, input }
+        WindowClass { hooks, input, text }
     }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {

@@ -43,6 +43,7 @@ use std::{
 use flui_platform::CursorError;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
+use flui_platform::text_store::TextStoreHost;
 use windows::{
     Win32::{
         Foundation::{
@@ -116,9 +117,9 @@ pub(crate) type WindowHooks = Rc<[Rc<dyn WindowMessages>]>;
 /// FLUI's window class on one owner thread, as the host's table makes it
 /// ([`WindowsHost::window_class`]): the hooks its procedure offers each
 /// message of a window to, and what those hooks tell the window's other
-/// features of its input. A hook keeps what it needs of a window as its own
-/// state, keyed by the window's identity, from the window's announcement
-/// ([`WindowMessages::created`]) to its destruction.
+/// features of its input and its text input. A hook keeps what it needs of a
+/// window as its own state, keyed by the window's identity, from the window's
+/// announcement ([`WindowMessages::created`]) to its destruction.
 #[derive(Clone)]
 pub(crate) struct WindowClass {
     /// The hooks, in the order a message reaches them.
@@ -126,6 +127,8 @@ pub(crate) struct WindowClass {
     /// The input those hooks keep, as the window, drag and drop and haptics
     /// read it.
     pub(crate) input: Rc<dyn WindowInputs>,
+    /// The text input those hooks keep, as the window hands it out.
+    pub(crate) text: Rc<dyn WindowTexts>,
 }
 
 thread_local! {
@@ -162,10 +165,9 @@ pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
     Some(class)
 }
 
-/// What the input of FLUI's window class on this thread tells the other
-/// features of a window, for the host the process registered the class for;
-/// `None` on a thread no owner of that host opened on.
-pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+/// FLUI's window class on this thread for the host the process registered
+/// the class for; `None` on a thread no owner of that host opened on.
+fn registered_class() -> Option<WindowClass> {
     let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
     CLASS_ON_THREAD
         .try_with(|classes| {
@@ -173,10 +175,34 @@ pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
                 .borrow()
                 .iter()
                 .find(|(made_for, _)| *made_for == host)
-                .map(|(_, class)| Rc::clone(&class.input))
+                .map(|(_, class)| class.clone())
         })
         .ok()
         .flatten()
+}
+
+/// What the input of FLUI's window class on this thread tells the other
+/// features of a window, for the host the process registered the class for;
+/// `None` on a thread no owner of that host opened on.
+pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
+    registered_class().map(|class| class.input)
+}
+
+/// What the text input of FLUI's window class on this thread holds of a
+/// window, for the host the process registered the class for; `None` on a
+/// thread no owner of that host opened on.
+pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
+    registered_class().map(|class| class.text)
+}
+
+/// What the text input of FLUI's window class holds of a window, as the
+/// window hands it out. Answers `None` for a window it does not hold: one
+/// whose text input did not start, one already closed, or a reference whose
+/// handle now names another window.
+pub(crate) trait WindowTexts {
+    /// The text-store host the window's input methods read the focused
+    /// field's store through.
+    fn store_host(&self, window: WindowRef) -> Option<Rc<dyn TextStoreHost>>;
 }
 
 /// What the input of FLUI's window class tells the window's other features
@@ -332,9 +358,22 @@ pub(crate) trait HostDrag: control::OwnerMessages + DataTransferSource {
     /// The drag source `window`, created on this thread, hands out.
     fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource>;
 
-    /// Make `window`, created on this thread, a drop target until it is
-    /// destroyed.
-    fn register_target(self: Arc<Self>, window: WindowRef);
+    /// Make `window`, which FLUI's class just created on this thread, a drop
+    /// target, which the transport keeps by the window's identity until
+    /// [`Self::revoke_target`]. A window whose registration fails takes no
+    /// drags.
+    fn register_target(self: Arc<Self>, window: &CreatedWindow);
+
+    /// `window` is now at `dpi`: what its drop target reports follows.
+    fn rescale_target(&self, window: WindowRef, dpi: u32);
+
+    /// `window` is destroyed, on its thread, while its callbacks still exist:
+    /// a drag over it leaves it, and OLE no longer offers it one.
+    fn revoke_target(&self, window: WindowRef);
+
+    /// The drop target `window` registered, as OLE holds it.
+    #[cfg(test)]
+    fn drop_target(&self, window: WindowRef) -> Option<windows::Win32::System::Ole::IDropTarget>;
 }
 
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,
@@ -451,6 +490,9 @@ pub(crate) struct CreatedWindow {
     pub(crate) hooks: WindowHooks,
     /// The owner thread's COM apartment, when the window was opened with it.
     pub(crate) apartment: Option<Rc<ComApartment>>,
+    /// The loop's drag-and-drop transport, which makes the window a drop
+    /// target.
+    pub(crate) drag: Arc<dyn HostDrag>,
 }
 
 impl CreatedWindow {
@@ -467,8 +509,9 @@ pub(crate) fn dpi_scale(dpi: u32) -> f64 {
 
 /// A step of a window of FLUI's class that one feature handles and others
 /// follow, told to every hook ([`WindowMessages::step`]) where the step is
-/// complete: in the window's own procedure for its size, focus, paint, scale
-/// and settings, in the input's for a key the application let through.
+/// complete: in the window's own procedure for its size, focus, paint, scale,
+/// settings and close, in the input's for a key the application let through,
+/// in the lifecycle's for the session's lock.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum WindowStep {
     /// Its client area is now `(width, height)` device pixels; it is not
@@ -489,8 +532,17 @@ pub(crate) enum WindowStep {
         /// Its DPI.
         dpi: u32,
     },
+    /// The rectangle its new DPI asks for is applied too: what it shows sits
+    /// where the new scale puts it on the screen.
+    ScaleApplied,
     /// A system setting changed.
     SettingChanged,
+    /// The user's session locked (`true`) or unlocked: a locked session
+    /// hides every window, whatever its surface.
+    SessionLocked(bool),
+    /// It is being destroyed and its close callbacks ran, so the presentation
+    /// that showed it is closed; its handle is still valid.
+    Closed,
     /// The application let a keydown through (did not prevent its default):
     /// the window's own keys follow it. `repeat` when the key auto-repeats.
     KeyLetThrough {

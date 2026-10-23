@@ -273,7 +273,7 @@ pub use owner::headless::{
 };
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
-pub use window::headless::{FakeSystemChrome, HeadlessWindowPolicy, MockWindow};
+pub use window::headless::{FakeSystemChrome, HeadlessWindowPolicy, MockWindow, UnknownDisplay};
 // Each native host's window and the extensions an application reaches it by.
 #[cfg(target_os = "ios")]
 pub use owner::apple::ios::{IOSExecutor, IOSSceneAttachmentId, IOSSceneSessionId};

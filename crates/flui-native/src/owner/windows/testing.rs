@@ -24,14 +24,15 @@ use super::control::{
     OwnerWindow,
 };
 use super::{
-    ClassWindows, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs, WindowRef,
-    WindowsHost,
+    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs,
+    WindowRef, WindowTexts, WindowsHost,
 };
 use crate::error::PlatformError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;
+use flui_platform::text_store::TextStoreHost;
 
 /// The hooks of a test host's window class, in the order the class's
 /// procedure offers them a message.
@@ -58,6 +59,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
         WindowClass {
             hooks: C::hooks(),
             input: Rc::new(NoInputs),
+            text: Rc::new(NoTexts),
         }
     }
 
@@ -260,5 +262,22 @@ impl HostDrag for NoDrag {
         self
     }
 
-    fn register_target(self: Arc<Self>, _window: WindowRef) {}
+    fn register_target(self: Arc<Self>, _window: &CreatedWindow) {}
+
+    fn rescale_target(&self, _window: WindowRef, _dpi: u32) {}
+
+    fn revoke_target(&self, _window: WindowRef) {}
+
+    fn drop_target(&self, _window: WindowRef) -> Option<windows::Win32::System::Ole::IDropTarget> {
+        None
+    }
+}
+
+/// A text input that holds no window.
+pub(crate) struct NoTexts;
+
+impl WindowTexts for NoTexts {
+    fn store_host(&self, _window: WindowRef) -> Option<Rc<dyn TextStoreHost>> {
+        None
+    }
 }

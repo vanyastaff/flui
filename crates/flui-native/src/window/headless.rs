@@ -26,7 +26,6 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::display::headless::{DisplayChangeError, LaidOutDisplays};
 use crate::host::{self, Host, WindowAccessibility, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
@@ -174,7 +173,7 @@ impl TrackedWindows for HeadlessWindows {
         options: WindowOptions,
     ) -> Arc<dyn HostWindow> {
         let window_id = next_headless_window_id();
-        let display = state.displays.default_window_display();
+        let display = state.window_display();
         let (capabilities, limits) = {
             let tracked = self.tracked.lock();
             (tracked.capabilities, tracked.policy)
@@ -188,13 +187,13 @@ impl TrackedWindows for HeadlessWindows {
                 positions: self.positions,
                 text_store_host: state.text_store_host.clone(),
                 display,
-                display_bounds: display.and_then(|id| state.displays.logical_bounds(id)),
+                display_bounds: display.and_then(|id| state.display_bounds(id)),
                 capabilities,
                 limits,
             },
         );
 
-        window.drag = crate::drag::headless::HeadlessDragSource::of(state);
+        window.drag = state.window_drag_source();
         // The initial snapshot reflects the devices already attached (ADR-0213 §3).
         window.callbacks.set_input_capabilities(
             state
@@ -329,6 +328,16 @@ impl host::Window<HeadlessLoop> for MockWindow {
 }
 
 // ==================== Mock Implementations ====================
+
+/// A simulated move of a window named a display its platform does not hold
+/// ([`MockWindow::simulate_move_to`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the platform holds no display {display:?}")]
+#[non_exhaustive]
+pub struct UnknownDisplay {
+    /// The display the move named.
+    pub display: DisplayId,
+}
 
 /// The canonical test/headless window double.
 ///
@@ -642,8 +651,7 @@ impl MockWindow {
         self.platform_state
             .upgrade()?
             .lock()
-            .displays
-            .logical_bounds(display)
+            .display_bounds(display)
     }
 
     /// Publish what the model says now: read it into a snapshot, and raise
@@ -852,15 +860,15 @@ impl MockWindow {
     /// changes; a closed window ignores the report.
     ///
     /// # Errors
-    /// [`DisplayChangeError::UnknownDisplay`] when the platform holds no
-    /// display with this id (or is gone); the window stays where it was.
-    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), DisplayChangeError> {
+    /// [`UnknownDisplay`] when the platform holds no display with this id (or
+    /// is gone); the window stays where it was.
+    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), UnknownDisplay> {
         let known = self
             .platform_state
             .upgrade()
-            .is_some_and(|platform| platform.lock().displays.contains(id));
+            .is_some_and(|platform| platform.lock().holds_display(id));
         if !known {
-            return Err(DisplayChangeError::UnknownDisplay);
+            return Err(UnknownDisplay { display: id });
         }
         {
             let mut state = self.state.lock();

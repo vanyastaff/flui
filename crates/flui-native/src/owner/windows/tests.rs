@@ -180,6 +180,7 @@ fn created(hwnd: HWND) -> CreatedWindow {
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),
         apartment: None,
+        drag: Arc::new(super::testing::NoDrag),
     }
 }
 

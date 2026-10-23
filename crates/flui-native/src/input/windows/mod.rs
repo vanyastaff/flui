@@ -302,7 +302,10 @@ impl WindowMessages for InputWindows {
             }
             // Double-click time and size are settings too.
             WindowStep::SettingChanged => input.measure_clicks(),
-            WindowStep::KeyLetThrough { .. } => {}
+            WindowStep::KeyLetThrough { .. }
+            | WindowStep::ScaleApplied
+            | WindowStep::SessionLocked(_)
+            | WindowStep::Closed => {}
         }
     }
 

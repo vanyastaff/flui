@@ -740,11 +740,8 @@ fn a_window_offers_its_text_services_as_its_host() {
     let host = win32
         .text_store_host(OwnerThreadToken::new())
         .expect("a real window offers its host");
-    let services = crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
-        context.text_services.borrow().clone()
-    })
-    .flatten()
-    .expect("the window holds its text services");
+    let services = crate::text::windows::testing::services_of(hwnd)
+        .expect("the window holds its text services");
     assert!(
         std::ptr::addr_eq(Rc::as_ptr(&host), Rc::as_ptr(&services)),
         "the host is the window's own TSF connection"
@@ -936,6 +933,49 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         );
         host.focus_store(None);
     });
+    window.close();
+}
+
+/// A window's DPI change reaches its text services as the new scale is set,
+/// so an input method's layout queries answer at the window's new scale.
+#[test]
+fn a_rescaled_window_answers_layout_at_its_new_scale() {
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SendMessageW, WM_DPICHANGED};
+
+    let platform = crate::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui rescaled field")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
+        .expect("window");
+    let hwnd = window
+        .as_any()
+        .downcast_ref::<crate::WindowsWindow>()
+        .expect("Win32 window")
+        .hwnd();
+    let services =
+        crate::text::windows::testing::services_of(hwnd).expect("the window's text services");
+    let dpi: usize = if services.scale() > 1.5 { 96 } else { 192 };
+    let mut rect = RECT::default();
+    // SAFETY: the case's own window on its owner thread; `WM_DPICHANGED`
+    // carries the address of the suggested rectangle, a live local here.
+    unsafe {
+        GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
+        SendMessageW(
+            hwnd,
+            WM_DPICHANGED,
+            Some(WPARAM((dpi << 16) | dpi)),
+            Some(LPARAM(&raw const rect as isize)),
+        );
+    }
+    assert!(
+        (services.scale() * 96.0 - dpi as f64).abs() < 1e-9,
+        "the text services answer at the window's new scale"
+    );
     window.close();
 }
 
@@ -1214,10 +1254,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
                 .expect("Win32 window")
                 .hwnd();
             assert!(
-                crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
-                    context.text_services.borrow().is_some()
-                })
-                .unwrap_or(false),
+                crate::text::windows::testing::services_of(hwnd).is_some(),
                 "the window's text services are active"
             );
             window.close();
@@ -1311,15 +1348,9 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         clippy::used_underscore_binding,
         reason = "Observe the drop-only apartment hold without extending its lifetime."
     )]
-    let apartment = crate::window::windows::proc::with_window_context(hwnd, "test", |context| {
-        context
-            .text_services
-            .borrow()
-            .as_ref()
-            .map(|services| Rc::downgrade(&services._apartment))
-    })
-    .flatten()
-    .expect("the window's text services are active");
+    let apartment = crate::text::windows::testing::services_of(hwnd)
+        .map(|services| Rc::downgrade(&services._apartment))
+        .expect("the window's text services are active");
 
     // A second COM client may keep the process MTA alive while this
     // window releases its own STA. Hold it until the assertion, including

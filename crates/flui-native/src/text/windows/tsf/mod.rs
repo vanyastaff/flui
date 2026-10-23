@@ -65,6 +65,7 @@ use windows::Win32::{
     Foundation::HWND,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
     UI::{
+        HiDpi::GetDpiForWindow,
         Input::KeyboardAndMouse::GetFocus,
         TextServices::{
             CLSID_TF_ThreadMgr, ITextStoreACP, ITfContext, ITfContextOwnerCompositionServices,
@@ -77,6 +78,7 @@ use windows_core::{IUnknown, Interface};
 use self::document::{DocumentState, TsfStore};
 use crate::owner::windows::WindowRef;
 use crate::owner::windows::com_apartment::ComApartment;
+use crate::owner::windows::dpi_scale;
 
 #[cfg(test)]
 thread_local! {
@@ -150,6 +152,10 @@ pub struct TextServices {
     /// The window with its identity, for the documents, which TSF may keep
     /// past the window.
     window: WindowRef,
+    /// The window's scale, which a document answers an input method's layout
+    /// queries at: read as the services activate, then told by the window's
+    /// class hook as the window's DPI changes ([`Self::rescale`]).
+    scale: Cell<f64>,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
@@ -269,9 +275,14 @@ impl TextServices {
         };
         // Owned before anything runs application code: from here a failure
         // drops the services, and their drop deactivates TSF.
+        // SAFETY: a plain query of the live window this thread created; it
+        // answers 0 for a handle that is not a window.
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
         let services = Rc::new_cyclic(|me| Self {
             hwnd: window.hwnd(),
             window,
+            // A window whose DPI cannot be read is taken at 100%.
+            scale: Cell::new(if dpi == 0 { 1.0 } else { dpi_scale(dpi) }),
             thread_manager,
             client_id,
             empty,
@@ -387,6 +398,17 @@ impl TextServices {
         if let Some(payload) = calls.into_failure() {
             log_failure(payload);
         }
+    }
+
+    /// The window is now at `dpi`: a layout query from here on answers at
+    /// its new scale.
+    pub(crate) fn rescale(&self, dpi: u32) {
+        self.scale.set(dpi_scale(dpi));
+    }
+
+    /// The window's scale, as the documents answer layout queries at it.
+    pub(super) fn scale(&self) -> f64 {
+        self.scale.get()
     }
 
     /// The window moved, or its DPI changed: the focused field's text sits

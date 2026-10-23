@@ -37,3 +37,6 @@
   accessibility integration, or built without `a11y`, answers a bridge that is never active
   instead of `None`. An iOS window's haptic actuator is made with the window rather than on
   first use.
+- **`flui-native`**: `MockWindow::simulate_move_to` refuses a display the platform does not hold
+  with `UnknownDisplay`, which names the display, instead of
+  `DisplayChangeError::UnknownDisplay`.
