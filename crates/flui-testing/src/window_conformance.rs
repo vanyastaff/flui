@@ -9,7 +9,8 @@
 //! - **Capabilities are honest.** A command is refused as
 //!   [`Unsupported`](WindowCommandError::Unsupported) exactly when its
 //!   capability is `false`: never accepted and ignored, never refused while
-//!   claimed.
+//!   claimed, and refused for good — its reason is not one worth asking again
+//!   ([`Unsupported::is_retryable`](flui_platform::Unsupported::is_retryable)).
 //! - **State converges.** A command the window accepted shows in its
 //!   [`state`](PlatformWindow::state) once the window system has settled: the
 //!   title, size, position, mode, visibility, flags and constraints it asked for.
@@ -130,6 +131,12 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
         let answer = window.apply(command.clone());
         fixture.settle();
         match (capable, &answer) {
+            (false, Err(WindowCommandError::Unsupported(refused))) if refused.is_retryable() => {
+                broken.push(format!(
+                    "{command:?} is not supported but was refused as {refused}, which asks to be \
+                     tried again"
+                ));
+            }
             (false, Err(WindowCommandError::Unsupported(_))) | (true, Ok(())) => {}
             (false, other) => broken.push(format!(
                 "{command:?} is not supported but answered {other:?}, not Unsupported"

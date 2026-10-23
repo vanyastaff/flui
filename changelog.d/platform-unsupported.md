@@ -39,6 +39,9 @@
   first use.
 - **`flui-platform`**: `WindowAppearance` and `WindowEvent` are `#[non_exhaustive]`: a backend
   may report a new appearance or window event, so a `match` on them needs a wildcard arm.
+- **`flui-testing`**: `window_conformance`'s `capabilities_are_honest` also fails a window that
+  refuses a command its capabilities leave out as worth asking again (`Unavailable`): such a
+  refusal is for good.
 - **`flui-native`**: `MockWindow::simulate_move_to` refuses a display the platform does not hold
   with `UnknownDisplay`, which names the display, instead of
   `DisplayChangeError::UnknownDisplay`.
