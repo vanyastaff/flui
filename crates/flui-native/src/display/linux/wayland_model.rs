@@ -278,7 +278,9 @@ fn view_of(global: u32, state: &OutputState, key_name: Option<&str>) -> Option<O
         bounds,
         usable_bounds: bounds,
         scale_factor,
-        refresh_period: refresh_period(mode.refresh_millihertz),
+        // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
+        // less means the compositor does not know.
+        refresh_period: RefreshPeriod::from_millihertz(i64::from(mode.refresh_millihertz)).ok(),
         is_primary: false,
         persistent_key: key_name.map(str::to_owned),
     })
@@ -295,12 +297,6 @@ fn label_of(state: &OutputState) -> String {
         .or_else(|| state.name.as_deref().and_then(nonempty))
         .or_else(|| nonempty(&format!("{} {}", state.make, state.model)))
         .unwrap_or_else(|| "Display".to_owned())
-}
-
-/// `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or less means
-/// the compositor does not know.
-fn refresh_period(refresh_millihertz: i32) -> Option<RefreshPeriod> {
-    RefreshPeriod::from_millihertz(i64::from(refresh_millihertz)).ok()
 }
 
 #[cfg(test)]

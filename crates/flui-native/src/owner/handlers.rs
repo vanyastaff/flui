@@ -351,7 +351,8 @@ pub struct WindowCallbacks {
     /// own `WindowEvent::Occluded` doc). The native Win32 backend derives
     /// its own signal from `WM_SIZE` minimize/restore plus `WM_SHOWWINDOW`
     /// hide/show, and the native AppKit backend from
-    /// `windowDidChangeOcclusionState:` — rules in `window::visibility`.
+    /// `windowDidChangeOcclusionState:`; the winit, Win32, AppKit and Web
+    /// windows report through the one rule in `window::visibility`.
     /// The native Web backend samples the canvas document's `hidden` value
     /// and observes Document `visibilitychange`, separately from canvas focus.
     /// Where no signal is ever delivered, this callback simply never fires

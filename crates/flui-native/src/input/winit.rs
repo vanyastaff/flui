@@ -44,6 +44,7 @@ use crate::input::assembly::{
 use crate::input::availability::WinitSession;
 use crate::input::event_timestamp_ns;
 use crate::input::keys::adapter::keyboard_input;
+use crate::input::scroll::{WheelAmount, wheel_step};
 use crate::owner::winit::{LoopInput, WinitLoop};
 use flui_platform::PlatformInput;
 
@@ -53,36 +54,40 @@ const MOUSE: NativeContact = NativeContact(u64::MAX);
 /// The trackpad gesture of a device on a window.
 const GESTURE: NativeContact = NativeContact(u64::MAX - 1);
 
-/// One scroll step in the unit the device reported, already in the owned
-/// sign convention (positive scrolls down and right).
+/// One scroll step in the unit the device reported, in FLUI's direction
+/// (positive scrolls down and right).
 #[derive(Debug, Clone, Copy)]
-struct ScrollStep {
-    unit: owned::ScrollUnit,
-    x: f64,
-    y: f64,
-    precision: owned::ScrollPrecision,
+pub(crate) struct ScrollStep {
+    pub(crate) delta: owned::ScrollDelta,
+    pub(crate) precision: owned::ScrollPrecision,
 }
 
-/// The step a winit wheel delta makes; `scale` is device pixels per logical
-/// pixel, and an invalid one refuses a pixel delta (it becomes zero). With
+/// The step a winit wheel delta makes, by the one wheel rule
+/// (`crate::input::scroll`): winit's deltas move the content. `scale` is
+/// device pixels per logical pixel, and an invalid one refuses a pixel
+/// delta; a refused step is zero in its unit. With
 /// `fractional_lines_precise` (X11, whose touchpad scrolls in fractions of a
 /// line), a line delta that is not whole is precise.
-fn wheel_step(delta: &MouseScrollDelta, scale: f64, fractional_lines_precise: bool) -> ScrollStep {
+pub(crate) fn scroll_step(
+    delta: &MouseScrollDelta,
+    scale: f64,
+    fractional_lines_precise: bool,
+) -> ScrollStep {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
         f64::NAN
     };
-    match delta {
-        MouseScrollDelta::LineDelta(x, y) => ScrollStep {
-            unit: if cfg!(target_os = "windows") {
+    let (unit, x, y, precision) = match delta {
+        MouseScrollDelta::LineDelta(x, y) => (
+            if cfg!(target_os = "windows") {
                 owned::ScrollUnit::Detents
             } else {
                 owned::ScrollUnit::Lines
             },
-            x: -f64::from(*x),
-            y: -f64::from(*y),
-            precision: if fractional_lines_precise
+            f64::from(*x),
+            f64::from(*y),
+            if fractional_lines_precise
                 && [x, y]
                     .iter()
                     .any(|value| value.is_finite() && value.fract() != 0.0)
@@ -91,14 +96,17 @@ fn wheel_step(delta: &MouseScrollDelta, scale: f64, fractional_lines_precise: bo
             } else {
                 owned::ScrollPrecision::Notched
             },
-        },
-        MouseScrollDelta::PixelDelta(delta) => ScrollStep {
-            unit: owned::ScrollUnit::Pixels,
-            x: -delta.x / scale,
-            y: -delta.y / scale,
-            precision: owned::ScrollPrecision::Precise,
-        },
-    }
+        ),
+        MouseScrollDelta::PixelDelta(delta) => (
+            owned::ScrollUnit::Pixels,
+            delta.x / scale,
+            delta.y / scale,
+            owned::ScrollPrecision::Precise,
+        ),
+    };
+    let delta = wheel_step(unit, WheelAmount::content(x), WheelAmount::content(y))
+        .unwrap_or_else(|_| owned::ScrollDelta::zero(unit));
+    ScrollStep { delta, precision }
 }
 
 fn native_button(button: MouseButton) -> owned::PointerButton {
@@ -509,7 +517,7 @@ impl WinitInput {
                     delta,
                     phase,
                 } => {
-                    let step = wheel_step(delta, scale, self.session == Some(WinitSession::X11));
+                    let step = scroll_step(delta, scale, self.session == Some(WinitSession::X11));
                     return Some(self.scroll(window, device_id, step, *phase, mods));
                 }
                 // A two-finger pan is a phased scroll on every backend
@@ -521,7 +529,7 @@ impl WinitInput {
                 } => {
                     let pixels =
                         winit::dpi::PhysicalPosition::new(f64::from(delta.x), f64::from(delta.y));
-                    let step = wheel_step(&MouseScrollDelta::PixelDelta(pixels), scale, false);
+                    let step = scroll_step(&MouseScrollDelta::PixelDelta(pixels), scale, false);
                     return Some(self.scroll(window, device_id, step, *phase, mods));
                 }
                 _ => return None,
@@ -548,20 +556,16 @@ impl WinitInput {
         ) else {
             return Vec::new();
         };
-        let ScrollStep {
-            unit,
-            x,
-            y,
-            precision,
-        } = step;
-        let delta = owned::ScrollDelta::try_new(unit, x, y)
-            .unwrap_or_else(|_| owned::ScrollDelta::zero(unit));
+        let ScrollStep { delta, precision } = step;
         // Only a pixel delta reports finger phases: X11's precise line
         // fractions arrive phaseless, as a wheel's do.
         let native_phase = self.scrolling.phase(
             surface,
             Some(device),
-            ScrollReading::fingers(gesture_phase(phase), unit == owned::ScrollUnit::Pixels),
+            ScrollReading::fingers(
+                gesture_phase(phase),
+                delta.unit() == owned::ScrollUnit::Pixels,
+            ),
         );
         let mut scroll = owned::ScrollEvent::new(
             pointer,

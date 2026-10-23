@@ -577,9 +577,10 @@ impl MacOSWindow {
     /// Reads the window's current `occlusionState` and forwards the visible
     /// bit through `dispatch_visibility_status_change` — the wire the
     /// runtime's per-presentation `FrameClock` gate and `AppLifecycleState`
-    /// derivation hang off. The decidable half (bit test, polarity, edge
-    /// filter) lives in `crate::window::visibility`, host-tested; only the
-    /// `occlusionState` read is AppKit-bound.
+    /// derivation hang off. The decidable half is host-tested: the bit test
+    /// and its polarity in `crate::window::apple::geometry::surface`, the edge
+    /// filter in `crate::window::visibility`; only the `occlusionState` read
+    /// is AppKit-bound.
     fn handle_occlusion_state_changed(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`;
         // `occlusionState` returns a plain NSUInteger bitmask.
@@ -587,15 +588,8 @@ impl MacOSWindow {
             let state: usize = msg_send![self.ns_window, occlusionState];
             state as u64
         };
-        let visible = crate::window::visibility::appkit_occlusion_state_is_visible(raw);
-        let edge = {
-            let mut state = self.state.lock();
-            let edge = crate::window::visibility::visibility_edge(state.occlusion_visible, visible);
-            if edge.is_some() {
-                state.occlusion_visible = visible;
-            }
-            edge
-        };
+        let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
+        let edge = self.state.lock().occlusion_visible.report(visible);
         // Dispatch outside the state lock, like every other handler here.
         if let Some(visible) = edge {
             tracing::debug!(?visible, "Window occlusion state changed");

@@ -2,9 +2,11 @@
 //! refresh period, and the snapshot a host publishes of them (ADR-0151 §10).
 //!
 //! The model is `source`: the id registry and last snapshot every native
-//! display source keeps, and when that snapshot is read from the operating
-//! system again. Beside it is one file per platform, each reading its
-//! operating system's own source:
+//! display source keeps, when that snapshot is read from the operating
+//! system again, and the one publisher of a measured refresh period
+//! (`MeasuredPeriod`); a period itself is made by the contract's
+//! `RefreshPeriod` constructors alone. Beside it is one file per platform,
+//! each reading its operating system's own source:
 //!
 //! - `windows`: the monitors from `QueryDisplayConfig` and
 //!   `EnumDisplayMonitors`, and the system's display broadcasts;

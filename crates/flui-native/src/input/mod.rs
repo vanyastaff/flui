@@ -3,9 +3,10 @@
 //!
 //! The model is what two or more platforms share: the pointer assembly
 //! ([`assembly`], ADR-0217 §3), the key rules ([`keys`]: Win32's tables, which
-//! the winit host on Windows reads too, and the adapter from
-//! `keyboard-types`), the availability table ([`availability`], ADR-0213),
-//! wheel normalization (`scroll`) and the event timeline below. Every
+//! the winit host on Windows reads too, the adapter from `keyboard-types`
+//! and the one table of key locations), the availability table
+//! ([`availability`], ADR-0213), the one wheel step (`scroll`) and the event
+//! timeline below. Every
 //! backend stamps against the one process epoch,
 //! [`flui_foundation::event_epoch`], which the interaction clock also counts
 //! from (ADR-0207 §2): timestamps from different backends, and the deadlines
