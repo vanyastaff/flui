@@ -1,20 +1,23 @@
-//! One file's OS entries and how each reaches the boundary: the entry
-//! collector, the body rule, the adapter rule and the identity rules.
+//! One file's OS entries and how each reaches the boundary: the import scan,
+//! the entry collector, the body rule, the adapter rule and the identity
+//! rules.
 //!
 //! The collector keeps owned copies of the bodies it judges, so the parsed
 //! tokens of a `define_class!` invocation can be read like the file around
 //! them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use proc_macro2::{Span, TokenStream, TokenTree};
 use syn::ext::IdentExt as _;
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Block, Expr, ImplItem, Item, Meta, Path, Stmt, Token, TraitItem, UseTree};
+use syn::{
+    Attribute, Block, Expr, ImplItem, Item, Meta, Path, Stmt, Token, TraitItem, Type, UseTree,
+};
 
-use super::{Finding, IDENTITY, UNREAD};
+use super::{Finding, Problem};
 use crate::source_tree::{
     Parsed, Truth, cfg_of, impl_item_attrs, item_attrs, stmt_attrs, trait_item_attrs,
 };
@@ -32,10 +35,38 @@ pub(super) const BOUNDARY: &str = "os_entry";
 /// `self`, `super` and the module that holds it.
 const LEADS: [&str; 4] = ["crate", "self", "super", "owner"];
 
-/// The types whose `new` hands a closure to the OS: block2's Objective-C
-/// blocks, and the delegates of `windows::Foundation`, which WinRT calls
-/// through an `extern "system"` `Invoke`.
-const CALLBACK_TYPES: [&str; 11] = [
+/// The crates that bind the operating system. A function or constructor
+/// reached through one of them (by its path, or by a name imported from it)
+/// that is handed a closure literal hands that closure to the OS: it is an
+/// entry, whatever its name. `objc2_*` counts too.
+const OS_CRATES: [&str; 14] = [
+    "windows",
+    "windows_core",
+    "objc2",
+    "block2",
+    "dispatch",
+    "dispatch2",
+    "core_foundation",
+    "core_graphics",
+    "jni",
+    "ndk",
+    "android_activity",
+    "accesskit_windows",
+    "accesskit_macos",
+    "accesskit_unix",
+];
+
+/// Functions of OS crates, by name, that run the closure they are given on
+/// the caller's stack before they return and never hand it to the OS: no
+/// entry. `autoreleasepool` runs it inside a pool objc2 pushes and pops in
+/// Rust.
+const SYNCHRONOUS: [&str; 1] = ["autoreleasepool"];
+
+/// The types whose `new` hands a closure to the OS, matched by name where
+/// their import cannot be read (a glob): block2's Objective-C blocks, and the
+/// WinRT delegates of `windows::Foundation` and `windows::System::Threading`,
+/// which WinRT calls through an `extern "system"` `Invoke`.
+const CALLBACK_TYPES: [&str; 14] = [
     "RcBlock",
     "StackBlock",
     "TypedEventHandler",
@@ -47,13 +78,19 @@ const CALLBACK_TYPES: [&str; 11] = [
     "AsyncOperationProgressHandler",
     "AsyncOperationWithProgressCompletedHandler",
     "DeferralCompletedHandler",
+    "WorkItemHandler",
+    "TimerElapsedHandler",
+    "TimerDestroyedHandler",
 ];
 
 /// GCD's methods that run a closure behind libdispatch's `extern "C"`
 /// trampoline: `dispatch` and `dispatch2` share the `exec_*` and `barrier_*`
-/// names, and `after` is `dispatch2`'s delayed one. A method of the crate's
-/// own under one of these names, given a closure, reads as one too, so the
-/// crate keeps the names for GCD.
+/// names, and `after` is `dispatch2`'s delayed one. A method's receiver has a
+/// type the gate cannot read, so methods are matched by name: a new OS
+/// method that takes a closure is added here, and the crate keeps these names
+/// for GCD. GCD's `apply`, `for_each` and `Group::notify` are not listed:
+/// the names collide with `Iterator::for_each` and the crate's own `apply`
+/// and `notify`, and the crate does not use them.
 const GCD_METHODS: [&str; 6] = [
     "exec_async",
     "exec_sync",
@@ -110,8 +147,10 @@ impl fmt::Display for Kind {
 enum Body {
     /// A function's block.
     Block(Block),
-    /// A closure's body.
-    Closure(Expr),
+    /// A closure's body; `moves` is whether its captures must move into the
+    /// boundary's body (a GCD work item, run once and dropped by
+    /// libdispatch).
+    Closure { body: Expr, moves: bool },
     /// A callback constructor given no closure literal.
     Unseen,
 }
@@ -124,6 +163,8 @@ pub(super) struct Entry {
     /// is handed to.
     pub(super) name: String,
     pub(super) line: usize,
+    /// The self type of the impl around the entry, which `Self::` names.
+    impl_type: Option<String>,
     body: Body,
 }
 
@@ -134,20 +175,35 @@ pub(super) enum Verdict {
     Boundary,
     /// Its body calls this adapter, whose body is the boundary's call.
     Adapter(String),
+    /// Its body is a constant: no code runs, so nothing can panic.
+    Constant,
     /// It does not reach the boundary; why.
     Unguarded(String),
-    /// It does, but an argument of the call runs before the boundary; which.
+    /// It does, but an argument of the call runs before the boundary, or the
+    /// boundary's body borrows what must move into it; which.
     Argument(String),
+}
+
+/// What the file's `use` items bind.
+#[derive(Default)]
+struct Imports {
+    /// Every name a `use` binds, anywhere in the file.
+    names: BTreeSet<String>,
+    /// Those whose path starts at an OS crate.
+    os: BTreeSet<String>,
+    /// Whether a `use` binds the bare boundary name to the boundary.
+    boundary: bool,
 }
 
 /// What one file holds.
 #[derive(Default)]
 pub(super) struct FileScan {
     pub(super) entries: Vec<Entry>,
-    /// Every function the file defines, by name: the adapter candidates.
-    fns: BTreeMap<String, Vec<Block>>,
-    /// Whether a `use` binds the bare boundary name to the boundary.
-    binds_boundary: bool,
+    /// The free functions the file defines at module level, by name.
+    free_fns: BTreeMap<String, Vec<Block>>,
+    /// The methods its impls define, by self type and name.
+    methods: BTreeMap<(String, String), Vec<Block>>,
+    imports: Imports,
     /// Whether the file is the boundary's module.
     is_boundary: bool,
     /// Whether it defines the boundary at its top level.
@@ -158,22 +214,36 @@ pub(super) struct FileScan {
 impl FileScan {
     /// Every entry with its verdict.
     pub(super) fn judged(&self) -> impl Iterator<Item = (&Entry, Verdict)> {
-        self.entries
-            .iter()
-            .map(|entry| (entry, self.verdict(&entry.body, true)))
+        self.entries.iter().map(|entry| {
+            let moves = matches!(entry.body, Body::Closure { moves: true, .. });
+            (
+                entry,
+                self.verdict(&entry.body, entry.impl_type.as_deref(), true, moves),
+            )
+        })
     }
 
-    /// `body`'s verdict; `adapters` is whether a call of an adapter counts
-    /// (an adapter's own body must be the boundary's call).
-    fn verdict(&self, body: &Body, adapters: bool) -> Verdict {
+    /// `body`'s verdict. `impl_type` is what `Self` names; `adapters` is
+    /// whether a call of an adapter counts (an adapter's own body must be the
+    /// boundary's call); `moves` is whether the boundary's body must be a
+    /// `move` closure or a value moved in.
+    fn verdict(
+        &self,
+        body: &Body,
+        impl_type: Option<&str>,
+        adapters: bool,
+        moves: bool,
+    ) -> Verdict {
         let expr = match body {
             Body::Block(block) => match sole(block) {
                 Some(expr) => expr,
+                None if block.stmts.is_empty() => return Verdict::Constant,
                 None => return Verdict::Unguarded(NOT_ONE.to_owned()),
             },
-            Body::Closure(expr) => match strip(expr) {
+            Body::Closure { body, .. } => match strip(body) {
                 Expr::Block(block) if block.label.is_none() => match sole(&block.block) {
                     Some(expr) => expr,
+                    None if block.block.stmts.is_empty() => return Verdict::Constant,
                     None => return Verdict::Unguarded(NOT_ONE.to_owned()),
                 },
                 expr => expr,
@@ -186,81 +256,107 @@ impl FileScan {
                 );
             }
         };
+        if inert(expr) {
+            return Verdict::Constant;
+        }
         let (callee, args) = match strip(expr) {
             Expr::Call(call) => match strip(&call.func) {
-                Expr::Path(path) if path.qself.is_none() => {
-                    (Callee::Path(segments(&path.path)), &call.args)
-                }
+                Expr::Path(path) if path.qself.is_none() => (segments(&path.path), &call.args),
                 _ => return Verdict::Unguarded("calls a computed function".to_owned()),
             },
-            Expr::MethodCall(call) if is_self(&call.receiver) => (
-                Callee::SelfMethod(call.method.unraw().to_string()),
-                &call.args,
-            ),
+            Expr::MethodCall(call) => {
+                return Verdict::Unguarded(format!(
+                    "calls `.{}(…)`, which resolves by its receiver's type; call an adapter as \
+                     `Type::{}(…)`",
+                    call.method, call.method
+                ));
+            }
             _ => {
                 return Verdict::Unguarded(format!(
                     "is not a call of `{MODULE}::{BOUNDARY}` or of an adapter"
                 ));
             }
         };
-        let through = match &callee {
-            Callee::Path(path) if self.is_boundary_call(path) => Verdict::Boundary,
-            _ if !adapters => {
-                return Verdict::Unguarded(format!("calls `{callee}`, not `{MODULE}::{BOUNDARY}`"));
-            }
-            _ => match self.adapter(&callee) {
+        let shown = callee.join("::");
+        let through = if self.is_boundary_call(&callee) {
+            Verdict::Boundary
+        } else if !adapters {
+            return Verdict::Unguarded(format!("calls `{shown}`, not `{MODULE}::{BOUNDARY}`"));
+        } else {
+            match self.adapter(&callee, impl_type) {
                 Ok(name) => Verdict::Adapter(name),
                 Err(why) => return Verdict::Unguarded(why),
-            },
+            }
         };
-        match args.iter().position(|arg| !inert(arg)) {
-            Some(index) => Verdict::Argument(format!(
-                "passes argument {} of `{callee}` an expression that runs before the boundary; \
+        if let Some(index) = args.iter().position(|arg| !inert(arg)) {
+            return Verdict::Argument(format!(
+                "passes argument {} of `{shown}` an expression that runs before the boundary; \
                  bind nothing outside it",
                 index + 1
-            )),
-            None => through,
+            ));
         }
+        if moves && !args.last().is_some_and(moved_in) {
+            return Verdict::Argument(format!(
+                "hands `{shown}` a body that borrows its captures, so they drop after the \
+                 boundary returns, in libdispatch's frames; make the body `move`"
+            ));
+        }
+        through
     }
 
     /// Whether `path` names the boundary.
     fn is_boundary_call(&self, path: &[String]) -> bool {
         is_boundary_path(path)
-            || (path.len() == 1 && path[0] == BOUNDARY && (self.binds_boundary || self.is_boundary))
+            || (path.len() == 1
+                && path[0] == BOUNDARY
+                && (self.imports.boundary || self.is_boundary))
     }
 
-    /// The adapter `callee` names, or why it names none.
-    fn adapter(&self, callee: &Callee) -> Result<String, String> {
-        let name = match callee {
-            Callee::Path(path) => match path.as_slice() {
-                [name] => name,
-                [first, name] if first == "Self" => name,
-                _ => {
+    /// The adapter `callee` names, or why it names none: a free function of
+    /// this file defined once at module level and not shadowed by an import,
+    /// or a method of `Self` or a named type, defined once in this file.
+    fn adapter(&self, callee: &[String], impl_type: Option<&str>) -> Result<String, String> {
+        let shown = callee.join("::");
+        let none = || {
+            format!(
+                "calls `{shown}`, which is neither `{MODULE}::{BOUNDARY}` nor an adapter of this \
+                 file"
+            )
+        };
+        let blocks = match callee {
+            [name] => {
+                if self.imports.names.contains(name) {
                     return Err(format!(
-                        "calls `{callee}`, which is neither `{MODULE}::{BOUNDARY}` nor an adapter \
-                         of this file"
+                        "calls `{shown}`, which an import of this file names, not an adapter"
                     ));
                 }
-            },
-            Callee::SelfMethod(name) => name,
+                self.free_fns.get(name)
+            }
+            [ty, name] => {
+                let ty = if ty == "Self" {
+                    impl_type.ok_or_else(none)?
+                } else {
+                    ty
+                };
+                self.methods.get(&(ty.to_owned(), name.clone()))
+            }
+            _ => return Err(none()),
         };
-        match self.fns.get(name).map(Vec::as_slice) {
-            None | Some([]) => Err(format!(
-                "calls `{callee}`, which is neither `{MODULE}::{BOUNDARY}` nor an adapter of this \
-                 file"
-            )),
-            Some([block]) => match self.verdict(&Body::Block(block.clone()), false) {
-                Verdict::Boundary => Ok(name.clone()),
+        match blocks.map(Vec::as_slice) {
+            None | Some([]) => Err(none()),
+            Some([block]) => match self.verdict(&Body::Block(block.clone()), None, false, false) {
+                Verdict::Boundary => Ok(shown),
                 Verdict::Unguarded(why) | Verdict::Argument(why) => {
-                    Err(format!("calls `{callee}`, whose own body {why}"))
+                    Err(format!("calls `{shown}`, whose own body {why}"))
                 }
-                // judged without adapters, so it names none
-                Verdict::Adapter(other) => Err(format!(
-                    "calls `{callee}`, which calls `{other}`; an adapter calls the boundary itself"
+                // judged without adapters, so it names none; a constant
+                // adapter is no boundary
+                Verdict::Adapter(_) | Verdict::Constant => Err(format!(
+                    "calls `{shown}`, which does not call the boundary itself"
                 )),
             },
             Some(blocks) => Err(format!(
-                "calls `{callee}`, which this file defines {} times; an adapter is defined once",
+                "calls `{shown}`, which this file defines {} times; an adapter is defined once",
                 blocks.len()
             )),
         }
@@ -269,23 +365,6 @@ impl FileScan {
 
 const NOT_ONE: &str = "is not one expression: whatever runs before or after the boundary's call \
                        can unwind into the OS";
-
-/// What an entry's body calls.
-enum Callee {
-    /// A path, by its segments.
-    Path(Vec<String>),
-    /// `self.name(…)`.
-    SelfMethod(String),
-}
-
-impl fmt::Display for Callee {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Path(path) => f.write_str(&path.join("::")),
-            Self::SelfMethod(name) => write!(f, "self.{name}"),
-        }
-    }
-}
 
 /// The one expression of `block`, with or without its semicolon.
 fn sole(block: &Block) -> Option<&Expr> {
@@ -302,10 +381,6 @@ fn strip(expr: &Expr) -> &Expr {
         Expr::Group(group) => strip(&group.expr),
         _ => expr,
     }
-}
-
-fn is_self(expr: &Expr) -> bool {
-    matches!(strip(expr), Expr::Path(path) if path.qself.is_none() && path.path.is_ident("self"))
 }
 
 fn segments(path: &Path) -> Vec<String> {
@@ -337,9 +412,14 @@ fn leads_in_crate(lead: &[String]) -> bool {
     lead.iter().all(|segment| LEADS.contains(&segment.as_str()))
 }
 
-/// An argument that cannot run code of its own: a literal, a path, a closure,
-/// a reference, field, cast or parenthesis of one, or `AfterPanic::Answer`
-/// of one.
+/// Whether `name` is an OS crate's.
+fn os_crate(name: &str) -> bool {
+    OS_CRATES.contains(&name) || name.starts_with("objc2_")
+}
+
+/// An expression that cannot run code of its own: a literal, a path, a
+/// closure, a tuple of them, a reference, field, cast or parenthesis of one,
+/// or `AfterPanic::Answer` of one.
 fn inert(expr: &Expr) -> bool {
     match expr {
         Expr::Lit(_) | Expr::Path(_) | Expr::Closure(_) => true,
@@ -363,6 +443,16 @@ fn inert(expr: &Expr) -> bool {
     }
 }
 
+/// A body that owns what it uses once it is handed over: a `move` closure,
+/// or a value moved in by name.
+fn moved_in(expr: &Expr) -> bool {
+    match strip(expr) {
+        Expr::Closure(closure) => closure.capture.is_some(),
+        Expr::Path(_) => true,
+        _ => false,
+    }
+}
+
 /// Whether `abi` is a foreign one: anything but `extern "Rust"`.
 fn foreign(abi: Option<&syn::Abi>) -> bool {
     abi.is_some_and(|abi| abi.name.as_ref().is_none_or(|name| name.value() != "Rust"))
@@ -379,18 +469,46 @@ fn objc_method(attrs: &[Attribute]) -> bool {
     })
 }
 
+/// The last segment of a type's path: the name an impl's methods go under.
+fn type_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Path(path) if path.qself.is_none() => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.unraw().to_string()),
+        Type::Group(group) => type_name(&group.elem),
+        Type::Paren(paren) => type_name(&paren.elem),
+        _ => None,
+    }
+}
+
 fn line(span: Span) -> usize {
     span.start().line
 }
 
+/// Whether a node with `attrs` exists in some build that is not a test.
+fn built(attrs: &[Attribute]) -> bool {
+    cfg_of(attrs).0 != Truth::False
+}
+
 /// The entries, functions, imports and identity findings of `file`.
 pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
+    let mut uses = UseScan {
+        rel: &file.rel,
+        imports: Imports::default(),
+        findings: Vec::new(),
+    };
+    uses.visit_file(&file.ast);
     let mut collector = Collector {
         rel: &file.rel,
         impl_kind: None,
+        impl_type: None,
         in_define_class: false,
         nesting: 0,
         out: FileScan {
+            imports: uses.imports,
+            findings: uses.findings,
             is_boundary,
             ..FileScan::default()
         },
@@ -399,67 +517,15 @@ pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
     collector.out
 }
 
-struct Collector<'f> {
+/// The first pass: what the file's `use` items bind, and whether a binding
+/// of the boundary's names points elsewhere.
+struct UseScan<'f> {
     rel: &'f str,
-    /// The kind and trait of the enclosing impl, when its methods are entries.
-    impl_kind: Option<(Kind, String)>,
-    /// Whether the items being read are a `define_class!` body.
-    in_define_class: bool,
-    /// How deep inside functions and inline modules the items being read are.
-    nesting: usize,
-    out: FileScan,
+    imports: Imports,
+    findings: Vec<Finding>,
 }
 
-impl Collector<'_> {
-    fn identity(&mut self, line: usize, what: String, detail: String) {
-        self.out.findings.push(Finding {
-            file: self.rel.to_owned(),
-            line,
-            what,
-            kind: IDENTITY,
-            detail,
-        });
-    }
-
-    fn unread(&mut self, line: usize, what: String, detail: String) {
-        self.out.findings.push(Finding {
-            file: self.rel.to_owned(),
-            line,
-            what,
-            kind: UNREAD,
-            detail,
-        });
-    }
-
-    fn entry(&mut self, kind: Kind, name: String, line: usize, body: Body) {
-        self.out.entries.push(Entry {
-            kind,
-            name,
-            line,
-            body,
-        });
-    }
-
-    fn function(&mut self, name: &syn::Ident, block: &Block) {
-        let name = name.unraw().to_string();
-        self.out.fns.entry(name).or_default().push(block.clone());
-    }
-
-    /// An item under the boundary's name, other than the boundary itself.
-    fn named(&mut self, ident: &syn::Ident, what: &str) {
-        let name = ident.unraw().to_string();
-        if name == BOUNDARY {
-            self.identity(
-                line(ident.span()),
-                format!("{what} {name}"),
-                format!(
-                    "only `{}::{BOUNDARY}` may have this name",
-                    BOUNDARY_MODULE.join("::")
-                ),
-            );
-        }
-    }
-
+impl UseScan<'_> {
     fn bind(&mut self, prefix: &[String], original: &syn::Ident, bound: &syn::Ident) {
         let original = original.unraw().to_string();
         let bound_name = bound.unraw().to_string();
@@ -467,20 +533,26 @@ impl Collector<'_> {
         if original != "self" {
             path.push(original);
         }
+        if path.first().is_some_and(|root| os_crate(root)) {
+            self.imports.os.insert(bound_name.clone());
+        }
+        self.imports.names.insert(bound_name.clone());
         let ok = match bound_name.as_str() {
             BOUNDARY => {
                 let ok = is_boundary_path(&path);
-                self.out.binds_boundary |= ok;
+                self.imports.boundary |= ok;
                 ok
             }
             MODULE => is_boundary_module_path(&path),
             _ => return,
         };
         if !ok {
-            self.identity(
-                line(bound.span()),
-                format!("use {}", path.join("::")),
-                format!(
+            self.findings.push(Finding {
+                file: self.rel.to_owned(),
+                line: line(bound.span()),
+                what: format!("use {}", path.join("::")),
+                kind: Problem::Identity,
+                detail: format!(
                     "binds `{bound_name}` to something other than `{}`",
                     if bound_name == BOUNDARY {
                         format!("{}::{BOUNDARY}", BOUNDARY_MODULE.join("::"))
@@ -488,29 +560,106 @@ impl Collector<'_> {
                         BOUNDARY_MODULE.join("::")
                     }
                 ),
-            );
+            });
         }
     }
 
-    fn use_tree(&mut self, tree: &UseTree, prefix: &mut Vec<String>) {
+    fn tree(&mut self, tree: &UseTree, prefix: &mut Vec<String>) {
         match tree {
             UseTree::Path(path) => {
                 prefix.push(path.ident.unraw().to_string());
-                self.use_tree(&path.tree, prefix);
+                self.tree(&path.tree, prefix);
                 prefix.pop();
             }
             UseTree::Name(name) => self.bind(prefix, &name.ident, &name.ident),
             UseTree::Rename(rename) => self.bind(prefix, &rename.ident, &rename.rename),
             UseTree::Glob(_) => {
                 if is_boundary_module_path(prefix) {
-                    self.out.binds_boundary = true;
+                    self.imports.boundary = true;
                 }
             }
             UseTree::Group(group) => {
                 for tree in &group.items {
-                    self.use_tree(tree, prefix);
+                    self.tree(tree, prefix);
                 }
             }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for UseScan<'_> {
+    fn visit_item(&mut self, item: &'ast Item) {
+        if !built(item_attrs(item)) {
+            return;
+        }
+        if let Item::Use(item) = item {
+            self.tree(&item.tree, &mut Vec::new());
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast ImplItem) {
+        if built(impl_item_attrs(item)) {
+            visit::visit_impl_item(self, item);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if built(stmt_attrs(stmt)) {
+            visit::visit_stmt(self, stmt);
+        }
+    }
+}
+
+struct Collector<'f> {
+    rel: &'f str,
+    /// The kind and trait of the enclosing impl, when its methods are entries.
+    impl_kind: Option<(Kind, String)>,
+    /// The self type of the enclosing impl.
+    impl_type: Option<String>,
+    /// Whether the items being read are a `define_class!` body.
+    in_define_class: bool,
+    /// How deep inside functions and impls the items being read are: a free
+    /// function at depth 0 is at module level.
+    nesting: usize,
+    out: FileScan,
+}
+
+impl Collector<'_> {
+    fn finding(&mut self, line: usize, what: String, kind: Problem, detail: String) {
+        self.out.findings.push(Finding {
+            file: self.rel.to_owned(),
+            line,
+            what,
+            kind,
+            detail,
+        });
+    }
+
+    fn entry(&mut self, kind: Kind, name: String, line: usize, body: Body) {
+        let impl_type = self.impl_type.clone();
+        self.out.entries.push(Entry {
+            kind,
+            name,
+            line,
+            impl_type,
+            body,
+        });
+    }
+
+    /// An item under the boundary's name, other than the boundary itself.
+    fn named(&mut self, ident: &syn::Ident, what: &str) {
+        let name = ident.unraw().to_string();
+        if name == BOUNDARY {
+            self.finding(
+                line(ident.span()),
+                format!("{what} {name}"),
+                Problem::Identity,
+                format!(
+                    "only `{}::{BOUNDARY}` may have this name",
+                    BOUNDARY_MODULE.join("::")
+                ),
+            );
         }
     }
 
@@ -530,9 +679,10 @@ impl Collector<'_> {
                     .segments
                     .last()
                     .map_or(0, |segment| line(segment.ident.span()));
-                self.unread(
+                self.finding(
                     at,
                     "define_class!".to_owned(),
+                    Problem::Unread,
                     format!("its body does not parse, so its methods cannot be read: {error}"),
                 );
             }
@@ -556,9 +706,10 @@ impl Collector<'_> {
                     if let [TokenTree::Ident(word), TokenTree::Ident(function), ..] = rest
                         && word == "fn"
                     {
-                        self.unread(
+                        self.finding(
                             line(function.span()),
                             format!("fn {function}"),
+                            Problem::Unread,
                             format!(
                                 "an extern fn defined in the tokens of `{name}!`, whose body the \
                                  gate cannot read; define it outside the macro"
@@ -577,9 +728,10 @@ impl Collector<'_> {
                         && second.as_char() == ':'
                         && new == "new"
                     {
-                        self.unread(
+                        self.finding(
                             line(ident.span()),
                             format!("{ident}::new"),
+                            Problem::Unread,
                             format!(
                                 "a callback made in the tokens of `{name}!`, whose closure the \
                                  gate cannot read; make it outside the macro"
@@ -591,9 +743,10 @@ impl Collector<'_> {
                     if let Some(TokenTree::Ident(method)) = trees.get(at + 1)
                         && GCD_METHODS.iter().any(|gcd| method == gcd)
                     {
-                        self.unread(
+                        self.finding(
                             line(method.span()),
                             format!(".{method}"),
+                            Problem::Unread,
                             format!(
                                 "a GCD work item in the tokens of `{name}!`, whose closure the \
                                  gate cannot read; dispatch it outside the macro"
@@ -607,16 +760,32 @@ impl Collector<'_> {
     }
 
     /// A closure handed to the OS by `name`: the first closure literal among
-    /// `args`.
-    fn closure_entry(&mut self, name: String, at: usize, args: &Punctuated<Expr, Token![,]>) {
+    /// `args`. `moves`: its captures must move into the boundary's body.
+    fn closure_entry(
+        &mut self,
+        name: String,
+        at: usize,
+        args: &Punctuated<Expr, Token![,]>,
+        moves: bool,
+    ) {
         let body = args
             .iter()
             .find_map(|arg| match strip(arg) {
-                Expr::Closure(closure) => Some(Body::Closure((*closure.body).clone())),
+                Expr::Closure(closure) => Some(Body::Closure {
+                    body: (*closure.body).clone(),
+                    moves,
+                }),
                 _ => None,
             })
             .unwrap_or(Body::Unseen);
         self.entry(Kind::Callback, name, at, body);
+    }
+
+    /// Whether `path` reaches into an OS crate: written from its root, or
+    /// starting at a name an import of this file takes from it.
+    fn os_path(&self, path: &[String]) -> bool {
+        path.first()
+            .is_some_and(|first| os_crate(first) || self.out.imports.os.contains(first))
     }
 }
 
@@ -640,11 +809,6 @@ fn class_impls(tokens: TokenStream) -> TokenStream {
     }
 }
 
-/// Whether a node with `attrs` exists in some build that is not a test.
-fn built(attrs: &[Attribute]) -> bool {
-    cfg_of(attrs).0 != Truth::False
-}
-
 impl<'ast> Visit<'ast> for Collector<'_> {
     fn visit_item(&mut self, item: &'ast Item) {
         if !built(item_attrs(item)) {
@@ -653,11 +817,11 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         match item {
             Item::Const(item) => self.named(&item.ident, "const"),
             Item::Static(item) => self.named(&item.ident, "static"),
-            Item::Use(item) => self.use_tree(&item.tree, &mut Vec::new()),
             Item::Mod(module) if module.ident.unraw() == MODULE && module.content.is_some() => {
-                self.identity(
+                self.finding(
                     line(module.ident.span()),
                     format!("mod {MODULE}"),
+                    Problem::Identity,
                     format!(
                         "a second module named `{MODULE}`; the boundary is `{}`",
                         BOUNDARY_MODULE.join("::")
@@ -669,12 +833,6 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         visit::visit_item(self, item);
     }
 
-    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        self.nesting += 1;
-        visit::visit_item_mod(self, module);
-        self.nesting -= 1;
-    }
-
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
         let name = function.sig.ident.unraw().to_string();
         if name == BOUNDARY {
@@ -684,7 +842,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 self.named(&function.sig.ident, "fn");
             }
         }
-        self.function(&function.sig.ident, &function.block);
+        if self.nesting == 0 {
+            self.out
+                .free_fns
+                .entry(name.clone())
+                .or_default()
+                .push((*function.block).clone());
+        }
         if foreign(function.sig.abi.as_ref()) {
             self.entry(
                 Kind::ExternFn,
@@ -709,9 +873,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 None
             }
         });
-        let outer = std::mem::replace(&mut self.impl_kind, kind);
+        let outer_kind = std::mem::replace(&mut self.impl_kind, kind);
+        let outer_type = std::mem::replace(&mut self.impl_type, type_name(&item.self_ty));
+        self.nesting += 1;
         visit::visit_item_impl(self, item);
-        self.impl_kind = outer;
+        self.nesting -= 1;
+        self.impl_kind = outer_kind;
+        self.impl_type = outer_type;
     }
 
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
@@ -725,7 +893,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         if name == BOUNDARY {
             self.named(&function.sig.ident, "fn");
         }
-        self.function(&function.sig.ident, &function.block);
+        if let Some(ty) = &self.impl_type {
+            self.out
+                .methods
+                .entry((ty.clone(), name.clone()))
+                .or_default()
+                .push(function.block.clone());
+        }
         let kind = if foreign(function.sig.abi.as_ref()) {
             Some((Kind::ExternFn, name))
         } else if self.in_define_class && objc_method(&function.attrs) {
@@ -744,11 +918,11 @@ impl<'ast> Visit<'ast> for Collector<'_> {
             );
         }
         // what a method's body holds belongs to no impl
-        let outer = self.impl_kind.take();
-        self.nesting += 1;
+        let outer_kind = self.impl_kind.take();
+        let outer_type = self.impl_type.take();
         visit::visit_impl_item_fn(self, function);
-        self.nesting -= 1;
-        self.impl_kind = outer;
+        self.impl_kind = outer_kind;
+        self.impl_type = outer_type;
     }
 
     fn visit_trait_item(&mut self, item: &'ast TraitItem) {
@@ -757,24 +931,27 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
     }
 
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.nesting += 1;
+        visit::visit_item_trait(self, item);
+        self.nesting -= 1;
+    }
+
     fn visit_trait_item_fn(&mut self, function: &'ast syn::TraitItemFn) {
         if function.sig.ident.unraw() == BOUNDARY {
             self.named(&function.sig.ident, "fn");
         }
-        if let Some(block) = &function.default {
-            self.function(&function.sig.ident, block);
-            if foreign(function.sig.abi.as_ref()) {
-                self.entry(
-                    Kind::ExternFn,
-                    function.sig.ident.unraw().to_string(),
-                    line(function.sig.ident.span()),
-                    Body::Block(block.clone()),
-                );
-            }
+        if let Some(block) = &function.default
+            && foreign(function.sig.abi.as_ref())
+        {
+            self.entry(
+                Kind::ExternFn,
+                function.sig.ident.unraw().to_string(),
+                line(function.sig.ident.span()),
+                Body::Block(block.clone()),
+            );
         }
-        self.nesting += 1;
         visit::visit_trait_item_fn(self, function);
-        self.nesting -= 1;
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
@@ -791,16 +968,24 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = strip(&call.func) {
-            let mut last = path.path.segments.iter().rev();
-            if let (Some(new), Some(ty)) = (last.next(), last.next())
-                && new.ident == "new"
-                && CALLBACK_TYPES.iter().any(|callback| ty.ident == callback)
-            {
-                self.closure_entry(
-                    format!("{}::new", ty.ident),
-                    line(ty.ident.span()),
-                    &call.args,
-                );
+            let callee = segments(&path.path);
+            let named_callback = matches!(callee.as_slice(), [.., ty, new]
+                if new == "new" && CALLBACK_TYPES.contains(&ty.as_str()));
+            let closure_to_os = self.os_path(&callee)
+                && call
+                    .args
+                    .iter()
+                    .any(|arg| matches!(strip(arg), Expr::Closure(_)))
+                && !callee
+                    .last()
+                    .is_some_and(|name| SYNCHRONOUS.contains(&name.as_str()));
+            if named_callback || closure_to_os {
+                let at = path
+                    .path
+                    .segments
+                    .last()
+                    .map_or(0, |segment| line(segment.ident.span()));
+                self.closure_entry(callee.join("::"), at, &call.args, false);
             }
         }
         visit::visit_expr_call(self, call);
@@ -812,6 +997,7 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 format!(".{}", call.method),
                 line(call.method.span()),
                 &call.args,
+                true,
             );
         }
         visit::visit_expr_method_call(self, call);

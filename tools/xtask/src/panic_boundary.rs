@@ -1,22 +1,24 @@
-//! `cargo xtask panic-boundary`: a panic in FLUI's code never unwinds into the
-//! operating system (ADR-0151 §16).
+//! `cargo xtask panic-boundary`: a panic in FLUI's code never leaves through
+//! the operating system (ADR-0151 §16).
 //!
-//! An unwind out of a function the OS calls aborts the process with nothing of
-//! the framework's diagnostics (`extern "C"` and `extern "system"`), or runs
-//! through frames that were never written to be unwound, such as AppKit's
-//! (`extern "C-unwind"`, which objc2's methods and blocks use). A missed
+//! Out of an `extern "C"` or `extern "system"` frame a panic aborts the
+//! process (since Rust 1.81; before, it was undefined behaviour), with
+//! nothing in the framework's diagnostics; out of an `extern "C-unwind"`
+//! frame, which objc2's methods and blocks use, it unwinds through AppKit's
+//! or libdispatch's frames, which were not written to be unwound. Containment
+//! buys a logged failure and a sane answer to the OS instead. A missed
 //! boundary is invisible in review, so this gate finds every entry the OS has
 //! into `flui-native` and checks that each goes through the one boundary,
 //! `owner::panic_boundary::os_entry`.
 //!
-//! **Entries.** In the crate's non-test code ([`scan`] follows its module tree
-//! the way rustc does; a module or item under a cfg that is false in every
-//! build, `test`, is left out), an entry is:
+//! **Entries.** In the crate's non-test code ([`crate::source_tree`] follows
+//! its module tree the way rustc does; a module or item under a cfg that is
+//! false in every build, `test`, is left out), an entry is:
 //!
 //! - a function with a foreign ABI (`extern "C"`, `"system"`, `"C-unwind"`,
-//!   …): a Win32 window procedure or enumeration callback, a JNI native or
-//!   `Java_*` export, an Objective-C method a `ClassBuilder` adds, an NDK
-//!   callback;
+//!   …), free, a method or a trait's default: a Win32 window procedure or
+//!   enumeration callback, a JNI native or `Java_*` export, an Objective-C
+//!   method a `ClassBuilder` adds, an NDK callback;
 //! - a method of `define_class!` marked `#[unsafe(method(…))]` or
 //!   `#[unsafe(method_id(…))]`, which objc2 turns into an `extern "C-unwind"`
 //!   function;
@@ -25,26 +27,40 @@
 //! - a method of an AccessKit handler (`ActionHandler`, `ActivationHandler`,
 //!   `DeactivationHandler`), which the adapters call from inside their own UIA,
 //!   NSAccessibility and AT-SPI entries;
-//! - a closure handed to the OS: an Objective-C block (`RcBlock::new`,
-//!   `StackBlock::new`), a WinRT delegate (`TypedEventHandler::new` and the
-//!   other delegate types of `windows::Foundation`), a GCD work item
-//!   (`exec_async`, `exec_sync`, `exec_after`, `after`, `barrier_async`,
-//!   `barrier_sync`; the crate keeps these method names for GCD). The
+//! - a closure handed to the OS: any closure literal given to a function or
+//!   constructor of an OS binding crate (`windows`, `objc2*`, `block2`,
+//!   `dispatch*`, `jni`, `ndk`, `android_activity`, …, reached by its path or
+//!   through a name the file imports from it), such as an Objective-C block or
+//!   a WinRT delegate; a block or delegate constructor matched by name where a
+//!   glob import hides it; and a GCD work item (`exec_async`, `exec_sync`,
+//!   `exec_after`, `after`, `barrier_async`, `barrier_sync`), whose body must
+//!   move its captures into the boundary, so they drop inside it. A named
 //!   constructor or method must be given the closure literal, so its body is
 //!   in view.
 //!
 //! **The rule.** An entry goes through the boundary when its body is one
-//! expression, a call of `os_entry` (written `…panic_boundary::os_entry`, or
-//! `os_entry` imported from it), or a call of an *adapter*: a function of the
-//! same file, defined there once, whose own body is that call, called as
-//! `name(…)`, `Self::name(…)` or `self.name(…)`. Nothing runs before the call
-//! or after it, and its arguments, which are evaluated outside the boundary,
-//! are each a literal, a path, a closure, a reference, field, cast or
-//! parenthesis of one, or `AfterPanic::Answer(…)` of one. `os_entry` is
-//! defined once, in `owner::panic_boundary`; any other item, module or import
-//! under the name `os_entry` or `panic_boundary` is a finding, so the name the
-//! rule reads is the function. There is no allowlist: an entry passes or the
-//! gate fails.
+//! expression: a constant (a literal or a path, which runs no code), a call of
+//! `os_entry` (written `…panic_boundary::os_entry`, or `os_entry` imported
+//! from it), or a call of an *adapter* whose own body is that call: a free
+//! function of the same file, defined once at module level and not shadowed by
+//! an import, called as `name(…)`, or a method of the same file defined once
+//! on `Self` or a named type, called as `Self::name(…)` or `Type::name(…)`. A
+//! method call (`self.name(…)`) resolves by its receiver's type and is no
+//! adapter. Nothing runs before the call or after it, and its arguments, which
+//! are evaluated outside the boundary, are each a literal, a path, a closure,
+//! a tuple, reference, field, cast or parenthesis of those, or
+//! `AfterPanic::Answer(…)` of one. `os_entry` is defined once, in
+//! `owner::panic_boundary`; any other item, module or import under the name
+//! `os_entry` or `panic_boundary` is a finding, so the name the rule reads is
+//! the function. There is no allowlist: an entry passes or the gate fails.
+//!
+//! **Limits.** Functions and constructors of OS crates are caught by their
+//! path; methods are not, since a receiver's type is out of the gate's
+//! reach, so a new OS method that takes a closure must be added to the GCD
+//! list, and a constructor reached through a glob import to the list of
+//! callback types. A block's or delegate's captures live as long as the OS
+//! keeps the block and drop when it releases it, outside any call: they are
+//! kept to values whose destructor runs no user code.
 //!
 //! **Out of scope, by kind.**
 //!
@@ -54,6 +70,8 @@
 //! - winit's `ApplicationHandler` and android-activity's glue: those crates
 //!   hold the boundary of their own procedures (winit resumes the panic in
 //!   `run_app`, on the Rust side; android-activity aborts with a log).
+//! - `flui-hot-reload`'s plugin ABI (`flui_scene_build`, `flui_app_build`):
+//!   entries a host process calls in a plugin, outside `flui-native`.
 //! - Test code: a stub's panic aborts the test process, which fails the run.
 //! - Code a dependency's proc-macro or macro generates: only the tokens written
 //!   in this crate are read. `define_class!` is parsed; in any other macro an
@@ -66,7 +84,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-
 use std::process::ExitCode;
 
 use crate::source_tree::{Disk, Source, Target, walk};
@@ -116,6 +133,34 @@ pub(crate) fn panic_boundary(args: &PanicBoundaryArgs) -> anyhow::Result<ExitCod
     Ok(ExitCode::FAILURE)
 }
 
+/// What is wrong with an entry or an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Problem {
+    /// An entry whose body is not a constant or one call of the boundary or
+    /// of an adapter.
+    Unguarded,
+    /// An argument of that call that runs before the boundary does, or a
+    /// work item's body that does not take its captures in.
+    Argument,
+    /// A second `os_entry` or `panic_boundary`, an import of either from
+    /// elsewhere, or a missing boundary.
+    Identity,
+    /// An entry the gate cannot read: in macro tokens, or an unparsable
+    /// `define_class!`.
+    Unread,
+}
+
+impl fmt::Display for Problem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unguarded => "unguarded",
+            Self::Argument => "argument",
+            Self::Identity => "identity",
+            Self::Unread => "unread",
+        })
+    }
+}
+
 /// One problem the gate reports.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Finding {
@@ -123,7 +168,7 @@ struct Finding {
     line: usize,
     /// The entry, or the item an identity rule is about.
     what: String,
-    kind: &'static str,
+    kind: Problem,
     detail: String,
 }
 
@@ -136,17 +181,6 @@ impl fmt::Display for Finding {
         )
     }
 }
-
-/// An entry whose body is not one call of the boundary or of an adapter.
-const UNGUARDED: &str = "unguarded";
-/// An argument of that call that runs before the boundary does.
-const ARGUMENT: &str = "argument";
-/// A second `os_entry` or `panic_boundary`, an import of either from
-/// elsewhere, or a missing boundary.
-const IDENTITY: &str = "identity";
-/// An entry the gate cannot read: in macro tokens, or an unparsable
-/// `define_class!`.
-const UNREAD: &str = "unread";
 
 /// One entry and how it reaches the boundary, for `--list`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -195,23 +229,27 @@ impl Report {
             .iter()
             .map(|kind| format!("{} {kind}s", by_kind.get(kind).copied().unwrap_or(0)))
             .collect();
-        let via_adapters = self
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry
-                    .through
-                    .as_deref()
-                    .is_some_and(|through| through.starts_with("adapter"))
-            })
-            .count();
+        let through = |what: &str| {
+            self.entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .through
+                        .as_deref()
+                        .is_some_and(|through| through.starts_with(what))
+                })
+                .count()
+        };
         format!(
-            "{} entries ({}) go through `{}::os_entry`, {via_adapters} of them by {} adapters; \
+            "{} entries ({}): {} through `{}::os_entry`, {} of them by {} adapters, {} constant; \
              {} files parsed",
             self.entries.len(),
             kinds.join(", "),
+            self.entries.len() - through("constant"),
             BOUNDARY_MODULE.join("::"),
+            through("adapter"),
             self.adapters.len(),
+            through("constant"),
             self.files
         )
     }
@@ -239,7 +277,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                 file: file.rel.clone(),
                 line: 1,
                 what: format!("mod {}", scan::MODULE),
-                kind: IDENTITY,
+                kind: Problem::Identity,
                 detail: format!(
                     "a second module named `{}`; the boundary is `{}`",
                     scan::MODULE,
@@ -254,7 +292,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                 file: file.rel.clone(),
                 line: 1,
                 what: format!("fn {}", scan::BOUNDARY),
-                kind: IDENTITY,
+                kind: Problem::Identity,
                 detail: "the boundary module does not define the boundary at its top level"
                     .to_owned(),
             });
@@ -266,6 +304,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                     report.adapters.insert((file.rel.clone(), name.clone()));
                     Some(format!("adapter `{name}`"))
                 }
+                Verdict::Constant => Some("constant".to_owned()),
                 Verdict::Unguarded(_) | Verdict::Argument(_) => None,
             };
             let finding = |kind, detail: &str| Finding {
@@ -276,9 +315,9 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                 detail: format!("{} {}", entry.kind, detail),
             };
             match &verdict {
-                Verdict::Unguarded(why) => report.findings.push(finding(UNGUARDED, why)),
-                Verdict::Argument(why) => report.findings.push(finding(ARGUMENT, why)),
-                Verdict::Boundary | Verdict::Adapter(_) => {}
+                Verdict::Unguarded(why) => report.findings.push(finding(Problem::Unguarded, why)),
+                Verdict::Argument(why) => report.findings.push(finding(Problem::Argument, why)),
+                Verdict::Boundary | Verdict::Adapter(_) | Verdict::Constant => {}
             }
             report.entries.push(Listed {
                 file: file.rel.clone(),
@@ -294,7 +333,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
             file: root.to_owned(),
             line: 1,
             what: format!("mod {}", BOUNDARY_MODULE.join("::")),
-            kind: IDENTITY,
+            kind: Problem::Identity,
             detail: "the crate has no boundary module".to_owned(),
         });
     }
@@ -307,7 +346,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
 // self-test
 
 /// `(file, what, kind)`: what the self-test compares.
-type Identity = (String, String, String);
+type Identity = (String, String, Problem);
 
 /// `(missed, false positives)` of the rule over the fixture crate.
 fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
@@ -316,17 +355,11 @@ fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
     let seen: BTreeSet<Identity> = report
         .findings
         .iter()
-        .map(|finding| {
-            (
-                finding.file.clone(),
-                finding.what.clone(),
-                finding.kind.to_owned(),
-            )
-        })
+        .map(|finding| (finding.file.clone(), finding.what.clone(), finding.kind))
         .collect();
     let expected: BTreeSet<Identity> = fixture::EXPECTED
         .iter()
-        .map(|&(file, what, kind)| (file.to_owned(), what.to_owned(), kind.to_owned()))
+        .map(|&(file, what, kind)| (file.to_owned(), what.to_owned(), kind))
         .collect();
     (
         expected.difference(&seen).cloned().collect(),
