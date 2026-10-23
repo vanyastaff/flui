@@ -1648,9 +1648,10 @@ graph LR
   — 279 (с новым тестом), новый тест под xvfb — 5 из 5; `checks`, `module-dag`, `facade-combos`,
   `deps --only policy`, `docs-paths`, `markers`.
 - [x] **LY90** — ветка `platform/panic-boundary-gate`, на LY34 (`dbbb8d7d9`); слиты `fc8f8ebaa`,
-  LY88 (`ccda248ee`, признака `a11y` больше нет) и `59e63b27c`. Граница — одна функция:
-  `owner::panic_boundary::os_entry<A: Copy + Debug, R>(entry: &'static str, args: A, after_panic:
-  AfterPanic<A, R>, body: impl FnOnce() -> R) -> R`, `AfterPanic::{Answer(fn(A) -> R), Abort}`.
+  LY88 (`ccda248ee`, признака `a11y` больше нет), `59e63b27c` и LY35 (`5cf18f936`). Граница —
+  одна функция: `owner::panic_boundary::os_entry<A: Copy + Debug, R>(entry: &'static str, args: A,
+  after_panic: AfterPanic<A, R>, body: impl FnOnce() -> R) -> R`,
+  `AfterPanic::{Answer(fn(A) -> R), Abort}`.
   `args` — то, с чем ОС вызвала вход (сообщение и окно, делегат): лог паники несёт их (кроме
   ZST) и текст паники под именем входа, ответ строится из них. Ответ — `fn`-указатель: ничего не
   захватывает и создаётся только после паники (ошибка COM читает `GetErrorInfo` потока в момент
@@ -1755,22 +1756,22 @@ graph LR
   и самотест, мутации ветвей гейта (разрешение адаптера мимо импорта, `move`, `Answer`, ABI в
   `impl`) — «MISSED». Исключения `module-dag` — 33, `globals` — 56, как было. Проверки на Windows:
   `cargo fmt`; clippy `-D warnings` `-p flui-native -p flui-app --all-targets` и с
-  `flui-native/winit-backend`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app` — 311
-  (2 пропущены), с `winit-backend` — 344 (2), `-p xtask` — 46; clippy Android `--all-targets`
+  `flui-native/winit-backend`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app` — 317
+  (2 пропущены), с `winit-backend` — 350 (2), `-p xtask` — 46; clippy Android `--all-targets`
   (`-p flui-native -p flui-app`), macOS lib `-p flui-native` и с `winit-backend` (`flui-app` под
   macOS требует `cc`: `psm` через `flui-rendering`), iOS lib (`DOCS_RS=1`), wasm32 lib;
-  `wasm-check`, `wasm-test` — 51; `checks` целиком: `module-dag` (291 модуль, 322 ребра, 33
+  `wasm-check`, `wasm-test` — 51; `checks` целиком: `module-dag` (295 модулей, 325 рёбер, 33
   исключения) и самотест (54), `globals` (56) и самотест (15), `panic-boundary` (169) и самотест
   (30), `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`, `changelog`;
   `doc-strict`; rustdoc `--document-private-items -D warnings`. WSL Ubuntu 24.04
   (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE` сняты): clippy с `winit-backend` и без; nextest
-  `FLUI_HEADLESS=1` — 329: 327, падают `x11_window_takes_commands_and_publishes_what_the_server_holds`
-  на X-сервере WSLg (как на `origin/main`, см. LY34) и однажды
-  `x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode` (модуль X11 отдельно — 5
-  прогонов, падает только первый); `--all-features` под xvfb — 285 из 285; `accessibility::linux`
-  и `owner::panic_boundary` с `winit-backend` — 7; rustdoc с `winit-backend` и без. Не
-  запускалось: Mac и iPhone — 41 вход AppKit, 14 UIKit, блоки и тесты wake pump и terminate gate
-  только собраны (библиотека), в очереди vanyastaff/flui#1840 (пункт 4 `docs/gaps.md`);
+  `FLUI_HEADLESS=1` — 335: 334, падает `x11_window_takes_commands_and_publishes_what_the_server_holds`
+  на X-сервере WSLg (как на `origin/main`, см. LY34; в прогоне до слияния LY35 однажды упал и
+  `x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`, отдельно он прошёл 5
+  из 5); `--all-features` под xvfb — 291 из 291; `accessibility::linux` и `owner::panic_boundary`
+  с `winit-backend` — 7; rustdoc с `winit-backend` и без. Не запускалось: Mac и iPhone — 41 вход
+  AppKit, 14 UIKit и блоки только собраны (библиотека), тесты wake pump и terminate gate не
+  собирались, в очереди vanyastaff/flui#1840 (пункт 4 `docs/gaps.md`);
   `cross-typecheck` (нет `zig`; job в CI); устройство Android (JNI-методы меняют только имя входа
   в логе и ответ по умолчанию). Браузер: проверять нечего — Web входов не имеет.
 - [x] **LY35** — ветка `platform/duplicates` (vanyastaff/flui#1873), начата на вершине LY34
