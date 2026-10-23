@@ -571,28 +571,51 @@ trait depends on `flui-platform` instead.
   JNI native, an Objective-C method a `ClassBuilder` adds, an NDK callback), a
   `define_class!` method, a method of a windows-rs `I…_Impl` (a COM vtable
   entry), an AccessKit handler, and a closure handed to the OS (an `RcBlock` or
-  `StackBlock`, a WinRT delegate, a GCD work item). Its body is one call of
-  `owner::panic_boundary::os_entry(entry, after_panic, body)`, or of an adapter
-  of its file whose body is that call (`com_boundary`, `com_entry`, `contained`,
-  `send`, …). `os_entry` logs a panic with its text before anything else runs,
-  contains the log, retains the payload, then answers what `AfterPanic` says:
-  `Answer(fn() -> R)`, a failure the OS understands, made only after a panic and
-  capturing nothing; or `Abort`, where the state behind the entry may be torn
+  `StackBlock`, a WinRT delegate, a GCD work item: any closure literal given to
+  a function of an OS binding crate). Its body is a constant (a literal or a
+  path: no code runs), one call of `owner::panic_boundary::os_entry(entry,
+  args, after_panic, body)`, or one call of an adapter whose body is that call:
+  a free function of the same file not shadowed by an import, or a method
+  called as `Type::name` or `Self::name` (`com_method`, `com_hresult` and
+  `TsfStore::document_method` for COM, `jni_native`, `Self::scene_event` for
+  UIKit scenes). Out of an `extern "C"` frame a panic would abort the process
+  unannounced, out of an `extern "C-unwind"` one unwind through AppKit's or
+  libdispatch's frames; `os_entry` logs it with its text, under the entry's
+  name and with `args` (what the OS called with, `Copy + Debug`: a message
+  and its window, the delegate), contains the log, retains the payload, then
+  answers what `AfterPanic` says: `Answer(fn(A) -> R)`, a failure the OS
+  understands made from the arguments only after a panic and capturing
+  nothing (a broadcast receiver grants a session-end query it could not
+  answer; `applicationShouldTerminate:` lets a session end go on and cancels
+  any other quit); or `Abort`, where the state behind the entry may be torn
   (FLUI's window procedure, the cloak hook, a UIKit configuration or init, the
-  macOS owner lane's guard). An answer that panics too ends the process. Inner
-  containment stays where an entry runs several steps (a broadcast subscriber,
-  a TSF method that poisons its document, a view's `dealloc` that still runs
-  the super `dealloc` after its context's teardown failed). `cargo xtask
-  panic-boundary` finds every entry and holds it to that shape, with no
-  allowlist; `wasm_bindgen` closures are out of its scope because wasm32 aborts
-  on panic, and winit's and android-activity's procedures contain their own.
-  The crate keeps the GCD method names (`exec_async`, `exec_sync`,
-  `exec_after`, `after`, `barrier_*`) for GCD. Tests:
-  `owner::panic_boundary::tests` (the first failure is logged before the answer;
-  a panicking log stays inside), `a_panicking_listener_stays_inside_its_handler`
-  (AccessKit, Windows and Linux) and, on macOS,
-  `a_tick_whose_hook_panics_leaves_no_tick_queued` (the wake pump does not stay
-  wedged after a contained tick).
+  macOS owner lane's guard). An answer that panics too ends the process.
+  Steps inside an entry are contained apart, each logged with its text
+  (`contain_os_entry` for a broadcast subscriber or an owner-window hook,
+  `contain_owner_callback` elsewhere): a TSF method that poisons its document
+  keeps its services' entry depth as a guard, so a panic past the poisoning
+  cannot leave host operations queued forever, and a view's `dealloc` still
+  runs the super `dealloc` after its context's teardown failed. A GCD work
+  item's body is a `move` closure, so its captures drop inside the boundary; a
+  block's or delegate's captures live as long as the OS keeps it and are
+  values whose destructor runs no user code. `cargo xtask panic-boundary`
+  finds every entry and holds it to that shape, with no allowlist. It reads
+  functions and constructors of OS crates by their path, but methods by name,
+  since a receiver's type is out of its reach: a new OS method that takes a
+  closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
+  `after`, `barrier_*`, names the crate keeps for GCD), and a constructor a
+  glob import hides to its list of callback types. `wasm_bindgen` closures are
+  out of its scope because wasm32 aborts on panic, winit's and
+  android-activity's procedures contain their own, and `flui-hot-reload`'s
+  plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
+  first failure is logged before the answer, with the entry's arguments, and a
+  contained step with its text; a panicking log stays inside),
+  `a_failing_subscriber_is_logged_and_a_session_end_still_granted`,
+  `a_panicking_listener_stays_inside_its_handler` (AccessKit, Windows and
+  Linux), the TSF row `a_tsf_call_failing_past_its_poisoning_leaves_no_depth`
+  and, on macOS, `a_tick_whose_hook_panics_leaves_no_tick_queued`,
+  `a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick` and
+  `a_session_end_is_under_way_from_its_announcement_to_its_answer`.
 - **`Platform` and `HostWindow` are sealed (ADR-0151 §5).** Each has a private
   supertrait: `Platform`'s is implemented for `HostPlatform<H>` alone,
   `HostWindow`'s for every type that implements the crate-private
