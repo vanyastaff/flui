@@ -1675,6 +1675,55 @@ graph LR
   `zig`; job в CI); `api-closure -p flui-native` хостом Linux на nightly — его первый прогон в job
   `doc`; Mac и iPhone (расширение macOS поверх `dyn HostWindow`, `liquid_glass`, корень iOS) — в
   очереди vanyastaff/flui#1840.
+  После ревью PR #1874 и слияния с `main` @ `59e63b27c` (LY88: фичи `a11y` нет; конфликтов кода не
+  было, кроме строки LY88 в `tests/contract.rs`, которая приводила окно к `WindowsWindow`, — теперь
+  `win32().is_some()`). Расширения ОС — по одному методу: `WindowsWindowExt::win32() ->
+  Option<Win32Window<'_>>`, `MacOSWindowExt::appkit() -> Option<AppKitWindow<'_>>` (`#[must_use]`);
+  37 однострочных пересылок `Option<()>` ушли, тела — методы видов, отказать по чужому хосту они
+  не могут; `AppKitWindow::add_tab_to_window -> Result<(), TabJoinError>` (`NotAppKit`,
+  `SameWindow`, `NotOnTheMainLane`, `Closed`). Удалены заглушки, отвечавшие успехом без действия:
+  Windows — прогресс на панели задач (с `TaskbarProgressState`), тень, анимации; macOS — tiling
+  (`enable_tiling`, `disable_tiling`, `is_tiling_enabled` и пять типов модуля `tiling`); удалён
+  `liquid_glass` (≈330 строк `unsafe` AppKit, недостижимых, под `expect(dead_code)`), вернётся из git
+  с командой материала (строки LY37 и LY43 поправлены). `HostWindow::as_any` — одно тело через
+  печать (`Sealed::any` в обобщённой реализации над `CoreHostWindow: 'static`), девять ручных тел
+  ушли; doc больше не утверждает, что снаружи нечего привести (`MockWindow` публичен).
+  `FakeAccessibility` бросает слушатель действий сразу (вне замка). Ошибки и doc не называют
+  удалённые `MacOSPlatform::with_config` и `AndroidPlatform`. Гейт: список `allow` вместо `deny`
+  (`cursor_icon`, `parking_lot`, `raw_window_handle`, `smallvec`, `web_time` — что API называет
+  сегодня на шести целях): запретный список открыт по умолчанию (`windows-sys`, `objc2-metal`,
+  `objc2-core-graphics` в lockfile его миновали), разрешающий — закрыт; изъятие для методов трейта
+  workspace — поимённое (`traits`: `flui_semantics::platform::PlatformAccessibility` →
+  `accesskit`, ненужное — находка); таблица читается с `deny_unknown_fields`; упавший rustdoc
+  отсылает к своим ошибкам выше. CI: job `doc` упал на nightly rustdoc `-D warnings` под
+  `x86_64-pc-windows-msvc` — две избыточные ссылки в `input/windows/direct_manipulation.rs`
+  (у Linux они не разрешались, теперь путь — подпись ссылки); таймаут `doc` возвращён к 25 мин
+  (`main` — 13 мин, шесть сборок ядра — около минуты каждая). Строки: LY36 называет `entries` и
+  `traits` и отдаёт LY100 часть R4.10 про двойники (строка LY100 и таблица трассировки — тоже),
+  R4.10 в `requirements.md` называет единственный вход Android; LY37 — форма видов, примеров нет,
+  материала и заглушек нет; LY43 — материалы одной ОС как значения одной команды (ADR-0254 п. 3
+  говорит «через решение 8», это решение владельца). Тест таблицы чужих хостов —
+  `tests/os_extensions.rs`, свой харнесс (`libtest-mimic`, один поток: winit строит цикл только
+  на главном потоке): `the_windows_extension_has_no_view_of_another_hosts_window` — окна headless и
+  winit (`winit-backend`) без вида Win32, окно Win32 с видом (`dpi() > 0`); с `expect` в приведении
+  падает на главном потоке; `the_macos_extension_has_no_view_of_another_hosts_window` — только
+  проверка типов (cross-typecheck). xtask: `an_allow_list_reports_every_crate_it_does_not_name`,
+  `an_admitted_trait_lets_its_implementations_methods_name_its_crate`,
+  `a_misspelled_key_of_the_table_is_an_error_not_a_narrower_build`, тесты записей переведены на
+  `allow`; самотест — 7 случаев (+ ОС-крейт, которого нет ни в одном списке; допущенный, другой и
+  отсутствующий трейт). Проверки после слияния (Windows): `cargo fmt`; clippy `-D warnings` `-p
+  flui-platform -p flui-native -p flui-app --all-targets` и с `flui-native/winit-backend`, `-p
+  flui-runtime -p flui-testing -p flui-interaction -p flui -p xtask --all-targets`; nextest `-p
+  flui-platform -p flui-native -p flui-app -p xtask` — 393 (2 пропущены), `-p flui-native -p
+  flui-app` с `winit-backend` — 338 (2), `-p flui-runtime -p flui-testing -p flui` — 138;
+  doctest'ы `flui-platform`, `flui-native`; clippy Android `--all-targets`, macOS lib (и с
+  `winit-backend`), iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51; `checks`
+  (`module-dag` — 288 модулей, 33 исключения; `globals` — 56), `doc-strict`; `api-closure` всех
+  четырёх пакетов на шести целях с `RUSTDOCFLAGS=-D warnings` (`1.99.0`, `RUSTC_BOOTSTRAP=1`) —
+  чисто, самотест — 7; nightly `2026-10-12` — Stable-пакеты чисто, rustdoc ядра под Windows со
+  всеми фичами и `-D warnings` — чисто. WSL (без `WAYLAND_DISPLAY`): clippy с `winit-backend` и без,
+  `--all-features` под xvfb — 279 из 279, rustdoc `-D warnings --document-private-items` с
+  `winit-backend` и без, самотест гейта на nightly — 7.
 - [x] **LY88** — ветка `platform/a11y-always`, на `main` @ `fc8f8ebaa` (LY34). Фичи `a11y` нет ни в
   `flui-native`, ни в `flui-app`, ни в фасаде. `accesskit_windows` и `accesskit_macos` — безусловные
   зависимости своих ОС: каждое окно Win32 и AppKit строит адаптер, таблица Win32 называет
