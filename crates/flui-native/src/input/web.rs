@@ -4,6 +4,8 @@
 //! - [`keys`]: which key belongs to the input method; built on every target
 //!   and public, hidden from the documentation, for the backend conformance
 //!   table in `tests/`;
+//! - `wheel`: the step a `WheelEvent` makes, by its `deltaMode`; pure, built
+//!   for the web and for tests on every host;
 //! - `pinch`: the browser's trackpad pinch, decoded from what each engine
 //!   dispatches for it; pure, built for the web and for tests on every host;
 //! - `events`: the listeners on the canvas, which the window registers through
@@ -47,6 +49,43 @@ pub mod keys {
 
     #[cfg(test)]
     mod tests;
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod wheel {
+    //! The DOM's wheel step. A `WheelEvent`'s deltas already point FLUI's way
+    //! (positive scrolls down and right), and `deltaMode` names their unit:
+    //! `DOM_DELTA_PIXEL` deltas are CSS, that is logical, pixels.
+    //! <https://w3c.github.io/uievents/#events-wheelevents>
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+
+    use crate::input::scroll::{WheelAmount, wheel_step};
+
+    /// The step a `WheelEvent` with `delta_mode` and these deltas makes. A
+    /// mode the DOM may add later follows `DOM_DELTA_PIXEL`.
+    ///
+    /// # Errors
+    /// [`InputValueError`] when a delta is not finite; the window drops such
+    /// an event.
+    pub(crate) fn step(
+        delta_mode: u32,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Result<ScrollDelta, InputValueError> {
+        let unit = match delta_mode {
+            1 => ScrollUnit::Lines,
+            2 => ScrollUnit::Pages,
+            _ => ScrollUnit::Pixels,
+        };
+        wheel_step(
+            unit,
+            WheelAmount::offset(delta_x),
+            WheelAmount::offset(delta_y),
+        )
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -415,7 +454,7 @@ pub(crate) mod events {
     use flui_foundation::geometry::Point;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey},
         pointer::{
             ButtonChange, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId,
             PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollEvent,
@@ -1677,12 +1716,10 @@ pub(crate) mod events {
 
     /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
     ///
-    /// The DOM already speaks the cross-backend wheel convention (positive =
-    /// content scrolls down/right; `DOM_DELTA_PIXEL` deltas are CSS = logical
-    /// pixels), so `from_web` is a passthrough that only maps `deltaMode` onto
-    /// the `ScrollDelta` variants — kept in `crate::input::scroll` so this
-    /// boundary appears in the same sign/unit table (and executing contract
-    /// tests) as the backends that DO have to flip or rescale.
+    /// The step is [`super::wheel::step`]: the DOM already speaks FLUI's
+    /// wheel direction, and `deltaMode` names the unit. It goes through the
+    /// one wheel rule (`crate::input::scroll`) with the backends that turn
+    /// or rescale their amounts, and its table test runs them alike.
     ///
     /// A wheel event names no pointer: it is the mouse's, the contact pointer
     /// events of the mouse open, with pointer identity one (reserved for it, so
@@ -1693,8 +1730,7 @@ pub(crate) mod events {
         canvas: &web_sys::HtmlCanvasElement,
         contacts: &RefCell<ContactRegistry>,
     ) -> Option<PlatformInput> {
-        let delta =
-            crate::input::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y()).ok()?;
+        let delta = super::wheel::step(we.delta_mode(), we.delta_x(), we.delta_y()).ok()?;
         // DOM getters run before the registry is borrowed: they can reenter.
         let position = PointerPosition::try_new(wheel_position(we, canvas)).ok()?;
         let time = event_time(we.time_stamp());
@@ -1731,15 +1767,6 @@ pub(crate) mod events {
         let source: &Utf16KeyboardEvent = ke.unchecked_ref();
         let key = map_key_value(source.key_utf16());
 
-        let location = match ke.location() {
-            1 => Location::Left,
-            2 => Location::Right,
-            3 => Location::Numpad,
-            // 0 is DOM_KEY_LOCATION_STANDARD; an unrecognised value is treated
-            // the same way rather than dropped.
-            _ => Location::Standard,
-        };
-
         PlatformInput::Keyboard(
             KeyEvent::new(
                 state,
@@ -1747,7 +1774,7 @@ pub(crate) mod events {
                 Code::from_w3c(&ke.code()).unwrap_or(Code::Unidentified),
                 EventTime::from_nanos((ke.time_stamp() * 1_000_000.0) as u64),
             )
-            .with_location(location)
+            .with_location(crate::input::keys::location_of_number(ke.location()))
             .with_modifiers(modifiers)
             .with_repeat(if ke.repeat() {
                 KeyRepeat::AutoRepeat

@@ -137,7 +137,7 @@ use crate::window::apple::geometry::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
-    mode::{ModeSequence, ModeStep, WindowFlags, is_shown, mode_of},
+    mode::{ModeSequence, ModeStep, WindowFlags, is_shown},
 };
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -167,8 +167,11 @@ use crate::owner::apple::macos::{HostDisplays, WindowRegistry, debug_assert_appk
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
 use crate::{
-    owner::OpenWindowError, owner::handlers::WindowCallbacks, window::config::WindowConfiguration,
-    window::state::WindowStateCell,
+    owner::OpenWindowError,
+    owner::handlers::WindowCallbacks,
+    window::config::WindowConfiguration,
+    window::state::{WindowStateCell, mode_of},
+    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, WindowEvent, WindowId, WindowOptions, WindowReveal,
@@ -349,10 +352,10 @@ struct MacOSWindowState {
     /// gating), fed by `windowDidChangeOcclusionState:`. Edge filter:
     /// AppKit documents that the notification may fire for reasons other
     /// than the visible bit flipping, so an unchanged value is never
-    /// re-dispatched (`window::visibility::visibility_edge`). Starts
+    /// re-dispatched (`window::visibility::ReportedVisibility`). Starts
     /// `true` — a freshly created window is treated as visible until AppKit
     /// says otherwise, matching every other backend's initial state.
-    occlusion_visible: bool,
+    occlusion_visible: ReportedVisibility,
 
     /// The window was opened `visible: true` with
     /// [`WindowReveal::AfterFirstFrame`] and is ordered front, but at
@@ -695,7 +698,7 @@ impl MacOSWindow {
                     cursor: CursorIcon::default(),
                     normal: None,
                     sequence: ModeSequence::default(),
-                    occlusion_visible: true,
+                    occlusion_visible: ReportedVisibility::new(true),
                     first_reveal_pending,
                 })),
                 windows_map: Arc::clone(&windows_map),
@@ -1926,7 +1929,7 @@ impl MacOSWindow {
                     }
                 };
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-                let mode = mode_of(flags);
+                let mode = mode_of(flags.mode_flags());
                 let position = primary_screen_height().and_then(|height| {
                     top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
                 });
@@ -1994,7 +1997,7 @@ impl MacOSWindow {
     /// window is about to leave it, and AppKit keeps no record of where it
     /// returns to.
     fn record_normal(&self) {
-        self.record_normal_if(|flags| mode_of(flags) == WindowMode::Normal);
+        self.record_normal_if(|flags| mode_of(flags.mode_flags()) == WindowMode::Normal);
     }
 
     /// [`record_normal`](Self::record_normal) for `windowWillEnterFullScreen:`,
@@ -2097,7 +2100,7 @@ impl MacOSWindow {
                 let flags = self.read_flags();
                 if bit == NSWindowStyleMask::Resizable
                     && !on
-                    && mode_of(flags) != WindowMode::Normal
+                    && mode_of(flags.mode_flags()) != WindowMode::Normal
                 {
                     return Err(WindowCommandError::Backend {
                         message: "a window is made fixed-size only in normal mode".into(),

@@ -45,8 +45,9 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use super::mode::{NetWmState, NetWmStateAtoms, WmState, window_mode};
+use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags};
 use crate::owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal};
+use crate::window::state::mode_of;
 use crate::window::{WindowManagerError, WindowManagerView};
 
 /// `_NET_WM_STATE` is read this far (in 4-byte units).
@@ -286,10 +287,10 @@ impl WindowManagerView for X11WindowProbe {
             .value32()
             .map(Iterator::collect::<Vec<_>>)
             .and_then(|words| WmState::from_property(&words));
-        Some(window_mode(
+        Some(mode_of(mode_flags(
             wm_state,
             NetWmState::from_atoms(&state_atoms, &self.atoms.states),
-        ))
+        )))
     }
 
     /// The windows whose mode properties changed since the last call.

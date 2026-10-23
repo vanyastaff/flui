@@ -673,7 +673,7 @@ pub trait PlatformWindow: Send + Sync {
     /// window manager may rarely or never produce.
     ///
     /// The native backends derive their own signal (rules in
-    /// `flui-native`'s `window::visibility`, host-tested): **Win32** from
+    /// `flui-native`'s window feature, host-tested): **Win32** from
     /// `WM_SIZE`-minimize/restore plus `WM_SHOWWINDOW` hide/show (Windows
     /// has no occlusion events at all), **AppKit** from
     /// `windowDidChangeOcclusionState:`'s visible bit (fires on full

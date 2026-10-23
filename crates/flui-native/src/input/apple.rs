@@ -5,6 +5,8 @@
 //! - [`keys`]: the AppKit keyboard tables; built on every target and public,
 //!   hidden from the documentation, for the backend conformance table in
 //!   `tests/`;
+//! - `wheel`: AppKit's wheel step; pure, built for macOS and for tests on
+//!   every host;
 //! - `macos`: the content view's class, the responder its window's input
 //!   arrives at, and the translation of its `NSEvent`s (`events`);
 //! - `ios`: the translation of a view's `UITouch`es.
@@ -413,6 +415,42 @@ pub mod keys {
             _ => return None,
         };
         Some(Key::Named(named))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod wheel {
+    //! AppKit's wheel step. An `NSEvent`'s `scrollingDeltaX` and
+    //! `scrollingDeltaY` move the content, in points when the device reports
+    //! `hasPreciseScrollingDeltas` (a trackpad, a precise mouse) and in lines
+    //! otherwise; they go through the one wheel rule, and a step it refuses is
+    //! zero in its unit.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::pointer::{ScrollDelta, ScrollPrecision, ScrollUnit};
+
+    use crate::input::scroll::{WheelAmount, wheel_step};
+
+    /// The step and precision of a scroll event whose deltas are
+    /// `scrolling_delta_x` and `scrolling_delta_y`, precise or not.
+    pub(crate) fn step(
+        precise: bool,
+        scrolling_delta_x: f64,
+        scrolling_delta_y: f64,
+    ) -> (ScrollDelta, ScrollPrecision) {
+        let (unit, precision) = if precise {
+            (ScrollUnit::Pixels, ScrollPrecision::Precise)
+        } else {
+            (ScrollUnit::Lines, ScrollPrecision::Notched)
+        };
+        let delta = wheel_step(
+            unit,
+            WheelAmount::content(scrolling_delta_x),
+            WheelAmount::content(scrolling_delta_y),
+        )
+        .unwrap_or_else(|_| ScrollDelta::zero(unit));
+        (delta, precision)
     }
 }
 
@@ -1216,8 +1254,7 @@ pub(crate) mod macos {
         use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
             PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision,
-            ScrollUnit,
+            PointerPosition, PointerRole, ScrollEvent, ScrollPhase,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
@@ -1415,21 +1452,14 @@ pub(crate) mod macos {
                     .pointer(NativeSurface::default(), None, MOUSE)
                     .unwrap_or_else(mouse_info);
                 let precise = event.hasPreciseScrollingDeltas();
-                let unit = if precise {
-                    ScrollUnit::Pixels
-                } else {
-                    ScrollUnit::Lines
-                };
-                let delta =
-                    ScrollDelta::try_new(unit, -event.scrollingDeltaX(), -event.scrollingDeltaY())
-                        .unwrap_or_else(|_| ScrollDelta::zero(unit));
+                let (delta, precision) = crate::input::apple::wheel::step(
+                    precise,
+                    event.scrollingDeltaX(),
+                    event.scrollingDeltaY(),
+                );
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
-                    .with_precision(if precise {
-                        ScrollPrecision::Precise
-                    } else {
-                        ScrollPrecision::Notched
-                    });
+                    .with_precision(precision);
                 if let Some(phase) = scroll_phase(
                     &mut self.scrolling,
                     event.phase(),
