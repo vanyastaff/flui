@@ -9,28 +9,40 @@
 //!   `WindowHandle`, `DisplayHandle` and `HandleError`; `cursor-icon`'s
 //!   `CursorIcon`; `serde` and `schemars` inside an implementation of one of
 //!   their own traits (a derive). Every other upstream item is a finding.
-//! - `[package.metadata.flui.api-closure] deny = ["windows", …]`: the public API
-//!   names none of the listed crates (the core host's OS bindings, ADR-0151 §8),
-//!   whatever else it names. A method of an implementation of another workspace
-//!   crate's trait is that trait's signature, so that crate's rule answers for
-//!   it (the core host's windows implement `flui-semantics`' accessibility
-//!   trait, whose methods name AccessKit's tree).
+//! - `[package.metadata.flui.api-closure] allow = ["parking_lot", …]`: the
+//!   public API names, from outside the workspace and the standard library,
+//!   only the listed crates. The list is what the API may name, not what it
+//!   may not, so a crate nobody thought of (an OS binding a dependency
+//!   brings) is a finding; the core host uses it to keep every OS binding,
+//!   AccessKit and tokio out of its paths (ADR-0151 §8).
 //!
-//! `[package.metadata.flui.api-closure] exceptions = [{ crate = "…", exit =
-//! "ADR-NNNN" }]` lets a Stable package name one more upstream crate until the
-//! change in the ADR `exit` names removes it; an exception the scan no longer
-//! needs is a finding, so the list only shrinks. In a `deny` package, `entries =
-//! [{ item = "pkg::path", crate = "…" }]` lets one item name one denied crate:
-//! what a composition root hands the package from outside (the Activity an
-//! Android `android_main` is handed); an entry no build needs is a finding.
+//! The table's other keys, each a list that only shrinks: an entry no build
+//! needs is a finding.
 //!
-//! `targets = [{ target = "…", features = [..] | all-features = true }]` checks
-//! the package's API as each target builds it, for a package whose public items
-//! differ by target (one host per operating system); without it, the host's
-//! build with default features is checked. The toolchain needs each target's
-//! standard library. The builds run with `DOCS_RS` set, as docs.rs builds
-//! documentation: a build script that compiles C for a target it cannot reach
-//! (the Objective-C exception helper on iOS) skips it.
+//! - `exceptions = [{ crate = "…", exit = "ADR-NNNN" }]` lets a Stable package
+//!   name one more upstream crate until the change in the ADR `exit` names
+//!   removes it.
+//! - `entries = [{ item = "pkg::path", crate = "…" }]` lets one item of an
+//!   `allow` package name one crate the list leaves out: what a composition
+//!   root hands the package from outside (the Activity an Android
+//!   `android_main` is handed).
+//! - `traits = [{ trait = "crate::path::Trait", crate = "…" }]` lets the
+//!   methods of an `allow` package's implementations of one workspace trait
+//!   name one crate the list leaves out, because the trait's own signature
+//!   names it (the core host's windows implement `flui-semantics`'
+//!   accessibility trait, whose methods take AccessKit's tree). The
+//!   implementation's header and associated types are still checked.
+//! - `targets = [{ target = "…", features = [..] | all-features = true }]`
+//!   checks the package's API as each target builds it, for a package whose
+//!   public items differ by target (one host per operating system); without
+//!   it, the host's build with default features is checked. The toolchain
+//!   needs each target's standard library. The builds run with `DOCS_RS` set,
+//!   as docs.rs builds documentation: a build script that compiles C for a
+//!   target it cannot reach (the Objective-C exception helper on iOS) skips
+//!   it.
+//!
+//! The table is read strictly: an unknown key (`all_features` for
+//! `all-features`) is an error, not a narrower build.
 //!
 //! What counts: every item of the package that rustdoc's JSON output lists
 //! (public items, hidden ones included, and their implementations), and every
@@ -55,6 +67,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context, bail};
+use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
 use crate::util;
@@ -120,8 +133,8 @@ const ALLOWED: &[(&str, Allowed)] = &[
 enum Mode {
     /// ADR-0089 §2, plus the package's exceptions.
     Stable,
-    /// Anything but these crates.
-    Deny(BTreeSet<String>),
+    /// These upstream crates, and no other.
+    Allow(BTreeSet<String>),
 }
 
 /// One upstream crate a Stable package may still name, until the ADR in `exit`.
@@ -131,11 +144,21 @@ struct Exception {
     exit: String,
 }
 
-/// The one item of a `deny` package that may name one denied crate.
+/// The one item of an `allow` package that may name one crate the list leaves
+/// out.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Entry {
     /// The item's path, as a finding prints it (`flui_native::android_platform`).
     item: String,
+    krate: String,
+}
+
+/// A workspace trait whose implementations' methods may name one crate an
+/// `allow` package's list leaves out, because the trait's signature names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Admission {
+    /// The trait's path (`flui_semantics::platform::PlatformAccessibility`).
+    path: String,
     krate: String,
 }
 
@@ -170,7 +193,58 @@ struct Rule {
     mode: Mode,
     exceptions: Vec<Exception>,
     entries: Vec<Entry>,
+    traits: Vec<Admission>,
     builds: Vec<Build>,
+}
+
+/// `[package.metadata.flui.api-closure]`, read strictly.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Table {
+    allow: Option<BTreeSet<String>>,
+    #[serde(default)]
+    exceptions: Vec<ExceptionRow>,
+    #[serde(default)]
+    entries: Vec<EntryRow>,
+    #[serde(default)]
+    traits: Vec<TraitRow>,
+    #[serde(default)]
+    targets: Vec<BuildRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExceptionRow {
+    #[serde(rename = "crate")]
+    krate: String,
+    exit: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntryRow {
+    item: String,
+    #[serde(rename = "crate")]
+    krate: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraitRow {
+    #[serde(rename = "trait")]
+    path: String,
+    #[serde(rename = "crate")]
+    krate: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct BuildRow {
+    target: String,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default)]
+    all_features: bool,
 }
 
 /// One violation.
@@ -194,6 +268,12 @@ enum Finding {
     UnusedEntry {
         package: String,
         item: String,
+        krate: String,
+    },
+    /// An admitted trait no build's implementation needs any more.
+    UnusedTrait {
+        package: String,
+        path: String,
         krate: String,
     },
 }
@@ -227,17 +307,26 @@ impl fmt::Display for Finding {
                 f,
                 "{package}: the entry `{item}` names no `{krate}` item in any build; remove it"
             ),
+            Self::UnusedTrait {
+                package,
+                path,
+                krate,
+            } => write!(
+                f,
+                "{package}: no implementation of `{path}` names `{krate}` in any build; remove the admission"
+            ),
         }
     }
 }
 
-/// What one build of a package shows: its findings, and the exceptions and
-/// entries it needed.
+/// What one build of a package shows: its findings, and the exceptions,
+/// entries and admitted traits it needed.
 #[derive(Debug, Default)]
 struct Scan {
     findings: BTreeSet<Finding>,
     used_exceptions: BTreeSet<String>,
     used_entries: BTreeSet<Entry>,
+    used_traits: BTreeSet<Admission>,
 }
 
 /// `cargo xtask api-closure`. Exit code 1 lists every finding.
@@ -315,33 +404,40 @@ fn rules(root: &Path, metadata: &cargo_metadata::Metadata) -> anyhow::Result<Vec
     let mut rules = Vec::new();
     for package in metadata.workspace_packages() {
         let flui = &package.metadata["flui"];
-        let table = &flui["api-closure"];
         let stable = flui["tier-kind"].as_str() == Some("stable");
-        let deny: BTreeSet<String> = table["deny"]
-            .as_array()
-            .map(|list| {
-                list.iter()
-                    .filter_map(Json::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mode = match (stable, deny.is_empty()) {
-            (true, true) => Mode::Stable,
-            (false, false) => Mode::Deny(deny),
-            (false, true) => continue,
-            (true, false) => bail!(
-                "{}: a Stable package takes ADR-0089 §2's allowlist, not a `deny` list",
+        let table: Table = match &flui["api-closure"] {
+            Json::Null => Table::default(),
+            table => serde_json::from_value(table.clone()).with_context(|| {
+                format!(
+                    "{}: `[package.metadata.flui.api-closure]` is malformed",
+                    package.name
+                )
+            })?,
+        };
+        let mode = match (stable, table.allow) {
+            (true, None) => Mode::Stable,
+            (false, Some(allow)) => Mode::Allow(allow),
+            (false, None) => {
+                let empty = table.exceptions.is_empty()
+                    && table.entries.is_empty()
+                    && table.traits.is_empty()
+                    && table.targets.is_empty();
+                if empty {
+                    continue;
+                }
+                bail!(
+                    "{}: an api-closure table without `allow` checks nothing",
+                    package.name
+                );
+            }
+            (true, Some(_)) => bail!(
+                "{}: a Stable package takes ADR-0089 §2's allowlist, not an `allow` list",
                 package.name
             ),
         };
         let mut exceptions = Vec::new();
-        for entry in table["exceptions"].as_array().into_iter().flatten() {
-            let krate = entry["crate"].as_str().with_context(|| {
-                format!("{}: an api-closure exception needs a `crate`", package.name)
-            })?;
-            let exit = entry["exit"].as_str().unwrap_or_default();
-            if !util::is_adr_number(exit) || !util::adr_exists(&adrs, exit) {
+        for ExceptionRow { krate, exit } in table.exceptions {
+            if !util::is_adr_number(&exit) || !util::adr_exists(&adrs, &exit) {
                 bail!(
                     "{}: the exception for `{krate}` names `{exit}`, which is no ADR in docs/adr",
                     package.name
@@ -353,48 +449,39 @@ fn rules(root: &Path, metadata: &cargo_metadata::Metadata) -> anyhow::Result<Vec
                     package.name
                 );
             }
-            exceptions.push(Exception {
-                krate: krate.to_owned(),
-                exit: exit.to_owned(),
-            });
+            exceptions.push(Exception { krate, exit });
         }
+        let leaves_out =
+            |krate: &str| matches!(&mode, Mode::Allow(allow) if !allow.contains(krate));
         let mut entries = Vec::new();
-        for entry in table["entries"].as_array().into_iter().flatten() {
-            let (Some(item), Some(krate)) = (entry["item"].as_str(), entry["crate"].as_str())
-            else {
+        for EntryRow { item, krate } in table.entries {
+            if !leaves_out(&krate) {
                 bail!(
-                    "{}: an api-closure entry needs an `item` and a `crate`",
-                    package.name
-                );
-            };
-            if !matches!(&mode, Mode::Deny(denied) if denied.contains(krate)) {
-                bail!(
-                    "{}: the entry `{item}` names `{krate}`, which is not on the package's `deny` list",
+                    "{}: the entry `{item}` names `{krate}`, which the package's `allow` list does not leave out",
                     package.name
                 );
             }
-            entries.push(Entry {
-                item: item.to_owned(),
-                krate: krate.to_owned(),
-            });
+            entries.push(Entry { item, krate });
         }
-        let mut builds = Vec::new();
-        for build in table["targets"].as_array().into_iter().flatten() {
-            let target = build["target"].as_str().with_context(|| {
-                format!("{}: an api-closure build needs a `target`", package.name)
-            })?;
-            builds.push(Build {
-                target: Some(target.to_owned()),
-                all_features: build["all-features"].as_bool() == Some(true),
-                features: build["features"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Json::as_str)
-                    .map(str::to_owned)
-                    .collect(),
-            });
+        let mut traits = Vec::new();
+        for TraitRow { path, krate } in table.traits {
+            if !leaves_out(&krate) {
+                bail!(
+                    "{}: the admission of `{path}` names `{krate}`, which the package's `allow` list does not leave out",
+                    package.name
+                );
+            }
+            traits.push(Admission { path, krate });
         }
+        let mut builds: Vec<Build> = table
+            .targets
+            .into_iter()
+            .map(|row| Build {
+                target: Some(row.target),
+                all_features: row.all_features,
+                features: row.features,
+            })
+            .collect();
         if builds.is_empty() {
             builds.push(Build::HOST);
         }
@@ -411,6 +498,7 @@ fn rules(root: &Path, metadata: &cargo_metadata::Metadata) -> anyhow::Result<Vec
             mode,
             exceptions,
             entries,
+            traits,
             builds,
         });
     }
@@ -468,7 +556,8 @@ fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule, build: &Build) -> any
         .with_context(|| format!("spawning `rustup run {toolchain} cargo rustdoc`"))?;
     if !status.success() {
         bail!(
-            "rustdoc failed for {} ({}): is the `{toolchain}` toolchain installed, with that target?",
+            "rustdoc failed for {} ({}); its errors are above (a missing toolchain or target \
+             is one of them)",
             rule.package,
             build.label()
         );
@@ -498,15 +587,17 @@ fn check(
 }
 
 /// The findings of `rule` over every build's scan: what each build names, and
-/// the exceptions and entries no build needed.
+/// the exceptions, entries and admitted traits no build needed.
 fn findings(rule: &Rule, scans: Vec<Scan>) -> Vec<Finding> {
     let mut all = BTreeSet::new();
     let mut used_exceptions = BTreeSet::new();
     let mut used_entries = BTreeSet::new();
+    let mut used_traits = BTreeSet::new();
     for scan in scans {
         all.extend(scan.findings);
         used_exceptions.extend(scan.used_exceptions);
         used_entries.extend(scan.used_entries);
+        used_traits.extend(scan.used_traits);
     }
     for exception in &rule.exceptions {
         if !used_exceptions.contains(&exception.krate) {
@@ -523,6 +614,15 @@ fn findings(rule: &Rule, scans: Vec<Scan>) -> Vec<Finding> {
                 package: rule.package.clone(),
                 item: entry.item.clone(),
                 krate: entry.krate.clone(),
+            });
+        }
+    }
+    for admission in &rule.traits {
+        if !used_traits.contains(admission) {
+            all.insert(Finding::UnusedTrait {
+                package: rule.package.clone(),
+                path: admission.path.clone(),
+                krate: admission.krate.clone(),
             });
         }
     }
@@ -563,8 +663,9 @@ fn scan(
         Some((name, segments.join("::")))
     };
 
-    // The trait crate of each implementation, for its own items too.
-    let mut impl_trait: BTreeMap<String, String> = BTreeMap::new();
+    // The trait (its crate and path) of each implementation, for its own
+    // items too.
+    let mut impl_trait: BTreeMap<String, (String, String)> = BTreeMap::new();
     for (id, item) in index {
         let Some(implementation) = item["inner"].get("impl") else {
             continue;
@@ -572,10 +673,10 @@ fn scan(
         let Some(trait_id) = implementation["trait"].get("id").map(id_text) else {
             continue;
         };
-        if let Some((krate, _)) = crate_of(&trait_id) {
-            impl_trait.insert(id.clone(), krate.clone());
+        if let Some(trait_of) = crate_of(&trait_id) {
+            impl_trait.insert(id.clone(), trait_of.clone());
             for child in implementation["items"].as_array().into_iter().flatten() {
-                impl_trait.insert(id_text(child), krate.clone());
+                impl_trait.insert(id_text(child), trait_of.clone());
             }
         }
     }
@@ -585,16 +686,19 @@ fn scan(
         if item["crate_id"].as_u64() != Some(0) || skipped(item) {
             continue;
         }
-        // A method of an implementation of another workspace crate's trait
-        // has that trait's signature: the trait's crate answers for it.
-        let workspace_signature = matches!(rule.mode, Mode::Deny(_))
-            && item["inner"].get("function").is_some()
-            && impl_trait
-                .get(id)
-                .is_some_and(|krate| workspace.contains(krate));
-        if workspace_signature {
-            continue;
-        }
+        // The admissions of the workspace trait whose method this item is: its
+        // signature is the trait's.
+        let admitted: Vec<&Admission> = match impl_trait.get(id) {
+            Some((krate, path))
+                if workspace.contains(krate) && item["inner"].get("function").is_some() =>
+            {
+                rule.traits
+                    .iter()
+                    .filter(|admission| &admission.path == path)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let mut ids = Vec::new();
         referenced(&item["inner"], &mut ids);
         for target in ids {
@@ -605,8 +709,15 @@ fn scan(
                 continue;
             }
             let allowed = match &rule.mode {
-                Mode::Deny(denied) => {
-                    if denied.contains(&krate) {
+                Mode::Allow(allowed) => {
+                    if allowed.contains(&krate) {
+                        true
+                    } else if let Some(admission) =
+                        admitted.iter().find(|admission| admission.krate == krate)
+                    {
+                        scan.used_traits.insert((*admission).clone());
+                        true
+                    } else {
                         let label = label(id, item, paths);
                         let entry = rule
                             .entries
@@ -616,8 +727,6 @@ fn scan(
                             scan.used_entries.insert(entry.clone());
                         }
                         entry.is_some()
-                    } else {
-                        true
                     }
                 }
                 Mode::Stable => {
@@ -627,7 +736,9 @@ fn scan(
                                 Allowed::Items(items) => items
                                     .iter()
                                     .any(|item| path.rsplit("::").next() == Some(item)),
-                                Allowed::DeriveOnly => impl_trait.get(id) == Some(&krate),
+                                Allowed::DeriveOnly => {
+                                    impl_trait.get(id).map(|(krate, _)| krate) == Some(&krate)
+                                }
                             }
                     });
                     let by_exception = !by_adr
@@ -807,6 +918,7 @@ fn self_test(doc: &Json, stable: &Rule, workspace: &BTreeSet<String>) -> ExitCod
                 Finding::Names { item, named, .. } => format!("{item} -> {named}"),
                 Finding::UnusedException { krate, .. } => format!("unused exception {krate}"),
                 Finding::UnusedEntry { item, krate, .. } => format!("unused entry {item} {krate}"),
+                Finding::UnusedTrait { path, krate, .. } => format!("unused trait {path} {krate}"),
             })
             .collect()
     };
@@ -846,9 +958,20 @@ fn self_test(doc: &Json, stable: &Rule, workspace: &BTreeSet<String>) -> ExitCod
         ],
         ..stable.clone()
     };
+    // What the contract's own API names under an allow list, plus `tracing`.
     let core = Rule {
         package: "core-host".into(),
-        mode: Mode::Deny(["windows".to_owned(), "accesskit".to_owned()].into()),
+        mode: Mode::Allow(
+            [
+                "raw_window_handle",
+                "cursor_icon",
+                "serde",
+                "schemars",
+                "tracing",
+            ]
+            .map(str::to_owned)
+            .into(),
+        ),
         exceptions: Vec::new(),
         ..stable.clone()
     };
@@ -861,6 +984,20 @@ fn self_test(doc: &Json, stable: &Rule, workspace: &BTreeSet<String>) -> ExitCod
             Entry {
                 item: "planted_gone".into(),
                 krate: "windows".into(),
+            },
+        ],
+        ..core.clone()
+    };
+    const ACCESSIBILITY: &[&str] = &["flui_semantics", "platform", "PlatformAccessibility"];
+    let with_traits = Rule {
+        traits: vec![
+            Admission {
+                path: ACCESSIBILITY.join("::"),
+                krate: "accesskit".into(),
+            },
+            Admission {
+                path: "flui_semantics::platform::Gone".into(),
+                krate: "accesskit".into(),
             },
         ],
         ..core.clone()
@@ -913,18 +1050,29 @@ fn self_test(doc: &Json, stable: &Rule, workspace: &BTreeSet<String>) -> ExitCod
             &["planted_hwnd -> windows::Win32::Foundation::HWND"],
         ),
         case(
-            "a denied type through a workspace trait the core host implements, and outside one",
+            "an OS crate no list names (a dependency's binding)",
             &core,
+            &|doc| plant(doc, "planted_device", &["objc2_metal", "MTLDevice"]),
+            &["planted_device -> objc2_metal::MTLDevice"],
+        ),
+        case(
+            "a left-out type through an admitted trait, another workspace trait, and outside one",
+            &with_traits,
             &|doc| {
+                plant_implementation(doc, ACCESSIBILITY, "planted_publish", TREE);
                 plant_implementation(
                     doc,
-                    &["flui_semantics", "platform", "PlatformAccessibility"],
-                    "planted_publish",
+                    &["flui_semantics", "platform", "Other"],
+                    "planted_other",
                     TREE,
                 );
                 plant(doc, "planted_published", TREE);
             },
-            &["planted_published -> accesskit::TreeUpdate"],
+            &[
+                "planted_other -> accesskit::TreeUpdate",
+                "planted_published -> accesskit::TreeUpdate",
+                "unused trait flui_semantics::platform::Gone accesskit",
+            ],
         ),
         case(
             "an entry in use and one no longer needed",

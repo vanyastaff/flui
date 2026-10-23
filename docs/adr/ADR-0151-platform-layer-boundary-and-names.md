@@ -751,9 +751,11 @@ directories). They add no area to it.
   on the contract, with every closed enum carrying its reason.
 - Section 8: `cargo xtask api-closure` documents `flui-native`, hidden items included, as each
   target it builds a host for builds it (Linux, Windows and macOS with every feature; iOS, Android
-  and wasm32) and finds no crate of its manifest's `deny` list (the OS bindings, AccessKit, tokio)
-  in a public path. A method of `flui-semantics`' accessibility trait is that trait's signature,
-  and the Activity's entry is the list's one named item; an entry no build needs is a finding.
+  and wasm32) and finds, outside the workspace, no crate but those its manifest's `allow` list
+  names, so an OS binding, AccessKit or tokio in a public path is a finding even if nobody listed
+  it. The two admitted exceptions are named in the manifest: the Activity's entry, and the methods
+  of `flui-semantics`' accessibility trait, whose signature takes AccessKit's tree; one no build
+  needs is a finding.
 - The `forbid(unsafe_code)` of a pure module holds under its parent's `expect(unsafe_code)`: a
   planted `unsafe` block in a pure module fails the build. This is unverified in the repository
   today and is proven when the first pure module lands. A planted host table that omits one

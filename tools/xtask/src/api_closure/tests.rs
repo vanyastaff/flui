@@ -5,7 +5,9 @@ use std::path::Path;
 
 use serde_json::{Value as Json, json};
 
-use super::{Build, Entry, Exception, Finding, Mode, Rule, check, findings, scan};
+use super::{
+    Admission, Build, Entry, Exception, Finding, Mode, Rule, Table, check, findings, scan,
+};
 
 /// A rustdoc JSON document with no items.
 fn empty() -> Json {
@@ -43,14 +45,15 @@ fn rule(mode: Mode, exceptions: Vec<Exception>) -> Rule {
         mode,
         exceptions,
         entries: Vec::new(),
+        traits: Vec::new(),
         builds: vec![Build::HOST],
     }
 }
 
-/// A rule over the deny list `denied`.
-fn deny(denied: &[&str]) -> Rule {
+/// A rule over the allow list `allowed`.
+fn allow(allowed: &[&str]) -> Rule {
     rule(
-        Mode::Deny(denied.iter().map(|krate| (*krate).to_owned()).collect()),
+        Mode::Allow(allowed.iter().map(|krate| (*krate).to_owned()).collect()),
         Vec::new(),
     )
 }
@@ -60,8 +63,9 @@ fn workspace() -> BTreeSet<String> {
     BTreeSet::from(["flui_foundation".to_owned()])
 }
 
-/// `item -> named` for each finding, `unused <crate>` for an unused exception
-/// and `unused entry <item>` for an unused entry.
+/// `item -> named` for each finding, `unused <crate>` for an unused exception,
+/// `unused entry <item>` for an unused entry and `unused trait <path>` for an
+/// unused admission.
 fn named(findings: Vec<Finding>) -> Vec<String> {
     findings
         .into_iter()
@@ -69,6 +73,7 @@ fn named(findings: Vec<Finding>) -> Vec<String> {
             Finding::Names { item, named, .. } => format!("{item} -> {named}"),
             Finding::UnusedException { krate, .. } => format!("unused {krate}"),
             Finding::UnusedEntry { item, .. } => format!("unused entry {item}"),
+            Finding::UnusedTrait { path, .. } => format!("unused trait {path}"),
         })
         .collect()
 }
@@ -213,38 +218,57 @@ fn an_exception_admits_its_crate_until_nothing_needs_it() {
 }
 
 #[test]
-fn a_deny_list_reports_only_the_crates_it_names() {
+fn an_allow_list_reports_every_crate_it_does_not_name() {
     let mut doc = empty();
     let hwnd = upstream(&mut doc, 1, &["windows", "Win32", "Foundation", "HWND"]);
-    let span = upstream(&mut doc, 2, &["tracing", "Span"]);
+    let device = upstream(&mut doc, 2, &["objc2_metal", "MTLDevice"]);
+    let span = upstream(&mut doc, 3, &["tracing", "Span"]);
     item(&mut doc, 1, Some("hwnd"), returning(hwnd));
-    item(&mut doc, 2, Some("span"), returning(span));
+    item(&mut doc, 2, Some("device"), returning(device));
+    item(&mut doc, 3, Some("span"), returning(span));
     assert_eq!(
-        found(&doc, &deny(&["windows"])),
-        ["hwnd -> windows::Win32::Foundation::HWND"]
+        found(&doc, &allow(&["tracing"])),
+        [
+            "hwnd -> windows::Win32::Foundation::HWND",
+            "device -> objc2_metal::MTLDevice"
+        ]
     );
 }
 
 #[test]
-fn a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list() {
+fn an_admitted_trait_lets_its_implementations_methods_name_its_crate() {
     let mut doc = empty();
     let tree = upstream(&mut doc, 1, &["accesskit", "TreeUpdate"]);
-    let own = upstream(&mut doc, 2, &["flui_foundation", "Publish"]);
-    let foreign = upstream(&mut doc, 3, &["tracing", "Instrument"]);
-    // A workspace crate's trait whose method names the denied tree.
-    item(&mut doc, 1, None, implementing(own, &[2]));
+    let admitted = upstream(&mut doc, 2, &["flui_foundation", "Publish"]);
+    let other = upstream(&mut doc, 2, &["flui_foundation", "Other"]);
+    let rule = Rule {
+        traits: vec![
+            Admission {
+                path: "flui_foundation::Publish".to_owned(),
+                krate: "accesskit".to_owned(),
+            },
+            Admission {
+                path: "flui_foundation::Gone".to_owned(),
+                krate: "accesskit".to_owned(),
+            },
+        ],
+        ..allow(&[])
+    };
+    // The admitted trait's method names the tree its signature takes.
+    item(&mut doc, 1, None, implementing(admitted, &[2]));
     item(&mut doc, 2, Some("publish"), returning(tree));
-    assert_eq!(found(&doc, &deny(&["accesskit"])), Vec::<String>::new());
-    // The same method of an upstream crate's trait, and the same signature
-    // as an inherent function, are the package's own.
-    item(&mut doc, 3, None, implementing(foreign, &[4]));
-    item(&mut doc, 4, Some("instrument"), returning(tree));
+    assert_eq!(found(&doc, &rule), ["unused trait flui_foundation::Gone"]);
+    // Another workspace trait's method, and the same signature as an inherent
+    // function, are the package's own.
+    item(&mut doc, 3, None, implementing(other, &[4]));
+    item(&mut doc, 4, Some("other"), returning(tree));
     item(&mut doc, 5, Some("published"), returning(tree));
     assert_eq!(
-        found(&doc, &deny(&["accesskit"])),
+        found(&doc, &rule),
         [
-            "instrument -> accesskit::TreeUpdate",
-            "published -> accesskit::TreeUpdate"
+            "other -> accesskit::TreeUpdate",
+            "published -> accesskit::TreeUpdate",
+            "unused trait flui_foundation::Gone"
         ]
     );
 }
@@ -259,7 +283,7 @@ fn an_entry_admits_its_item_and_crate_until_no_build_needs_it() {
             item: "start".to_owned(),
             krate: "android_activity".to_owned(),
         }],
-        ..deny(&["android_activity"])
+        ..allow(&[])
     };
     assert_eq!(found(&doc, &rule), ["unused entry start"]);
     item(&mut doc, 1, Some("start"), returning(app));
@@ -283,7 +307,7 @@ fn an_entry_one_build_needs_is_needed_and_each_build_reports_its_own() {
             item: "start".to_owned(),
             krate: "android_activity".to_owned(),
         }],
-        ..deny(&["android_activity", "windows"])
+        ..allow(&[])
     };
     let build = |target: &str| Build {
         target: Some(target.to_owned()),
@@ -305,4 +329,13 @@ fn an_entry_one_build_needs_is_needed_and_each_build_reports_its_own() {
         [Finding::Names { build, .. }] if build == "x86_64-pc-windows-msvc"
     ));
     assert_eq!(named(all), ["hwnd -> windows::Win32::Foundation::HWND"]);
+}
+
+#[test]
+fn a_misspelled_key_of_the_table_is_an_error_not_a_narrower_build() {
+    let read = |table: Json| serde_json::from_value::<Table>(table);
+    let build = |key: &str| json!({ "allow": [], "targets": [{ "target": "x86_64-pc-windows-msvc", (key): true }] });
+    assert!(read(build("all-features")).is_ok());
+    assert!(read(build("all_features")).is_err());
+    assert!(read(json!({ "allow": [], "entry": [] })).is_err());
 }
