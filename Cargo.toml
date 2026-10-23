@@ -223,8 +223,8 @@ windows-sys = { version = "0.61", default-features = false }
 web-time = "1.1"
 
 # ACCESSIBILITY - the cross-platform a11y tree model. Data model only here;
-# the per-OS `accesskit_*` platform adapters are feature-gated in flui-native,
-# and the `PlatformAccessibility` trait they implement is flui-semantics'.
+# the per-OS `accesskit_*` platform adapters are flui-native's target-specific
+# dependencies, and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25.1"
 # The tree model every AccessKit adapter reads through: flui-semantics' agent
@@ -817,11 +817,6 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-rel
 # own `dev-agent` feature, which `flui run --agent` turns on. Without it the
 # normal application graph excludes flui-devtools.
 dev-agent = ["dep:flui-devtools", "flui-devtools/agent"]
-
-# Native accessibility: the per-OS AccessKit adapters that hand the semantics
-# tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
-# carries a D-Bus stack).
-a11y = ["flui-app/a11y"]
 
 # === Core Features ===
 # Serialization of the value types, in every crate that owns some: geometry

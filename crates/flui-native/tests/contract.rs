@@ -120,7 +120,23 @@ fn test_window_lifecycle_contract() {
             window.request_redraw();
             tracing::info!("✓ request_redraw() executed without panic");
 
-            // Contract 9: Multiple window creation
+            // Contract 9: a Win32 window is reachable by UI Automation in
+            // every build, with no feature to turn on. Only a native window
+            // can tell: the headless double always hands out its fake. The
+            // Linux winit window's bridge is pinned by a real-loop test, since
+            // winit opens no window outside its loop.
+            #[cfg(target_os = "windows")]
+            {
+                use flui_native::WindowsWindowExt as _;
+                if window.win32().is_some() {
+                    assert!(
+                        window.accessibility().is_some(),
+                        "a Win32 window hands out its UI Automation bridge"
+                    );
+                }
+            }
+
+            // Contract 10: Multiple window creation
             let options2 = WindowOptions::default()
                 .with_title("Contract Test Window 2".to_string())
                 .with_size(Size::new(400.0, 300.0))

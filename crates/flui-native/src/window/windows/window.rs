@@ -95,7 +95,6 @@ pub struct WindowsWindow {
     /// a UI Automation client that asks at any later point is answered.
     /// Inert until one does — see
     /// [`WindowsAccessibility::new`](crate::accessibility::windows::WindowsAccessibility::new).
-    #[cfg(feature = "a11y")]
     accessibility: Arc<crate::accessibility::windows::WindowsAccessibility>,
 
     /// This window's haptic actuator: the pen in range of it.
@@ -515,7 +514,6 @@ impl WindowsWindow {
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
-                #[cfg(feature = "a11y")]
                 accessibility: Arc::new(crate::accessibility::windows::WindowsAccessibility::new(
                     hwnd,
                 )),
@@ -1247,7 +1245,6 @@ impl crate::host_window::HostWindow for WindowsWindow {
     /// accessibility wire discovers. Without this override the trait
     /// default (`None`) leaves every real Windows window silently invisible
     /// to UI Automation clients.
-    #[cfg(feature = "a11y")]
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
     }
@@ -1953,7 +1950,6 @@ impl Clone for WindowsWindow {
             context: self.context,
             // The clone shares the same window, so it shares the same UIA
             // bridge — one subclass hook per HWND, never two.
-            #[cfg(feature = "a11y")]
             accessibility: Arc::clone(&self.accessibility),
             // And its actuator, so a newer request replaces an older one
             // whichever wrapper made it.
@@ -1977,7 +1973,6 @@ impl Drop for WindowsWindow {
                     // exists, and this is the owner-thread teardown path
                     // subclassing requires. Any capability `Arc` still held
                     // elsewhere degrades to a no-op.
-                    #[cfg(feature = "a11y")]
                     self.accessibility.shutdown();
 
                     // SAFETY: `DestroyWindow` takes `self.hwnd` by value;

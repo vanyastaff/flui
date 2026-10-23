@@ -99,10 +99,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
 /// Keep an owner-affine resource whose final owner was dropped on another thread.
 /// Retention precedes diagnostics: a subscriber panic must not retire the resource
 /// on the wrong thread, including while the caller is already unwinding.
-#[cfg(any(
-    all(feature = "a11y", any(target_os = "windows", target_os = "macos")),
-    test
-))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
     std::mem::forget(resource);
     contain_owner_callback(report);

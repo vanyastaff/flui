@@ -205,7 +205,8 @@ fn start_agent_session(
     }
     let start = std::env::current_dir().context("could not read current directory")?;
     let workspace = find_workspace_root(&start);
-    let session = Session::create(&start, workspace.as_deref())?;
+    let target_dir = agent::target_dir_override();
+    let session = Session::create(&start, workspace.as_deref(), target_dir.as_deref())?;
     ui::success(format!(
         "Agent session: {} (connect with `flui mcp`)",
         style(session.file().display()).cyan()

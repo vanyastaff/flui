@@ -458,7 +458,6 @@ impl MacOSWindow {
         self.callbacks.dispatch_active_status_change(true);
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
-        #[cfg(feature = "a11y")]
         if let Some(bridge) = self.accessibility.get() {
             bridge.update_view_focus_state(true);
         }
@@ -469,7 +468,6 @@ impl MacOSWindow {
     fn handle_focus_lost(&self) {
         self.publish_state();
         self.callbacks.dispatch_active_status_change(false);
-        #[cfg(feature = "a11y")]
         if let Some(bridge) = self.accessibility.get() {
             bridge.update_view_focus_state(false);
         }

@@ -6,6 +6,11 @@
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.
+- **Amended:** 2026-10-22 — section 15: the Linux AT-SPI adapter comes with the Linux host. While
+  that host is winit (section 11), `accesskit_unix` rides `winit-backend`, which `flui-app` turns
+  on for every Linux build; it becomes an unconditional Linux dependency together with `zbus` when
+  the native Wayland and X11 host arrives. The Windows and macOS adapters compile always; the
+  confirmation reads the same way.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -656,6 +661,13 @@ The cost the feature avoids is paid anyway on Linux. The winit fallback already 
 `crates/flui-app/Cargo.toml:137`), and the native Linux host of section 11 needs D-Bus for
 logind notices (`crates/flui-platform/src/platforms/linux/host_notices/logind.rs`) and for portals.
 
+*Amended 2026-10-22:* the invariant on Linux is that the AT-SPI adapter comes with the Linux host.
+Until the native host of section 11 exists that host is winit, so `accesskit_unix` is enabled by
+`winit-backend` beside `zbus`, and every application build has it because `flui-app` enables
+`winit-backend` on Linux; a build of the core host without it has no Linux window to make
+accessible. With the native host, `accesskit_unix` and `zbus` become unconditional Linux
+dependencies together.
+
 ### 16. Quality bar
 
 The lines `docs/platform-parity.md` lists under "Quality bar" are requirements of the platform
@@ -764,8 +776,10 @@ directories). They add no area to it.
 - Each rename: the map re-run on its own output changes nothing; regenerated trybuild snapshots
   are reviewed as diffs. The second rename's opening check finds no `flui-platform` or
   `flui_platform` token outside the archival roots and this ADR.
-- No manifest declares an `a11y` feature, and `cargo heli xtask cross-typecheck` builds each OS's
-  AccessKit adapter without a flag.
+- No manifest declares an `a11y` feature; `cargo heli xtask cross-typecheck` builds the Windows
+  and macOS AccessKit adapters without a flag, and the AT-SPI adapter builds in every build of the
+  Linux host (`winit-backend` until the native host, then every Linux build), where a real-loop
+  test reads it from a window under Xvfb.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not
   pass `panic_boundary` (a `--self-test` case, as the other gates have).
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked
