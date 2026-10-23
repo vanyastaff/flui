@@ -229,6 +229,10 @@ impl DragSessionKey {
 
 /// When a backend can start an OS drag session (ADR-0211 §11).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a backend starts a session whenever the pointer leaves the window, or only as the gesture starts (ADR-0211 §11)"
+)]
 pub enum OsDragStart {
     /// Any time: the session starts in-window and escalates when the pointer
     /// leaves the window (Win32, AppKit, Android, Wayland).
@@ -244,6 +248,10 @@ pub enum OsDragStart {
 
 /// How an OS drag session ended, as the source sees it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a session ends with a drop a target took, or with none"
+)]
 pub enum OsDragEnd {
     /// A target took the drop with this action.
     Dropped(TransferActions),
@@ -326,6 +334,10 @@ pub struct OsSessionPlan {
 
 /// What an OS session offers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a session offers the OS its representations with the identity, or the identity alone (ADR-0211 §9)"
+)]
 pub enum OsOffer {
     /// The serialized representations and the identity.
     Full,

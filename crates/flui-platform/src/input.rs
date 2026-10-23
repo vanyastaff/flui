@@ -96,6 +96,10 @@ impl Default for DispatchEventResult {
 /// constructing those values; one reporting points or CSS pixels passes them
 /// through. Geometry and device metadata remain distinct typed values.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "every consumer routes every kind of input, so a new kind is a change each of them makes"
+)]
 pub enum PlatformInput {
     /// Pointer, scrolling, trackpad or device-lifecycle event.
     Pointer(PointerEvent),
@@ -175,6 +179,10 @@ impl PlatformInput {
 /// reply half flows the other way, through
 /// [`crate::data_transfer::DataTransferSource::update_drop_feedback`].
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the stages of the transport protocol (ADR-0038), each of which a target answers"
+)]
 pub enum DragDropEvent {
     /// A drag entered the window. Carries the full offer (stage 1) and the
     /// actions the source currently permits.

@@ -83,6 +83,10 @@ pub struct RangeRect {
 /// How [`TextStoreRead::index_at_point`] treats a point that falls between
 /// characters or outside the text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "TSF's `GXFPF_NEAREST` is set or not"
+)]
 pub enum PointMode {
     /// The character whose box contains the point; a point outside the text
     /// is [`TextStoreError::PointOutside`].

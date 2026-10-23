@@ -307,6 +307,7 @@ impl WindowShowError {
 
 /// Window appearance (light/dark theme)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WindowAppearance {
     /// Light appearance (default)
     #[default]
@@ -331,6 +332,10 @@ impl From<WindowAppearance> for crate::Brightness {
 
 /// Window background appearance (backdrop material)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "every backend maps every material, and the window trait is sealed: a new material is a change each backend makes"
+)]
 pub enum WindowBackgroundAppearance {
     /// Opaque background (default)
     #[default]
@@ -372,6 +377,7 @@ impl CursorError {
 
 /// Window events that can be observed via `flui_native::Platform::on_window_event`
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum WindowEvent {
     /// Window was created
     Created(WindowId),

@@ -98,6 +98,9 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+// A public enum is closed only where that is a decision: one more variant
+// later is a breaking change, so each closed enum says why it is closed.
+#![deny(clippy::exhaustive_enums)]
 
 mod brightness;
 mod clipboard;
