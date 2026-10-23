@@ -20,7 +20,7 @@
   `TilingLayout` and `TilingState`. Nothing replaces them in this release.
 - **`flui-native`**: the Liquid Glass backdrop: `LiquidGlassConfig`, `LiquidGlassMaterial`,
   `BlendingMode` and `MacOSWindowExt::{set_liquid_glass, set_liquid_glass_config,
-  clear_liquid_glass}`. Nothing replaces it in this release.
+  clear_liquid_glass}`, for now: it comes back through `flui::native::macos`.
 - **`flui-native`**: `WindowConfiguration`, `FullscreenMonitor`, the `flui_native::config` module,
   `WindowsPlatform::with_config` and `MacOSPlatform::with_config`. No host read the resize
   debounce or the fullscreen monitor; `WindowsPlatform::new()` and `MacOSPlatform::new()` open
