@@ -406,11 +406,7 @@ mod tests {
     struct StubWindow;
 
     impl crate::host_window::CoreHostWindow for StubWindow {}
-    impl crate::host_window::HostWindow for StubWindow {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
+    impl crate::host_window::HostWindow for StubWindow {}
 
     impl flui_platform::PlatformWindow for StubWindow {
         fn id(&self) -> flui_platform::WindowId {

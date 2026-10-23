@@ -896,10 +896,6 @@ impl LayoutSync {
 impl crate::host_window::CoreHostWindow for WebWindow {}
 
 impl crate::host_window::HostWindow for WebWindow {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     /// The canvas's `EditContext` or hidden textarea, serving the focused
     /// field's store; `None` once the window closed.
     fn text_store_host(

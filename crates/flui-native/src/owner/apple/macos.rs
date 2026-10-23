@@ -248,9 +248,9 @@ impl MacOSLoop {
         // the token objc2's AppKit API requires, which is why there is no
         // separate pre-check.
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
-            message: "MacOSPlatform::with_config must run on the AppKit main thread".to_string(),
+            message: "MacOSPlatform::new must run on the AppKit main thread".to_string(),
         })?;
-        debug_assert_appkit_main_thread("MacOSPlatform::with_config");
+        debug_assert_appkit_main_thread("MacOSPlatform::new");
 
         {
             // Initialize NSApplication (the process-wide singleton).
@@ -325,7 +325,7 @@ impl host::Loop for MacOSLoop {
         platform: Arc<dyn Platform>,
         on_finish_launching: PlatformReadyCallback,
     ) -> Result<(), PlatformError> {
-        // Idempotent when `with_config` already bound on this thread; trips
+        // Idempotent when `MacOSPlatform::new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");

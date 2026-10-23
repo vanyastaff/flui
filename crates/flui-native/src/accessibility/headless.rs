@@ -24,9 +24,6 @@ struct FakeAccessibilityState {
     active: bool,
     published: usize,
     activation_listener: Option<flui_semantics::platform::AccessibilityActivationListener>,
-    /// Held as a platform holds it, until it is replaced, and never called:
-    /// no assistive technology asks a headless window for an action.
-    action_listener: Option<flui_semantics::platform::AccessibilityActionListener>,
 }
 
 impl FakeAccessibility {
@@ -73,7 +70,6 @@ impl std::fmt::Debug for FakeAccessibility {
         f.debug_struct("FakeAccessibility")
             .field("active", &state.active)
             .field("published_count", &state.published)
-            .field("action_listener", &state.action_listener.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -99,7 +95,9 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
         self.state.lock().activation_listener = Some(listener);
     }
 
+    /// No assistive technology asks a headless window for an action, so the
+    /// listener is dropped here, outside any lock.
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
-        self.state.lock().action_listener = Some(listener);
+        drop(listener);
     }
 }

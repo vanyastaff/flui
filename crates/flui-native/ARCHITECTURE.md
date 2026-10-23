@@ -81,25 +81,29 @@ trait depends on `flui-platform` instead.
   The Android host has no public platform name: it starts over the Activity
   the system hands only to `android_main`, through `android_platform(app)`.
 - **No public path names an OS type (ADR-0151 §8).** The crate's public API,
-  hidden items included, names no OS binding (`windows`, `objc2` and its
-  frameworks, `android-activity`, `ndk`, `jni`, `web-sys`, `winit`, …),
-  AccessKit or tokio, on any target it builds a host for: `cargo xtask
-  api-closure` documents it for Linux, Windows and macOS with every feature
-  and for iOS, Android and wasm32, and reads each build's JSON against the
-  `deny` list of `[package.metadata.flui.api-closure]`. The windows a host
-  builds are crate-private: the platform hands out `Arc<dyn HostWindow>`, a
-  raw window or display handle leaves through `raw-window-handle`, and what
-  one OS offers beyond the window contract is an extension trait implemented
-  for `dyn HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) over
-  `HostWindow::as_any`, which answers `None` for another host's window and
-  asks nothing of it. Two things name a denied crate by design: the entry
-  `android_platform(app)`, which takes the Activity (the manifest's
-  `entries`), and the implementations of `flui-semantics`'
-  `PlatformAccessibility`, whose methods name AccessKit's tree as that trait
-  does. Tests in `tests/` read a window's `HWND` the way an embedder does,
-  through `raw-window-handle` (`win32_handle` in `tests/main.rs`); the
-  extension's answers are pinned by
-  `the_windows_extension_answers_only_for_a_win32_window`.
+  hidden items included, names from outside the workspace only the crates of
+  the `allow` list in `[package.metadata.flui.api-closure]` (the cursor, the
+  callback lock, the raw handles, the pointer assembly's buffers and the web's
+  `Instant`), on every target it builds a host for: `cargo xtask api-closure`
+  documents it for Linux, Windows and macOS with every feature and for iOS,
+  Android and wasm32. A list of what may be named fails closed: an OS binding
+  a dependency brings is a finding without anyone listing it. The windows a
+  host builds are crate-private: the platform hands out `Arc<dyn HostWindow>`,
+  a raw window or display handle leaves through `raw-window-handle`, and what
+  one OS offers beyond the window contract is an extension implemented for
+  `dyn HostWindow` (`WindowsWindowExt::win32`, `MacOSWindowExt::appkit`) over
+  `HostWindow::as_any`, whose one body every window gets through the seal: it
+  answers `None` for another host's window, and otherwise a view of the OS's
+  window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
+  host's. Two things name a crate the list leaves out, each named in the
+  manifest: the entry `android_platform(app)`, which takes the Activity
+  (`entries`), and the implementations of `flui-semantics`'
+  `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
+  does (`traits`). Tests in `tests/` read a window's `HWND` the way an
+  embedder does, through `raw-window-handle` (`win32_handle` in
+  `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
+  its loop on the main thread, pins that a headless and a winit window have
+  no Win32 view and a Win32 window has one.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
@@ -467,7 +471,7 @@ trait depends on `flui-platform` instead.
   its halves or one OS object need one: `windows/` (the pure `limits`; the
   window, the set and position, the procedure and the backdrop under
   `cfg(windows)`) and `apple/` (the pure `geometry`, `macos` with its
-  `delegate` and its public `ext`, `ios`, `liquid_glass`). The platform's
+  `delegate` and its public `ext`, and `ios`). The platform's
   system chrome (the table's `Chrome` position) is in the same file.
   - **The host seam.** The window position names what a platform's windows
     share, `host::Window::Shared`: the Win32 handle map and configuration
@@ -3145,7 +3149,7 @@ also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
 the owner thread before the backend opens its windows.
 
 The Android goldens were recorded on a device by a `NativeActivity` library
-that installed the capture before `AndroidPlatform` created its registry and
+that installed the capture before the Android platform created its registry and
 shared the test codec and sink (`tests/native_recording/journal.rs`) through
 `#[path]`. Each session, in a
 fresh launch, is injected by the system (`adb shell input`, and `uinput`

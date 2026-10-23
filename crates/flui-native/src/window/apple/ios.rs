@@ -20,7 +20,6 @@
 // crate's `unsafe` FFI islands, opted out at its module boundary.
 #![expect(unsafe_code)]
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{
@@ -1149,10 +1148,6 @@ impl host::Window<IOSLoop> for IOSWindow {
 impl crate::host_window::CoreHostWindow for IOSWindow {}
 
 impl crate::host_window::HostWindow for IOSWindow {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,

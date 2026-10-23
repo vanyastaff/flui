@@ -266,17 +266,17 @@ pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{HeadlessWindowPolicy, MockWindow};
 // The extensions an application reaches a native host's window by: each is
-// implemented for `dyn HostWindow` and answers `None` for a window of another
-// host (ADR-0151 §8). The windows themselves, and the OS types they hold, are
-// not public; a raw handle leaves through `raw-window-handle`.
+// implemented for `dyn HostWindow`, and its one method answers `None` for a
+// window of another host or a typed view of the OS's window (ADR-0151 §8). The
+// windows themselves, and the OS types they hold, are not public; a raw handle
+// leaves through `raw-window-handle`.
 #[cfg(target_os = "macos")]
 pub use window::apple::macos::{
-    MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TilePosition, TilingConfiguration,
-    TilingError, TilingLayout, TilingState,
+    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
 };
 #[cfg(windows)]
 pub use window::windows::backdrop::{
-    TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
+    Win32Window, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
@@ -400,8 +400,10 @@ pub use owner::{
 /// #[cfg(windows)]
 /// {
 ///     use flui_native::{WindowsBackdrop, WindowsWindowExt};
-///     // `Some(())` on a Win32 window; `None` under `FLUI_HEADLESS`.
-///     let _ = window.set_backdrop(WindowsBackdrop::Mica);
+///     // A Win32 window's view; `None` under `FLUI_HEADLESS`.
+///     if let Some(win32) = window.win32() {
+///         win32.set_backdrop(WindowsBackdrop::Mica);
+///     }
 /// }
 /// ```
 pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {

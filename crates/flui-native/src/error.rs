@@ -30,7 +30,7 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// The variants map one-to-one onto where they surface:
 ///
 /// * [`Init`](Self::Init) — [`crate::current_platform`] and backend
-///   constructors (`WindowsPlatform::new`, `MacOSPlatform::with_config`, …).
+///   constructors (`WindowsPlatform::new`, `MacOSPlatform::new`, …).
 /// * [`EventLoop`](Self::EventLoop) — `Platform::run` when the loop itself
 ///   fails to start or exits abnormally.
 /// * [`Bootstrap`](Self::Bootstrap) — `Platform::run` when the embedder's

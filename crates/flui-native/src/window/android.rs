@@ -436,10 +436,6 @@ fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_runn
 impl crate::host_window::CoreHostWindow for AndroidWindow {}
 
 impl crate::host_window::HostWindow for AndroidWindow {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,

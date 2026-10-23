@@ -506,7 +506,9 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test.workspace = true
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The harnesses that run their cases on the main thread, where winit builds
+# its event loop (`linux_preferences`, `os_extensions`).
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dev-dependencies]
 libtest-mimic.workspace = true
 
 # Main-thread winit ownership plus one private D-Bus service per process.
@@ -516,6 +518,13 @@ name = "linux_preferences"
 path = "tests/linux_preferences.rs"
 harness = false
 required-features = ["winit-backend"]
+
+# An OS extension on another host's windows, the winit host's among them: its
+# own harness, because winit builds its event loop on the main thread only.
+[[test]]
+name = "os_extensions"
+path = "tests/os_extensions.rs"
+harness = false
 
 [[test]]
 name = "wasm32"
@@ -669,53 +678,20 @@ exceptions = [
     { from = "window::headless", to = "text::headless", exit = "ADR-0151", since = "2026-10-22", reason = "the headless window hands out the text input double; it goes when the window-level positions reach the window through the host table, and the window hands out the text input its table names instead of keeping one" },
 ]
 
-
 # No public path of the core host names an OS binding, AccessKit or tokio, on
 # any target it builds a host for (ADR-0151 §8, checked by `cargo xtask
 # api-closure`): the windows and their OS handles are crate-private, a raw
 # handle leaves through `raw-window-handle`, and an OS's extras are extensions
-# of `HostWindow` over FLUI types. The accessibility trait the windows
-# implement is `flui-semantics`', whose methods name AccessKit's tree.
+# of `HostWindow` over FLUI types.
 [package.metadata.flui.api-closure]
-deny = [
-    "accesskit",
-    "accesskit_consumer",
-    "accesskit_macos",
-    "accesskit_unix",
-    "accesskit_windows",
-    "android_activity",
-    "arboard",
-    "block2",
-    "core_foundation",
-    "core_graphics",
-    "dispatch",
-    "dispatch2",
-    "jni",
-    "jni_sys",
-    "js_sys",
-    "libc",
-    "ndk",
-    "ndk_sys",
-    "objc2",
-    "objc2_app_kit",
-    "objc2_core_foundation",
-    "objc2_core_haptics",
-    "objc2_foundation",
-    "objc2_quartz_core",
-    "objc2_ui_kit",
-    "rustix",
-    "tokio",
-    "ui_events_winit",
-    "wasm_bindgen",
-    "wayland_client",
-    "wayland_protocols",
-    "web_sys",
-    "windows",
-    "windows_core",
-    "winit",
-    "x11rb",
-    "zbus",
-]
+# The only upstream crates a public path may name: the raw handles
+# (ADR-0089 §2), the contract's cursor, the lock the window's callback setters
+# hand out, the pointer assembly's inline buffers (hidden, for `tests/`) and the
+# web's `Instant`. Anything else, an OS binding first, is a finding.
+allow = ["cursor_icon", "parking_lot", "raw_window_handle", "smallvec", "web_time"]
+# The windows' accessibility bridges implement `flui-semantics`' trait, whose
+# methods take AccessKit's tree.
+traits = [{ trait = "flui_semantics::platform::PlatformAccessibility", crate = "accesskit" }]
 # The Activity is the system's, handed only to the application's
 # `android_main`: the composition root passes it on through this one entry, as
 # the facade's `run_app_android` takes it.

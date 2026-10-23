@@ -261,7 +261,7 @@ impl WindowsWindow {
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsLoop::with_config` guarantees before any `open_window`
+        // `WindowsLoop::new` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
         // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
@@ -1243,10 +1243,6 @@ impl WindowsWindow {
 impl crate::host_window::CoreHostWindow for WindowsWindow {}
 
 impl crate::host_window::HostWindow for WindowsWindow {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     /// The window's own UIA bridge — the capability the composition root's
     /// accessibility wire discovers. Without this override the trait
     /// default (`None`) leaves every real Windows window silently invisible

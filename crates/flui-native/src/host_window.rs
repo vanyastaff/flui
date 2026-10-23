@@ -65,17 +65,24 @@ mod sealed {
         label = "not a window of a host in `flui-native`",
         note = "only the windows the core host builds implement `HostWindow` (inside `flui-native`, a new window adds `impl CoreHostWindow for` it); a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)"
     )]
-    pub trait Sealed {}
+    pub trait Sealed {
+        /// The window as its own type: [`HostWindow::as_any`](super::HostWindow::as_any).
+        fn any(&self) -> &dyn std::any::Any;
+    }
 
     /// A window a host in this crate builds; each implements it beside its
     /// `HostWindow`. The seal reaches them through one generic
     /// implementation rather than one per window, so the compiler's account
     /// of a refused outside `impl HostWindow` names the same implementations
-    /// on every target and feature set.
-    pub trait CoreHostWindow {}
+    /// on every target and feature set, and the downcast is written once.
+    pub trait CoreHostWindow: 'static {}
 
     #[diagnostic::do_not_recommend]
-    impl<W: CoreHostWindow> Sealed for W {}
+    impl<W: CoreHostWindow> Sealed for W {
+        fn any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
 }
 
 pub(crate) use sealed::{CoreHostWindow, OwnerThreadToken};
@@ -146,10 +153,13 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// host is not that type, and they answer `None` for it (ADR-0151 §8).
     ///
     /// It is the host's, not the window contract's: the framework programs
-    /// against [`PlatformWindow`], which offers no downcast, and a host's own
-    /// window types are not public, so a downcast outside this crate finds
-    /// nothing to name.
-    fn as_any(&self) -> &dyn Any;
+    /// against [`PlatformWindow`], which offers no downcast. The native hosts'
+    /// window types are not public, so outside this crate only the headless
+    /// host's window can be named and downcast to (`MockWindow`, its test
+    /// controls). Every window gets this one body, through the seal.
+    fn as_any(&self) -> &dyn Any {
+        sealed::Sealed::any(self)
+    }
 }
 
 // Without these, `Arc<dyn HostWindow>` would not be a raw-handle target, and a

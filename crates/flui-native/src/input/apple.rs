@@ -1032,8 +1032,8 @@ pub(crate) mod macos {
     /// index the `context_ptr` ivar directly only because its callers are
     /// `FLUIContentView` methods — AppKit invokes a method on an object that
     /// declares it. A view handed in from elsewhere carries no such guarantee: an
-    /// `NSVisualEffectView` (the window's content view while Liquid Glass is
-    /// applied) has no `context_ptr` ivar at all, and reading it would be undefined
+    /// `NSVisualEffectView` (the window's content view under a backdrop
+    /// material) has no `context_ptr` ivar at all, and reading it would be undefined
     /// rather than returning null. So every read of that ivar
     /// from a view the crate did not itself receive as `self` goes through here,
     /// where the class is checked first.
