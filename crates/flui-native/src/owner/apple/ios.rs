@@ -82,9 +82,10 @@ use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, Window
 
 use crate::host_window::HostWindow;
 use crate::owner::watch::Watch;
-use flui_platform::{DisplayId, DisplaySnapshot, RefreshPeriod};
+use flui_platform::PlatformInput;
+use flui_platform::{DisplayId, DisplaySnapshot};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::UIScreen;
+use objc2_ui_kit::{UIHoverGestureRecognizer, UIScreen, UITouch, UIView};
 
 /// What the iOS host's table names for its owner thread (ADR-0151 §10): the
 /// displays, the preference source and the notice channel the loop holds. The
@@ -105,6 +106,37 @@ pub(crate) trait IosHost: 'static {
 
     /// The channel the memory warning takes to the application.
     fn notices() -> Arc<dyn NoticeChannel>;
+
+    /// The touches of a window's view made now: the input's part of the
+    /// view, which keeps the contacts it admitted.
+    fn view_touches() -> Box<dyn ViewTouches>;
+}
+
+/// Which UIKit touch callback delivered a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TouchPhase {
+    /// `touchesBegan:withEvent:`.
+    Down,
+    /// `touchesMoved:withEvent:`.
+    Move,
+    /// `touchesEnded:withEvent:`.
+    Up,
+    /// `touchesCancelled:withEvent:`.
+    Cancel,
+}
+
+/// The input's part of one window's view: the touches and the Pencil hover
+/// UIKit delivers to it, which the view hands over as they arrive and
+/// dispatches what they carry. Made with the view ([`IosHost::view_touches`])
+/// and dropped with it, so the contacts it admitted are the view's own.
+pub(crate) trait ViewTouches {
+    /// What `touch`, delivered in `phase`, carries.
+    fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput>;
+
+    /// What the Pencil's hover over `view`, as `recognizer` reports it,
+    /// carries.
+    fn hover(&mut self, recognizer: &UIHoverGestureRecognizer, view: &UIView)
+    -> Vec<PlatformInput>;
 }
 
 /// The system preference source the UIKit loop keeps, on the main thread
@@ -144,19 +176,37 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// [`PlatformError::Displays`] when the snapshot revision space is used up.
     fn snapshot(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError>;
 
-    /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
-    /// again. Any thread.
-    fn invalidate(&self);
-
     /// The identity of `screen`, which the source retains.
     fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity;
 
-    /// Record the period `window`'s display link measured on screen `number`,
-    /// and mark the snapshot stale.
-    fn report_link_period(&self, number: ScreenNumber, window: WindowId, period: RefreshPeriod);
+    /// `window`, whose screen `slot` holds, is now on the screen `next` names
+    /// (the default names none, as for a window detached from its scene).
+    /// When that differs, what `window`'s display link measured on the screen
+    /// it left is forgotten and the snapshot is marked stale; answers whether
+    /// it differed, for which the window owes a display-changed notification.
+    fn move_window(
+        &self,
+        window: WindowId,
+        slot: &Mutex<ScreenIdentity>,
+        next: ScreenIdentity,
+    ) -> bool;
 
-    /// Forget `window`'s period on screen `number`: its link is gone.
-    fn forget_link_period(&self, number: ScreenNumber, window: WindowId);
+    /// One tick of `window`'s display link on the screen numbered `number`
+    /// showed `interval_seconds` to the frame it targets. Answers whether the
+    /// period the link publishes for that screen changed, which marks the
+    /// snapshot stale; the window then owes the owner a wake and a
+    /// display-changed notification.
+    fn observe_link(
+        &self,
+        window: WindowId,
+        number: Option<ScreenNumber>,
+        interval_seconds: f64,
+    ) -> bool;
+
+    /// `window`'s display link is gone: what it measured on the screen
+    /// numbered `number` is forgotten, and the snapshot is marked stale when
+    /// that screen had a period from it.
+    fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>);
 
     /// Ask `link` to run at the best rate `screen` sustains on the version the
     /// platform runs on.
@@ -225,31 +275,34 @@ pub(crate) trait SceneWindow: HostWindow {
 /// Makes the windows the scenes connect: the window feature's, handed to the
 /// loop by the host.
 pub(crate) trait SceneWindows: Send + Sync {
-    /// A new window `id`, which wakes the owner through `signal` and names its
-    /// screen through `displays`.
+    /// A new window `id`, which wakes the owner through `signal`, names its
+    /// screen through `displays` and hands its view's touches to `touches`.
     fn create(
         &self,
         marker: MainThreadMarker,
         id: WindowId,
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
+        touches: Box<dyn ViewTouches>,
     ) -> Arc<dyn SceneWindow>;
 }
 
 /// An iOS window as the features beside it reach it (ADR-0151 §3), on the
-/// main thread: the view that outlives its scene attachments, and the system
-/// chrome its root controllers answer UIKit from, which the window keeps
-/// because UIKit asks the controller, not the application, for the status
-/// bar. The table's haptics and chrome positions make the window's part of
-/// them from this, as the window is made.
+/// main thread: the view that outlives its scene attachments, the owner it
+/// wakes, and the system chrome its root controllers answer UIKit from, which
+/// the window keeps because UIKit asks the controller, not the application,
+/// for the status bar. The table's text, haptics and chrome positions make
+/// the window's part of them from this, as the window is made.
 ///
 /// Public where it is defined, so the host table can name it as the window's
 /// reference; the module is private, so it is nameable only inside the crate.
 pub struct ViewRef {
     /// The window's view.
-    pub(crate) view: Retained<objc2_ui_kit::UIView>,
+    pub(crate) view: Retained<UIView>,
     /// The thread the reference is read on.
     pub(crate) marker: MainThreadMarker,
+    /// The owner the window wakes.
+    pub(crate) signal: std::sync::Weak<OwnerSignal>,
     /// The window's system chrome.
     pub(crate) chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
 }
@@ -338,6 +391,8 @@ pub struct IOSLoop {
     _screen_observer: NativeOwner<Watch>,
     /// Where the memory warning goes on its way to the host.
     notices: Arc<dyn NoticeChannel>,
+    /// Makes the touches of each window's view, as the table names them.
+    view_touches: fn() -> Box<dyn ViewTouches>,
 }
 
 impl std::fmt::Debug for IOSLoop {
@@ -411,6 +466,7 @@ impl IOSLoop {
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(),
+            view_touches: H::view_touches,
         })
     }
 
@@ -982,6 +1038,7 @@ impl IOSLoop {
                 id,
                 Arc::downgrade(&self.signal),
                 Arc::clone(&self.displays),
+                (self.view_touches)(),
             );
             let admitted = {
                 let mut state = self.state().borrow_mut();

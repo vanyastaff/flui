@@ -12,7 +12,6 @@ use objc2::{ClassType, class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
-use crate::input::apple::macos as view;
 use crate::owner::apple::macos::HostDisplays;
 
 /// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
@@ -603,9 +602,6 @@ impl MacOSWindow {
             // resize, because a refresh period does not invalidate layout.
             let moved = self.refresh_display();
             self.publish_state();
-
-            // Update the FLUI view's scale factor
-            view::update_view_scale_factor(self.view, new_scale);
 
             if moved || changed {
                 // The snapshot carries each display's scale, and a window that

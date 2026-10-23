@@ -578,10 +578,10 @@ globals = [
     { item = "owner::slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
     { item = "window::headless::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
     { item = "owner::apple::ios::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
-    { item = "window::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
+    { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
     { item = "owner::apple::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
     { item = "owner::apple::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
-    { item = "input::apple::macos::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
+    { item = "owner::apple::macos::content_view::view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "clipboard::windows::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
     { item = "window::apple::macos::delegate::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
@@ -619,26 +619,11 @@ groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version", "storage"]
 hosts = "hosts"
 crate-level = ["host", "platform", "host_window", "error", "executor", "task"]
-# The one edge between platform files of one feature (the winit host on Linux
+# The one edge between platform files of one feature: the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
-# winit), and each between the window's and another feature's files of one
-# platform. A window that keeps another feature's object or state of it (a
-# drop target, a drag source double, a TSF connection), and a feature's code
-# that reaches into the window, keep theirs until that feature keeps its own
-# per-window state, keyed by window identity, set up and dropped by its own
-# hooks. A window that
-# reads a display, preference or lifecycle fact with another feature's code
-# keeps the edge until an owner hook hands it the fact. The features that
-# share one AppKit or UIKit view keep the edges between them until that view
-# is an owner multiplexer they join through hooks.
+# winit. No window file names another feature's: a window's text input,
+# accessibility, actuator and chrome come from the host table, a feature keeps
+# its own state of a window, and the owner hands a window the facts it reads.
 exceptions = [
     { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
-    { from = "text::apple::macos", to = "input::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the `NSTextInputClient` methods, added to the AppKit content view's class, read the view's context (`get_context`) and send keys down its key path (`dispatch_input_event`); it goes when the content view is an owner multiplexer that the input, the text input and the window join through hooks, each keeping its own state of a window keyed by the window's identity (ADR-0151 §10)" },
-    { from = "input::apple::macos", to = "text::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the AppKit content view's class, which takes the input, adds the `NSTextInputClient` methods and keeps the text input's state in its context; it goes when the content view is an owner multiplexer that the input, the text input and the window join through hooks, each keeping its own state of a window keyed by the window's identity (ADR-0151 §10)" },
-    { from = "input::apple::macos", to = "window::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the AppKit content view's `drawRect:` enters the window's display pass (`DisplayPassGuard`); it goes when the content view is an owner multiplexer and the window draws through its hook (ADR-0151 §10)" },
-    { from = "window::apple::macos", to = "display::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the AppKit window converts its frames with the AppKit screen rule (`bounds_of`); it goes when the macOS loop's display hook hands the window a screen's bounds as a fact" },
-    { from = "window::apple::macos", to = "input::apple::macos", exit = "ADR-0151", since = "2026-10-22", reason = "the AppKit window creates its content view, whose class takes the input and draws, and tells it of a scale change; it goes when the content view is an owner multiplexer and the window keeps only its frame (ADR-0151 §10)" },
-    { from = "window::apple::ios", to = "display::apple", exit = "ADR-0151", since = "2026-10-22", reason = "the UIKit window's display link reports the period it measures (`LinkPeriod`) and follows its scene's screen (`change_screen`) by the Apple display rules; it goes when the iOS loop's display hook carries both, as it carries the screen's identity" },
-    { from = "window::apple::ios", to = "input::apple::ios", exit = "ADR-0151", since = "2026-10-22", reason = "the UIKit window's view keeps its touches' state (`TouchInputState`) and decodes them with the input translation; it goes when the view's touches reach the input through an owner multiplexer's hook and the input keeps their state keyed by the window's identity (ADR-0151 §10)" },
-    { from = "window::apple::ios", to = "text::apple::ios", exit = "ADR-0151", since = "2026-10-22", reason = "the UIKit window captures its text sizing from its traits; it goes when the text feature keeps the window's text sizing itself, keyed by window identity, set up and dropped through the UIKit loop's window hooks" },
 ]

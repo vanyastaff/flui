@@ -15,6 +15,8 @@
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
 #![expect(deprecated)]
 
+pub(crate) mod content_view;
+pub(crate) mod display_pass;
 mod loop_control;
 pub(crate) mod observation;
 mod owner_lane;
@@ -51,6 +53,18 @@ pub(crate) trait MacosHost: 'static {
         notices: &Arc<dyn NoticeChannel>,
         control: &Arc<LoopControl>,
     ) -> Box<dyn NoticeSources>;
+
+    /// What each window's content view dispatches to: its input and its text
+    /// input, made with the view.
+    fn view_hooks() -> content_view::ViewHooks;
+}
+
+/// An AppKit rectangle as the geometry type the shared rules take.
+pub(crate) fn bounds_of(rect: objc2_foundation::NSRect) -> flui_foundation::geometry::Bounds<f64> {
+    flui_foundation::geometry::Bounds {
+        origin: flui_foundation::geometry::Point::new(rect.origin.x, rect.origin.y),
+        size: flui_foundation::geometry::Size::new(rect.size.width, rect.size.height),
+    }
 }
 
 /// The sources of the macOS host's system notices, which the loop starts once
@@ -194,6 +208,9 @@ pub struct MacOSLoop {
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
     pub(crate) notices: Arc<dyn NoticeChannel>,
+
+    /// What each window's content view dispatches to, as the table made it.
+    pub(crate) view_hooks: content_view::ViewHooks,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -339,6 +356,7 @@ impl MacOSLoop {
                 displays,
                 _screen_observer: screen_observer,
                 notices,
+                view_hooks: H::view_hooks(),
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so

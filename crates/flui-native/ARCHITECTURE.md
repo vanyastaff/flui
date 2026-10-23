@@ -135,7 +135,17 @@ trait depends on `flui-platform` instead.
   serves several features dispatches through a hook declared beside it, which
   each feature's file implements and the host's table names: on Windows the
   table implements `owner::windows::WindowsHost`, whose `window_class` and
-  `broadcast_subscribers` list, in order, what the owner dispatches to. A
+  `broadcast_subscribers` list, in order, what the owner dispatches to. On
+  macOS every window's content view is the owner's
+  (`owner::apple::macos::content_view`, `FLUIContentView`): it hands its
+  events to the input's `ViewInput` and its `NSTextInputClient` methods to the
+  text input's `ViewText`, one of each per view, made by the table's
+  `MacosHost::view_hooks`, routes a key press between them, and enters the
+  display pass (`owner::apple::macos::display_pass`) for the frame its
+  `drawRect:` asks the window for. On iOS the window's view hands its
+  touches to the input's `ViewTouches` (`IosHost::view_touches`, one per
+  view), and its display link's cadence and its screen to the loop's
+  `HostDisplays` (`observe_link`, `move_window`, `forget_link`). A
   loop keeps a feature's state the same way: each `owner` module declares one
   host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
   `WebHost`, `WinitHost`, `HeadlessHost`) whose methods the table implements
@@ -542,8 +552,9 @@ trait depends on `flui-platform` instead.
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
   touchpad's DirectManipulation viewport, one OS object, with its pure
-  `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`, the AppKit
-  content view's class and its events; `ios`, the touches), `android.rs`
+  `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`,
+  `ViewInputs`, the input of one content view, and its events; `ios`,
+  `TouchInputState`, the touches of one view), `android.rs`
   (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
   pure `keys` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
   and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
@@ -1999,9 +2010,9 @@ it.
 
 **Choice:** `drawRect:` stays the frame source. It is the signal AppKit actually
 delivers — the view is live and the frame carries its own dirty rect — and the
-produce contract the engine consumes is dispatched from it (`view.rs::draw_rect`
+produce contract the engine consumes is dispatched from it (`owner::apple::macos::content_view`'s `draw_rect`
 → `WindowCallbacks::dispatch_request_frame`). What changed is the re-arm.
-`display_pass` in `window/apple/macos.rs` marks the thread for the duration of the frame
+`owner::apple::macos::display_pass` marks the thread for the duration of the frame
 AppKit asked for (an RAII guard, nesting-safe, thread-local), and
 `window/apple/macos.rs::dispatch_redraw_request` — the single decision point `request_redraw`
 calls — sends the `setNeedsDisplay:` inline at any other moment, but hands it to
@@ -2189,13 +2200,17 @@ locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
 
 ### AppKit's input method is a route for a `keyDown:`, not a second producer of one
 
-**Decision.** `FLUIContentView` conforms to `NSTextInputClient` (all 11 methods plus
-`add_protocol`), and `keyDown:` becomes a gate rather than a direct conversion:
-while `TextInputState.ime_allowed` is **false** it calls `handle_input_event`
-exactly as before; while it is **true** it hands the event to
-`interpretKeyEvents:` and emits nothing itself, with `doCommandBySelector:`
-re-dispatching the events the input method declines. `PlatformTextInput` is
-implemented by `MacOSTextInput`, whose two setters route through the owner lane.
+**Decision.** `FLUIContentView` (the owner's `content_view`) conforms to
+`NSTextInputClient` (all 11 methods plus `add_protocol`), and `keyDown:` becomes
+a gate rather than a direct conversion: while the view's text input does not
+compose (`ViewText::takes_key_presses`, `TextInputState.ime_allowed` **false**)
+it hands the event to the view's input exactly as before; while it does it
+hands the event to `interpretKeyEvents:` and emits nothing itself, with
+`doCommandBySelector:` handing the events the input method declines back to
+the input. The methods turn AppKit's arguments into Rust values and call the
+view's `TextView`, which keeps the composition. `PlatformTextInput` is
+implemented by `MacOSTextInput`, whose two setters route through the owner
+lane to the same `TextView`.
 
 **Why.** AppKit's composition pipeline is entered only by `interpretKeyEvents:`,
 which calls *back* into the same view (`setMarkedText:` while composing,

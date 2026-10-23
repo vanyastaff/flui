@@ -1,7 +1,7 @@
 //! The macOS window: [`MacOSWindow`] over an `NSWindow` (its state as AppKit
-//! reports it, the requests its commands send, and [`display_pass`], whether
-//! the thread is inside a view's display pass, which decides how a redraw is
-//! asked for), and [`MacOSWindows`], what the windows open with.
+//! reports it, and the requests its commands send; whether the thread is
+//! inside a view's display pass, the owner's `display_pass`, decides how a
+//! redraw is asked for), and [`MacOSWindows`], what the windows open with.
 //!
 //! Two parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; and [`ext`],
@@ -21,94 +21,6 @@
 
 pub(crate) mod delegate;
 pub(crate) mod ext;
-
-pub(crate) mod display_pass {
-    //! Whether the current thread is inside an AppKit display pass of a view.
-    //!
-    //! AppKit discards a `setNeedsDisplay:` that is issued *while the view is being
-    //! displayed*: the flag is cleared when the pass unwinds, so the request that
-    //! was supposed to schedule the next frame disappears with it. Measured on
-    //! macOS 15.7 (Darwin 24.6) with an isolated probe, on a window that is fully
-    //! visible (`occlusionState` has the visible bit) in every arm:
-    //!
-    //! | re-arm issued from inside `drawRect:` | draws over 4 s |
-    //! |---|---|
-    //! | `[view setNeedsDisplay:YES]` | 1 |
-    //! | nothing at all (control) | 1 |
-    //! | `[view.layer setNeedsDisplay]` | 1 |
-    //! | `setNeedsDisplay:` deferred to the next main-queue turn | 396 |
-    //!
-    //! So a view's `drawRect:` cannot re-arm itself in place, and neither can its
-    //! layer; deferring the same call by one turn of the lane that is already
-    //! serialized is what actually re-arms it. `[view needsDisplay]` reads `NO`
-    //! immediately after the in-pass call and `[view.layer needsDisplay]` reads
-    //! `YES` while still never being serviced — the flag that survives is not the
-    //! flag AppKit acts on, so neither is a usable signal to test against.
-    //!
-    //! This module is the condition that decision is made on, kept apart from both
-    //! ends so it can be tested without a window: [`DisplayPassGuard`] is entered
-    //! by the view's `drawRect:` for the duration of the frame it dispatches, and
-    //! consulted by the window's `request_redraw` to choose between setting the
-    //! flag in place and deferring it.
-    //!
-    //! It is the AppKit realisation of ADR-0039 §4(b)/(c): the frame transaction
-    //! is a region the drain gate is closed for, and a wake arriving while it is
-    //! closed **defers** — the lane stays queued and the wake re-arms at the next
-    //! top-level anchor — so the frame transaction stays uninterruptible. The
-    //! `DrainGate` that same section specifies for the lane is this marker's
-    //! sibling: a wake delivered during a nested modal run loop must defer for the
-    //! same reason, and when the AppKit `CFRunLoopSource` relay lands it must
-    //! consult a gate that agrees with this one. Two owner-thread re-entrancy
-    //! markers that never reference each other is how they drift apart, so the
-    //! relation is written down here rather than implied.
-    //!
-    //! The marker is thread-local because "displaying" is a property of the thread
-    //! AppKit is displaying on, not of the process: every other thread is free to
-    //! request a redraw at that moment, and its request is queued behind the pass
-    //! rather than swallowed by it. The grain is therefore the *thread*, not "this
-    //! window's display pass" — a request for a different window issued on this
-    //! thread while any view here is displaying defers as well. That is
-    //! conservative in the safe direction (a deferred `setNeedsDisplay:` is always
-    //! honoured; it costs one lane turn at worst), and it is the reason
-    //! `request_redraw` does not claim to defer exactly the discarded call.
-
-    use std::cell::Cell;
-
-    thread_local! {
-        /// True while this thread is inside a `drawRect:`-driven display pass.
-        static IN_DISPLAY_PASS: Cell<bool> = const { Cell::new(false) };
-    }
-
-    /// Is the current thread inside an AppKit display pass of a view?
-    pub(super) fn in_display_pass() -> bool {
-        IN_DISPLAY_PASS.with(Cell::get)
-    }
-
-    /// Marks the current thread as inside a display pass until dropped.
-    ///
-    /// The guard restores the flag's previous value rather than clearing it, so
-    /// nesting (a display pass that somehow triggers another) unwinds correctly
-    /// instead of leaving the outer pass's marker cleared early.
-    pub(crate) struct DisplayPassGuard {
-        /// The flag's value before this guard set it.
-        previous: bool,
-    }
-
-    impl DisplayPassGuard {
-        /// Mark the current thread as inside a display pass.
-        pub(crate) fn enter() -> Self {
-            let previous = IN_DISPLAY_PASS.with(|flag| flag.replace(true));
-            Self { previous }
-        }
-    }
-
-    impl Drop for DisplayPassGuard {
-        fn drop(&mut self) {
-            let previous = self.previous;
-            IN_DISPLAY_PASS.with(|flag| flag.set(previous));
-        }
-    }
-}
 
 use delegate::{create_window_delegate, display_of_screen};
 pub use ext::tiling::{TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState};
@@ -161,8 +73,9 @@ const NO: Bool = Bool::NO;
 
 use crate::host::{self, WindowAccessibility, WindowPositions};
 use crate::host_window::HostWindow;
-use crate::input::apple::macos as view;
 use crate::owner::apple::MacOSLoop;
+use crate::owner::apple::macos::content_view::{self, ViewHooks};
+use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
     ContentViewRef, HostDisplays, WindowRegistry, debug_assert_appkit_main_thread,
 };
@@ -426,6 +339,7 @@ impl MacOSWindow {
         options: WindowOptions,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
+        view_hooks: ViewHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Production windows route every thread-affine AppKit message through
         // the AppKit main queue — the one lane all other process AppKit
@@ -434,6 +348,7 @@ impl MacOSWindow {
             options,
             windows_map,
             windows,
+            view_hooks,
             crate::owner::apple::macos::owner_queue(),
             true,
         )
@@ -508,6 +423,7 @@ impl MacOSWindow {
         options: WindowOptions,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
+        view_hooks: ViewHooks,
         owner: &'static dispatch::Queue,
         owner_is_main: bool,
     ) -> Result<Arc<Self>, OpenWindowError> {
@@ -630,7 +546,7 @@ impl MacOSWindow {
                     }
                     // Without a position the top-left corner stays where it is.
                     _ => cocoa_frame_keeping_top(
-                        crate::display::apple::macos::bounds_of(current),
+                        crate::owner::apple::macos::bounds_of(current),
                         size,
                     ),
                 };
@@ -686,7 +602,7 @@ impl MacOSWindow {
 
             // Create content view for input events. `frame` is
             // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view = view::create_content_view(frame, scale, Arc::downgrade(&callbacks));
+            let content_view = content_view::create(frame, Arc::downgrade(&callbacks), view_hooks);
 
             // What the features beside the window make their part of it from.
             let closed = Arc::new(AtomicBool::new(false));
@@ -751,7 +667,7 @@ impl MacOSWindow {
             );
 
             // Enable mouse tracking for mouse moved events
-            view::enable_mouse_tracking(content_view);
+            content_view::enable_mouse_tracking(content_view);
 
             // Make content view first responder to receive keyboard events
             let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
@@ -1182,7 +1098,12 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        let window = MacOSWindow::new(options, Arc::clone(&owner.windows), windows)?;
+        let window = MacOSWindow::new(
+            options,
+            Arc::clone(&owner.windows),
+            windows,
+            owner.view_hooks,
+        )?;
         owner.notices.mark_stale_on_wake(window.state_cell());
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
@@ -1453,7 +1374,7 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread before it is messaged.
             let window = unsafe { &*self.ns_window };
             // The window's appearance, not NSApp's: a window may override it.
-            view::effective_appearance(
+            content_view::effective_appearance(
                 window
                     .downcast_ref::<objc2_app_kit::NSWindow>()
                     .expect("BUG: MacOSWindow wraps an NSWindow"),
@@ -1954,7 +1875,7 @@ impl MacOSWindow {
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 let mode = mode_of(flags);
                 let position = primary_screen_height().and_then(|height| {
-                    top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                    top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                 });
                 WindowState::new(
                     WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
@@ -2008,7 +1929,7 @@ impl MacOSWindow {
                 let frame: NSRect = msg_send![self.ns_window, frame];
                 WindowGeometry::new(
                     primary_screen_height().and_then(|height| {
-                        top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                        top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                     }),
                     Size::new(frame.size.width, frame.size.height),
                 )

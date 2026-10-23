@@ -41,15 +41,15 @@ use objc2_ui_kit::{
     UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
-use crate::display::apple::link_rate::LinkPeriod;
-use crate::display::apple::screen::change_screen;
 use crate::host;
 use crate::host::{Host, WindowPositions};
 use crate::host_window::HostWindow;
-use crate::input::apple::ios::TouchInputState;
+
 use crate::owner::OpenWindowError;
 use crate::owner::apple::IOSLoop;
-use crate::owner::apple::ios::{HostDisplays, NativeOwner, ScreenIdentity, ViewRef};
+use crate::owner::apple::ios::{
+    HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, ViewRef, ViewTouches,
+};
 use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
     SceneInstallation, SceneWindow, SceneWindows,
@@ -58,6 +58,7 @@ use crate::owner::call_point::install;
 use crate::owner::handlers::WindowCallbacks;
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
+use crate::text::TextInput;
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::state::WindowStateCell;
 use crate::{BootstrapError, PlatformError, PlatformProxy};
@@ -92,10 +93,12 @@ enum SamplingAdmission {
 
 pub struct FluiViewIvars {
     callbacks: Arc<WindowCallbacks>,
-    text_sizing: RefCell<Option<crate::CapturedTextSizing>>,
-    text_sizing_authority: RefCell<Arc<AtomicBool>>,
+    /// The window's text input, which keeps the text size captured from the
+    /// view's traits; set once, as the window is made after its view.
+    text: std::cell::OnceCell<Arc<dyn TextInput>>,
     owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
-    input: RefCell<TouchInputState>,
+    /// The input's part of the view: its touches, as the table made it.
+    input: RefCell<Box<dyn ViewTouches>>,
     /// Where this view stands in the attach/detach lifecycle: whether it may
     /// report metrics at all, and which window a report belongs to, so a
     /// callback arriving after a detach is dropped instead of announcing the
@@ -107,9 +110,8 @@ pub struct FluiViewIvars {
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
-    /// The cadence the link's ticks show, and the period it last published.
-    link_period: RefCell<LinkPeriod>,
-    /// The platform's display source, which holds the period the link reports.
+    /// The platform's display source, which measures the cadence the link's
+    /// ticks show and holds the period it publishes.
     displays: Arc<dyn HostDisplays>,
     /// The screen this window's scene is on; shared with the window, whose
     /// `display_id` any thread may call.
@@ -170,25 +172,25 @@ define_class!(
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
             self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Began);
+            self.dispatch_touches(touches, TouchPhase::Down);
         }
 
         #[unsafe(method(touchesMoved:withEvent:))]
         fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
             self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Moved);
+            self.dispatch_touches(touches, TouchPhase::Move);
         }
 
         #[unsafe(method(touchesEnded:withEvent:))]
         fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
             self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Ended);
+            self.dispatch_touches(touches, TouchPhase::Up);
         }
 
         #[unsafe(method(touchesCancelled:withEvent:))]
         fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
             self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Cancelled);
+            self.dispatch_touches(touches, TouchPhase::Cancel);
         }
 
         #[unsafe(method(layoutSubviews))]
@@ -241,21 +243,13 @@ struct ViewDisplay {
     window: WindowId,
 }
 
-/// Which touch callback produced a batch, mapped to the pointer phase the
-/// owned pointer vocabulary uses.
-#[derive(Clone, Copy)]
-enum TouchPhase {
-    Began,
-    Moved,
-    Ended,
-    Cancelled,
-}
-
 impl FluiView {
-    /// Build the content view for one window, sized to the screen's bounds.
+    /// Build the content view for one window, sized to the screen's bounds,
+    /// which hands its touches to `touches`.
     fn new(
         mtm: MainThreadMarker,
         callbacks: Arc<WindowCallbacks>,
+        touches: Box<dyn ViewTouches>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
         dark: Arc<AtomicBool>,
         owner_signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
@@ -265,15 +259,13 @@ impl FluiView {
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
             callbacks,
-            text_sizing: RefCell::new(None),
-            text_sizing_authority: RefCell::new(Arc::new(AtomicBool::new(true))),
+            text: std::cell::OnceCell::new(),
             owner_signal,
-            input: RefCell::new(TouchInputState::default()),
+            input: RefCell::new(touches),
             sampling: std::cell::Cell::new(SamplingAdmission::Detached),
             sampling_active: std::cell::Cell::new(false),
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
-            link_period: RefCell::new(LinkPeriod::default()),
             displays: display.displays,
             screen: display.screen,
             window_id: display.window,
@@ -320,19 +312,17 @@ impl FluiView {
         }
     }
 
+    /// The view's traits changed, or it moved to another window: what the
+    /// window's text input captured of them no longer holds.
     fn invalidate_text_sizing(&self) {
-        let authority = self
-            .ivars()
-            .text_sizing_authority
-            .replace(Arc::new(AtomicBool::new(true)));
-        authority.store(false, Ordering::Release);
-        let retired = self.ivars().text_sizing.borrow_mut().take();
-        drop(retired);
-        if let Some(signal) = self.ivars().owner_signal.upgrade() {
-            let _ = signal.wake();
+        if let Some(text) = self.ivars().text.get() {
+            text.invalidate_sizing();
         }
     }
 
+    /// The window's text size, captured by its text input from the view's
+    /// traits while the view is attached to the window it serves; a capture
+    /// that saw the view move on meanwhile is withdrawn.
     fn capture_text_sizing(
         &self,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
@@ -350,36 +340,21 @@ impl FluiView {
             self.invalidate_text_sizing();
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
-        let cached = self.ivars().text_sizing.borrow().clone();
-        if let Some(cached) = cached.filter(crate::CapturedTextSizing::is_current) {
-            return Ok(crate::TextSizingCaptureState::Ready(cached));
-        }
-        let authority = Arc::clone(&self.ivars().text_sizing_authority.borrow());
-        let traits =
-            objc2::exception::catch(std::panic::AssertUnwindSafe(|| self.traitCollection()))
-                .map_err(|exception| {
-                    drop(exception);
-                    crate::TextSizingCaptureError::Native {
-                        message: "UIKit trait capture failed".into(),
-                    }
-                })?;
+        let text = self
+            .ivars()
+            .text
+            .get()
+            .map(Arc::clone)
+            .ok_or(crate::TextSizingCaptureError::Unavailable)?;
+        let captured = text.capture_sizing()?;
         let attached = self
             .window()
             .is_some_and(|window| std::ptr::from_ref::<UIWindow>(&window) as usize == identity);
-        if !authority.load(Ordering::Acquire)
-            || self.ivars().sampling.get() != admission
-            || !attached
-        {
+        if self.ivars().sampling.get() != admission || !attached {
+            text.invalidate_sizing();
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
-        let capture = crate::CapturedTextSizing::new(
-            Arc::new(crate::text::apple::ios::Snapshot { traits }),
-            authority,
-            std::thread::current().id(),
-        );
-        let retired = self.ivars().text_sizing.replace(Some(capture.clone()));
-        drop(retired);
-        Ok(crate::TextSizingCaptureState::Ready(capture))
+        Ok(captured)
     }
 
     /// Create the per-frame tick, targeting this view's `onDisplayLink:`.
@@ -417,55 +392,49 @@ impl FluiView {
             .ivars()
             .displays
             .identify(MainThreadMarker::from(self), screen);
-        let changed = change_screen(&mut *self.ivars().screen.lock(), identity);
-        let Some(previous) = changed else {
+        let moved = self.ivars().displays.move_window(
+            self.ivars().window_id,
+            &self.ivars().screen,
+            identity,
+        );
+        if !moved {
             return;
-        };
-        if let Some(number) = previous.number {
-            self.ivars()
-                .displays
-                .forget_link_period(number, self.ivars().window_id);
         }
-        self.ivars().link_period.borrow_mut().forget();
         let link = self.ivars().display_link.borrow().clone();
         if let Some(link) = link {
             self.ivars().displays.request_frame_rate(&link, screen);
         }
-        self.ivars().displays.invalidate();
         self.callbacks().dispatch_display_changed();
     }
 
     /// The scene is gone: this window names no screen until it is attached
-    /// again. Forgets the window's link period on the old screen and, if the
-    /// identity was set, tells the owner the display changed. No lock or
+    /// again. Its link's measurement on the old screen is forgotten and, if
+    /// the identity was set, the owner is told the display changed. No lock or
     /// borrow is held across the callback.
     fn detach_screen(&self) {
-        let changed = change_screen(&mut *self.ivars().screen.lock(), ScreenIdentity::default());
-        let Some(previous) = changed else {
-            return;
-        };
-        if let Some(number) = previous.number {
-            self.ivars()
-                .displays
-                .forget_link_period(number, self.ivars().window_id);
+        let moved = self.ivars().displays.move_window(
+            self.ivars().window_id,
+            &self.ivars().screen,
+            ScreenIdentity::default(),
+        );
+        if moved {
+            self.callbacks().dispatch_display_changed();
         }
-        self.ivars().link_period.borrow_mut().forget();
-        self.ivars().displays.invalidate();
-        self.callbacks().dispatch_display_changed();
     }
 
-    /// Read the cadence one tick shows (the time to the frame it targets) and
-    /// publish it when it leaves the band around the last published period.
+    /// Hand the cadence one tick shows (the time to the frame it targets) to
+    /// the displays, which publish it when it leaves the band around the last
+    /// published period.
     fn observe_link_cadence(&self, link: &CADisplayLink) {
         let interval = link.targetTimestamp() - link.timestamp();
-        let published = self.ivars().link_period.borrow_mut().observe(interval);
         let number = self.ivars().screen.lock().number;
-        let (Some(period), Some(number)) = (published, number) else {
+        let published =
+            self.ivars()
+                .displays
+                .observe_link(self.ivars().window_id, number, interval);
+        if !published {
             return;
-        };
-        self.ivars()
-            .displays
-            .report_link_period(number, self.ivars().window_id, period);
+        }
         if let Some(signal) = self.ivars().owner_signal.upgrade() {
             let _ = signal.wake();
         }
@@ -487,13 +456,10 @@ impl FluiView {
             link.invalidate();
             // A link that is gone measures nothing: the screen's period is
             // unknown until its replacement ticks.
-            self.ivars().link_period.borrow_mut().forget();
             let number = self.ivars().screen.lock().number;
-            if let Some(number) = number {
-                self.ivars()
-                    .displays
-                    .forget_link_period(number, self.ivars().window_id);
-            }
+            self.ivars()
+                .displays
+                .forget_link(self.ivars().window_id, number);
         }
     }
 
@@ -527,11 +493,7 @@ impl FluiView {
             }) {
                 continue;
             }
-            let events = self
-                .ivars()
-                .input
-                .borrow_mut()
-                .convert(&touch, phase.as_pointer_phase());
+            let events = self.ivars().input.borrow_mut().touch(&touch, phase);
             for event in events {
                 let result = self.callbacks().dispatch_input(event);
                 any |= result.default_prevented;
@@ -636,17 +598,6 @@ impl FluiView {
     }
 }
 
-impl TouchPhase {
-    fn as_pointer_phase(self) -> crate::input::apple::ios::TouchPhase {
-        match self {
-            TouchPhase::Began => crate::input::apple::ios::TouchPhase::Down,
-            TouchPhase::Moved => crate::input::apple::ios::TouchPhase::Move,
-            TouchPhase::Ended => crate::input::apple::ios::TouchPhase::Up,
-            TouchPhase::Cancelled => crate::input::apple::ios::TouchPhase::Cancel,
-        }
-    }
-}
-
 struct IOSLifecycle {
     execution: WindowExecutionState,
     focused: bool,
@@ -744,6 +695,7 @@ impl IOSWindow {
         id: WindowId,
         signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
+        touches: Box<dyn ViewTouches>,
         positions: &WindowPositions<ViewRef>,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
@@ -763,9 +715,10 @@ impl IOSWindow {
         let view = FluiView::new(
             mtm,
             Arc::clone(&callbacks),
+            touches,
             Arc::clone(&metrics),
             Arc::clone(&dark),
-            signal,
+            signal.clone(),
             ViewDisplay {
                 displays,
                 screen: Arc::clone(&screen),
@@ -776,12 +729,15 @@ impl IOSWindow {
         let this = ViewRef {
             view: Retained::into_super(view.clone()),
             marker: mtm,
+            signal,
             chrome: Arc::new(IOSSystemChrome(Arc::clone(&status_bar))),
         };
+        let text = positions.text(&this);
+        let _ = view.ivars().text.set(Arc::clone(&text));
         Self {
             haptics: positions.haptics(&this),
             chrome: positions.chrome(&this),
-            text: positions.text(&this),
+            text,
             accessibility: positions.accessibility(&this),
             native: NativeOwner::new(
                 NativeWindow {
@@ -1139,12 +1095,14 @@ impl SceneWindows for IOSWindows {
         id: WindowId,
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
+        touches: Box<dyn ViewTouches>,
     ) -> Arc<dyn SceneWindow> {
         Arc::new(IOSWindow::new(
             marker,
             id,
             signal,
             displays,
+            touches,
             &self.positions,
         ))
     }
