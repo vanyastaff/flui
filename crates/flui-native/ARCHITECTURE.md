@@ -46,18 +46,15 @@ trait depends on `flui-platform` instead.
   directory the layout does not name cannot come back unchecked
   (`table_test`, built for tests only, needs none). A platform file names its
   model, a base and other features' models; every other edge is a
-  named, dated exception whose `reason` says what removes it: the winit host's
-  displays on Linux reading `display::linux` (until the native Linux host,
-  ADR-0151 §11), and edges between the window's file and another feature's of
-  one platform. A window's text input, accessibility bridge, actuator and
-  chrome reach it through the host table, so naming none of them is no edge.
-  Each remaining one goes one of two ways: a feature that reaches into the
-  window, or whose state of a window the window keeps, keeps that state
-  itself, keyed by the window's identity and set up and dropped by its own
-  window hooks; a window that reads a display, preference or lifecycle fact
-  with another feature's code gets the fact through an owner hook. The
-  features that share one AppKit or UIKit view keep theirs until that view is
-  an owner multiplexer they join.
+  named, dated exception whose `reason` says what removes it, and one is
+  left: the winit host's displays on Linux reading `display::linux` (until
+  the native Linux host, ADR-0151 §11). No window file names another
+  feature's: a window's text input, accessibility bridge, actuator and
+  chrome reach it through the host table; a feature keeps its own state of a
+  window, keyed by the window's identity and set up and dropped by its own
+  window hooks; a window reads a display, preference or lifecycle fact
+  through an owner hook; and the features that answer one AppKit or UIKit
+  view join it through the owner's hooks.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
@@ -525,20 +522,19 @@ trait depends on `flui-platform` instead.
     model trait: the winit window reads it, `window::linux::x11`'s probe
     answers it, and the winit host connects them, so neither platform file
     names the other.
-  - What a window file still names of another feature, and what another
-    feature's code names of the window, are the edges
-    `[package.metadata.flui.modules] exceptions` lists: the iOS window's text
-    sizing, which goes when the text feature keeps it by the window's
-    identity, as the Win32 text services, drop target and session already
-    keep theirs (each set up by its window hook's `created` and dropped when
-    the window goes, none reaching the window's context), and the AppKit and
-    UIKit windows' screen rules, which go when the loop's display hook hands
-    them the facts, as the headless loop hands its windows the laid-out
-    displays and the drag source (`HeadlessState::window_display`,
-    `display_bounds`, `window_drag_source`). The features that add methods
-    to one AppKit or UIKit view class (the input, the text input, the window's
-    drawing) keep the edges between them until that class is the owner's,
-    joined through hooks.
+  - No window file names another feature's, and no feature's code names the
+    window's. A feature keeps its own state of a window: the Win32 text
+    services, drop target and session by the window's identity, each set up
+    by its window hook's `created` and dropped when the window goes, none
+    reaching the window's context; the Android input method its field by
+    `ActivityWindowId`; the iOS text input the text size it captured from
+    the view's traits. A window reads the facts it needs through its loop:
+    the headless windows the laid-out displays and the drag source
+    (`HeadlessState::window_display`, `display_bounds`, `window_drag_source`),
+    the UIKit window its link cadence and screen through `HostDisplays`, the
+    AppKit window its frames through the owner's `bounds_of`. The features
+    that answer one AppKit or UIKit view (the input, the text input, the
+    window's drawing) join it through the owner's hooks.
 - **The input is a feature directory, `input/` (ADR-0151 §10).** Its model
   is what the platforms share: `assembly` (the pointer registry every backend
   assembles its contacts through, the decoder of native readings, a
@@ -2948,7 +2944,7 @@ comparing the stored version to the rename, so two processes on one directory
 cannot both succeed from the same base. The comparison checks the stored
 length against the base's (`StoredVersion::byte_len`) before reading, so a
 value of another length is never read for it. A file system without locks
-refuses such a write with `LockUnsupported` rather than writing unguarded:
+refuses such a write as `Unsupported` (`NotOnThisDevice`) rather than writing unguarded:
 `std` maps only some of its codes to `ErrorKind::Unsupported`, so
 `ERROR_INVALID_FUNCTION` (1), `ERROR_NOT_SUPPORTED` (50) and `ENOLCK` are
 recognised by code.
