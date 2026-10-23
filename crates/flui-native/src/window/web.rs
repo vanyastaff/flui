@@ -406,11 +406,6 @@ impl WebWindow {
         }
     }
 
-    /// Get a reference to the underlying canvas element
-    pub fn canvas(&self) -> &web_sys::HtmlCanvasElement {
-        &self.canvas
-    }
-
     /// Get window callbacks for event dispatch
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
@@ -1253,10 +1248,6 @@ impl PlatformWindow for WebWindow {
         let raw = RawDisplayHandle::Web(WebDisplayHandle::new());
         // SAFETY: Web display handle is always valid
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

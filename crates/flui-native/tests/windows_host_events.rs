@@ -360,11 +360,7 @@ fn a_block_is_registered_on_the_visible_window() {
         .platform
         .open_window(flui_platform::WindowOptions::default().with_visible(true))
         .expect("a window");
-    let window_hwnd = window
-        .as_any()
-        .downcast_ref::<flui_native::WindowsWindow>()
-        .expect("the Win32 backend")
-        .hwnd();
+    let window_hwnd = crate::win32_handle(window.as_ref());
     assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
     assert!(
         reason_held_for(window_hwnd).is_some(),

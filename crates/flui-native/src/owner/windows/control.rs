@@ -350,7 +350,7 @@ pub(crate) struct OwnerControl {
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
-    /// `WindowsLoop::with_config`), with the broadcast subscribers and window
+    /// `WindowsLoop::new`), with the broadcast subscribers and window
     /// hooks `H` names and the owner window's `owner_hooks`.
     pub(crate) fn new<H: super::WindowsHost>(
         identity: WindowIdentity,

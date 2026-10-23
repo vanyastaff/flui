@@ -98,30 +98,10 @@ impl AndroidHost for Android {
     }
 }
 
-/// Android platform implementation using `android-activity`
-///
-/// Wraps the `AndroidApp` provided by `android_main()` and implements the
-/// `Platform` trait for integration with the FLUI framework.
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// #[no_mangle]
-/// fn android_main(app: AndroidApp) {
-///     let platform = AndroidPlatform::new(app);
-///     let _ = platform.run(Box::new(|owner| {
-///         // Platform ready (first Resume) — create window and renderer
-///         let _ = owner;
-///         Ok(())
-///     }));
-/// }
-/// ```
-pub type AndroidPlatform = HostPlatform<Android>;
-
 impl HostPlatform<Android> {
-    /// Create a new Android platform from the `AndroidApp` provided by
-    /// `android_main()`
-    pub fn new(app: AndroidApp) -> Self {
+    /// The Android platform over the Activity `android_main` was handed; the
+    /// crate root's `android_platform` is its one caller.
+    pub(crate) fn new(app: AndroidApp) -> Self {
         Self::from_parts((), |_| AndroidLoop::new::<Android>(app))
     }
 }

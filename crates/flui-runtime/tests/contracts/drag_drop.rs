@@ -927,9 +927,6 @@ impl PlatformWindow for WithDragSource {
     ) -> Result<(), flui_platform::WindowCommandError> {
         self.window.apply(command)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Two drags leave their window and the backend's first start panics: that

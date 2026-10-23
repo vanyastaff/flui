@@ -2,7 +2,6 @@
 //! `flui-native` that writes every item still does not compile, and the only
 //! error is the seal. `PlatformWindow` stays open, so the window below is one.
 
-use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -183,10 +182,6 @@ impl PlatformWindow for OutsideWindow {
 
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

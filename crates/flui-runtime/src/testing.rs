@@ -281,10 +281,6 @@ impl PlatformWindow for TestWindow {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// The scripted submit behavior a [`ScriptedSink`] carries: zero-based call

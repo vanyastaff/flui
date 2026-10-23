@@ -480,10 +480,6 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn capture_wake_failure_preserves_release_debt() {

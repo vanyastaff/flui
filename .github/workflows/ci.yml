@@ -596,11 +596,17 @@ jobs:
       # toolchain of every other step.
       - name: Install Rust nightly (rustdoc JSON)
         uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+        with:
+          # The core host's API is documented as each target it builds a host
+          # for builds it (`targets` in flui-native's api-closure table).
+          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-apple-ios,aarch64-linux-android,wasm32-unknown-unknown
 
       # What a Stable crate's public API names from upstream crates (ADR-0089
-      # §2), then the same rule over planted violations. Nightly adds lints
-      # ahead of stable; lints are the stable jobs' business, so its warnings
-      # do not fail this step.
+      # §2), and that the core host's names only its allow list on every target
+      # it builds a host for (ADR-0151 §8), then the same rules over planted
+      # violations. Nightly
+      # adds lints ahead of stable; lints are the stable jobs' business, so its
+      # warnings do not fail this step.
       - name: cargo xtask api-closure (+ --self-test)
         env:
           CARGO_BUILD_WARNINGS: warn

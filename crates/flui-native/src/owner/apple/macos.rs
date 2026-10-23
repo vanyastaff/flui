@@ -92,9 +92,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSScreen};
 use parking_lot::Mutex;
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::handlers::CallbackWindow;
-use crate::platform::HostPlatform;
 use crate::{
     error::PlatformError,
     executor::BackgroundExecutor,
@@ -249,9 +248,9 @@ impl MacOSLoop {
         // the token objc2's AppKit API requires, which is why there is no
         // separate pre-check.
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
-            message: "MacOSPlatform::with_config must run on the AppKit main thread".to_string(),
+            message: "MacOSPlatform::new must run on the AppKit main thread".to_string(),
         })?;
-        debug_assert_appkit_main_thread("MacOSPlatform::with_config");
+        debug_assert_appkit_main_thread("MacOSPlatform::new");
 
         {
             // Initialize NSApplication (the process-wide singleton).
@@ -318,18 +317,6 @@ impl MacOSLoop {
             Ok(platform)
         }
     }
-
-    pub(crate) fn app(&self) -> &Retained<NSApplication> {
-        &self.app
-    }
-}
-
-/// What the macOS platform offers beyond [`Platform`].
-impl<H: Host<Loop = MacOSLoop>> HostPlatform<H> {
-    /// Get the NSApplication instance
-    pub fn app(&self) -> &Retained<NSApplication> {
-        self.owner().app()
-    }
 }
 
 impl host::Loop for MacOSLoop {
@@ -338,7 +325,7 @@ impl host::Loop for MacOSLoop {
         platform: Arc<dyn Platform>,
         on_finish_launching: PlatformReadyCallback,
     ) -> Result<(), PlatformError> {
-        // Idempotent when `with_config` already bound on this thread; trips
+        // Idempotent when `MacOSPlatform::new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");

@@ -1540,7 +1540,7 @@ impl WindowsWindow {
     /// // Toggle fullscreen on F11 key press (from WM_KEYDOWN handler)
     /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
     /// ```
-    pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
+    pub(crate) fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
         use windows::Win32::{
             Graphics::Gdi::{
                 GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,

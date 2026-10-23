@@ -152,7 +152,7 @@ impl WindowsAccessibility {
     /// with no assistive technology running is inert — the adapter answers
     /// `WM_GETOBJECT` only when a client actually asks.
     #[must_use]
-    pub fn new(hwnd: HWND) -> Self {
+    pub(crate) fn new(hwnd: HWND) -> Self {
         let shared = Arc::new(BridgeShared::new());
         let adapter = SubclassingAdapter::new(
             hwnd,

@@ -6,7 +6,7 @@
 //! accessibility bridge is reached through `flui_native::HostWindow`, a
 //! host-side subtrait only the composition root sees.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
@@ -92,8 +92,6 @@ pub enum WindowAt {
 /// # A window built from this crate alone
 ///
 /// ```
-/// use std::any::Any;
-///
 /// use flui_platform::{
 ///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
 ///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
@@ -135,9 +133,6 @@ pub enum WindowAt {
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
 ///     }
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
@@ -149,8 +144,6 @@ pub enum WindowAt {
 /// tries to supply one here does not compile:
 ///
 /// ```compile_fail,E0407
-/// use std::any::Any;
-///
 /// use flui_platform::{
 ///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
 ///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
@@ -193,14 +186,21 @@ pub enum WindowAt {
 ///         Err(CursorError::Unsupported)
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
 /// assert_eq!(window.show(), Err(WindowShowError::Unsupported));
+/// ```
+///
+/// Nor is the downcast to a host's own window: `flui_native::HostWindow`,
+/// which only the core host implements, carries it (ADR-0151 §8), so a window
+/// the framework programs against is never turned into a concrete type:
+///
+/// ```compile_fail,E0599
+/// fn downcast(window: &dyn flui_platform::PlatformWindow) {
+///     let _ = window.as_any();
+/// }
 /// ```
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
@@ -887,17 +887,6 @@ pub trait PlatformWindow: Send + Sync {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Err(raw_window_handle::HandleError::Unavailable)
     }
-
-    // ==================== Utility ====================
-
-    /// Downcast to concrete type.
-    ///
-    /// No default body: a panicking default here would only be discovered
-    /// the first time some caller downcasts a backend that forgot to
-    /// override it — every implementor must supply its own (invariably
-    /// `{ self }`), the same shape [`PlatformHaptics::as_any`]
-    /// already requires.
-    fn as_any(&self) -> &dyn Any;
 }
 
 impl HasWindowHandle for dyn PlatformWindow + '_ {

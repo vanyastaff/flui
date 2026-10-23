@@ -165,9 +165,6 @@ impl PlatformWindow for DragWindow {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn window(source: Option<OsDragStart>) -> Arc<dyn PlatformWindow> {

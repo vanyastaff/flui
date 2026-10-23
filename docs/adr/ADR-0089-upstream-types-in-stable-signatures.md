@@ -208,7 +208,10 @@ translation has exhaustive inbound matches and its outbound role-family test.
 
 - `cargo xtask api-closure` and its `--self-test` (§6), in CI's `doc` job: the self-test plants a
   `ui-events` type, a `RawWindowHandle` (§2), an allowed `CursorIcon` and `HandleError`, an
-  unused exception and, under a deny list, an OS type into the contract's real rustdoc output,
-  and the rule reports exactly the violations.
+  unused exception and, under an allow list, an OS type and an OS crate no list names, a left-out
+  type inside an admitted workspace trait's implementation, another workspace trait's and outside
+  both, an admission and an entry in use beside ones no longer needed into the contract's real
+  rustdoc output, and the rule reports exactly the violations. The same gate checks the core
+  host's allow list on every target it builds a host for (ADR-0151 §8).
 - The implemented outbound `ALL` role test and exhaustive inbound matches in `flui-semantics` (§3).
 - The generated-key round-trip test and the keyboard-types diff check (§4).

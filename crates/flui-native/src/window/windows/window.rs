@@ -261,7 +261,7 @@ impl WindowsWindow {
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsLoop::with_config` guarantees before any `open_window`
+        // `WindowsLoop::new` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
         // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
@@ -714,7 +714,7 @@ impl WindowsWindow {
     }
 
     /// Get the native HWND handle
-    pub fn hwnd(&self) -> HWND {
+    pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
@@ -1825,10 +1825,6 @@ impl PlatformWindow for WindowsWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

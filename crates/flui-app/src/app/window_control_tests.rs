@@ -6,7 +6,6 @@
     reason = "clippy asks for `const` on the Android target even though the initializer already is"
 )]
 
-use std::any::Any;
 use std::sync::Mutex;
 
 use flui_foundation::geometry::{Point, Size};
@@ -28,11 +27,16 @@ fn address(n: usize) -> PresentationAddress {
 
 /// A window the headless platform opened, with the capabilities given.
 fn headless_window(capabilities: WindowCapabilities) -> Arc<dyn PlatformWindow> {
-    let window: Arc<dyn PlatformWindow> = HeadlessPlatform::new()
+    headless_host_window(capabilities)
+}
+
+/// The same, as the host hands it out, so a test can reach the headless
+/// window's own controls.
+fn headless_host_window(capabilities: WindowCapabilities) -> Arc<dyn flui_native::HostWindow> {
+    HeadlessPlatform::new()
         .with_window_capabilities(capabilities)
         .open_window(WindowOptions::default())
-        .expect("a headless window opens");
-    window
+        .expect("a headless window opens")
 }
 
 struct Rig {
@@ -258,9 +262,6 @@ impl PlatformWindow for RecordingWindow {
         }
         Ok(())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Arc<RecordingWindow> {
@@ -411,7 +412,8 @@ fn a_dead_window_takes_its_queued_commands_with_it() {
 }
 
 fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
-    let window = headless_window(WindowCapabilities::ALL);
+    let host = headless_host_window(WindowCapabilities::ALL);
+    let window: Arc<dyn PlatformWindow> = host.clone();
     let rig = rig(&window, 10);
     let log = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&log);
@@ -425,7 +427,7 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
         .expect("open window accepts subscriptions");
     assert!(log.borrow().is_empty(), "subscribing calls nothing");
 
-    let native = window
+    let native = host
         .as_any()
         .downcast_ref::<flui_native::MockWindow>()
         .expect("headless window");

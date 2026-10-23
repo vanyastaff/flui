@@ -38,9 +38,12 @@ executor.rs      BackgroundExecutor (tokio pool)
 error.rs         PlatformError, BootstrapError
 ```
 
-`window::config` (`WindowConfiguration`, fullscreen monitor selection) is public
-as `flui_native::config`; each host's window and its extensions
-(`WindowsWindow`, `MacOSWindow`, `WinitWindow`, …) are named at the crate root.
+No public path names an OS type (ADR-0151 §8): each host's window is the
+`Arc<dyn HostWindow>` the platform opens, a raw window or display handle comes
+from `raw-window-handle`, and what one OS offers beyond the window contract is
+an extension of `HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) that
+answers `None` for another host's window. The Android host starts over the
+Activity `android_main` is handed, through `android_platform(app)`.
 
 - **Windows** — creation, bounds, appearance, fullscreen, and `WindowEvent`
   dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).

@@ -133,9 +133,6 @@ impl PlatformWindow for CountingWindow {
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

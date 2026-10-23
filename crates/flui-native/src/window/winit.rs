@@ -7,7 +7,6 @@
 //! windows the loop tracks (`owner::winit::LoopWindows`).
 
 use std::{
-    any::Any,
     cell::Cell,
     sync::{
         Arc,
@@ -798,10 +797,6 @@ impl PlatformWindow for WinitWindow {
         )))
         .window_text_input()
         .and_then(WindowTextInput::ime)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     // No `haptics()` override: desktop winit targets have no haptic

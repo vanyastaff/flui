@@ -75,7 +75,7 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_native::{AndroidPlatform, Platform};
+    use flui_native::Platform;
     use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
@@ -93,7 +93,7 @@ where
         .as_ref()
         .and_then(crate::app::dev_agent::DevAgent::attach);
 
-    let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
+    let platform: Box<dyn Platform> = flui_native::android_platform(app);
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
@@ -409,7 +409,7 @@ where
         // Blocking here is only safe while ONE invariant holds: **nothing
         // off-thread ever holds this lane**. Today that follows from this
         // backend's shape — the lane is taken inside `dispatch_request_frame`,
-        // which `AndroidPlatform::run`'s loop calls after `poll_events`
+        // which the Android platform's `run` loop calls after `poll_events`
         // returns, on this same thread, and no event arm drives a frame. A
         // second lane consumer on another thread (a worker service, a
         // pipelined presentation) would make this lock a real deadlock, which
@@ -430,7 +430,7 @@ where
         // Two more invariants this registration rests on, stated where it is
         // made rather than assumed:
         //
-        // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
+        // * The slots are cleared exactly once, on the Android platform's `run`
         //   exit path (`flui-native`'s `owner/android/looper.rs`, after the
         //   loop and before the quit hook), on the loop's three returning
         //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
@@ -714,7 +714,7 @@ impl AndroidFrameDriver {
         // closure: both retries pace their ATTEMPT via a
         // non-blocking deadline check (see `RetryBackoff`'s
         // doc), never by blocking this thread.
-        // `AndroidPlatform::run`'s poll loop calls
+        // The Android platform's `run` poll loop calls
         // `process_input_events`/`dispatch_request_frame`
         // inline on this SAME thread, so a sleep here — even
         // one bounded to the backoff's own growing interval —
@@ -723,7 +723,7 @@ impl AndroidFrameDriver {
         // territory at the backoff's one-second cap. The
         // deadline is carried by the wake hook wired at step 0c
         // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so `AndroidPlatform::run`'s poll blocks no longer than
+        // so the Android platform's `run` poll blocks no longer than
         // the hook's deadline and forces a
         // dispatch once the deadline is due (`flui-native`'s
         // `owner/android/looper.rs`).

@@ -5,8 +5,8 @@
 //!
 //! Two parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; and [`ext`],
-//! [`MacOSWindowExt`] with the tiling configuration it takes, the public
-//! AppKit features beyond the cross-platform window.
+//! [`MacOSWindowExt`] and the [`AppKitWindow`] it gives, the public AppKit
+//! features beyond the cross-platform window.
 //!
 //! The loop holds the windows it tracks as `CallbackWindow`s
 //! (`owner::apple::macos`).
@@ -111,8 +111,9 @@ pub(crate) mod display_pass {
 }
 
 use delegate::{create_window_delegate, display_of_screen};
-pub use ext::tiling::{TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState};
-pub use ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
+pub use ext::{
+    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
+};
 
 use std::sync::{
     Arc,
@@ -187,11 +188,10 @@ pub struct MacOSWindow {
     /// accessibility bridge, and is the `ns_view` of the raw window handle.
     ///
     /// Fixed for the window's lifetime and read from here, never from
-    /// `-[NSWindow contentView]`: Liquid Glass makes an `NSVisualEffectView`
-    /// the content view and re-parents this view inside it. Not retained by
-    /// the wrapper: the window's view hierarchy holds it, and the one code
-    /// path that detaches it (the Liquid Glass swap) retains it across the
-    /// swap.
+    /// `-[NSWindow contentView]`: a backdrop material makes an
+    /// `NSVisualEffectView` the content view and re-parents this view inside
+    /// it. Not retained by the wrapper: the window's view hierarchy holds it,
+    /// and a path that detaches it retains it across the detach.
     view: ObjcId,
 
     /// Window state
@@ -1690,10 +1690,6 @@ impl PlatformWindow for MacOSWindow {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 // Implement raw-window-handle for wgpu integration
@@ -1716,8 +1712,8 @@ impl HasWindowHandle for MacOSWindow {
         }
 
         // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
-        // the NSWindow: the FLUI view, which stays the surface view while
-        // Liquid Glass is applied.
+        // the NSWindow: the FLUI view, which stays the surface view whatever
+        // the window's content view is.
         let ns_view = NonNull::new(self.view.cast::<std::ffi::c_void>())
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);

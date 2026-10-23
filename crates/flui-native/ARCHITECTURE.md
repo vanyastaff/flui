@@ -78,6 +78,32 @@ trait depends on `flui-platform` instead.
   whose loop it is. The executor, the application path, URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
+  The Android host has no public platform name: it starts over the Activity
+  the system hands only to `android_main`, through `android_platform(app)`.
+- **No public path names an OS type (ADR-0151 §8).** The crate's public API,
+  hidden items included, names from outside the workspace only the crates of
+  the `allow` list in `[package.metadata.flui.api-closure]` (the cursor, the
+  callback lock, the raw handles, the pointer assembly's buffers and the web's
+  `Instant`), on every target it builds a host for: `cargo xtask api-closure`
+  documents it for Linux, Windows and macOS with every feature and for iOS,
+  Android and wasm32. A list of what may be named fails closed: an OS binding
+  a dependency brings is a finding without anyone listing it. The windows a
+  host builds are crate-private: the platform hands out `Arc<dyn HostWindow>`,
+  a raw window or display handle leaves through `raw-window-handle`, and what
+  one OS offers beyond the window contract is an extension implemented for
+  `dyn HostWindow` (`WindowsWindowExt::win32`, `MacOSWindowExt::appkit`) over
+  `HostWindow::as_any`, whose one body every window gets through the seal: it
+  answers `None` for another host's window, and otherwise a view of the OS's
+  window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
+  host's. Two things name a crate the list leaves out, each named in the
+  manifest: the entry `android_platform(app)`, which takes the Activity
+  (`entries`), and the implementations of `flui-semantics`'
+  `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
+  does (`traits`). Tests in `tests/` read a window's `HWND` the way an
+  embedder does, through `raw-window-handle` (`win32_handle` in
+  `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
+  its loop on the main thread, pins that a headless and a winit window have
+  no Win32 view and a Win32 window has one.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
@@ -467,7 +493,8 @@ trait depends on `flui-platform` instead.
   (`window::visibility::ReportedVisibility`: the runtime hears an answer
   only when it changes; the winit, Win32, AppKit and Web windows each read
   the answer from their own OS), the desktop window configuration
-  (`window::config`, public as `flui_native::config`) and the acknowledgement
+  (`window::config`, crate-private: its windows open with F11 as the
+  fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
@@ -485,9 +512,9 @@ trait depends on `flui-platform` instead.
   style imply for the surface; the window, the set and position, the
   procedure and the backdrop under `cfg(windows)`) and `apple/` (the pure
   `geometry` with its `frame`, `mode`, `surface` (the occlusion bit) and
-  `screen_edges`, `macos` with its `delegate` and its public `ext`, `ios`,
-  `liquid_glass`). The platform's system chrome (the table's `Chrome`
-  position) is in the same file.
+  `screen_edges`, `macos` with its `delegate` and its public `ext`, and
+  `ios`). The platform's system chrome (the table's `Chrome` position) is in
+  the same file.
   - **The host seam.** The window position names what a platform's windows
     share, `host::Window::Shared`: the Win32 handle map and configuration
     (`WindowSet`), the macOS configuration, the UIKit window factory, the
@@ -702,7 +729,7 @@ trait depends on `flui-platform` instead.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  `PlatformWindow` body and extension command on `MacOSWindow`
   re-enters the owner lane through `route_on_owner`, so a call from any thread
   is marshaled onto the window's owner lane before any AppKit message is sent.
   Two carve-outs: the class-E raw-handle accessors
@@ -2838,8 +2865,9 @@ behavior: Android execution remains unavailable on this host.
 
 ### AppKit tab joins borrow live windows
 
-`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and returns whether
-AppKit received the join. A numeric ID cannot establish ownership of an
+`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and answers whether
+AppKit received the join (`None` when the receiving window is not an AppKit
+window). A numeric ID cannot establish ownership of an
 Objective-C object. The backend rejects a different backend, different owner
 lanes, non-main lanes, closed windows and joining a window to itself before
 messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
@@ -2847,9 +2875,9 @@ with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
 join on their shared main owner lane. No state or registry mutex spans that call.
 
 The method's public compile-fail doctest rejects numeric IDs, and its compiling
-example pins the borrowed-window signature and boolean result. These compiler
-checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
-execution remains unverified on the Windows audit host.
+example pins the borrowed-window signature and its `Option<bool>` answer. These
+compiler checks do not prove native tab grouping or close/reentry behavior.
+AppKit runtime execution remains unverified on the Windows audit host.
 
 ### Win32 observations and closed-window tracking
 
@@ -3230,7 +3258,7 @@ also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
 the owner thread before the backend opens its windows.
 
 The Android goldens were recorded on a device by a `NativeActivity` library
-that installed the capture before `AndroidPlatform` created its registry and
+that installed the capture before the Android platform created its registry and
 shared the test codec and sink (`tests/native_recording/journal.rs`) through
 `#[path]`. Each session, in a
 fresh launch, is injected by the system (`adb shell input`, and `uinput`

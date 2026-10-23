@@ -20,7 +20,6 @@
 // crate's `unsafe` FFI islands, opted out at its module boundary.
 #![expect(unsafe_code)]
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{
@@ -1359,10 +1358,6 @@ impl PlatformWindow for IOSWindow {
             self.callbacks.dispatch_state_changed();
         }
         published.state
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     crate::owner::handlers::impl_window_callback_setters!(callbacks);

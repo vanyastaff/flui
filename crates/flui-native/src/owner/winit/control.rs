@@ -451,10 +451,6 @@ mod tests {
             command.admit(&flui_platform::WindowCapabilities::NONE)?;
             Ok(())
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     fn winit_control_cross_thread_request_is_processed_on_the_owner() {
