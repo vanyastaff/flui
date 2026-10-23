@@ -258,6 +258,21 @@ impl RefreshPeriod {
         Self::from_nanos_ratio(1_000_000_000_000, millihertz)
     }
 
+    /// The period of a cadence measured as the time between two frames, in
+    /// seconds: a display link's tick, a browser's frame interval.
+    ///
+    /// # Errors
+    /// [`InvalidRefreshPeriod`] for an interval that is not finite, not
+    /// positive, or outside 1 ms to 1 s.
+    pub fn from_secs_f64(seconds: f64) -> Result<Self, InvalidRefreshPeriod> {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return Err(InvalidRefreshPeriod);
+        }
+        Duration::try_from_secs_f64(seconds)
+            .map_err(|_| InvalidRefreshPeriod)
+            .and_then(Self::try_from)
+    }
+
     /// `dividend / divisor` nanoseconds, rounded to nearest. Both operands are
     /// products of `u32` and `u64`-range values, so they fit `u128` exactly.
     fn from_nanos_ratio(dividend: u128, divisor: u128) -> Result<Self, InvalidRefreshPeriod> {

@@ -2,8 +2,8 @@
 //! manager say about a window, which winit does not report — whether it is
 //! minimized, and when that or its mode changes.
 //!
-//! Two halves: [`mode`], the pure one, decides a window's mode from the two
-//! properties a window manager keeps for it and is checked on every host;
+//! Two halves: [`mode`], the pure one, reads what the two properties a window
+//! manager keeps for a window say of its mode and is checked on every host;
 //! `probe` reads those properties from the server and watches them change,
 //! answering the window model's `WindowManagerView`, which the winit host
 //! connects to the winit window.
@@ -24,8 +24,8 @@ pub(crate) mod mode {
     //!
     //! winit reports a window as maximized or fullscreen but not as minimized, and
     //! its answers for the other two lag the window manager by an event. The
-    //! adapter reads the properties directly and this model decides what they
-    //! say.
+    //! adapter reads the properties directly, this model reads what they say
+    //! (`mode_flags`) and `window::state::mode_of` decides the mode.
     //!
     //! - **`WM_STATE`** (ICCCM) is the window manager's statement of whether the
     //!   window is mapped: normal, iconic (minimized) or withdrawn (not mapped).
@@ -41,9 +41,7 @@ pub(crate) mod mode {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::WindowMode;
-
-    use crate::window::state::mode_of;
+    use crate::window::state::ModeFlags;
 
     /// The `_NET_WM_STATE` atoms this model reads, as the server numbered them.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,26 +98,30 @@ pub(crate) mod mode {
         }
     }
 
-    /// The window's mode. `wm_state` is `None` when the window manager sets none.
+    /// What the two properties say of the window, which `window::state::mode_of`
+    /// decides the mode from. `wm_state` is `None` when the window manager sets
+    /// none.
     ///
-    /// Minimized wins over the rest, as it hides the window whatever else is set;
-    /// fullscreen wins over maximized, which a fullscreen window often keeps. A
-    /// window maximized on one axis only is tiled or snapped, not maximized.
-    pub(crate) fn window_mode(wm_state: Option<WmState>, net: NetWmState) -> WindowMode {
-        let minimized = match wm_state {
-            Some(state) => state == WmState::Iconic,
-            None => net.hidden,
-        };
-        mode_of(
-            minimized,
-            net.fullscreen,
-            net.maximized_horz && net.maximized_vert,
-        )
+    /// `WM_STATE` decides minimized, and `_NET_WM_STATE_HIDDEN` only when it is
+    /// missing. A window maximized on one axis only is tiled or snapped, not
+    /// maximized.
+    pub(crate) fn mode_flags(wm_state: Option<WmState>, net: NetWmState) -> ModeFlags {
+        ModeFlags {
+            minimized: match wm_state {
+                Some(state) => state == WmState::Iconic,
+                None => net.hidden,
+            },
+            fullscreen: net.fullscreen,
+            maximized: net.maximized_horz && net.maximized_vert,
+        }
     }
 
     #[cfg(test)]
     mod tests {
+        use flui_platform::WindowMode;
+
         use super::*;
+        use crate::window::state::mode_of;
 
         const KNOWN: NetWmStateAtoms = NetWmStateAtoms {
             hidden: 301,
@@ -220,7 +222,7 @@ pub(crate) mod mode {
             ];
             for (case, wm_state, atoms, expected) in table {
                 let net = NetWmState::from_atoms(atoms, &KNOWN);
-                assert_eq!(window_mode(*wm_state, net), *expected, "{case}");
+                assert_eq!(mode_of(mode_flags(*wm_state, net)), *expected, "{case}");
             }
         }
 
