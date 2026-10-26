@@ -36,13 +36,15 @@ trait depends on `flui-platform` instead.
   3 000-line limit needs it, a directory) in every feature it fills, named in
   std's words (`windows`, `apple` with `macos`/`ios`, `android`, `web`,
   `linux` with `wayland`/`x11`, `winit`, `headless`). A public name a host
-  offers beyond `Platform` (a window and its extensions, the headless test
-  controls, the UIKit scene events) is named at the crate root.
+  offers beyond `Platform` (a window, the headless test controls, the UIKit
+  scene events) is named at the crate root, except one OS's window
+  extensions, which are named in that OS's module of `os` (`os::windows`,
+  `os::macos`), the modules the facade publishes as `flui::native::<os>`.
   `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
   checks: the ten features; `owner`, `version` and `storage` as `base`, which
   names no feature; `hosts`, which nothing names; and the crate-level files
   (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
-  `task`). A top-level module with none of these roles is a finding, so a
+  `task`, `os`). A top-level module with none of these roles is a finding, so a
   directory the layout does not name cannot come back unchecked
   (`table_test`, built for tests only, needs none). A platform file names its
   model, a base and other features' models; every other edge is a
@@ -91,11 +93,23 @@ trait depends on `flui-platform` instead.
   host builds are crate-private: the platform hands out `Arc<dyn HostWindow>`,
   a raw window or display handle leaves through `raw-window-handle`, and what
   one OS offers beyond the window contract is an extension implemented for
-  `dyn HostWindow` (`WindowsWindowExt::win32`, `MacOSWindowExt::appkit`) over
+  `dyn HostWindow` (`os::windows::WindowsWindowExt::win32`,
+  `os::macos::MacOSWindowExt::appkit`) over
   `HostWindow::as_any`, whose one body every window gets through the seal: it
   answers `None` for another host's window, and otherwise a view of the OS's
   window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
-  host's. Two things name a crate the list leaves out, each named in the
+  host's. The facade publishes the `os` modules, through `flui_app::native`,
+  as `flui::native::<os>` behind its `native` feature (ADR-0254 §8). A view's
+  method does what it says or reports that it cannot: the AppKit backdrop
+  (`AppKitWindow::set_backdrop`, an `NSVisualEffectView` behind FLUI's view)
+  answers `MacOSBackdropError` for a closed window, a window off the AppKit
+  main lane and an effect view AppKit did not create. What a window is
+  created with on one OS is not an extension but a value of that OS's type in
+  the contract's `WindowOptions::os` (`OsWindowOptions::Windows`), which only
+  that OS's host reads: the Win32 window opens with its corners and title-bar
+  theme (`Win32WindowOptions`), and another host opens the window without
+  them, as a window that OS's extension has no view of. Two things name a
+  crate the list leaves out, each named in the
   manifest: the entry `android_platform(app)`, which takes the Activity
   (`entries`), and the implementations of `flui-semantics`'
   `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
@@ -103,7 +117,9 @@ trait depends on `flui-platform` instead.
   embedder does, through `raw-window-handle` (`win32_handle` in
   `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
   its loop on the main thread, pins that a headless and a winit window have
-  no Win32 view and a Win32 window has one.
+  no Win32 view and a Win32 window has one, and that a Win32 window opens
+  with the corners and theme its options ask for while a headless or winit
+  window given them opens without.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
@@ -1436,8 +1452,9 @@ read failing neither discards nor delays the other's accepted value.
 value the backend chose for its own chrome, and `on_appearance_changed` fires
 only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
-changed it, until the app picks the chrome through `WindowsWindowExt`
-(`set_theme(System)` hands it back); reading the flag back would report the
+changed it, until the app picks the chrome through `Win32Window` or opens the
+window with a theme of its own (`Win32WindowOptions::theme`;
+`set_theme(System)` hands it back); reading the flag back would report the
 backend's own choice. macOS
 resolves the window's `effectiveAppearance` against Aqua and DarkAqua, with the
 content view's `viewDidChangeEffectiveAppearance` as the change source. iOS

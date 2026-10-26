@@ -251,3 +251,21 @@ only degrade, never fail. `PlatformHaptics` gained `perform_with`, `play` and
 keeps compiling; `FakeHaptics` records each request with the actuator that
 played it and the outcome it returned.
 **Tests:** `haptic_pattern_builder_rejects_invalid_patterns`.
+
+### One operating system's creation options are one typed value
+
+What a window is created with on one operating system is `WindowOptions::os`,
+an `OsWindowOptions`: `None` (every host opens the window as it does without
+options) or a value of that system's type, `Windows(Win32WindowOptions)` today
+(ADR-0254 §8). Options of every system as fields of the common struct (GPUI)
+would grow it per system; untyped keys (SDL) would lose the types. The types
+live here, beside `WindowOptions`, because the slot is here; they are pure data,
+built on every target, so a cross-platform application sets them without a
+`cfg` of its own. Only that system's host reads its value. Another host (the
+headless host, winit, another system's) opens the window without it, and the
+application sees that its options were not taken when that system's extension
+in `flui::native` has no view of the window. A later system's options are a new
+variant: the enum is `#[non_exhaustive]`, and a host matches its own variant and
+leaves the rest.
+**Tests:** `a_win32_window_opens_with_its_options_and_another_host_without_them`
+(`flui-native`), `config_to_options_keeps_every_field` (`flui-app`).

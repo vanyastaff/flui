@@ -79,6 +79,7 @@ flui = { path = "…" }
 | `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
 | `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |
 | `animation-diagnostics` | off | structured animation transition events and CPU spans through `tracing`; devtools `profiling` also enables them |
+| `native` | off | `flui::native`, the escape hatch: what one operating system's windows offer beyond the window contract (`flui::native::windows`, `flui::native::macos`); Evolving, not Stable |
 
 Native accessibility needs no feature: on Windows, macOS and Linux the AccessKit
 adapters hand the semantics tree to Narrator, VoiceOver and Orca in every build.
