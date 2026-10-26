@@ -33,25 +33,34 @@ the repeated copies of the same layers (memory is O(depth x layers)).
 
    ```text
    RetainedSubtree {
-       own:   Vec<RetainedNode>,            // layers painted by this boundary's nodes
-       slots: Vec<NestedSlot>,              // one per nested boundary directly inside
+       entries: Vec<Entry>,                 // paint order, one stream
        effect_slots, content,
    }
-   NestedSlot { boundary: RenderId, parent: Option<usize>, origin: Offset }
+   enum Entry { Layer(RetainedNode), Slot(NestedSlot) }
+   NestedSlot { boundary: RenderId, parent: Option<usize>, origin: Offset,
+                offset_override: Option<Offset> }
    ```
 
-   The nested boundary's `OffsetLayer` is **not** part of the enclosing capture's `own`: the slot
-   owns it. At replay the slot mints that layer from the boundary's *current* layout offset and
+   A slot is an ordered hole in the entry stream, at the position the painting walk reached the
+   boundary. Replay walks `entries` front to back, so a boundary between two inline picture runs
+   under one parent keeps its place between them, and blend and occlusion order are the painted
+   order whatever the capture state. The differential test includes that interleaving.
+
+   The nested boundary's `OffsetLayer` is **not** a `Layer` entry of the enclosing capture: the
+   slot owns it. At replay the slot mints that layer from the boundary's *current* position and
    its *current* content token (kept when the boundary is clean, freshly minted when it was
    repainted), so a repainted nested boundary always carries a new stamp for the damage differ,
-   and a boundary that moved needs only the new offset. `origin` is the slot's position in its
-   parent's layer space; the stored value is relative, never an absolute anchor.
+   and a boundary that moved needs only the new offset. The position is `offset_override` when the
+   parent painted the child through `paint_child_at` (a `FractionalTranslation`-style wrapper
+   whose committed child offset stays zero), else the child's committed layout offset; the
+   override is part of the clean parent's own paint, so it is stored, not re-derived. `origin` is
+   the slot's position in its parent's layer space; both are relative, never an absolute anchor.
 
 2. **Replay recurses through slots.** Grafting a capture mints its own nodes, and at each slot
    either grafts the nested boundary's capture or, when that boundary is queued for a repaint or has
    no capture, runs `paint_subtree` for it and records a fresh capture. The replay carries the
-   parent's `AnchorFrame` down and rebases it at each slot (`frame.rebased(origin + current
-   offset)`), exactly as the painting walk does, so a nested painter that reads `paint_anchor`
+   parent's `AnchorFrame` down and rebases it at each slot (`frame.rebased(origin + position)`, with the
+   position defined above), exactly as the painting walk does, so a nested painter that reads `paint_anchor`
    sees the position after an ancestor moved the boundary. A missing capture is a per-slot repaint, not an eviction of its ancestors.
 
 3. **A clean boundary is replayed whatever is nested.** The graft-time `nested_boundaries` check,
