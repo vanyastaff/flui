@@ -611,7 +611,8 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
     assert_eq!(fingerprint(&patched), fingerprint(&full));
 }
 
-/// Retained output was recorded for the old pixel ratio, so a change repaints everything.
+/// Retained output was recorded for the old pixel ratio, so the next paint under another one
+/// repaints everything, even when only a nested boundary asked for it.
 #[test]
 fn a_pixel_ratio_change_drops_the_retained_output() {
     let (owner, inner, root_tally, inner_tally) = rooted();
@@ -621,6 +622,7 @@ fn a_pixel_ratio_change_drops_the_retained_output() {
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
 
     owner.set_device_pixel_ratio(2.0);
+    owner.mark_needs_paint(inner);
     let (_, _) = frame(owner);
 
     assert_eq!(root_tally.paints(), root_before + 1);

@@ -502,7 +502,7 @@ never whether the frame is correct.
    that is not one repaints every frame it is dirty.** `run_paint` serves the
    root through `serve_boundary` when `RenderView`-style roots declare
    themselves boundaries, so a nested mark replays the root's capture and a
-   layer update under it patches that capture. A pixel-ratio change evicts
+   layer update under it patches that capture. The next paint after a pixel-ratio change evicts
    every capture, since the recorded output was made for the old ratio.
    **Asserted by:** `a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints`,
    `a_layer_update_under_the_root_boundary_patches_the_retained_root` and

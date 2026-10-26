@@ -1415,20 +1415,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// glyph and snapped hairline downstream.
     pub fn set_device_pixel_ratio(&mut self, dpr: f64) {
         if dpr.is_finite() && dpr > 0.0 {
-            // Retained output was recorded for the old ratio (text shaping and
-            // hairline snapping depend on it), so it is not replayed under the
-            // new one: every capture goes and the root repaints.
-            #[expect(
-                clippy::float_cmp,
-                reason = "an unchanged ratio is bit-identical, not approximately equal"
-            )]
-            if self.device_pixel_ratio != dpr {
-                self.retained_boundaries.clear();
-                self.root_content = None;
-                if let Some(root_id) = self.root_id {
-                    self.mark_needs_paint(root_id);
-                }
-            }
             self.device_pixel_ratio = dpr;
             // Assistive technology reads bounds in physical pixels: the
             // semantics owner republishes its root under the new scale, and

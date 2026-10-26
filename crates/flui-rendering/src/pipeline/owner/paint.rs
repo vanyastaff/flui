@@ -105,6 +105,19 @@ impl PipelineOwner<PaintPhase> {
         self.scheduler.enter_phase(PhaseKind::Paint);
         self.local_dirty.begin_paint();
 
+        // Retained output was recorded for another pixel ratio (text shaping and hairline
+        // snapping depend on it), so none of it is replayed: every capture goes and the root,
+        // served without one, repaints the whole tree.
+        #[expect(
+            clippy::float_cmp,
+            reason = "an unchanged ratio is bit-identical, not approximately equal"
+        )]
+        if self.retained_pixel_ratio != self.device_pixel_ratio {
+            self.retained_boundaries.clear();
+            self.root_content = None;
+            self.retained_pixel_ratio = self.device_pixel_ratio;
+        }
+
         // Deepest-first ordering retained: the
         // full-tree descent below repaints everything, but per-boundary
         // dirty-driven repaints will rely on this order once retention
