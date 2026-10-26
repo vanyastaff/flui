@@ -755,6 +755,14 @@ jobs:
       - name: cargo miri test (pipeline::owner)
         run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner
 
+      # The layout walk's lease (ADR-0252): double enter, non-child edge and
+      # header reads beside a live node, then the cycle, panic and poison paths
+      # through the real walk.
+      - name: cargo miri test (layout lease)
+        run: cargo +nightly miri test -p flui-rendering --lib --locked lease_
+      - name: cargo miri test (layout_failure_matrix)
+        run: cargo +nightly miri test -p flui-rendering --features testing --test rendering_it --locked layout_failure_matrix
+
       # Public GlobalKey behavior (ADR-0050): state migration, duplicate-parent
       # grafting and frame-boundary diagnostics run a real `ElementTree` through
       # `BuildOwner::finalize_tree`. No `unsafe` of its own — the point is the

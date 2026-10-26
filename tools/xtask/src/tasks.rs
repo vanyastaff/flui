@@ -545,6 +545,9 @@ fn gpu_test_plan() -> Vec<Step> {
 /// CI's `miri` job: selected ownership and containment contracts under Miri.
 /// - flui-rendering `pipeline::owner`: owner failure and semantics publishing
 ///   families, including retirement of caught text panic payloads.
+/// - flui-rendering `lease_` and `rendering_it::layout_failure_matrix`: the layout walk's lease
+///   (double enter, non-child edge, header reads beside a live node) and its cycle, panic and
+///   poison paths through the real walk (ADR-0252).
 /// - flui-view `view_it::global_key_contract_matrix`: public GlobalKey migration
 ///   and duplicate-parent behavior (ADR-0050).
 /// - flui-engine `surface_lease` and `cancelling_renderer_new`: the
@@ -557,6 +560,12 @@ fn gpu_test_plan() -> Vec<Step> {
 fn miri_plan() -> Vec<Step> {
     [
         ("flui-rendering", "--lib", "pipeline::owner"),
+        ("flui-rendering", "--lib", "lease_"),
+        (
+            "flui-rendering",
+            "--test rendering_it --features testing",
+            "layout_failure_matrix",
+        ),
         ("flui-view", "--test view_it", "global_key_contract_matrix"),
         ("flui-engine", "--lib", "surface_lease"),
         ("flui-engine", "--lib", "cancelling_renderer_new"),

@@ -2333,7 +2333,6 @@ dependencies = [
  "proptest",
  "rustc-hash 2.1.3",
  "serde",
- "slab",
  "smallvec",
  "stacker",
  "static_assertions",
