@@ -8,7 +8,6 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
@@ -32,7 +31,7 @@ use super::sessions::{
     Shared, Surface, WeakShared, pointer_kind,
 };
 use super::tracker::{DropTracker, Dropped, single_action};
-use super::view::{DragScope, DragView};
+use super::view::{DragScope, DragView, InFlight, OwnerWake};
 use crate::close::ClosePanic;
 use crate::events::PointerKind;
 use crate::pointer::mouse_tracker::WeakMouseTracker;
@@ -195,6 +194,7 @@ impl std::fmt::Debug for DragStart {
 pub struct DragOwner {
     shared: Shared,
     source: Arc<dyn DataTransferSource>,
+    wake: OwnerWake,
 }
 
 impl std::fmt::Debug for DragOwner {
@@ -206,15 +206,21 @@ impl std::fmt::Debug for DragOwner {
 impl DragOwner {
     /// The machinery of `runtime`, in the platform instance named by `nonce`,
     /// answering the OS through `source`.
+    ///
+    /// `wake` is called, from whichever thread it happens on, when the last
+    /// request a drop made resolves or is dropped: the owner then has a drop
+    /// to conclude ([`next_deadline`](Self::next_deadline)) and may be asleep.
     #[must_use]
     pub fn new(
         nonce: ProcessNonce,
         runtime: UiRuntimeId,
         source: Arc<dyn DataTransferSource>,
+        wake: OwnerWake,
     ) -> Self {
         Self {
             shared: Rc::new(std::cell::RefCell::new(DragSessions::new(nonce, runtime))),
             source,
+            wake,
         }
     }
 
@@ -662,7 +668,7 @@ impl DragOwner {
         let in_flight = if let Some(known) = state.offer_mut(offer.id()) {
             Arc::clone(&known.in_flight)
         } else {
-            let in_flight = Arc::new(AtomicUsize::new(0));
+            let in_flight = InFlight::new(Arc::clone(&self.wake));
             state.offers.push(OfferState {
                 id: offer.id(),
                 in_flight: Arc::clone(&in_flight),
@@ -849,7 +855,7 @@ struct ViewParts {
     key: Option<DragSessionKey>,
     scope: DragScope,
     allowed: TransferActions,
-    in_flight: Option<Arc<AtomicUsize>>,
+    in_flight: Option<Arc<InFlight>>,
     pointer: PointerKind,
 }
 

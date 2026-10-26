@@ -147,8 +147,12 @@ impl UiRuntime {
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
         let build_in_progress = BuildInProgress::new();
-        let drag =
-            flui_interaction::drag::DragOwner::new(process_nonce, ui_runtime_id, data_transfer);
+        let drag = flui_interaction::drag::DragOwner::new(
+            process_nonce,
+            ui_runtime_id,
+            data_transfer,
+            Arc::clone(&wake),
+        );
 
         let presentation = PresentationState::new(
             presentation_id,
