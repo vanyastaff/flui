@@ -4,6 +4,7 @@
 //! the last one when it closes or the session ends.
 
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use flui_foundation::PresentationAddress;
@@ -70,7 +71,20 @@ pub(super) fn keep(config: &AppConfig, address: PresentationAddress) {
         return;
     };
     let recalled = recall(&*storage, &name);
-    let recorder = Rc::new(PlacementRecorder::new(storage, name, recalled.as_ref()));
+    // Storage answers on its own thread: wake the owner, which takes the answer
+    // at its next turn.
+    let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
+        return;
+    };
+    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = proxy.wake();
+    });
+    let recorder = Rc::new(PlacementRecorder::new(
+        storage,
+        name,
+        recalled.as_ref(),
+        wake_owner,
+    ));
     let weak = Rc::downgrade(&recorder);
     let Ok((state, subscription)) = handle.subscribe(move |state| {
         if let Some(recorder) = weak.upgrade() {
