@@ -594,9 +594,10 @@ impl FluiView {
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
                 .dispatch_metrics_resize(next.size, next.scale);
-            // The published state follows the metrics: `state()` reads them
-            // again when the owner asks.
-            self.callbacks().dispatch_state_changed();
+            // The published state follows the metrics; the resize above
+            // published it unless the metrics are not a drawable area, and
+            // the size is part of it either way.
+            self.callbacks().publish_state();
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -1018,8 +1019,9 @@ impl IOSWindow {
                 }
             }
         }
-        // Visibility and focus are part of the published state.
-        self.callbacks.dispatch_state_changed();
+        // Execution, visibility and focus are published in one revision,
+        // before the callbacks of each.
+        self.callbacks.publish_state();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1110,14 +1112,23 @@ impl SceneWindows for IOSWindows {
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
     ) -> Arc<dyn SceneWindow> {
-        Arc::new(IOSWindow::new(
+        let window = Arc::new(IOSWindow::new(
             marker,
             id,
             signal,
             displays,
             touches,
             &self.positions,
-        ))
+        ));
+        window.callbacks.set_state_publisher({
+            let window = Arc::downgrade(&window);
+            Arc::new(move || {
+                if let Some(window) = window.upgrade() {
+                    let _ = PlatformWindow::state(&*window);
+                }
+            })
+        });
+        window
     }
 }
 
@@ -1364,13 +1375,25 @@ impl PlatformWindow for IOSWindow {
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| {
-            let size = self.metrics.lock().size;
-            WindowState::new(WindowGeometry::new(None, size), size)
+            let metrics = *self.metrics.lock();
+            WindowState::new(WindowGeometry::new(None, metrics.size), metrics.size)
                 .with_visible(self.is_visible())
                 .with_focused(self.is_focused())
                 .with_resizable(false)
                 .with_decorated(false)
                 .with_display(self.screen.lock().id)
+                .with_metrics(
+                    flui_foundation::geometry::WindowMetrics::from_logical(
+                        metrics.size,
+                        metrics.scale,
+                    )
+                    .ok(),
+                )
+                .with_appearance(PlatformWindow::appearance(self))
+                .with_safe_area(metrics.safe_area)
+                .with_execution(PlatformWindow::execution_state(self))
+                .with_hovered(self.callbacks.hovered())
+                .with_capabilities(PlatformWindow::capabilities(self))
         });
         if published.changed {
             self.callbacks.dispatch_state_changed();

@@ -178,24 +178,26 @@ fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), WindowCommandEr
 }
 
 /// What every Win32 window honours and observes, known before one exists
-/// (`Platform::window_capabilities`).
+/// (`Platform::window_capabilities`). Win32 has no fullscreen of its own: the
+/// host makes one of a borderless window sized to its monitor.
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    use flui_platform::Availability::{Emulated, Native};
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.sets_position = true;
-    capabilities.sets_size = true;
-    capabilities.sets_constraints = true;
-    capabilities.sets_resizable = true;
-    capabilities.sets_decorated = true;
-    capabilities.minimizes = true;
-    capabilities.maximizes = true;
-    capabilities.enters_fullscreen = true;
-    capabilities.shows = true;
-    capabilities.hides = true;
-    capabilities.activates = true;
-    capabilities.observes_position = true;
-    capabilities.observes_minimized = true;
-    capabilities.places_at_open = true;
+    capabilities.sets_title = Native;
+    capabilities.sets_position = Native;
+    capabilities.sets_size = Native;
+    capabilities.sets_constraints = Native;
+    capabilities.sets_resizable = Native;
+    capabilities.sets_decorated = Native;
+    capabilities.minimizes = Native;
+    capabilities.maximizes = Native;
+    capabilities.enters_fullscreen = Emulated;
+    capabilities.shows = Native;
+    capabilities.hides = Native;
+    capabilities.activates = Native;
+    capabilities.observes_position = Native;
+    capabilities.observes_minimized = Native;
+    capabilities.places_at_open = Native;
     capabilities
 }
 
@@ -430,6 +432,9 @@ impl WindowsWindow {
                     restore_style: 0,
                     constraints,
                     display: displays.display_of_window(hwnd),
+                    appearance,
+                    hovered: false,
+                    occluded: false,
                 },
             )));
 
@@ -454,6 +459,19 @@ impl WindowsWindow {
             // `surface::initial_visibility`'s doc.
             let config = windows.config.clone();
             let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
+            // Each fact the window reports, its input's hover included, is
+            // published from the owner context of this very window before its
+            // own callback runs. Off the owner thread, or once the window is
+            // gone, there is nothing to read.
+            callbacks.set_state_publisher({
+                let address = hwnd.0 as isize;
+                Arc::new(move || {
+                    let hwnd = HWND(address as *mut std::ffi::c_void);
+                    let _ = super::proc::with_window_context(hwnd, "publish state", |ctx| {
+                        ctx.publish_window_state(hwnd);
+                    });
+                })
+            });
             let context = Box::new(WindowContext {
                 window_id,
                 windows: Arc::downgrade(&windows),

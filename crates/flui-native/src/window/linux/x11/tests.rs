@@ -581,10 +581,10 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
     );
     run_x11_window(host, WindowOptions::default(), |window, _server| {
         let capabilities = window.capabilities();
-        assert!(!capabilities.observes_minimized);
+        assert!(!capabilities.observes_minimized.is_available());
         // Nothing else is taken away.
         let mut expected = WindowCapabilities::ALL;
-        expected.observes_minimized = false;
+        expected.observes_minimized = flui_platform::Availability::Unavailable;
         assert_eq!(capabilities, expected);
         // Asking is still allowed: the compositor or window manager acts.
         window

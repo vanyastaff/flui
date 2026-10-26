@@ -650,6 +650,15 @@ impl MacOSWindow {
                 )),
             });
 
+            window.callbacks.set_state_publisher({
+                let window = Arc::downgrade(&window);
+                Arc::new(move || {
+                    if let Some(window) = window.upgrade() {
+                        window.publish_state();
+                    }
+                })
+            });
+
             // Enable mouse tracking for mouse moved events
             content_view::enable_mouse_tracking(content_view);
 
@@ -1154,24 +1163,25 @@ impl host::Window<MacOSLoop> for MacOSWindow {
 
 /// What every AppKit window honours and observes, known before one exists
 /// (`Platform::window_capabilities`). Each field is named, so a command added
-/// to the contract is `false` here until `apply` carries it out.
+/// to the contract is unavailable here until `apply` carries it out.
 const fn window_capabilities() -> WindowCapabilities {
+    use flui_platform::Availability::Native;
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.sets_position = true;
-    capabilities.sets_size = true;
-    capabilities.sets_constraints = true;
-    capabilities.sets_resizable = true;
-    capabilities.sets_decorated = true;
-    capabilities.minimizes = true;
-    capabilities.maximizes = true;
-    capabilities.enters_fullscreen = true;
-    capabilities.hides = true;
-    capabilities.shows = true;
-    capabilities.activates = true;
-    capabilities.observes_position = true;
-    capabilities.observes_minimized = true;
-    capabilities.places_at_open = true;
+    capabilities.sets_title = Native;
+    capabilities.sets_position = Native;
+    capabilities.sets_size = Native;
+    capabilities.sets_constraints = Native;
+    capabilities.sets_resizable = Native;
+    capabilities.sets_decorated = Native;
+    capabilities.minimizes = Native;
+    capabilities.maximizes = Native;
+    capabilities.enters_fullscreen = Native;
+    capabilities.hides = Native;
+    capabilities.shows = Native;
+    capabilities.activates = Native;
+    capabilities.observes_position = Native;
+    capabilities.observes_minimized = Native;
+    capabilities.places_at_open = Native;
     capabilities
 }
 
@@ -1831,10 +1841,11 @@ impl MacOSWindow {
 
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
-        let (display, normal) = {
+        let (display, normal, scale) = {
             let state = self.state.lock();
-            (state.display, state.normal)
+            (state.display, state.normal, state.scale_factor)
         };
+        let hovered = self.callbacks.hovered();
         route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
             // body runs on the owner thread — inline on the OS main thread for
@@ -1888,6 +1899,21 @@ impl MacOSWindow {
                     Size::new(max.width, max.height),
                 ))
                 .with_display(display)
+                .with_metrics(
+                    flui_foundation::geometry::WindowMetrics::from_logical(
+                        Size::new(content.size.width, content.size.height),
+                        scale,
+                    )
+                    .ok(),
+                )
+                // The window's appearance, not NSApp's: a window may override it.
+                .with_appearance(content_view::effective_appearance(
+                    (&*self.ns_window)
+                        .downcast_ref::<objc2_app_kit::NSWindow>()
+                        .expect("BUG: MacOSWindow wraps an NSWindow"),
+                ))
+                .with_hovered(hovered)
+                .with_capabilities(window_capabilities())
             }
         })
     }

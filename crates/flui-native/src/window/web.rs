@@ -77,7 +77,12 @@ impl StatePublisher {
     /// revision.
     fn current(&self) -> WindowState {
         let published = self.cell.state_with(|| {
-            sample_state(&self.canvas, &self.state, self.displays.current_display())
+            sample_state(
+                &self.canvas,
+                &self.state,
+                self.displays.current_display(),
+                self.callbacks.hovered(),
+            )
         });
         if published.changed {
             self.callbacks.dispatch_state_changed();
@@ -98,14 +103,25 @@ fn sample_state(
     canvas: &web_sys::HtmlCanvasElement,
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
+    hovered: bool,
 ) -> WindowState {
-    let (title, size, focused, visible) = {
+    let (title, size, focused, visible, execution, metrics) = {
         let state = state.lock();
         (
             state.title.clone(),
             Size::new(state.width, state.height),
             state.focused,
             state.visible,
+            state.execution,
+            // The backing store is the drawable area; an empty box is none.
+            flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::DeviceSize::new(
+                    i32::try_from(state.backing.width).unwrap_or(i32::MAX),
+                    i32::try_from(state.backing.height).unwrap_or(i32::MAX),
+                ),
+                state.scale_factor,
+            )
+            .ok(),
         )
     };
     // The canvas, or an element that holds it: another element of the page (a
@@ -128,6 +144,20 @@ fn sample_state(
         .with_resizable(false)
         .with_decorated(false)
         .with_display(display)
+        .with_metrics(metrics)
+        .with_appearance(page_appearance())
+        .with_execution(execution)
+        .with_hovered(hovered)
+        .with_capabilities(window_capabilities())
+}
+
+/// The user's color scheme as the page sees it (`prefers-color-scheme`).
+fn page_appearance() -> WindowAppearance {
+    if dark_scheme_query().is_some_and(|query| query.matches()) {
+        WindowAppearance::Dark
+    } else {
+        WindowAppearance::Light
+    }
 }
 
 struct WebWindowState {
@@ -369,7 +399,7 @@ impl WebWindow {
         };
 
         let state = Arc::new(Mutex::new(state));
-        let initial = sample_state(&canvas, &state, displays.current_display());
+        let initial = sample_state(&canvas, &state, displays.current_display(), false);
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
@@ -982,8 +1012,8 @@ impl crate::host_window::HostWindow for WebWindow {
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.enters_fullscreen = true;
+    capabilities.sets_title = flui_platform::Availability::Native;
+    capabilities.enters_fullscreen = flui_platform::Availability::Native;
     capabilities
 }
 
@@ -1051,7 +1081,16 @@ impl host::Window<WebLoop> for WebWindow {
         // Notify window created
         WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
 
-        Ok(Arc::new(window))
+        let window = Arc::new(window);
+        window.callbacks.set_state_publisher({
+            let window = Arc::downgrade(&window);
+            Arc::new(move || {
+                if let Some(window) = window.upgrade() {
+                    window.publisher().publish();
+                }
+            })
+        });
+        Ok(window)
     }
 
     fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
@@ -1180,11 +1219,7 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if dark_scheme_query().is_some_and(|query| query.matches()) {
-            WindowAppearance::Dark
-        } else {
-            WindowAppearance::Light
-        }
+        page_appearance()
     }
 
     /// The browser's screen the page is on: the one screen of a tab, or the

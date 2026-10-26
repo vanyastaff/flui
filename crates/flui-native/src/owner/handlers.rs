@@ -393,6 +393,14 @@ pub struct WindowCallbacks {
     /// every window it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
     should_close_dispatching: Mutex<bool>,
+    /// Publishes the window's snapshot before each fact's own callback is
+    /// queued; see [`Self::set_state_publisher`].
+    state_publisher: Mutex<Option<StatePublisher>>,
+    /// What the last hover report said: whatever reports it (Win32 or web
+    /// input, AppKit's tracking area, winit's cursor events), a hover reaches
+    /// the window through [`Self::dispatch_hover_status_change`] alone, and
+    /// the window's snapshot reads it here ([`Self::hovered`]).
+    hovered: AtomicBool,
 
     /// One-shot latch set by [`Self::clear`] before it takes any slot.
     ///
@@ -415,6 +423,12 @@ pub struct WindowCallbacks {
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
 type StatusCallback = Box<dyn FnMut(bool) + Send>;
+
+/// Reads a window from its window system again and publishes what it read:
+/// a new revision, and `on_state_changed`, when the snapshot differs. A
+/// window's host builds it over a weak reference to the window, so the
+/// callbacks never keep their window alive.
+pub(crate) type StatePublisher = Arc<dyn Fn() + Send + Sync>;
 
 enum WindowCallbackEvent {
     Input(PlatformInput),
@@ -666,6 +680,33 @@ impl WindowCallbacks {
     pub(crate) fn accepts_registration(&self) -> bool {
         !self.lifecycle_closed.load(Ordering::SeqCst)
     }
+    /// Set how this window publishes its snapshot (ADR-0254 §1). Every fact
+    /// dispatch below (resize and scale, focus, visibility, hover, appearance,
+    /// display, safe area, execution state) runs it first, on the calling
+    /// thread and with no lock of this set held, so the snapshot holds the
+    /// fact and `on_state_changed` is queued ahead of the fact's own callback.
+    /// A fact reported by another feature (the input's hover) reaches the
+    /// snapshot the same way as the window's own. The host sets it once, when
+    /// the window opens.
+    pub(crate) fn set_state_publisher(&self, publisher: StatePublisher) {
+        *self.state_publisher.lock() = Some(publisher);
+    }
+
+    /// Whether the pointer is over the window, as the last hover report said;
+    /// `false` before the first.
+    pub(crate) fn hovered(&self) -> bool {
+        self.hovered.load(Ordering::Acquire)
+    }
+
+    /// Publish the window's snapshot now, if its host set how: for a fact
+    /// that has no callback of its own.
+    pub(crate) fn publish_state(&self) {
+        let publisher = self.state_publisher.lock().clone();
+        if let Some(publisher) = publisher {
+            publisher();
+        }
+    }
+
     /// Create a new empty callback set
     pub fn new() -> Self {
         Self::counting_frames(Arc::default())
@@ -699,6 +740,8 @@ impl WindowCallbacks {
             on_surface_status_change: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
+            state_publisher: Mutex::new(None),
+            hovered: AtomicBool::new(false),
             cleared: AtomicBool::new(false),
             lifecycle_closed: AtomicBool::new(false),
         }
@@ -829,6 +872,7 @@ impl WindowCallbacks {
         let on_appearance_changed = self.on_appearance_changed.lock().take();
         let on_display_changed = self.on_display_changed.lock().take();
         let on_surface_status_change = self.on_surface_status_change.lock().take();
+        let state_publisher = self.state_publisher.lock().take();
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
         contain_owner_callback(|| drop(on_safe_area_change));
@@ -849,6 +893,7 @@ impl WindowCallbacks {
         contain_owner_callback(|| drop(on_appearance_changed));
         contain_owner_callback(|| drop(on_display_changed));
         contain_owner_callback(|| drop(on_surface_status_change));
+        contain_owner_callback(|| drop(state_publisher));
     }
 
     fn drain_events(
@@ -1021,6 +1066,8 @@ impl WindowCallbacks {
     ) {
         if let Some(commit) = commit {
             commit();
+            // Committed at its delivery point: the snapshot reads it now.
+            self.publish_state();
         }
         call(&self.queued(slot), |callback| callback(value)).or_resume(());
     }
@@ -1381,6 +1428,7 @@ impl WindowCallbacks {
 
     /// Dispatch a resize event with the window's new metrics.
     pub fn dispatch_resize(&self, metrics: WindowMetrics) {
+        self.publish_state();
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Resize(metrics))
         else {
@@ -1445,6 +1493,9 @@ impl WindowCallbacks {
     #[cfg(target_os = "ios")]
     pub(crate) fn dispatch_lifecycle_immediate(&self, event: LifecycleEvent) {
         use LifecycleEvent::{Execution, Focus, Surface, Visibility};
+        if !matches!(event, Surface(_)) {
+            self.publish_state();
+        }
         match event {
             Execution(value) => self.invoke_lifecycle(&self.on_execution_state_change, value),
             Focus(value) => self.invoke_lifecycle(&self.on_active_status_change, value),
@@ -1463,6 +1514,7 @@ impl WindowCallbacks {
 
     /// Dispatch active status change (focus gained/lost).
     pub fn dispatch_active_status_change(&self, is_active: bool) {
+        self.publish_state();
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
             WindowCallbackEvent::Active(is_active, None),
@@ -1491,6 +1543,7 @@ impl WindowCallbacks {
 
     /// Dispatch visibility status change (occlusion gained/lost).
     pub fn dispatch_visibility_status_change(&self, is_visible: bool) {
+        self.publish_state();
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
             WindowCallbackEvent::Visibility(is_visible, None),
@@ -1537,6 +1590,7 @@ impl WindowCallbacks {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
+        self.publish_state();
         let Some(mut drain) = DispatchDrain::begin(&self.safe_area_dispatch, insets) else {
             return;
         };
@@ -1553,6 +1607,7 @@ impl WindowCallbacks {
         let Ok(metrics) = WindowMetrics::from_logical(size, scale) else {
             return;
         };
+        self.publish_state();
         // Latched on `lifecycle_closed`, deliberately not the `cleared` flag
         // the queued Resize arm calls against (see `drain_events`'s own arm):
         // this is an IMMEDIATE delivery, so it is fenced the moment a close is
@@ -1582,6 +1637,7 @@ impl WindowCallbacks {
 
     /// Deliver an owner-thread execution observation through the window FIFO.
     pub fn dispatch_execution_state_change(&self, state: WindowExecutionState) {
+        self.publish_state();
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Execution(state))
         else {
@@ -1592,6 +1648,8 @@ impl WindowCallbacks {
 
     /// Dispatch hover status change (mouse enter/leave).
     pub fn dispatch_hover_status_change(&self, is_hovered: bool) {
+        self.hovered.store(is_hovered, Ordering::Release);
+        self.publish_state();
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Hover(is_hovered))
         else {
@@ -1602,6 +1660,7 @@ impl WindowCallbacks {
 
     /// Dispatch appearance change (system theme changed).
     pub fn dispatch_appearance_changed(&self) {
+        self.publish_state();
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::AppearanceChanged)
         else {
@@ -1613,6 +1672,7 @@ impl WindowCallbacks {
     /// Dispatch a display change hint (the window may be on another display, or
     /// its display changed).
     pub fn dispatch_display_changed(&self) {
+        self.publish_state();
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::DisplayChanged)
         else {

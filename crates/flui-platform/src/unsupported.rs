@@ -120,9 +120,19 @@ impl Unsupported {
 pub enum Availability {
     /// Delivered by the operating system.
     Native,
-    /// Synthesized by the backend from other input (the web's ctrl+wheel
-    /// decoded as a pinch), and possibly ambiguous with that input.
+    /// Built by the backend from what the operating system does provide, and
+    /// only as good as that: the web's ctrl+wheel decoded as a pinch (possibly
+    /// ambiguous with that input), a Win32 fullscreen made of a borderless
+    /// window sized to its monitor.
     Emulated,
     /// This backend in this session has no path for it.
     Unavailable,
+}
+
+impl Availability {
+    /// Whether the capability is delivered at all, natively or emulated.
+    #[must_use]
+    pub const fn is_available(self) -> bool {
+        !matches!(self, Self::Unavailable)
+    }
 }

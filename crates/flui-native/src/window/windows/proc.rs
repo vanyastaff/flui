@@ -325,6 +325,9 @@ impl WindowContext {
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
             display: self.displays.display_of_window(hwnd),
+            appearance: self.appearance.get(),
+            hovered: self.callbacks.hovered(),
+            occluded: self.visibility.occluded(),
         }
     }
 
@@ -1379,6 +1382,13 @@ pub(crate) struct OwnerTracking {
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
+    /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
+    /// dark-mode flag this host sets on the chrome to match (ADR-0222).
+    pub(crate) appearance: WindowAppearance,
+    /// Whether the mouse is over the window, as its input last reported it.
+    pub(crate) hovered: bool,
+    /// Whether a cloak or a locked session hides the window whatever it shows.
+    pub(crate) occluded: bool,
 }
 
 /// The window's title as the system holds it, `None` when it cannot be read.
@@ -1409,12 +1419,15 @@ pub(crate) fn sample_state(
         restore_style,
         constraints,
         display,
+        appearance,
+        hovered,
+        occluded,
     } = tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
             record.scale_factor,
-            record.visible,
+            record.visible && !occluded,
             record.focused,
             record.bounds.size,
         )
@@ -1492,6 +1505,22 @@ pub(crate) fn sample_state(
         .with_resizable(style & WS_THICKFRAME.0 != 0)
         .with_decorated(style & WS_CAPTION.0 == WS_CAPTION.0)
         .with_display(display)
+        // The client area in device pixels at the window's scale; a minimized
+        // window's empty client area is not drawable and keeps the last.
+        .with_metrics(
+            have_client
+                .then(|| {
+                    flui_foundation::geometry::WindowMetrics::new(
+                        Size::new(client.right - client.left, client.bottom - client.top),
+                        scale,
+                    )
+                    .ok()
+                })
+                .flatten(),
+        )
+        .with_appearance(appearance)
+        .with_hovered(hovered)
+        .with_capabilities(super::window::window_capabilities())
 }
 
 impl WindowsWindow {
@@ -1975,6 +2004,9 @@ impl WindowContext {
     }
 
     fn settle_visibility(&self) {
+        // A cloak or a lock hides a shown window in its snapshot too: read it
+        // again, whether or not the report below changes.
+        self.snapshot.invalidate();
         let visible = self.visibility.visible();
         if let Some(visible) = ReportedVisibility::report_in(&self.visibility.reported, visible) {
             tracing::debug!(visible, "window visibility changed");

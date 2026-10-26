@@ -1,11 +1,11 @@
 //! `WindowCommand::validate`, `WindowCommand::admit` and `WindowState::successor`:
 //! the pure rules every backend and every queue in front of one relies on.
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
-    WindowState,
+    Availability, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry,
+    WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -108,9 +108,9 @@ fn commands_without_numbers_are_always_valid() {
     }
 }
 
-type Capability = fn(&mut WindowCapabilities) -> &mut bool;
+type Capability = fn(&mut WindowCapabilities) -> &mut Availability;
 
-fn admit_refuses_exactly_when_the_capability_is_false() {
+fn admit_refuses_exactly_when_the_capability_is_unavailable() {
     let rows: [(WindowCommand, Capability); 12] = [
         (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
         (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
@@ -138,7 +138,9 @@ fn admit_refuses_exactly_when_the_capability_is_false() {
     for (command, capability) in rows {
         let mut all = WindowCapabilities::ALL;
         assert_eq!(command.admit(&all), Ok(()), "{command:?}");
-        *capability(&mut all) = false;
+        *capability(&mut all) = Availability::Emulated;
+        assert_eq!(command.admit(&all), Ok(()), "{command:?} emulated");
+        *capability(&mut all) = Availability::Unavailable;
         assert_eq!(
             command.admit(&all),
             Err(WindowCommandError::Unsupported(Unsupported::new(
@@ -226,6 +228,79 @@ fn the_last_revision_refuses_instead_of_wrapping() {
     assert_eq!(unchanged.revision, WindowRevision::LAST);
 }
 
+fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
+    WindowMetrics::new(Size::new(width, height), scale).expect("a drawable area")
+}
+
+/// Every fact the snapshot holds is a difference the revision moves for.
+fn each_window_fact_advances_the_revision() {
+    let mut honours_title = WindowCapabilities::NONE;
+    honours_title.sets_title = Availability::Native;
+    let facts: [(&str, WindowState); 8] = [
+        ("focus", base_state().with_focused(true)),
+        ("visibility", base_state().with_visible(false)),
+        ("hover", base_state().with_hovered(true)),
+        (
+            "appearance",
+            base_state().with_appearance(WindowAppearance::Dark),
+        ),
+        (
+            "safe area",
+            base_state().with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0)),
+        ),
+        (
+            "execution",
+            base_state().with_execution(WindowExecutionState::Suspended),
+        ),
+        (
+            "metrics",
+            base_state().with_metrics(Some(metrics(1568, 1122, 2.0))),
+        ),
+        (
+            "capabilities",
+            base_state().with_capabilities(honours_title),
+        ),
+    ];
+    for (fact, sample) in facts {
+        let next = base_state()
+            .successor(sample.clone())
+            .expect("a change publishes");
+        assert_eq!(next.revision.get(), 1, "{fact}");
+        assert_eq!(
+            next.successor(sample).expect("equal").revision.get(),
+            1,
+            "{fact}: the same report again publishes nothing"
+        );
+    }
+}
+
+/// A report that is not a drawable area keeps the metrics before it, and
+/// publishes nothing when nothing else changed.
+fn a_report_that_is_not_drawable_keeps_the_metrics() {
+    let drawn = base_state()
+        .successor(base_state().with_metrics(Some(metrics(800, 600, 1.0))))
+        .expect("first metrics");
+    assert_eq!(drawn.revision.get(), 1);
+    let minimized = drawn
+        .successor(base_state().with_metrics(None))
+        .expect("nothing to publish");
+    assert_eq!(minimized, drawn, "no revision for an empty report");
+    let with_mode = drawn
+        .successor(
+            base_state()
+                .with_metrics(None)
+                .with_mode(WindowMode::Minimized),
+        )
+        .expect("the mode changes");
+    assert_eq!(with_mode.revision.get(), 2);
+    assert_eq!(with_mode.metrics, Some(metrics(800, 600, 1.0)));
+    assert_eq!(
+        WindowState::new(WindowGeometry::new(None, size(0.0, 0.0)), size(0.0, 0.0)).metrics,
+        None,
+        "nothing drawable reported yet"
+    );
+}
+
 #[test]
 fn window_command_validate() {
     crate::run_table(
@@ -257,8 +332,8 @@ fn window_command_validate() {
                 commands_without_numbers_are_always_valid,
             ),
             (
-                "admit_refuses_exactly_when_the_capability_is_false",
-                admit_refuses_exactly_when_the_capability_is_false,
+                "admit_refuses_exactly_when_the_capability_is_unavailable",
+                admit_refuses_exactly_when_the_capability_is_unavailable,
             ),
             (
                 "restoring_normal_needs_no_capability",
@@ -283,6 +358,14 @@ fn window_command_validate() {
             (
                 "the_last_revision_refuses_instead_of_wrapping",
                 the_last_revision_refuses_instead_of_wrapping,
+            ),
+            (
+                "each_window_fact_advances_the_revision",
+                each_window_fact_advances_the_revision,
+            ),
+            (
+                "a_report_that_is_not_drawable_keeps_the_metrics",
+                a_report_that_is_not_drawable_keeps_the_metrics,
             ),
         ],
     );

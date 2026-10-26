@@ -6,24 +6,29 @@
 //!
 //! [`WindowState`] describes what the operating system reports about a window,
 //! never what code asked for: a size the OS clamped is the clamped size, and a
-//! maximize the OS refused leaves the mode where it was. A change publishes a
-//! new snapshot with a higher [`WindowRevision`] and one payload-free
-//! `on_state_changed` notification; a sample equal to the published one keeps
-//! the revision ([`WindowState::successor`]). The revision never wraps: the
-//! last one is reached once, then the snapshot refuses further change.
+//! maximize the OS refused leaves the mode where it was. It holds every fact of
+//! the window (ADR-0254 §1): geometry and mode, the drawable metrics and scale,
+//! appearance, display, safe area, execution state, focus, visibility, hover
+//! and the [`WindowCapabilities`]. A change publishes a new snapshot with a
+//! higher [`WindowRevision`] and one payload-free `on_state_changed`
+//! notification; a sample equal to the published one keeps the revision
+//! ([`WindowState::successor`]). The revision never wraps: the last one is
+//! reached once, then the snapshot refuses further change.
 //!
 //! # Commands
 //!
 //! Every change is a [`WindowCommand`] applied through
 //! [`PlatformWindow::apply`](crate::PlatformWindow::apply). A window answers
 //! [`WindowCommandError::Unsupported`] exactly when the matching
-//! [`WindowCapabilities`] field is `false`, so a caller can ask up front and is
-//! never told "done" for a no-op. An accepted command is a request: its
-//! outcome is visible only in the next snapshot.
+//! [`WindowCapabilities`] field is [`Availability::Unavailable`], so a caller
+//! can ask up front and is never told "done" for a no-op. An accepted command
+//! is a request: its outcome is visible only in the next snapshot.
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 
-use crate::{DisplayId, Unsupported, UnsupportedReason};
+use crate::{
+    Availability, DisplayId, Unsupported, UnsupportedReason, WindowAppearance, WindowExecutionState,
+};
 
 /// The monotone version of a [`WindowState`]. Never wraps.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -144,13 +149,39 @@ pub struct WindowState {
     pub resizable: bool,
     /// Whether the window has its frame and title bar.
     pub decorated: bool,
-    /// The display the window is on, named by the display snapshot's identity.
+    /// The display the window is on, named by the display snapshot's identity
+    /// (ADR-0236); `None` when the platform cannot tell, which a consumer reads
+    /// as an unknown display, never as the primary one.
     pub display: Option<DisplayId>,
+    /// The drawable area in device pixels and its ratio to logical pixels, as
+    /// the window last reported a drawable one; `None` until it has. A report
+    /// that is not a drawable area (a minimized window's zero size, a scale
+    /// that is not finite and positive) is never published:
+    /// [`successor`](Self::successor) keeps the metrics before it.
+    pub metrics: Option<WindowMetrics>,
+    /// The light/dark appearance the system applies to the window: the user's
+    /// theme as applied to it, never one the backend chose for its own chrome
+    /// (ADR-0222). A backend that cannot observe the theme reports
+    /// [`WindowAppearance::Light`].
+    pub appearance: WindowAppearance,
+    /// Safe-area intrusions in logical pixels, relative to the content area;
+    /// zero where the platform reports none. Not keyboard occlusion.
+    pub safe_area: EdgeInsets,
+    /// Whether the platform lets the window run its UI, independent of focus,
+    /// visibility and the GPU surface (ADR-0035).
+    pub execution: WindowExecutionState,
+    /// Whether the pointer is over the window's content.
+    pub hovered: bool,
+    /// Which commands the window honours. A change in what it honours (a
+    /// compositor revising what it allows) is a state change like any other.
+    pub capabilities: WindowCapabilities,
 }
 
 impl WindowState {
-    /// A visible, unfocused, resizable, decorated window in normal mode at
-    /// revision zero, with no title, limits or display.
+    /// A visible, unfocused, unhovered, running, resizable, decorated window
+    /// in normal mode at revision zero, with no title, limits, display,
+    /// metrics or safe area, the light appearance, and capabilities that
+    /// honour nothing.
     #[must_use]
     pub fn new(outer: WindowGeometry, content_size: Size<f64>) -> Self {
         Self {
@@ -166,6 +197,12 @@ impl WindowState {
             resizable: true,
             decorated: true,
             display: None,
+            metrics: None,
+            appearance: WindowAppearance::Light,
+            safe_area: EdgeInsets::ZERO,
+            execution: WindowExecutionState::Running,
+            hovered: false,
+            capabilities: WindowCapabilities::NONE,
         }
     }
 
@@ -232,16 +269,64 @@ impl WindowState {
         self
     }
 
+    /// Set the drawable metrics; `None` for a report that is not a drawable
+    /// area, which [`successor`](Self::successor) does not publish.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Option<WindowMetrics>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// Set the appearance the system applies to the window.
+    #[must_use]
+    pub fn with_appearance(mut self, appearance: WindowAppearance) -> Self {
+        self.appearance = appearance;
+        self
+    }
+
+    /// Set the safe-area insets.
+    #[must_use]
+    pub fn with_safe_area(mut self, safe_area: EdgeInsets) -> Self {
+        self.safe_area = safe_area;
+        self
+    }
+
+    /// Set the execution state.
+    #[must_use]
+    pub fn with_execution(mut self, execution: WindowExecutionState) -> Self {
+        self.execution = execution;
+        self
+    }
+
+    /// Set whether the pointer is over the window.
+    #[must_use]
+    pub fn with_hovered(mut self, hovered: bool) -> Self {
+        self.hovered = hovered;
+        self
+    }
+
+    /// Set which commands the window honours.
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: WindowCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// The snapshot that follows this one with `sample`: this very value when
     /// `sample` differs from it in nothing but the revision, otherwise
     /// `sample` at the next revision. The revision `sample` carries is
-    /// ignored.
+    /// ignored, and a sample without [`metrics`](Self::metrics) (the window
+    /// reported no drawable area) keeps this snapshot's: a report that is not
+    /// a drawable area is never published.
     ///
     /// # Errors
     /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
     /// at the last revision. The revision never wraps.
     pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
+        if sample.metrics.is_none() {
+            sample.metrics = self.metrics;
+        }
         if sample == *self {
             return Ok(sample);
         }
@@ -250,98 +335,101 @@ impl WindowState {
     }
 }
 
-/// Which commands a window honours.
+/// Which commands a window honours, and how.
 ///
-/// A backend reports exactly what it does today: a capability is `true` only
-/// when [`apply`](crate::PlatformWindow::apply) carries the command out, and
-/// `false` exactly when it answers [`WindowCommandError::Unsupported`]. Fields
-/// are public so a backend can start from [`NONE`](Self::NONE) or
-/// [`ALL`](Self::ALL) and set the difference.
+/// A backend reports exactly what it does today. Each field is an
+/// [`Availability`]: [`Native`](Availability::Native) when the window system
+/// carries the command out (or makes the report) itself,
+/// [`Emulated`](Availability::Emulated) when the backend builds it from what
+/// the window system does provide (a fullscreen made of a borderless window
+/// sized to its monitor), and [`Unavailable`](Availability::Unavailable)
+/// exactly when [`apply`](crate::PlatformWindow::apply) answers
+/// [`WindowCommandError::Unsupported`]; a boolean could not say "only
+/// approximately". Fields are public so a backend can start from
+/// [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set the difference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "one independent yes/no per command and observation; a bit mask would hide the names"
-)]
 pub struct WindowCapabilities {
     /// [`WindowCommand::SetTitle`].
-    pub sets_title: bool,
+    pub sets_title: Availability,
     /// [`WindowCommand::SetPosition`].
-    pub sets_position: bool,
+    pub sets_position: Availability,
     /// [`WindowCommand::SetSize`].
-    pub sets_size: bool,
+    pub sets_size: Availability,
     /// [`WindowCommand::SetConstraints`].
-    pub sets_constraints: bool,
+    pub sets_constraints: Availability,
     /// [`WindowCommand::SetResizable`].
-    pub sets_resizable: bool,
+    pub sets_resizable: Availability,
     /// [`WindowCommand::SetDecorated`].
-    pub sets_decorated: bool,
+    pub sets_decorated: Availability,
     /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
-    pub minimizes: bool,
+    pub minimizes: Availability,
     /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
-    pub maximizes: bool,
+    pub maximizes: Availability,
     /// [`WindowMode::Fullscreen`] through [`WindowCommand::SetMode`].
-    pub enters_fullscreen: bool,
+    pub enters_fullscreen: Availability,
     /// [`WindowCommand::Hide`].
-    pub hides: bool,
+    pub hides: Availability,
     /// [`WindowCommand::Show`].
-    pub shows: bool,
+    pub shows: Availability,
     /// [`WindowCommand::Activate`]: bring the window to the front and request
     /// focus.
-    pub activates: bool,
+    pub activates: Availability,
     /// The snapshot's [`WindowGeometry::position`] is reported.
-    pub observes_position: bool,
+    pub observes_position: Availability,
     /// [`WindowMode::Minimized`] is ever published.
-    pub observes_minimized: bool,
+    pub observes_minimized: Availability,
     /// A saved position can be applied again when the window opens.
-    pub places_at_open: bool,
+    pub places_at_open: Availability,
 }
 
 impl WindowCapabilities {
     /// A window that honours no command and observes nothing.
     pub const NONE: Self = Self {
-        sets_title: false,
-        sets_position: false,
-        sets_size: false,
-        sets_constraints: false,
-        sets_resizable: false,
-        sets_decorated: false,
-        minimizes: false,
-        maximizes: false,
-        enters_fullscreen: false,
-        hides: false,
-        shows: false,
-        activates: false,
-        observes_position: false,
-        observes_minimized: false,
-        places_at_open: false,
+        sets_title: Availability::Unavailable,
+        sets_position: Availability::Unavailable,
+        sets_size: Availability::Unavailable,
+        sets_constraints: Availability::Unavailable,
+        sets_resizable: Availability::Unavailable,
+        sets_decorated: Availability::Unavailable,
+        minimizes: Availability::Unavailable,
+        maximizes: Availability::Unavailable,
+        enters_fullscreen: Availability::Unavailable,
+        hides: Availability::Unavailable,
+        shows: Availability::Unavailable,
+        activates: Availability::Unavailable,
+        observes_position: Availability::Unavailable,
+        observes_minimized: Availability::Unavailable,
+        places_at_open: Availability::Unavailable,
     };
 
-    /// A window that honours every command and observes everything.
+    /// A window whose window system honours every command and reports
+    /// everything itself.
     pub const ALL: Self = Self {
-        sets_title: true,
-        sets_position: true,
-        sets_size: true,
-        sets_constraints: true,
-        sets_resizable: true,
-        sets_decorated: true,
-        minimizes: true,
-        maximizes: true,
-        enters_fullscreen: true,
-        hides: true,
-        shows: true,
-        activates: true,
-        observes_position: true,
-        observes_minimized: true,
-        places_at_open: true,
+        sets_title: Availability::Native,
+        sets_position: Availability::Native,
+        sets_size: Availability::Native,
+        sets_constraints: Availability::Native,
+        sets_resizable: Availability::Native,
+        sets_decorated: Availability::Native,
+        minimizes: Availability::Native,
+        maximizes: Availability::Native,
+        enters_fullscreen: Availability::Native,
+        hides: Availability::Native,
+        shows: Availability::Native,
+        activates: Availability::Native,
+        observes_position: Availability::Native,
+        observes_minimized: Availability::Native,
+        places_at_open: Availability::Native,
     };
 
-    /// Whether `command` is one this window honours.
+    /// How this window honours `command`.
     ///
-    /// [`WindowMode::Normal`] is always honoured: asking a window for the
-    /// mode every window has is never a no-op that pretends.
+    /// [`WindowMode::Normal`] is always [`Native`](Availability::Native):
+    /// asking a window for the mode every window has is never a no-op that
+    /// pretends.
     #[must_use]
-    pub const fn permits(&self, command: &WindowCommand) -> bool {
+    pub const fn availability(&self, command: &WindowCommand) -> Availability {
         match command {
             WindowCommand::SetTitle(_) => self.sets_title,
             WindowCommand::SetPosition(_) => self.sets_position,
@@ -352,11 +440,17 @@ impl WindowCapabilities {
             WindowCommand::SetMode(WindowMode::Minimized) => self.minimizes,
             WindowCommand::SetMode(WindowMode::Maximized) => self.maximizes,
             WindowCommand::SetMode(WindowMode::Fullscreen) => self.enters_fullscreen,
-            WindowCommand::SetMode(WindowMode::Normal) => true,
+            WindowCommand::SetMode(WindowMode::Normal) => Availability::Native,
             WindowCommand::Hide => self.hides,
             WindowCommand::Show => self.shows,
             WindowCommand::Activate => self.activates,
         }
+    }
+
+    /// Whether this window honours `command` at all, natively or emulated.
+    #[must_use]
+    pub const fn permits(&self, command: &WindowCommand) -> bool {
+        self.availability(command).is_available()
     }
 }
 
@@ -430,8 +524,9 @@ impl WindowCommand {
     ///
     /// # Errors
     /// What [`validate`](Self::validate) refuses, or
-    /// [`WindowCommandError::Unsupported`] when `capabilities` do not permit
-    /// the command: the window's platform does not take it
+    /// [`WindowCommandError::Unsupported`] when the command's capability is
+    /// [`Availability::Unavailable`]
+    /// in `capabilities`: the window's platform does not take it
     /// ([`UnsupportedReason::NotOnThisPlatform`]).
     pub fn admit(&self, capabilities: &WindowCapabilities) -> Result<(), WindowCommandError> {
         self.validate()?;
@@ -451,7 +546,8 @@ fn positive_size(size: Size<f64>) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum WindowCommandError {
-    /// This window does not honour the command; its capability is `false`.
+    /// This window does not honour the command; its capability is
+    /// [`Availability::Unavailable`].
     #[error("the window does not take this command: {0}")]
     Unsupported(#[from] Unsupported),
     /// The command's numbers cannot describe a window.

@@ -18,27 +18,29 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use flui_platform::{
-    DispatchEventResult, SizeConstraints, WindowCommand, WindowCommandError, WindowGeometry,
-    WindowMode, WindowOptions, WindowReveal, WindowState,
+    DispatchEventResult, PlatformWindow, SizeConstraints, WindowCommand, WindowCommandError,
+    WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
+use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, RECT, WPARAM},
     Graphics::{
-        Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute},
+        Dwm::{DWMWA_CLOAK, DWMWA_CLOAKED, DwmGetWindowAttribute, DwmSetWindowAttribute},
         Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
     },
     UI::{
-        Input::KeyboardAndMouse::{VK_ESCAPE, VK_F11},
+        HiDpi::GetDpiForWindow,
+        Input::KeyboardAndMouse::{GetFocus, VK_ESCAPE, VK_F11, VK_RETURN, VK_RIGHT},
         WindowsAndMessaging::{
-            DispatchMessageW, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, IsIconic,
+            DispatchMessageW, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowRect, IsIconic,
             IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SC_MOVE,
-            SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SendMessageW,
-            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-            WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
-            WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+            SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+            SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+            TranslateMessage, WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE,
+            WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -1061,6 +1063,158 @@ fn deadlines_are_delivered_while_the_window_is_moved() {
     );
 }
 
+// --- the snapshot against what Win32 says ----------------------------------
+
+/// What Win32 says of the window, read with its own queries.
+fn win32_readback(hwnd: HWND) -> Readback {
+    let mut client = RECT::default();
+    let mut cloaked = 0_u32;
+    // SAFETY: plain queries of the live window on its creating thread; the
+    // out-parameters are stack locals of the sizes the calls write.
+    let (have_client, dpi, focus, shown, cloak_read) = unsafe {
+        (
+            GetClientRect(hwnd, &raw mut client).is_ok(),
+            GetDpiForWindow(hwnd),
+            GetFocus(),
+            IsWindowVisible(hwnd).as_bool(),
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&raw mut cloaked).cast(),
+                std::mem::size_of::<u32>() as u32,
+            )
+            .is_ok(),
+        )
+    };
+    Readback {
+        metrics: have_client
+            .then(|| {
+                WindowMetrics::new(
+                    Size::new(client.right - client.left, client.bottom - client.top),
+                    f64::from(dpi) / 96.0,
+                )
+                .ok()
+            })
+            .flatten(),
+        focused: Some(focus == hwnd),
+        visible: Some(shown && !(cloak_read && cloaked != 0)),
+    }
+}
+
+/// A Win32 window for the conformance checks of `flui-testing`.
+struct Win32Fixture {
+    _platform: WindowsPlatform,
+    window: Arc<dyn HostWindow>,
+    hwnd: HWND,
+}
+
+impl WindowFixture for Win32Fixture {
+    fn window(&self) -> Arc<dyn PlatformWindow> {
+        Arc::clone(&self.window) as Arc<dyn PlatformWindow>
+    }
+
+    fn readback(&self) -> Readback {
+        win32_readback(self.hwnd)
+    }
+
+    fn settle(&mut self) {
+        settle();
+    }
+
+    fn close(&mut self) {
+        self.window.close();
+        settle();
+    }
+}
+
+fn the_win32_window_conforms() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let hwnd = hwnd_of(&window);
+    window_conformance::assert_conforms(&mut Win32Fixture {
+        _platform: platform,
+        window,
+        hwnd,
+    });
+}
+
+/// A live resize runs Win32's modal sizing loop: each `WM_SIZE` of it
+/// publishes the snapshot, and the snapshot it announces is the size and
+/// scale Win32 reports at that step, before the loop returns.
+fn a_live_resize_publishes_inside_its_modal_loop() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let hwnd = hwnd_of(&window);
+    let before = window.state().metrics.expect("a shown window is drawable");
+    let steps = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&steps);
+    let weak = Arc::downgrade(&window);
+    let address = hwnd.0 as isize;
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let hwnd = HWND(address as *mut std::ffi::c_void);
+        let published = window.state().metrics;
+        log.lock()
+            .expect("log")
+            .push((published, win32_readback(hwnd).metrics));
+    }));
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&done);
+    let sizer = std::thread::spawn(move || {
+        // The first arrow picks the right edge, the rest move it; Enter keeps
+        // the size.
+        let keys = std::iter::repeat_n(VK_RIGHT, 6).chain([VK_RETURN]);
+        for key in keys {
+            std::thread::sleep(Duration::from_millis(60));
+            // SAFETY: a post to a window of this process; one that is gone
+            // fails the call.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(address as *mut _)),
+                    WM_KEYDOWN,
+                    WPARAM(usize::from(key.0)),
+                    LPARAM(0x0001_0001),
+                )
+            };
+        }
+        while !finished.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: as above.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(address as *mut _)),
+                    WM_KEYDOWN,
+                    WPARAM(usize::from(VK_ESCAPE.0)),
+                    LPARAM(0x0001_0001),
+                )
+            };
+        }
+    });
+    // The keyboard sizing loop, modal until the keys above end it.
+    send(&window, WM_SYSCOMMAND, SC_SIZE as usize, 0);
+    let inside = steps.lock().expect("log").clone();
+    done.store(true, Ordering::SeqCst);
+    sizer.join().expect("the sizing thread");
+    assert!(
+        !inside.is_empty(),
+        "no snapshot was published inside the sizing loop"
+    );
+    for (published, reported) in &inside {
+        assert_eq!(
+            published, reported,
+            "a step's snapshot is what Win32 reported"
+        );
+    }
+    let grown = window.state().metrics.expect("drawable");
+    assert!(
+        grown.physical().width > before.physical().width,
+        "the loop grew the window: {before:?} to {grown:?}"
+    );
+}
+
 fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     let platform = platform();
     let window = open(&platform, options());
@@ -1308,6 +1462,11 @@ fn native_window_commands() {
         (
             "a_locked_session_or_a_cloak_hides_a_shown_window",
             a_locked_session_or_a_cloak_hides_a_shown_window,
+        ),
+        ("the_win32_window_conforms", the_win32_window_conforms),
+        (
+            "a_live_resize_publishes_inside_its_modal_loop",
+            a_live_resize_publishes_inside_its_modal_loop,
         ),
     ];
     crate::run_table("native_window_commands", cases);

@@ -782,10 +782,28 @@ trait depends on `flui-platform` instead.
 - **A window publishes a state snapshot and takes commands (ADR-0237).** There
   is one window trait. `PlatformWindow::state` returns an immutable
   `WindowState` with a revision, `apply` takes a `WindowCommand`, and
-  `capabilities` says which commands the window honours: `apply` answers
-  `Unsupported` exactly when the matching capability is `false`, and the
-  capabilities of each backend are what its `apply` carries out today. The
-  snapshot describes what the OS reported, not what a command asked for.
+  `capabilities` says which commands the window honours, each as an
+  `Availability`: `apply` answers `Unsupported` exactly when the matching
+  capability is `Unavailable`, `Emulated` marks what the host builds itself
+  (the Win32 borderless fullscreen), and the capabilities of each backend are
+  what its `apply` carries out today. The snapshot describes what the OS
+  reported, not what a command asked for, and holds every fact of the window
+  (ADR-0254 §1): the drawable `WindowMetrics` (a report that is not a drawable
+  area keeps the last), appearance, display, safe area, execution state,
+  focus, visibility, hover and the capabilities.
+- **Every fact callback is preceded by the snapshot that holds the fact.**
+  Each host sets a `StatePublisher` on the window's `WindowCallbacks` when the
+  window opens (over a weak reference to the window); every fact dispatch
+  (resize and scale, focus, visibility, hover, appearance, display, safe area,
+  execution state) runs it first, so the snapshot is read again, published
+  and `on_state_changed` queued ahead of the fact's own callback, in the OS
+  callback that reported it (each `WM_SIZE` of a Win32 live resize inside its
+  modal loop). A fact another feature reports reaches the snapshot the same
+  way: the hover is what the last `dispatch_hover_status_change` said
+  (`WindowCallbacks::hovered`), whether Win32 or web input, AppKit's tracking
+  area or winit's cursor events reported it. An observation committed at its
+  delivery point (the Web's focus and visibility) is published right after
+  its commit.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
@@ -795,8 +813,8 @@ trait depends on `flui-platform` instead.
   Web from the layout, focus and visibility observers; the headless window
   keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
   or decline a maximize) and publishes after each command or `simulate_*`
-  call. The iOS window rereads its metrics on each `state` call and does not
-  yet raise `on_state_changed` from its view's metric updates.
+  call. The iOS window rereads its metrics and lifecycle on each `state` call
+  and publishes from its view's metric updates and each lifecycle step.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
