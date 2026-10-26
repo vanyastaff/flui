@@ -1185,10 +1185,6 @@ impl PlatformWindow for MockWindow {
     // ==================== Callbacks ====================
 
     crate::owner::handlers::impl_window_callback_setters!(callbacks);
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl crate::host_window::CoreHostWindow for MockWindow {}

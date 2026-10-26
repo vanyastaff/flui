@@ -543,13 +543,13 @@ mod tests {
     use flui_platform::pointer::{PenTool, PointerKind};
 
     use crate::WindowsPlatform;
-    use crate::WindowsWindow;
     use crate::input::assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime,
     };
     use crate::input::windows::testing::decode_into;
     use crate::owner::windows::{WindowRef, window_inputs};
     use crate::platform::Platform as _;
+    use crate::window::windows::WindowsWindow;
     use flui_platform::HapticFeedback;
     use flui_platform::WindowOptions;
 

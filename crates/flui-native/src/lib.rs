@@ -141,13 +141,14 @@
 //! - `default` (`desktop`): the native desktop backend for the target OS. It
 //!   does not include winit.
 //! - `winit-backend`: the winit backend, the Linux windowing path today. It
-//!   brings `wayland` and `x11`.
+//!   brings `wayland` and `x11`, and on Linux the AT-SPI accessibility bridge.
 //! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
 //!   outputs and their refresh rates from the compositor. On other targets they
 //!   add nothing.
-//! - `a11y`: the per-OS accessibility bridges.
 //!
-//! The headless testing platform needs no feature.
+//! Accessibility has no feature: Win32, AppKit and Linux winit windows always
+//! hand out their operating system's AccessKit adapter. The headless testing
+//! platform needs no feature.
 //!
 //! # Input capabilities
 //!
@@ -178,7 +179,6 @@
 
 pub(crate) mod accessibility;
 pub(crate) mod clipboard;
-pub use window::config;
 mod display;
 pub(crate) mod drag;
 pub mod error;
@@ -220,10 +220,6 @@ pub use text::sizing::{
 mod version;
 mod window;
 
-// Re-export configuration types
-// ==================== Platform Detection ====================
-
-pub use config::{FullscreenMonitor, WindowConfiguration};
 // The acknowledgement a host waits for before it publishes a window it
 // attached (a UIKit scene's), which the composition root completes.
 pub use window::installation::{
@@ -243,9 +239,6 @@ pub use hosts::IOSPlatform;
 #[cfg(target_os = "macos")]
 pub use hosts::MacOSPlatform;
 pub use platform::HostPlatform;
-// Mobile platforms
-#[cfg(target_os = "android")]
-pub use hosts::AndroidPlatform;
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use hosts::WebPlatform;
@@ -265,7 +258,6 @@ pub use display::headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
 };
 pub use drag::headless::HeadlessDragAndDrop;
-pub use haptics::headless::FakeHaptics;
 pub use input::headless::HeadlessInputDevices;
 pub use lifecycle::headless::HeadlessHostEvents;
 pub use owner::headless::{
@@ -273,30 +265,25 @@ pub use owner::headless::{
 };
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
-pub use window::headless::{FakeSystemChrome, HeadlessWindowPolicy, MockWindow, UnknownDisplay};
-// Each native host's window and the extensions an application reaches it by.
-#[cfg(target_os = "ios")]
-pub use owner::apple::ios::{IOSExecutor, IOSSceneAttachmentId, IOSSceneSessionId};
-#[cfg(target_os = "ios")]
-pub use window::apple::ios::{IOSSceneEvent, IOSWindow};
-#[cfg(target_os = "macos")]
-pub use window::apple::liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
+pub use window::headless::{HeadlessWindowPolicy, MockWindow, UnknownDisplay};
+// The extensions an application reaches a native host's window by: each is
+// implemented for `dyn HostWindow`, and its one method answers `None` for a
+// window of another host or a typed view of the OS's window (ADR-0151 §8). The
+// windows themselves, and the OS types they hold, are not public; a raw handle
+// leaves through `raw-window-handle`.
 #[cfg(target_os = "macos")]
 pub use window::apple::macos::{
-    MacOSCollectionBehavior, MacOSWindow, MacOSWindowExt, MacOSWindowLevel, TilePosition,
-    TilingConfiguration, TilingError, TilingLayout, TilingState,
+    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
 };
 #[cfg(windows)]
 pub use window::windows::backdrop::{
-    TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
+    Win32Window, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
 };
-#[cfg(windows)]
-pub use window::windows::{WindowsWindow, win32};
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub use window::winit::WinitWindow;
+// What a UIKit scene tells the composition root.
+#[cfg(target_os = "ios")]
+pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
+#[cfg(target_os = "ios")]
+pub use window::apple::ios::IOSSceneEvent;
 // The application's handler set and a window's callbacks (`owner/handlers.rs`).
 pub use owner::handlers::{InputCallback, InputWake, WindowCallbacks};
 // Re-export task types
@@ -336,7 +323,8 @@ pub use owner::{
 ///      - `cfg(target_os = "macos")` → `MacOSPlatform`
 ///      - `cfg(target_os = "linux")` → `WinitPlatform` (the `winit-backend`
 ///        feature)
-///      - `cfg(target_os = "android")` → `AndroidPlatform`
+///      - `cfg(target_os = "android")` → an error: the Android host starts
+///        over the Activity `android_main` is handed (`android_platform`)
 ///      - `cfg(target_os = "ios")` → `IOSPlatform`
 ///      - `cfg(target_arch = "wasm32")` → `WebPlatform`
 ///    - Conditional guards prevent multiple platforms being compiled
@@ -358,8 +346,8 @@ pub use owner::{
 ///   enabled (the native Wayland and X11 host replaces it, ADR-0151
 ///   section 11); otherwise returns an error. `flui-app` enables
 ///   `winit-backend` for Linux builds.
-/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
-///   available)
+/// - **Android**: Returns an error: the host needs the Activity, which the
+///   system hands only to `android_main`; `android_platform(app)` starts it
 /// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
 ///   input, clipboard, displays, a `CADisplayLink` frame source, and the
 ///   background/foreground lifecycle (verified on a real simulator)
@@ -382,7 +370,8 @@ pub use owner::{
 /// Returns [`PlatformError::Init`] if:
 /// - Platform initialization fails (e.g., COM failure on Windows)
 /// - Platform is not supported (should not happen with cfg guards)
-/// - Platform stub is called (Android, Web)
+/// - It is called on Android, whose host starts over the Activity
+///   (`android_platform`)
 /// - Linux is reached without the `winit-backend` feature enabled
 ///
 /// # Examples
@@ -402,17 +391,20 @@ pub use owner::{
 ///
 /// # Platform-Specific Code
 ///
-/// For platform-specific features, use cfg guards:
+/// What one OS offers beyond the window contract is an extension of
+/// [`HostWindow`], which answers `None` for a window of another host:
 ///
 /// ```rust,ignore
 /// let platform = current_platform()?;
+/// let window = platform.open_window(WindowOptions::default())?;
 ///
 /// #[cfg(windows)]
 /// {
-///     let windows_platform = platform.as_any()
-///         .downcast_ref::<WindowsPlatform>()
-///         .unwrap();
-///     // Use Windows-specific features
+///     use flui_native::{WindowsBackdrop, WindowsWindowExt};
+///     // A Win32 window's view; `None` under `FLUI_HEADLESS`.
+///     if let Some(win32) = window.win32() {
+///         win32.set_backdrop(WindowsBackdrop::Mica);
+///     }
 /// }
 /// ```
 pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
@@ -458,11 +450,11 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         not(any(windows, target_os = "macos", target_os = "linux"))
     ))]
     {
-        // On Android, use AndroidPlatform::new(app) directly from android_main().
-        // current_platform() cannot be used because AndroidApp is required.
+        // The Android host needs the Activity, which the system hands only to
+        // `android_main`: `android_platform(app)` starts it.
         Err(PlatformError::Init {
-            message: "On Android, use AndroidPlatform::new(app) from android_main() instead of \
-                      current_platform()"
+            message: "On Android, start the platform with `flui_native::android_platform(app)` \
+                      from android_main() instead of current_platform()"
                 .to_string(),
         })
     }
@@ -525,4 +517,25 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 /// ```
 pub fn headless_platform() -> Box<dyn Platform> {
     Box::new(HeadlessPlatform::new())
+}
+
+/// The Android platform over the Activity the system handed `android_main`.
+///
+/// The one public item of the core host that names an `android-activity`
+/// type: the system hands the Activity only to the application's
+/// `android_main`, and the composition root passes it on here, as the
+/// facade's `run_app_android` takes it (ADR-0151 §8). Nothing the platform
+/// hands back names it.
+///
+/// ```rust,ignore
+/// #[unsafe(no_mangle)]
+/// fn android_main(app: android_activity::AndroidApp) {
+///     let platform = flui_native::android_platform(app);
+///     let _ = platform.run(Box::new(|_owner| Ok(())));
+/// }
+/// ```
+#[cfg(target_os = "android")]
+#[must_use]
+pub fn android_platform(app: android_activity::AndroidApp) -> Box<dyn Platform> {
+    Box::new(HostPlatform::<hosts::android::Android>::new(app))
 }

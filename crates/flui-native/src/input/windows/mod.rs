@@ -1045,7 +1045,7 @@ mod raw {
 
     use flui_platform::{
         EventTime, Modifiers as KeyboardModifiers,
-        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, NamedKey},
         pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
     };
     use windows::Win32::{
@@ -2049,7 +2049,7 @@ mod raw {
                 Code::Unidentified,
                 EventTime::from_nanos(time),
             )
-            .with_location(Location::Standard)
+            .with_location(keys::CHARACTER_WITHOUT_A_KEY)
             .with_modifiers(modifiers),
         )
     }

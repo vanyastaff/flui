@@ -269,6 +269,33 @@ fn non_finite_rate_is_unknown() {
     }
 }
 
+/// A measured interval is a period as it stands, and one that describes no
+/// cadence (not finite, not positive, outside 1 ms to 1 s) is unknown.
+fn measured_interval_is_the_period() {
+    for (seconds, nanos) in [
+        (1.0 / 60.0, Some(16_666_666)),
+        (0.001, Some(1_000_000)),
+        (1.0, Some(1_000_000_000)),
+        (0.0, None),
+        (-1.0 / 60.0, None),
+        (0.0002, None),
+        (2.0, None),
+        (f64::NAN, None),
+        (f64::INFINITY, None),
+        (f64::NEG_INFINITY, None),
+    ] {
+        let period = RefreshPeriod::from_secs_f64(seconds).ok();
+        match nanos {
+            Some(nanos) => assert!(
+                period.is_some_and(|period| period.get().abs_diff(Duration::from_nanos(nanos))
+                    <= Duration::from_nanos(1)),
+                "{seconds} s is {period:?}"
+            ),
+            None => assert_eq!(period, None, "{seconds} s"),
+        }
+    }
+}
+
 #[test]
 fn refresh_value_classification_table() {
     crate::run_table(
@@ -299,6 +326,10 @@ fn refresh_value_classification_table() {
             (
                 "non_finite_rate_is_unknown",
                 non_finite_rate_is_unknown as fn(),
+            ),
+            (
+                "measured_interval_is_the_period",
+                measured_interval_is_the_period as fn(),
             ),
         ],
     );

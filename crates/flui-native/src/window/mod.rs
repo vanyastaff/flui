@@ -1,10 +1,11 @@
 //! The window feature (ADR-0151 §10): what every host keeps of a window, and
 //! one file per platform.
 //!
-//! The model is what two or more platforms share: the published state and its
-//! staleness ([`state`]), the hidden-surface rules of the Win32 and AppKit
-//! windows (`visibility`), the window configuration a desktop host is built
-//! with ([`config`]) and the acknowledgement a host waits for before it
+//! The model is what two or more platforms share: the published state, its
+//! staleness and the mode decided from a window system's flags ([`state`]),
+//! the rule by which a window reports whether its surface is seen
+//! (`visibility`), the window configuration the Win32 and AppKit hosts are
+//! built with (`config`) and the acknowledgement a host waits for before it
 //! publishes a window it attached ([`installation`]). Each platform file
 //! implements the window position of its host's table, and its system chrome
 //! (the `Chrome` position) beside it.
@@ -13,10 +14,17 @@
 //! what it asks of the window feature, a platform file here implements it, and
 //! `hosts/<os>.rs` hands the loop the window feature's object.
 
-pub mod config;
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) mod config;
 pub(crate) mod installation;
 pub(crate) mod state;
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_arch = "wasm32",
+    all(target_os = "linux", feature = "winit-backend"),
+    test
+))]
 pub(crate) mod visibility;
 
 #[cfg(target_os = "android")]

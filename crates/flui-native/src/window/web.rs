@@ -27,6 +27,7 @@ use crate::{
     host, host::WindowAccessibility, host::WindowPositions, host_window::HostWindow,
     owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::signal::OwnerSignal,
     owner::web::WebLoop, text::TextInput, text::WindowTextInput, window::state::WindowStateCell,
+    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
@@ -419,11 +420,6 @@ impl WebWindow {
         }
     }
 
-    /// Get a reference to the underlying canvas element
-    pub fn canvas(&self) -> &web_sys::HtmlCanvasElement {
-        &self.canvas
-    }
-
     /// Get window callbacks for event dispatch
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
@@ -688,7 +684,7 @@ impl WebWindow {
                 .expect("BUG: window construction verified the canvas document"),
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
-            observed: Cell::new(self.state.lock().visible),
+            observed: Cell::new(ReportedVisibility::new(self.state.lock().visible)),
             accepting,
             publisher: self.publisher(),
         }
@@ -794,7 +790,7 @@ pub(crate) struct VisibilitySync {
     pub(crate) document: web_sys::Document,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
-    observed: Cell<bool>,
+    observed: Cell<ReportedVisibility>,
     accepting: Rc<Cell<bool>>,
     publisher: StatePublisher,
 }
@@ -803,9 +799,12 @@ impl VisibilitySync {
     pub(crate) fn sync(&self) {
         let visible = !self.document.hidden();
         // A host getter can synchronously retire this registration.
-        if !self.accepting.get() || self.observed.replace(visible) == visible {
+        if !self.accepting.get() {
             return;
         }
+        let Some(visible) = ReportedVisibility::report_in(&self.observed, visible) else {
+            return;
+        };
         let state = Arc::clone(&self.state);
         let cell = Arc::clone(&self.publisher.cell);
         self.callbacks
@@ -1352,10 +1351,6 @@ impl PlatformWindow for WebWindow {
         let raw = RawDisplayHandle::Web(WebDisplayHandle::new());
         // SAFETY: Web display handle is always valid
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

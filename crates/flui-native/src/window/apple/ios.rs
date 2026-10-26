@@ -20,7 +20,6 @@
 // crate's `unsafe` FFI islands, opted out at its module boundary.
 #![expect(unsafe_code)]
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{
@@ -56,6 +55,7 @@ use crate::owner::apple::ios::{
 };
 use crate::owner::call_point::install;
 use crate::owner::handlers::WindowCallbacks;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
@@ -139,96 +139,118 @@ define_class!(
     #[ivars = FluiViewIvars]
     struct FluiView;
 
+    // Every method runs its body in the panic boundary: a panic answers UIKit
+    // as if the event had been handled, rather than unwinding through it.
     impl FluiView {
         #[unsafe(method(traitCollectionDidChange:))]
         fn trait_collection_did_change(&self, previous: Option<&UITraitCollection>) {
-            self.pin_for_native_callback();
-            // SAFETY: UIView's implementation receives the borrowed old traits.
-            let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
-            crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
-            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            os_entry("traitCollectionDidChange:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                // SAFETY: UIView's implementation receives the borrowed old traits.
+                let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
+                crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+                crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            });
         }
 
         #[unsafe(method(didMoveToWindow))]
         fn did_move_to_window(&self) {
-            self.pin_for_native_callback();
-            // SAFETY: UIView declares this selector and the receiver is pinned.
-            let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
-            crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
-            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            os_entry("didMoveToWindow", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                // SAFETY: UIView declares this selector and the receiver is pinned.
+                let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
+                crate::owner::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+                crate::owner::panic_boundary::contain_owner_callback(|| self.sample_appearance());
+            });
         }
 
         #[unsafe(method(onPencilHover:))]
         fn on_pencil_hover(&self, recognizer: &UIHoverGestureRecognizer) {
-            self.pin_for_native_callback();
-            if self.window().is_none() { return; }
-            let events = self.ivars().input.borrow_mut().hover(recognizer, self);
-            for event in events {
-                if self.window().is_none() { break; }
-                self.callbacks().dispatch_input(event);
-            }
+            os_entry("onPencilHover:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                if self.window().is_none() { return; }
+                let events = self.ivars().input.borrow_mut().hover(recognizer, self);
+                for event in events {
+                    if self.window().is_none() { break; }
+                    self.callbacks().dispatch_input(event);
+                }
+            });
         }
 
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Down);
+            os_entry("touchesBegan:withEvent:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_touches(touches, TouchPhase::Down);
+            });
         }
 
         #[unsafe(method(touchesMoved:withEvent:))]
         fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Move);
+            os_entry("touchesMoved:withEvent:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_touches(touches, TouchPhase::Move);
+            });
         }
 
         #[unsafe(method(touchesEnded:withEvent:))]
         fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Up);
+            os_entry("touchesEnded:withEvent:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_touches(touches, TouchPhase::Up);
+            });
         }
 
         #[unsafe(method(touchesCancelled:withEvent:))]
         fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
-            self.pin_for_native_callback();
-            self.dispatch_touches(touches, TouchPhase::Cancel);
+            os_entry("touchesCancelled:withEvent:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                self.dispatch_touches(touches, TouchPhase::Cancel);
+            });
         }
 
         #[unsafe(method(layoutSubviews))]
         fn layout_subviews(&self) {
-            self.pin_for_native_callback();
-            // SAFETY: `super` is the `UIView` implementation of
-            // `layoutSubviews`; calling it is what a correct override does.
-            // The annotation pins the return type, which `msg_send!` cannot
-            // infer for a `void` super call.
-            let _: () = unsafe { msg_send![super(self), layoutSubviews] };
-            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            os_entry("layoutSubviews", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                // SAFETY: `super` is the `UIView` implementation of
+                // `layoutSubviews`; calling it is what a correct override does.
+                // The annotation pins the return type, which `msg_send!` cannot
+                // infer for a `void` super call.
+                let _: () = unsafe { msg_send![super(self), layoutSubviews] };
+                crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            });
         }
 
         #[unsafe(method(safeAreaInsetsDidChange))]
         fn safe_area_insets_did_change(&self) {
-            self.pin_for_native_callback();
-            // SAFETY: `super` resolves to the superclass named in the
-            // `#[unsafe(super(UIView))]` declaration above at compile time, so
-            // this runs UIKit's implementation rather than re-entering this
-            // override — which a plain `self` send would do without bound. The
-            // receiver is a live `&FluiView` because the pinning call above
-            // retains it first; the annotation pins the `void` return that
-            // `msg_send!` cannot infer. `UIView` gained this selector in
-            // iOS 11, and no lower deployment target is configured here.
-            let _: () = unsafe { msg_send![super(self), safeAreaInsetsDidChange] };
-            crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            os_entry("safeAreaInsetsDidChange", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                // SAFETY: `super` resolves to the superclass named in the
+                // `#[unsafe(super(UIView))]` declaration above at compile time, so
+                // this runs UIKit's implementation rather than re-entering this
+                // override — which a plain `self` send would do without bound. The
+                // receiver is a live `&FluiView` because the pinning call above
+                // retains it first; the annotation pins the `void` return that
+                // `msg_send!` cannot infer. `UIView` gained this selector in
+                // iOS 11, and no lower deployment target is configured here.
+                let _: () = unsafe { msg_send![super(self), safeAreaInsetsDidChange] };
+                crate::owner::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            });
         }
 
         /// The `CADisplayLink` target: one tick per refresh requests a frame.
         #[unsafe(method(onDisplayLink:))]
         fn on_display_link(&self, link: &CADisplayLink) {
-            self.pin_for_native_callback();
-            let current = self.ivars().display_link.borrow().as_ref()
-                .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
-            if current && !link.isPaused() {
-                self.observe_link_cadence(link);
-                self.callbacks().dispatch_request_frame();
-            }
+            os_entry("onDisplayLink:", (), AfterPanic::Answer(|()| ()), || {
+                self.pin_for_native_callback();
+                let current = self.ivars().display_link.borrow().as_ref()
+                    .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
+                if current && !link.isPaused() {
+                    self.observe_link_cadence(link);
+                    self.callbacks().dispatch_request_frame();
+                }
+            });
         }
     }
 
@@ -1338,10 +1360,6 @@ impl PlatformWindow for IOSWindow {
         published.state
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
@@ -1560,6 +1578,8 @@ pub(crate) mod status_bar {
 
     use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
+    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+
     use crate::owner::apple::ios::NativeOwner;
 
     /// No style delivered yet: UIKit's own default stands.
@@ -1611,15 +1631,25 @@ pub(crate) mod status_bar {
         #[ivars = FluiViewControllerIvars]
         pub(super) struct FluiViewController;
 
+        // A panic answers what a plain `UIViewController` would: the default
+        // style, and no deferred edges.
         impl FluiViewController {
             #[unsafe(method(preferredStatusBarStyle))]
             fn preferred_status_bar_style(&self) -> UIStatusBarStyle {
-                status_bar_style(self.ivars().style.load(Ordering::Acquire))
+                os_entry(
+                    "preferredStatusBarStyle",
+                    (), AfterPanic::Answer(|()| UIStatusBarStyle::Default),
+                    || status_bar_style(self.ivars().style.load(Ordering::Acquire)),
+                )
             }
 
             #[unsafe(method(preferredScreenEdgesDeferringSystemGestures))]
             fn preferred_screen_edges_deferring_system_gestures(&self) -> UIRectEdge {
-                self.ivars().deferred_edges.get()
+                os_entry(
+                    "preferredScreenEdgesDeferringSystemGestures",
+                    (), AfterPanic::Answer(|()| UIRectEdge::empty()),
+                    || self.ivars().deferred_edges.get(),
+                )
             }
         }
 
@@ -1718,9 +1748,16 @@ pub(crate) mod status_bar {
             }
             let status_bar = Arc::clone(&self.0);
             DispatchQueue::main().exec_async(move || {
-                let mtm =
-                    MainThreadMarker::new().expect("BUG: the main queue runs on the main thread");
-                crate::owner::panic_boundary::contain_owner_callback(|| status_bar.refresh(mtm));
+                os_entry(
+                    "the status bar's refresh",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    move || {
+                        let mtm = MainThreadMarker::new()
+                            .expect("BUG: the main queue runs on the main thread");
+                        status_bar.refresh(mtm);
+                    },
+                );
             });
         }
 

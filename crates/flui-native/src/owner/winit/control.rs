@@ -469,10 +469,6 @@ mod tests {
         fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
             None
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     fn winit_control_cross_thread_request_is_processed_on_the_owner() {

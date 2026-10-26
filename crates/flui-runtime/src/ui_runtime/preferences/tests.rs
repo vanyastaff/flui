@@ -91,10 +91,6 @@ impl PlatformWindow for Window {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
         let panic = self.panic_query.swap(false, Ordering::Relaxed);
@@ -360,9 +356,6 @@ impl PlatformWindow for HapticWindow {
         command: flui_platform::WindowCommand,
     ) -> Result<(), flui_platform::WindowCommandError> {
         self.inner.apply(command)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())

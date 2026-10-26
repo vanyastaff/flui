@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! android_main(AndroidApp)
-//!   -> AndroidPlatform::new(app)
+//!   -> flui_native::android_platform(app)
 //!   -> Platform::run()  [poll_events loop]
 //!     -> MainEvent::Start / Stop     -> visibility
 //!     -> MainEvent::Resume / Pause   -> execution state (frame gate)
@@ -61,14 +61,13 @@ use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowEx
 
 use parking_lot::Mutex;
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::android::java_view;
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
     HostDisplays,
 };
 use crate::owner::handlers::CallbackWindow;
-use crate::platform::HostPlatform;
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -221,7 +220,7 @@ pub(crate) trait ActivityWindow: CallbackWindow {
 /// position of its table reads.
 ///
 /// Wraps the `AndroidApp` provided by `android_main()`.
-/// [`AndroidPlatform`](crate::AndroidPlatform) is its platform.
+/// The platform over it is the one `android_platform` (the crate root) starts.
 pub struct AndroidLoop {
     pub(crate) app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -553,13 +552,6 @@ impl AndroidLoop {
         for event in held {
             callbacks.dispatch_input(event);
         }
-    }
-}
-
-impl<H: Host<Loop = AndroidLoop>> HostPlatform<H> {
-    /// Get the underlying `AndroidApp`
-    pub fn app(&self) -> &AndroidApp {
-        &self.owner().app
     }
 }
 

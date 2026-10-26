@@ -27,6 +27,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::call_point::{Called, Field, Once, call, retire},
     owner::handlers::PlatformHandlers,
+    owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
 };
 use flui_platform::PlatformWindow;
 
@@ -117,7 +118,7 @@ impl LoopControl {
         let blocked = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
         let epoch = self.terminate_gate.lock().announced(blocked);
         if let Some(epoch) = epoch {
-            self.after(ANNOUNCEMENT_LIFETIME, move |control| {
+            self.run_after(ANNOUNCEMENT_LIFETIME, move |control| {
                 if control.terminate_gate.lock().announcement_lapsed(epoch) {
                     control.ask_session_end(SessionEndPhase::Cancelled);
                 }
@@ -147,6 +148,14 @@ impl LoopControl {
         });
     }
 
+    /// Whether a session end is announced or its reply owed: a terminate
+    /// request whose handling panicked lets it go on.
+    fn session_ending(&self) -> bool {
+        self.terminate_gate
+            .try_lock()
+            .is_some_and(|gate| gate.session_ending())
+    }
+
     /// `applicationShouldTerminate:`. A quit nobody announced goes through the
     /// run loop's orderly stop and is cancelled here; a session end is answered
     /// at once, or after the application releases its holds.
@@ -158,11 +167,15 @@ impl LoopControl {
                 NSApplicationTerminateReply::TerminateCancel
             }
             Termination::Now => {
-                self.finish_session_end(Reply::AlreadyAnswered);
+                // The session ends whatever telling the application raised:
+                // contained apart, so a panic there cannot cancel the logout.
+                contain_os_entry("applicationShouldTerminate:", || {
+                    self.finish_session_end(Reply::AlreadyAnswered);
+                });
                 NSApplicationTerminateReply::TerminateNow
             }
             Termination::Later { epoch } => {
-                self.after(DEFERRAL_LIMIT, move |control| {
+                self.run_after(DEFERRAL_LIMIT, move |control| {
                     if control.terminate_gate.lock().deferral_ran_out(epoch) {
                         tracing::warn!("a session end waited the full limit for the application");
                         control.finish_session_end(Reply::ToAppKit);
@@ -175,14 +188,19 @@ impl LoopControl {
 
     /// Run `body` on the owner lane after `delay`, if the control is still
     /// alive.
-    fn after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
+    fn run_after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
         let weak = Arc::downgrade(self);
         owner_queue().exec_after(delay, move || {
-            cleanup_step(|| {
-                if let Some(control) = weak.upgrade() {
-                    body(&control);
-                }
-            });
+            os_entry(
+                "a deferred owner-lane task",
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
+                    if let Some(control) = weak.upgrade() {
+                        body(&control);
+                    }
+                },
+            );
         });
     }
 
@@ -497,35 +515,64 @@ define_class!(
     unsafe impl NSObjectProtocol for LoopDelegate {}
     // SAFETY: this delegate is retained for its entire installation on main.
     unsafe impl NSApplicationDelegate for LoopDelegate {
+        // FLUI owns window policy. Suppress AppKit's default untitled
+        // document creation, regardless of its visible-window classification,
+        // and after a panic too.
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_reopen(&self, _app: &NSApplication, _has_visible_windows: bool) -> bool {
-            cleanup_step(|| {
-                if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
-            });
-            // FLUI owns window policy. Suppress AppKit's default untitled
-            // document creation, regardless of its visible-window classification.
-            false
+            os_entry(
+                "applicationShouldHandleReopen:hasVisibleWindows:",
+                (), AfterPanic::Answer(|()| false),
+                || {
+                    if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
+                    false
+                },
+            )
         }
 
+        // An ordinary quit never runs user teardown inside the Objective-C
+        // callback: it queues the request and cancels this one. A session
+        // end is answered here, since the system waits for the answer. After
+        // a panic, a session end goes on and any other quit is cancelled
+        // (`reply_after_panic`).
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
-            // An ordinary quit never runs user teardown inside the Objective-C
-            // callback: it queues the request and cancels this one. A session
-            // end is answered here, since the system waits for the answer.
-            // Guard everything: Rust unwinding must not cross this ABI.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.ivars()
-                    .upgrade()
-                    .map(|control| control.terminate_requested())
-            }))
-            .unwrap_or_else(|payload| {
-                report_contained_panic(payload);
-                None
-            })
-            .unwrap_or(NSApplicationTerminateReply::TerminateCancel)
+            os_entry(
+                "applicationShouldTerminate:",
+                self,
+                AfterPanic::Answer(reply_after_panic),
+                || {
+                    self.ivars().upgrade().map_or(
+                        NSApplicationTerminateReply::TerminateCancel,
+                        |control| control.terminate_requested(),
+                    )
+                },
+            )
         }
     }
 );
+
+/// What a log of the delegate's entries shows: which object it is.
+impl std::fmt::Debug for LoopDelegate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoopDelegate").finish_non_exhaustive()
+    }
+}
+
+/// What `applicationShouldTerminate:` answers when its handling panicked: a
+/// session end goes on, since cancelling it holds the user's logout up; any
+/// other quit is cancelled, as an ordinary one is.
+fn reply_after_panic(delegate: &LoopDelegate) -> NSApplicationTerminateReply {
+    if delegate
+        .ivars()
+        .upgrade()
+        .is_some_and(|control| control.session_ending())
+    {
+        NSApplicationTerminateReply::TerminateNow
+    } else {
+        NSApplicationTerminateReply::TerminateCancel
+    }
+}
 
 /// Scope guard retains the non-owning delegate until after cleanup and detachment.
 pub(super) struct LoopOwnership {

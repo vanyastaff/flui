@@ -135,7 +135,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 12] = [
+const FLUI_KEYS: [&str; 13] = [
     "tier",
     "tier-kind",
     "order",
@@ -148,6 +148,7 @@ const FLUI_KEYS: [&str; 12] = [
     "wasm",
     "globals",
     "modules",
+    "api-closure",
 ];
 
 /// A workspace package as the checks see it, before its
@@ -328,6 +329,10 @@ impl Members {
             // Its keys are `cargo xtask module-dag`'s to read and check.
             if !(flui["modules"].is_null() || flui["modules"].is_object()) {
                 bail!("{rel}: `modules` must be a table");
+            }
+            // Its keys are `cargo xtask api-closure`'s to read and check.
+            if !(flui["api-closure"].is_null() || flui["api-closure"].is_object()) {
+                bail!("{rel}: `api-closure` must be a table");
             }
             let layer = match &flui["layer"] {
                 Json::Null => None,

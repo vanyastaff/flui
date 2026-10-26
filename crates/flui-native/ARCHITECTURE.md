@@ -90,14 +90,41 @@ trait depends on `flui-platform` instead.
   whose loop it is. The executor, the application path, URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
+  The Android host has no public platform name: it starts over the Activity
+  the system hands only to `android_main`, through `android_platform(app)`.
+- **No public path names an OS type (ADR-0151 §8).** The crate's public API,
+  hidden items included, names from outside the workspace only the crates of
+  the `allow` list in `[package.metadata.flui.api-closure]` (the cursor, the
+  callback lock, the raw handles, the pointer assembly's buffers and the web's
+  `Instant`), on every target it builds a host for: `cargo xtask api-closure`
+  documents it for Linux, Windows and macOS with every feature and for iOS,
+  Android and wasm32. A list of what may be named fails closed: an OS binding
+  a dependency brings is a finding without anyone listing it. The windows a
+  host builds are crate-private: the platform hands out `Arc<dyn HostWindow>`,
+  a raw window or display handle leaves through `raw-window-handle`, and what
+  one OS offers beyond the window contract is an extension implemented for
+  `dyn HostWindow` (`WindowsWindowExt::win32`, `MacOSWindowExt::appkit`) over
+  `HostWindow::as_any`, whose one body every window gets through the seal: it
+  answers `None` for another host's window, and otherwise a view of the OS's
+  window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
+  host's. Two things name a crate the list leaves out, each named in the
+  manifest: the entry `android_platform(app)`, which takes the Activity
+  (`entries`), and the implementations of `flui-semantics`'
+  `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
+  does (`traits`). Tests in `tests/` read a window's `HWND` the way an
+  embedder does, through `raw-window-handle` (`win32_handle` in
+  `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
+  its loop on the main thread, pins that a headless and a winit window have
+  no Win32 view and a Win32 window has one.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
   crate-private `OwnerHooks` and `ProxyTransport` a host implements),
   `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
   the owner-thread storage for a value that is not `Send`, and
-  `owner::panic_boundary` the containment a panic in user code meets before it
-  reaches the operating system, `owner::call_point` the one point where the
+  `owner::panic_boundary` the containment a panic meets before it reaches the
+  operating system (`os_entry`, the one boundary of every OS entry, below),
+  `owner::call_point` the one point where the
   platform calls a handler, `owner::handlers` the application's handler set
   and a window's callbacks, `owner::notices` the trait a loop pushes system
   notices through (`NoticeChannel`, which the lifecycle feature implements; a
@@ -350,9 +377,21 @@ trait depends on `flui-platform` instead.
   file is a module's tests, the mechanism of one OS object
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
-  iOS, accessibility on Android, iOS and the Web (and everywhere without
-  `a11y`), haptics on winit. Android's clipboard is an in-process stand-in
+  iOS, accessibility on Android, iOS and the Web and under winit off Linux,
+  haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
+
+  Accessibility has no Cargo feature (ADR-0151 §15, as amended).
+  `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
+  their OS, and every Win32 and AppKit window builds its adapter. The Linux
+  adapter comes with the Linux host: while that host is winit, `accesskit_unix`
+  rides `winit-backend` beside the `zbus` the host needs for the Settings
+  portal and logind (`flui-app` turns `winit-backend` on for every Linux
+  build), and `accessibility::{bridge, linux}` compile under
+  `all(target_os = "linux", feature = "winit-backend")`, written once, in
+  `accessibility/mod.rs`. The native Wayland and X11 host makes
+  `accesskit_unix` and `zbus` unconditional Linux dependencies and that gate
+  `target_os = "linux"`.
 
   The table's positions make the accessibility adapter and the actuator a
   window hands out (`host::Accessibility::for_window`,
@@ -373,10 +412,22 @@ trait depends on `flui-platform` instead.
   owner's `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
   model is `display::source`, the id registry and last snapshot every native
-  source keeps; beside it is one file per platform: `windows.rs` (the
+  source keeps, and the one publisher of a measured refresh period. A period
+  is made by the contract's constructors alone: every source hands the rate
+  or interval its platform reports straight to the one for its unit
+  (`RefreshPeriod::{from_hz, from_ratio, from_millihertz, from_secs_f64}`),
+  whose one check refuses what describes no cadence, and the two that
+  measure a cadence, the iOS display link and the browser's frame estimate,
+  publish through `MeasuredPeriod::offer`, which replaces the published
+  period only when a measurement leaves its band (`outside_band`, the band
+  rule the estimate also judges its frames' agreement by).
+  `display::source::mapping` reads one table of cadences through the
+  Android sample, the Windows rule, the Wayland and RandR models, the
+  display link and the estimator; the macOS source hands CoreGraphics' rate
+  to `from_hz` from its FFI half. Beside it is one file per platform: `windows.rs` (the
   monitors, `source`; their pure `sample` rules; the `DisplayBroadcasts`
   subscriber, `broadcasts`), `apple/` (`macos.rs`, `ios.rs`, and in
-  `mod.rs` the pure `screen` keys and bounds the two share, `period` and
+  `mod.rs` the pure `screen` keys and bounds the two share and
   `link_rate`), `android.rs` (`source` and the pure `sample`), `web.rs`
   (`source` with the capabilities it detects, `events`, and the pure
   `capability`, `dppx_query`, `refresh_estimate`, `screen_identity`),
@@ -472,19 +523,37 @@ trait depends on `flui-platform` instead.
     factors are input's (`input::android`).
 - **The window feature is `window/`, and a loop holds its windows without
   naming them (ADR-0151 §10).** The model is what two or more platforms share:
-  the published state (`window::state`), the hidden-surface rules of the Win32
-  and AppKit windows (`window::visibility`), the desktop window configuration
-  (`window::config`, public as `flui_native::config`) and the acknowledgement
+  the published state (`window::state`), the one rule that decides a window's
+  mode from what its window system says (`window::state::mode_of` over
+  `ModeFlags`: minimized before fullscreen before maximized; winit's
+  queries, AppKit's flags, the X11 window manager's properties and the Win32
+  window's tracked mode each read their report into the flags and nothing
+  else), the one rule by which a window reports whether its surface is seen
+  (`window::visibility::ReportedVisibility`: the runtime hears an answer
+  only when it changes; the winit, Win32, AppKit and Web windows each read
+  the answer from their own OS), the desktop window configuration
+  (`window::config`, crate-private: its windows open with F11 as the
+  fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
-  `PendingWindowInstallation`, `InstallationCancelled`). Each platform's
+  `PendingWindowInstallation`, `InstallationCancelled`).
+  `window::state::mapping` reads one table through winit's flags, the X11
+  window manager's properties, AppKit's raw flags (which keep full screen
+  above a miniaturized flag, a row of their own) and the Win32 tracked mode;
+  `window::visibility::mapping` reads one table through the Win32 surface
+  rules (`WM_SIZE`, `WM_SHOWWINDOW`) and AppKit's occlusion bit into the
+  rule, and through the rule itself for winit and the Web, whose answers
+  come from FFI. Each platform's
   window is one file beside it (`android`, `web`, `winit`, `headless`, and
   `linux/x11`, the live X11 layer the winit host uses), or a directory where
-  its halves or one OS object need one: `windows/` (the pure `limits`; the
-  window, the set and position, the procedure and the backdrop under
-  `cfg(windows)`) and `apple/` (the pure `geometry`, `macos` with its
-  `delegate` and its public `ext`, `ios`, `liquid_glass`). The platform's
-  system chrome (the table's `Chrome` position) is in the same file.
+  its halves or one OS object need one: `windows/` (the pure `limits`, `mode`
+  and `surface`, which says what `WM_SIZE`, `WM_SHOWWINDOW` and the creation
+  style imply for the surface; the window, the set and position, the
+  procedure and the backdrop under `cfg(windows)`) and `apple/` (the pure
+  `geometry` with its `frame`, `mode`, `surface` (the occlusion bit) and
+  `screen_edges`, `macos` with its `delegate` and its public `ext`, and
+  `ios`). The platform's system chrome (the table's `Chrome` position) is in
+  the same file.
   - **The host seam.** The window position names what a platform's windows
     share, `host::Window::Shared`: the Win32 handle map and configuration
     (`WindowSet`), the macOS configuration, the UIKit window factory, the
@@ -541,18 +610,30 @@ trait depends on `flui-platform` instead.
   touchpad viewport's readings, and the `native-capture` journal; it names
   no platform file and forbids `unsafe`), `availability` (each backend's
   input capabilities table), `keys` (the Win32 virtual keys and the mouse
-  buttons' codes, `MouseButtonCodes`, and the `adapter` from `ui-events` key
-  results that Android and winit share), `scroll` and `event_timestamp_ns`
-  (public at the crate root). Beside it, one file per platform, each pure
+  buttons' codes, `MouseButtonCodes`, the `adapter` from `ui-events` key
+  results that Android and winit share, with keyboard-types' locations
+  matched variant by variant, and the one table of key locations, whose
+  named rows give the number the DOM reports for each location and the
+  codes that imply it, which Win32 and AppKit read it from; a character no
+  key typed is `CHARACTER_WITHOUT_A_KEY`), `scroll` (the one wheel step: a
+  platform's amounts in the unit it picks, each axis turned to FLUI's
+  direction by whether it moves the offset or the content, an idle axis
+  `+0.0` whichever zero the platform reported, a non-finite amount refused,
+  which winit and AppKit deliver as a zero step and the Web and Android
+  drop) and `event_timestamp_ns` (public at the crate root).
+  `input::keys::mapping` reads one table of keys through the Win32 scancode
+  table, the AppKit keycode table, the DOM's number and the keyboard-types
+  adapter; `input::scroll::mapping` reads one table of turns through the
+  Win32 registry, the Web's, Android's, AppKit's and winit's steps. Beside it, one file per platform, each pure
   half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
   touchpad's DirectManipulation viewport, one OS object, with its pure
-  `manipulation` decoder), `apple.rs` (the pure `keys`; `macos`,
+  `manipulation` decoder), `apple.rs` (the pure `keys` and `wheel`; `macos`,
   `ViewInputs`, the input of one content view, and its events; `ios`,
   `TouchInputState`, the touches of one view), `android.rs`
   (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
-  pure `keys` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
+  pure `keys`, `wheel` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
   and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
   holds its input through a hook (`InputWindows` in the window class,
   `ActivityInput`, `HostInput`, `LoopInput`, `SimulatedDevices`), and the
@@ -566,7 +647,7 @@ trait depends on `flui-platform` instead.
   `pointer_assembly_allocates_nothing_per_event` needs a binary of its own,
   whose global allocator counts every allocation, so neither can reach a
   `pub(crate)` module; the other pure halves (`android::motion`,
-  `web::pinch`) are `pub(crate)` and tested beside them.
+  `web::pinch`, `web::wheel`) are `pub(crate)` and tested beside them.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
   `HandlerSlot` (a field of a host's state mutex or `RefCell`, a window's
@@ -591,6 +672,57 @@ trait depends on `flui-platform` instead.
   `native_host_events`' `a_hook_that_replaced_itself_and_failed_is_retained`
   and `web_session_end_hook_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
+- **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
+  code the operating system calls, or a library from inside its own entry: a
+  function with a foreign ABI (a window procedure, an enumeration callback, a
+  JNI native, an Objective-C method a `ClassBuilder` adds, an NDK callback), a
+  `define_class!` method, a method of a windows-rs `I…_Impl` (a COM vtable
+  entry), an AccessKit handler, and a closure handed to the OS (an `RcBlock` or
+  `StackBlock`, a WinRT delegate, a GCD work item: any closure literal given to
+  a function of an OS binding crate). Its body is a constant (a literal or a
+  path: no code runs), one call of `owner::panic_boundary::os_entry(entry,
+  args, after_panic, body)`, or one call of an adapter whose body is that call:
+  a free function of the same file not shadowed by an import, or a method
+  called as `Type::name` or `Self::name` (`com_method`, `com_hresult` and
+  `TsfStore::document_method` for COM, `jni_native`, `Self::scene_event` for
+  UIKit scenes). Out of an `extern "C"` frame a panic would abort the process
+  unannounced, out of an `extern "C-unwind"` one unwind through AppKit's or
+  libdispatch's frames; `os_entry` logs it with its text, under the entry's
+  name and with `args` (what the OS called with, `Copy + Debug`: a message
+  and its window, the delegate), contains the log, retains the payload, then
+  answers what `AfterPanic` says: `Answer(fn(A) -> R)`, a failure the OS
+  understands made from the arguments only after a panic and capturing
+  nothing (a broadcast receiver grants a session-end query it could not
+  answer; `applicationShouldTerminate:` lets a session end go on and cancels
+  any other quit); or `Abort`, where the state behind the entry may be torn
+  (FLUI's window procedure, the cloak hook, a UIKit configuration or init, the
+  macOS owner lane's guard). An answer that panics too ends the process.
+  Steps inside an entry are contained apart, each logged with its text
+  (`contain_os_entry` for a broadcast subscriber or an owner-window hook,
+  `contain_owner_callback` elsewhere): a TSF method that poisons its document
+  keeps its services' entry depth as a guard, so a panic past the poisoning
+  cannot leave host operations queued forever, and a view's `dealloc` still
+  runs the super `dealloc` after its context's teardown failed. A GCD work
+  item's body is a `move` closure, so its captures drop inside the boundary; a
+  block's or delegate's captures live as long as the OS keeps it and are
+  values whose destructor runs no user code. `cargo xtask panic-boundary`
+  finds every entry and holds it to that shape, with no allowlist. It reads
+  functions and constructors of OS crates by their path, but methods by name,
+  since a receiver's type is out of its reach: a new OS method that takes a
+  closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
+  `after`, `barrier_*`, names the crate keeps for GCD), and a constructor a
+  glob import hides to its list of callback types. `wasm_bindgen` closures are
+  out of its scope because wasm32 aborts on panic, winit's and
+  android-activity's procedures contain their own, and `flui-hot-reload`'s
+  plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
+  first failure is logged before the answer, with the entry's arguments, and a
+  contained step with its text; a panicking log stays inside),
+  `a_failing_subscriber_is_logged_and_a_session_end_still_granted`,
+  `a_panicking_listener_stays_inside_its_handler` (AccessKit, Windows and
+  Linux), the TSF row `a_tsf_call_failing_past_its_poisoning_leaves_no_depth`
+  and, on macOS, `a_tick_whose_hook_panics_leaves_no_tick_queued`,
+  `a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick` and
+  `a_session_end_is_under_way_from_its_announcement_to_its_answer`.
 - **`Platform` and `HostWindow` are sealed (ADR-0151 §5).** Each has a private
   supertrait: `Platform`'s is implemented for `HostPlatform<H>` alone,
   `HostWindow`'s for every type that implements the crate-private
@@ -636,7 +768,7 @@ trait depends on `flui-platform` instead.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  `PlatformWindow` body and extension command on `MacOSWindow`
   re-enters the owner lane through `route_on_owner`, so a call from any thread
   is marshaled onto the window's owner lane before any AppKit message is sent.
   Two carve-outs: the class-E raw-handle accessors
@@ -2130,7 +2262,8 @@ determined must be reported as unknown rather than guessed at.
 
 **Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
 from `CGDisplayModeGetRefreshRate` over the display's *current* mode
-(`display/apple/macos.rs::refresh_period_for_screen`), reached from the
+(`display/apple/macos.rs::refresh_rate_of_screen`, made a period by
+`RefreshPeriod::from_hz`), reached from the
 screen via `NSScreenNumber` — the same display id `display.rs` reads for its
 bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
 describe and some displays do, and a 0 turned into a period is infinite. The
@@ -2182,11 +2315,14 @@ written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
 such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`RefreshPeriod::from_hz`, reached through `display::apple::period`), pinned by
-`refresh_value_classification_table` (non-cadence inputs — zero, negative, NaN,
-±infinity — are unknown rather than an infinite or panicking period) and by
-`macos_shim_keeps_the_period_it_reports_today`, which holds the shim
-to the value this backend reported before the snapshot. The live path is
+(`RefreshPeriod::from_hz`, the contract's constructor the macOS source hands
+CoreGraphics' rate to), pinned by `refresh_value_classification_table`
+(non-cadence inputs — zero, negative, NaN, ±infinity — are unknown rather
+than an infinite or panicking period) and by
+`macos_shim_keeps_the_period_it_reports_today`, which holds the common panel
+rates to the value this backend reported before the snapshot. The read
+itself is FFI, so `every_display_source_reads_a_cadence_alike` has no macOS
+column. The live path is
 pinned behaviourally by the same manual run that pins the frame pump,
 which reported the refresh period from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
@@ -2772,8 +2908,9 @@ behavior: Android execution remains unavailable on this host.
 
 ### AppKit tab joins borrow live windows
 
-`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and returns whether
-AppKit received the join. A numeric ID cannot establish ownership of an
+`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and answers whether
+AppKit received the join (`None` when the receiving window is not an AppKit
+window). A numeric ID cannot establish ownership of an
 Objective-C object. The backend rejects a different backend, different owner
 lanes, non-main lanes, closed windows and joining a window to itself before
 messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
@@ -2781,9 +2918,9 @@ with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
 join on their shared main owner lane. No state or registry mutex spans that call.
 
 The method's public compile-fail doctest rejects numeric IDs, and its compiling
-example pins the borrowed-window signature and boolean result. These compiler
-checks do not prove native tab grouping or close/reentry behavior. AppKit runtime
-execution remains unverified on the Windows audit host.
+example pins the borrowed-window signature and its `Option<bool>` answer. These
+compiler checks do not prove native tab grouping or close/reentry behavior.
+AppKit runtime execution remains unverified on the Windows audit host.
 
 ### Win32 observations and closed-window tracking
 
@@ -3164,7 +3301,7 @@ also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
 the owner thread before the backend opens its windows.
 
 The Android goldens were recorded on a device by a `NativeActivity` library
-that installed the capture before `AndroidPlatform` created its registry and
+that installed the capture before the Android platform created its registry and
 shared the test codec and sink (`tests/native_recording/journal.rs`) through
 `#[path]`. Each session, in a
 fresh launch, is injected by the system (`adb shell input`, and `uinput`

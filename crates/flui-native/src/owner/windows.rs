@@ -68,6 +68,7 @@ use windows::{
 
 use crate::owner::call_point::{Field, Once, SharedField, call, install, retire};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
+use crate::owner::panic_boundary::{self, AfterPanic};
 use crate::{
     error::PlatformError,
     executor::BackgroundExecutor,
@@ -1080,20 +1081,14 @@ impl WindowsLoop {
     /// which hold the actual message handling.
     ///
     /// The hooks dispatch framework-supplied callbacks (a window's callbacks,
-    /// the platform's window-event handler) that can panic. A panic must not
-    /// unwind across this `extern "system"` frame: unwinding across a non-unwind ABI
-    /// boundary is a guaranteed process abort since Rust 1.81, and was
-    /// undefined behavior before that (Rust Reference, *Panic* chapter,
-    /// "unwinding across FFI boundaries") — and that language-imposed abort
-    /// reports nothing through this framework's diagnostics. So the panic
-    /// is caught here, its payload logged via `tracing`, and the process
-    /// terminated deliberately — the same outcome, made deterministic and
-    /// observable on every toolchain. Deliberately NOT
-    /// swallowed-and-continued (`DefWindowProcW` as a fallback answer): a
-    /// panic mid-`WM_DESTROY` or mid-dispatch leaves framework state torn,
-    /// and pumping further messages over torn state converts one crash into
-    /// arbitrary later misbehavior — per `docs/PANIC-POLICY.md`, a panic is
-    /// a bug report, never control flow.
+    /// the platform's window-event handler) that can panic, and a panic must
+    /// not unwind across this `extern "system"` frame. The boundary logs it
+    /// and ends the process: deliberately NOT swallowed-and-continued
+    /// (`DefWindowProcW` as a fallback answer), since a panic mid-`WM_DESTROY`
+    /// or mid-dispatch leaves framework state torn, and pumping further
+    /// messages over torn state converts one crash into arbitrary later
+    /// misbehavior — per `docs/PANIC-POLICY.md`, a panic is a bug report,
+    /// never control flow.
     ///
     /// # Safety
     ///
@@ -1107,27 +1102,16 @@ impl WindowsLoop {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        // `AssertUnwindSafe` is sound here: on `Err` the process aborts
-        // before any code can observe whatever state the unwind tore.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: arguments forwarded verbatim from Win32's dispatch of
-            // this registered `WNDPROC` — see `# Safety` above.
-            unsafe { dispatch_window_message::<H>(hwnd, msg, wparam, lparam) }
-        }));
-        match outcome {
-            Ok(result) => result,
-            Err(payload) => {
-                tracing::error!(
-                    msg,
-                    hwnd = ?hwnd,
-                    panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
-                    "panic in a window-procedure callback; aborting — it must not \
-                     unwind across the extern \"system\" boundary, and the framework \
-                     state behind this message may be torn"
-                );
-                std::process::abort();
-            }
-        }
+        panic_boundary::os_entry(
+            "FLUI's window procedure",
+            (msg, hwnd),
+            AfterPanic::Abort,
+            || {
+                // SAFETY: arguments forwarded verbatim from Win32's dispatch of
+                // this registered `WNDPROC` — see `# Safety` above.
+                unsafe { dispatch_window_message::<H>(hwnd, msg, wparam, lparam) }
+            },
+        )
     }
 
     /// Run the Windows message loop (internal implementation)

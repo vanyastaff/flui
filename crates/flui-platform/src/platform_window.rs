@@ -6,7 +6,7 @@
 //! accessibility bridge is reached through `flui_native::HostWindow`, a
 //! host-side subtrait only the composition root sees.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
@@ -93,7 +93,6 @@ pub enum WindowAt {
 /// # A window built from this crate alone
 ///
 /// ```
-/// use std::any::Any;
 /// use std::sync::Arc;
 ///
 /// use flui_platform::{
@@ -147,9 +146,6 @@ pub enum WindowAt {
 ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
 ///         None
 ///     }
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
@@ -161,7 +157,6 @@ pub enum WindowAt {
 /// tries to supply one here does not compile:
 ///
 /// ```compile_fail,E0407
-/// use std::any::Any;
 /// use std::sync::Arc;
 ///
 /// use flui_platform::{
@@ -216,14 +211,21 @@ pub enum WindowAt {
 ///         None
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
 /// assert!(matches!(window.show(), Err(WindowShowError::Unsupported(_))));
+/// ```
+///
+/// Nor is the downcast to a host's own window: `flui_native::HostWindow`,
+/// which only the core host implements, carries it (ADR-0151 §8), so a window
+/// the framework programs against is never turned into a concrete type:
+///
+/// ```compile_fail,E0599
+/// fn downcast(window: &dyn flui_platform::PlatformWindow) {
+///     let _ = window.as_any();
+/// }
 /// ```
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
@@ -314,10 +316,11 @@ pub trait PlatformWindow: Send + Sync {
     ///   the scheduler's `on_frame_scheduled` hook and handed to async wakers,
     ///   so it fires on whatever thread completed the future. No test pins
     ///   it.
-    /// - `flui_app`'s AccessKit activation listener — **conditional**, and so
-    ///   not reachable in a default build: it exists only under the non-default
-    ///   `a11y` feature, and fires only once an assistive technology attaches to
-    ///   the adapter's own thread. No test pins this one.
+    /// - `flui_runtime`'s AccessKit activation listener — **conditional**: every
+    ///   Win32, AppKit and Linux winit window has an adapter, but the listener
+    ///   fires only once an assistive technology attaches, on the thread the
+    ///   adapter calls it from (AT-SPI's is the adapter's own). No test pins
+    ///   this one.
     fn request_redraw(&self);
 
     /// Tell the backend a frame is about to be presented for this window —
@@ -693,7 +696,7 @@ pub trait PlatformWindow: Send + Sync {
     /// window manager may rarely or never produce.
     ///
     /// The native backends derive their own signal (rules in
-    /// `flui-native`'s `window::visibility`, host-tested): **Win32** from
+    /// `flui-native`'s window feature, host-tested): **Win32** from
     /// `WM_SIZE`-minimize/restore plus `WM_SHOWWINDOW` hide/show (Windows
     /// has no occlusion events at all), **AppKit** from
     /// `windowDidChangeOcclusionState:`'s visible bit (fires on full
@@ -907,17 +910,6 @@ pub trait PlatformWindow: Send + Sync {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Err(raw_window_handle::HandleError::Unavailable)
     }
-
-    // ==================== Utility ====================
-
-    /// Downcast to concrete type.
-    ///
-    /// No default body: a panicking default here would only be discovered
-    /// the first time some caller downcasts a backend that forgot to
-    /// override it — every implementor must supply its own (invariably
-    /// `{ self }`), the same shape [`PlatformHaptics::as_any`]
-    /// already requires.
-    fn as_any(&self) -> &dyn Any;
 }
 
 impl HasWindowHandle for dyn PlatformWindow + '_ {

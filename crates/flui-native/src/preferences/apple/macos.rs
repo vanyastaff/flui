@@ -194,9 +194,16 @@ impl Drop for RetryWake<'_> {
         let signal = self.source.signal.clone();
         let delay = deadline.saturating_duration_since(web_time::Instant::now());
         crate::owner::apple::macos::owner_queue().exec_after(delay, move || {
-            if let Some(signal) = signal.upgrade() {
-                let _ = signal.wake();
-            }
+            crate::owner::panic_boundary::os_entry(
+                "the preference retry's wake",
+                (),
+                crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
+                move || {
+                    if let Some(signal) = signal.upgrade() {
+                        let _ = signal.wake();
+                    }
+                },
+            );
         });
     }
 }

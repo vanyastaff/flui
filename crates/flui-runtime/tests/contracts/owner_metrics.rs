@@ -2272,9 +2272,6 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         None
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         *self.display.lock().expect("display script")
     }
@@ -2357,9 +2354,6 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self

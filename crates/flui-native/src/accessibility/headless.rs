@@ -1,17 +1,19 @@
-//! The headless host's accessibility: a recorder of what a window published.
+//! The headless host's accessibility: a counter of what a window published.
 
 use parking_lot::Mutex;
 
-/// Recording fake for [`PlatformAccessibility`](flui_semantics::platform::PlatformAccessibility),
-/// backing the headless backend's
+/// The headless host's [`PlatformAccessibility`](flui_semantics::platform::PlatformAccessibility),
+/// backing its windows'
 /// [`HostWindow::accessibility`](crate::HostWindow::accessibility).
 ///
-/// Records every published tree so a test can assert what an assistive
-/// technology would actually have been told — the roles, labels and ids — not
-/// merely that publishing did not panic. Activation is drivable
-/// ([`set_active`](Self::set_active)) because the interesting behaviour is
-/// conditional on it: a composition root must start assembly on attach and stop
-/// on detach, and neither is observable without being able to fake the signal.
+/// Counts the trees published while an assistive technology is attached, so a
+/// test can tell that publishing reached the platform only then. Activation is
+/// drivable ([`set_active`](Self::set_active)) because the interesting
+/// behaviour is conditional on it: a composition root must start assembly on
+/// attach and stop on detach, and neither is observable without being able to
+/// fake the signal. Its own methods name no AccessKit type (ADR-0151 §8): the
+/// trees and action listeners it hears come through `PlatformAccessibility`,
+/// `flui-semantics`' trait.
 #[derive(Default)]
 pub struct FakeAccessibility {
     state: Mutex<FakeAccessibilityState>,
@@ -20,9 +22,8 @@ pub struct FakeAccessibility {
 #[derive(Default)]
 struct FakeAccessibilityState {
     active: bool,
-    published: Vec<accesskit::TreeUpdate>,
+    published: usize,
     activation_listener: Option<flui_semantics::platform::AccessibilityActivationListener>,
-    action_listener: Option<flui_semantics::platform::AccessibilityActionListener>,
 }
 
 impl FakeAccessibility {
@@ -32,16 +33,10 @@ impl FakeAccessibility {
         Self::default()
     }
 
-    /// Every tree published while active, in order.
-    #[must_use]
-    pub fn published(&self) -> Vec<accesskit::TreeUpdate> {
-        self.state.lock().published.clone()
-    }
-
     /// How many trees were published while active.
     #[must_use]
     pub fn published_count(&self) -> usize {
-        self.state.lock().published.len()
+        self.state.lock().published
     }
 
     /// Simulate assistive technology attaching or detaching, notifying the
@@ -67,26 +62,6 @@ impl FakeAccessibility {
             listener(active);
         }
     }
-
-    /// Simulate assistive technology requesting an action.
-    ///
-    /// Dropped while inactive, because that is what the platform does: actions
-    /// originate from an attached client, and one arriving after detach is
-    /// stale. Forwarding it anyway would let a higher layer depend on
-    /// action delivery outside an active session and pass here while failing
-    /// against a real adapter.
-    pub fn request_action(&self, request: accesskit::ActionRequest) {
-        let listener = {
-            let state = self.state.lock();
-            if !state.active {
-                return;
-            }
-            state.action_listener.clone()
-        };
-        if let Some(listener) = listener {
-            listener(request);
-        }
-    }
 }
 
 impl std::fmt::Debug for FakeAccessibility {
@@ -94,18 +69,18 @@ impl std::fmt::Debug for FakeAccessibility {
         let state = self.state.lock();
         f.debug_struct("FakeAccessibility")
             .field("active", &state.active)
-            .field("published_count", &state.published.len())
+            .field("published_count", &state.published)
             .finish_non_exhaustive()
     }
 }
 
 impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
-    fn publish(&self, update: accesskit::TreeUpdate) {
+    fn publish(&self, _update: accesskit::TreeUpdate) {
         let mut state = self.state.lock();
         // Inactive means nothing is listening: the update is dropped rather
-        // than recorded, mirroring the real adapter's `update_if_active`.
+        // than counted, mirroring the real adapter's `update_if_active`.
         if state.active {
-            state.published.push(update);
+            state.published = state.published.saturating_add(1);
         }
     }
 
@@ -120,8 +95,10 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
         self.state.lock().activation_listener = Some(listener);
     }
 
+    /// No assistive technology asks a headless window for an action, so the
+    /// listener is dropped here, outside any lock.
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
-        self.state.lock().action_listener = Some(listener);
+        drop(listener);
     }
 }
 

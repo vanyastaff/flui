@@ -41,9 +41,10 @@ use flui_platform::{
     WindowReveal, WindowState,
 };
 
+use super::mode::NativeMode;
 use super::proc::{
-    FirstShow, NativeMode, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command,
-    frame_style, restyled, sample_state, to_screen, to_workspace,
+    FirstShow, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command, frame_style,
+    restyled, sample_state, to_screen, to_workspace,
 };
 use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, logical_to_device, open_spot,
@@ -270,7 +271,7 @@ impl WindowsWindow {
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsLoop::with_config` guarantees before any `open_window`
+        // `WindowsLoop::new` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
         // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
@@ -454,7 +455,7 @@ impl WindowsWindow {
             // installs), so the creation-time `ShowWindow(SW_SHOW)` below
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
-            // `window::visibility::win32_initial_visibility`'s doc.
+            // `surface::initial_visibility`'s doc.
             let config = windows.config.clone();
             let callbacks = Arc::new(WindowCallbacks::counting_frames(frames.counter()));
             let context = Box::new(WindowContext {
@@ -487,7 +488,7 @@ impl WindowsWindow {
                 // A window whose reveal waits for its first frame is visible to
                 // the runtime already: its frames must run to earn the reveal.
                 visibility: super::proc::Visibility::new(
-                    deferred || crate::window::visibility::win32_initial_visibility(created_style),
+                    deferred || super::surface::initial_visibility(created_style),
                 ),
                 cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
@@ -722,7 +723,7 @@ impl WindowsWindow {
     }
 
     /// Get the native HWND handle
-    pub fn hwnd(&self) -> HWND {
+    pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
@@ -1853,10 +1854,6 @@ impl PlatformWindow for WindowsWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

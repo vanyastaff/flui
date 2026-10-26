@@ -197,8 +197,8 @@ graph LR
 | **LY33** [P] | **`preferences/` и `lifecycle/`** (D13, R4.1, R4.8). `preferences/`: `shared/preference_read` (196; допуск опроса, общий для ограниченных сэмплеров) → `read.rs`; Windows: `windows/preferences.rs` (457), `windows/preferences/{languages,tests}.rs` (180 + 279) и `windows/platform/preference_retry_tests.rs` (242) → `windows/` (приёмник широковещательных сообщений уже в `owner/windows.rs`, LY27: предпочтения подписываются на него через `owner/`); Apple: `macos/preferences.rs` (115) и `ios/preferences.rs` (128) → `apple/{macos,ios}.rs`; Android: `android/preferences.rs` (445) и `shared/android_text_weight` (82) → `android.rs`, а помощник Activity `with_activity` из него → `owner/android/activity.rs`, и с ним уходит исключение `module-dag` `display::android` → `platforms::android::preferences`; Web: `web/preferences.rs` (83) → `web.rs`; Linux: наблюдение портала Settings из `winit/preferences.rs` (239; D-Bus) → `linux.rs` (им пользуются winit, Wayland и X11); headless: производитель из LY8 в `headless/*` → `headless.rs`. `lifecycle/`: `shared/system_notice` (321; путь, которым уведомления любого хоста доходят до приложения) → `notice.rs`; Windows: `windows/host_events.rs` (481) и `shared/{windows_host_messages,windows_memory_watch}` (376 + 207) → `windows.rs`; Apple: `macos/system_notices.rs` (246), `shared/{terminate_gate,dispatch_memory_pressure}` (277 + 76) и `shared/apple_scene_error` (15; сбой уничтожения сцены UIKit) → `apple/{macos,ios}.rs`; Android: `shared/android_lifecycle` (446) и `android/memory.rs` (37) → `android.rs`; Web: `web/page_events.rs` (87) → `web.rs`; Linux (живой слой): `linux/host_notices/*` (logind, давление памяти), `linux/lifecycle_model/{mod,logind,memory_pressure}.rs` и `winit/platform/linux_notices.rs` (272) → `linux.rs`; headless: `HeadlessHostEvents` → `headless.rs`. Записи `globals` переезжают. Что переехало на деле: `shared/preferred_locales` → `preferences/locales.rs` (модель: его читают Web, Linux, macOS, iOS и Android); один файл на платформу, прежние файлы — его встроенные модули: `preferences/android.rs` (`configuration`, правила `contrast`, `text_weight`), `preferences/web.rs` (`browser`, правило `media` из `shared/browser_preferences`), `lifecycle/windows.rs` (`host_events`, правила `messages`, `memory_watch`; тесты `HostEvents` — `lifecycle/windows/tests.rs`), `lifecycle/apple/macos.rs` (`notices`, правило `memory_pressure`); Linux — `lifecycle/linux.rs` (входящий ящик и источник) и `lifecycle/linux/{logind,pressure}.rs`, каждый со своим правилом (`signals`, `triggers`), `logind/bus_tests.rs`; `preferences/linux.rs` — наблюдение портала без типов winit, связка с winit — свой блок `cfg(feature = "winit-backend")`, Wayland и X11 (LY78, LY82) запускают его так же. `shared/system_notice` → `lifecycle/notice.rs` за трейтом `owner::notices::NoticeChannel`, канал цикла делает таблица. Правило Activity (`shared/android_lifecycle`, `android/memory.rs`) → `lifecycle/android.rs` за хуком лупера `ActivityCallbacks`, словарь колбэков — `owner/android/activity_callbacks.rs`; цикл — позиция lifecycle, у macOS, iOS, Android и winit на Linux через одну обобщённую реализацию в `lifecycle/mod.rs`. В `owner/` остались `shared/terminate_gate` → `owner/apple/terminate_gate.rs` и `shared/apple_scene_error` → `owner/apple/ios/scene_error.rs` (ответ и сцены цикла). `winit/platform/linux_notices.rs`: доставка → `lifecycle::linux`, `WinitLoop::session_end` → `owner/winit/session_end.rs`, остаток (зонд X11 и проверка дисплеев) → `platforms/winit/linux_unreported.rs` (LY28, LY31). Окно (LY28, влито позже) читает эти фичи через исключения `module-dag`: `window::windows` → `preferences::windows` (геометрия мыши), `window::windows` → `lifecycle::windows` (правило `messages` для своей подписки на `WM_WTSSESSION_CHANGE`: каждое окно само регистрируется на уведомления сессии и по блокировке скрывает свою поверхность), `window::android` → `preferences::android` (ночной режим, плотность, геометрия касаний) | LY27, LY9 | `crates/flui-native/src/{preferences,lifecycle}/*`, `platforms/{windows,macos,ios,android,web,winit,linux,headless}/*` (уходят перенесённые файлы), `shared/*` (уходят), `Cargo.toml` (`globals`, features) | `module-dag`, `file-length`, `globals`, `markers` | перенесённые тесты правил и шины logind (`bus_tests`); `linux_preferences`, `preferences`, `windows_host_events` без правок смысла | L + W + T; Dev: macOS, Android, Linux (ручной прогон под X11) |
 | **LY34** | **`version/`; `shared/` и `platforms/` исчезают** (D13, R4.1, R4.4). `shared/os_version/` (689; пороги и гейты версий ОС, ADR-0244) и `ios/os_version.rs` (18) → `version/gate.rs` (модули `windows`, `apple`, `android` внутри, под `cfg(any(<os>, test))`); генерируемый `shared/platform_floor.rs` → `version/floor.rs`, а `tools/xtask/src/platform_floor.rs` пишет новый путь; `version/` входит в проверку `module-dag` и не зависит от фич. `storage/` (`file_store.rs`, `page_store.rs`, `os_error.rs`, `user_dirs.rs`) остаётся как есть. Удаляются `shared/mod.rs` (29 строк `cfg`) и `platforms/mod.rs`; на верхнем уровне, кроме механизма хоста (`host.rs`, `platform.rs`, `host_window.rs`), остаются `error.rs`, `table_test.rs` и `executor.rs` с `task.rs`, которые удаляет LY61. `flui-app` называет установку окна от корня крейта (`flui_native::WindowInstallation`, LY28), так что `shared::window_installation` и псевдоним для него не остаются. 21 файл `tests/` с `flui_native::shared::*` исчезает: тесты правил — модулями рядом с моделями и чистыми частями, conformance и трассы — через публичный API. Записи `globals` (19, ключ — путь модуля) и пути в allowlists xtask переехали; `module-dag` охватывает все каталоги ядра; ключ `retiring` и каждое исключение в `platforms::*` удаляются (свои снимают LY28, LY29 и LY33; среди остальных `display::apple::ios` → `platforms::ios::os_version`, когда чтение версии становится `version/gate.rs`). Поправка 2026-10-22 (строка писалась до исключений LY28–LY33, выход части которых — LY38, задача после LY34): исключений в `platforms::*` и ключа `retiring` нет; остаются набор LY38 (32: оконные позиции через таблицу хоста, общие виды AppKit и UIKit, `text::web` → `window::web` и десять рёбер окна и другой фичи одной платформы от LY28, LY30, LY31 и LY33, которые строка LY38 называет с формой снятия) и поимённое ребро `display::winit` → `display::linux`, которое живёт до LY87; путь `include_bytes!` на `classes.dex` и `android_dex.rs` уже указывают на `owner/android/java_view.rs` (LY27), а `android-dex` подтверждает, что ни один путь не ведёт в `platforms/` или `shared/`; ARCHITECTURE.md ядра описывает новое устройство. Тесты `owner/`, которые ещё называют хосты или фичи (унаследованы от `main`: `owner/windows/tests.rs` — `display::windows`, хост-трейт таблицы `hosts::windows` и `WindowsPlatform`; `owner/winit/real_loop_tests.rs` — `WinitPlatform` и `preferences::windows`; тест текстового хоста в `owner/mod.rs` — `HeadlessPlatform`), переходят на заглушки `owner/` (как `owner::winit::testing::QuietHost`) или переезжают к фичам, которые проверяют | LY27, LY28, LY29, LY30, LY31, LY32, LY33 | `crates/flui-native/src/{version/*,hosts/*}`, `shared/*` и `platforms/*` (удаляются), `tests/*`, `Cargo.toml` (`globals`), `tools/xtask/src/platform_floor.rs`, `tools/xtask/allowlists/*` | `module-dag`, `globals`, `platform-floor`, `android-dex`, `file-length`, `markers`; `rg 'unimplemented!'` по `src/` | перенесённые тесты; `tests/` не называет `flui_native::shared` и `flui_native::platforms`; записи нативных трасс без правок | L + T |
 | **LY35** | **Слияния дублей** (D13, R4.7). Внутри моделей фич. Режим окна из флагов — одно определение вместо четырёх: `mode_of` в `window/state.rs` остаётся, а `mode_of` в `window/apple/geometry.rs` (было `appkit_window_mode.rs`), `window_mode` в `window/linux/x11.rs` (было `x11_window_mode.rs`) и `public()` в `window/windows/mod.rs` (было `windows/window.rs`) уходят. Период обновления — один конструктор из Гц, мГц и интервала с одной проверкой (конечное, больше нуля) и один издатель в `display/source.rs` вместо `display::android::sample::refresh_period` (`display/android.rs`), `display::apple::link_rate::ScreenPeriods::period_of` и `display::apple::period::core_graphics_refresh_period` (оба в `display/apple/mod.rs`), `refresh_period_for_screen` в `display/apple/macos.rs`, `refresh_period` в `display/linux/wayland_model.rs`, `display::windows::sample::{rational_refresh_period, frequency_period}` (`display/windows.rs`) и `display::web::refresh_estimate` (`display/web.rs`). `Location` клавиши — одна таблица в `input/keys.rs` вместо `keyboard_adapter` (6 мест), `keys` (4), `input/web.rs` (4; было `web/events.rs`) и `input/windows/` (1; было `windows/events.rs`). Шаг колеса — по одному правилу в `input/scroll.rs` вместо `scroll`, `winit/events.rs::wheel_step`, `web/events.rs` и `android_scroll`; видимость — одно правило в `window/visibility.rs` | LY34 | `crates/flui-native/src/{window,display,input}/*` | `module-dag`, `globals`, `file-length` | табличные тесты `mapping` (одни для всех потребителей); записи нативных трасс проходят без изменений | L + W + T |
-| **LY36** | **OS-типы `pub(crate)`** (D11, R4.10, R3.9). Скрыть: `win32::{HWND,DWMWINDOWATTRIBUTE,DwmExtendFrameIntoClientArea,DwmSetWindowAttribute,MARGINS}`, `WindowsWindow::hwnd`, `toggle_fullscreen_for_hwnd`, `WindowsAccessibility::new(HWND)`, `MacOSPlatform::app`, `AndroidPlatform::{new(AndroidApp),app}`, `WebWindow::canvas`, реэкспорты `accesskit` через `PlatformAccessibility`, `FakeAccessibility::published`, `liquid_glass`, а также имена, которые не называет никто вне крейта и которых нет в сигнатурах публичных трейтов (`WindowConfiguration`, `FullscreenMonitor`, `Headless*`); `PlatformReadyCallback` становится `AppHandler::ready` (LY45); остальные безымянные снаружи имена (`PlatformExecutor`, `WaitError`, `PlatformResult`) уходят вместе с `Platform::background_executor` в LY61. `AndroidApp` flui-app передаёт через вход ядра, форму которого называет PR. `as_any` переезжает с `PlatformWindow` на `HostWindow`; расширения ОС реализованы поверх него и возвращают `Option`. Гейт API-замыкания проверяет rustdoc-JSON ядра с `--document-hidden-items` | LY34, LY39 | `crates/flui-native/src/{lib.rs,host_window.rs,hosts/*,owner/*,window/*,accessibility/*}`, `crates/flui-platform/src/platform_window.rs` (удаляется `as_any`), `crates/flui-app/src/app/runner/*`, `examples/*` | гейт API-замыкания (расширен на ядро), `workspace`, `cross-typecheck` | rustdoc-JSON: пусто; расширение Windows на окне headless даёт `None` | L + W + T |
-| **LY37** | **Escape hatch** (D11, R3.9). Фасад публикует `flui::native::<os>` за `cfg` и фичей `native` (Evolving): `WindowsWindowExt`, `MacOSWindowExt` как расширения поверх `dyn HostWindow`, чьи методы принимают и возвращают только типы FLUI (прогресс на панели задач, материал, вкладки macOS), а сырые handle окна и дисплея отдают только через трейты `raw-window-handle` (ADR-0089 §2); опции создания одной ОС — типизированное значение этой ОС в слоте `WindowOptions` (ADR-0254 п. 8; форму слота называет PR); примеры `windows11_demo`, `resize_jitter_probe` переходят на `flui::native::windows`; строка в `docs/extending.md` и в `tests/surface.rs` | LY36 | `src/*` (фасад), `crates/flui-platform/src/window.rs` (слот), `crates/flui-native/src/window/{windows,apple}/*` (расширения), `examples/*`, `docs/extending.md` | `workspace`, `reach`, `facade-combos`, `doc-strict` | чужой хост → `None`/`Unsupported`, не паника; doctest каждого расширения; фича `native` выключена по умолчанию | L + W + T |
+| **LY36** | **OS-типы `pub(crate)`** (D11, R4.10, R3.9). Скрыть: `win32::{HWND,DWMWINDOWATTRIBUTE,DwmExtendFrameIntoClientArea,DwmSetWindowAttribute,MARGINS}`, `WindowsWindow::hwnd`, `toggle_fullscreen_for_hwnd`, `WindowsAccessibility::new(HWND)`, `MacOSPlatform::app`, `AndroidPlatform::{new(AndroidApp),app}`, `WebWindow::canvas`, реэкспорты `accesskit` через `PlatformAccessibility`, `FakeAccessibility::published`, `liquid_glass`, а также имена, которые не называет никто вне крейта и которых нет в сигнатурах публичных трейтов (`WindowConfiguration`, `FullscreenMonitor`, `Headless*`); `PlatformReadyCallback` становится `AppHandler::ready` (LY45); остальные безымянные снаружи имена (`PlatformExecutor`, `WaitError`, `PlatformResult`) уходят вместе с `Platform::background_executor` в LY61. `AndroidApp` flui-app передаёт через вход ядра, форму которого называет PR. `as_any` переезжает с `PlatformWindow` на `HostWindow`; расширения ОС реализованы поверх него и возвращают `Option`. Гейт API-замыкания проверяет rustdoc-JSON ядра с `--document-hidden-items`; его `entries` держит ровно вход Android, которого требует эта строка, `traits` — методы реализаций `PlatformAccessibility` из `flui-semantics`. Часть R4.10 про тестовые двойники (`FakeAccessibility`, `FakeTextInput`, `MockWindow`, `HeadlessPlatform` и прочие `Headless*` в корне) — LY100 (двойники за фичей `scripted`) и LY48 | LY34, LY39 | `crates/flui-native/src/{lib.rs,host_window.rs,hosts/*,owner/*,window/*,accessibility/*}`, `crates/flui-platform/src/platform_window.rs` (удаляется `as_any`), `crates/flui-app/src/app/runner/*`, `examples/*` | гейт API-замыкания (расширен на ядро), `workspace`, `cross-typecheck` | rustdoc-JSON: пусто; расширение Windows на окне headless даёт `None` | L + W + T |
+| **LY37** | **Escape hatch** (D11, R3.9). Фасад публикует `flui::native::<os>` за `cfg` и фичей `native` (Evolving): `WindowsWindowExt`, `MacOSWindowExt` как расширения поверх `dyn HostWindow` (форма LY36: один метод `win32()`/`appkit()` даёт вид окна ОС `Win32Window`/`AppKitWindow` или `None`), чьи методы принимают и возвращают только типы FLUI (вкладки macOS, уровень, тема и углы Windows; прогресс на панели задач — `flui-system`, LY57; материалы одной ОС, ADR-0254 п. 3: Liquid Glass macOS возвращается здесь из git (`window/apple/liquid_glass.rs` до LY36) методами `AppKitWindow`, общий словарь материалов — команда окна LY43; заглушки, отвечавшие успехом без действия, удалены LY36), а сырые handle окна и дисплея отдают только через трейты `raw-window-handle` (ADR-0089 §2); опции создания одной ОС — типизированное значение этой ОС в слоте `WindowOptions` (ADR-0254 п. 8; форму слота называет PR); примеров `windows11_demo` и `resize_jitter_probe` нет с #1827, переводить нечего; строка в `docs/extending.md` и в `tests/surface.rs` | LY36 | `src/*` (фасад), `crates/flui-platform/src/window.rs` (слот), `crates/flui-native/src/window/{windows,apple}/*` (расширения), `examples/*`, `docs/extending.md` | `workspace`, `reach`, `facade-combos`, `doc-strict` | чужой хост → `None`/`Unsupported`, не паника; doctest каждого расширения; фича `native` выключена по умолчанию | L + W + T |
 
 ### Контракт
 
@@ -209,7 +209,7 @@ graph LR
 | **LY40** | **Снимок окна: полнота** (D4, R3.1). `WindowState` получает все оконные факты, которые сегодня отдают геттеры или парные `on_*`: размеры и масштаб (`WindowMetrics`), внешний вид, дисплей, safe-area insets, состояние исполнения, фокус, видимость, наведение; каждый факт сохраняет правило своей записи (тема — пользовательская, как применена к окну, ADR-0222; дисплей — по идентичности снимка дисплеев, ADR-0236; состояние исполнения не зависит от фокуса и видимости, ADR-0035; нерисуемое значение — нулевой размер, неконечный или неположительный масштаб — не публикуется); `WindowCapabilities` входит в `WindowState` (токен привязывается к ревизии, LY42); `activates` и сходные признаки — `Availability`, а не `bool`. Одно `on_state_changed` без данных; хост публикует факты одной ревизией и доставляет изменение синхронно внутри OS-колбэка там, где его даёт ОС (Win32 modal loop). Геттеры живут до LY41 (аддитивный шаг) | LY38 | `crates/flui-platform/src/{window_state.rs,platform_window.rs}`, `crates/flui-native/src/window/*` | `workspace`, `reach`, `cross-typecheck` | conformance окна: снимок согласован с readback ОС на каждом хосте; Windows — живой resize в modal loop | L + W + T |
 | **LY41** | **Потребители на снимок; удаление вторых истин** (D4, D10, R3.1). Удалить геттеры `is_focused`, `is_visible`, `physical_size`, `logical_size`, `scale_factor`, `metrics`, `appearance`, `display_id`, `safe_area_insets`, `execution_state`, `is_active`, `is_hovered`, `capabilities`; `mouse_position` и `modifiers` (положение и модификаторы берутся из потока ввода); регистрации `on_resize`, `on_active_status_change`, `on_visibility_status_change`, `on_hover_status_change`, `on_appearance_changed`, `on_display_changed`, `on_safe_area_change`, `on_execution_state_change` (остаются шесть регистраций по обязательствам, их заменит LY44); потребитель, которому нужно знать, какой факт изменился, сравнивает новый снимок с прежним (равенство ревизий); методы-близнецы `show`, `activate`, `close` и `WindowShowError`; `WindowEvent` и `Platform::on_window_event`. `flui-app` (`direct.rs`, `runner/{window_install,desktop,secondary_window,android,ios,web}.rs`) подписывается один раз на запуск; `presentation.rs` читает снимок; 15 реализаций `PlatformWindow` вне ядра (ADR-0254) теряют методы; команды show, activate, close идут только через `WindowControl` | LY40, LY26 | `crates/flui-platform/src/{platform_window.rs,window.rs}`, `crates/flui-native/src/window/*`, `crates/flui-app/src/app/**`, `crates/flui-runtime/src/presentation.rs`, `crates/flui-interaction`, `crates/flui-testing`, тестовые двойники в `flui-*` | `workspace`, `reach`, `markers` | headless: смена фокуса видна одним `state_changed` и одним снимком; путь вето закрытия (ADR-0123) через `WindowControl`; `rg` по удалённым именам пуст | L + W + T |
 | **LY42** | **`AdmittedCommand`** (D4, R3.2). `WindowCommand::admit(&WindowCapabilities)` возвращает `AdmittedCommand`, который строит только `admit`; `apply` принимает его; ошибки разделены: `AdmissionError { Unsupported, InvalidGeometry }` для вызывающего, `ApplyError { Closed, Superseded, Platform }` для хоста, где `Superseded` — возможности сменили ревизию между допуском и применением на следующем owner-ходе, команду надо допустить заново (гонка «допустили на ревизии N, применили на N+1» не прячется в `Platform` и отличима от сбоя ОС); токен привязан к ревизии снимка, а ОС оставляет за собой последнее слово через `Platform` и следующий снимок. Место вызова — `WindowControl::submit` в `flui-app`: допуск при подаче против возможностей снимка, применение на следующем ходе владельца в порядке подачи; `submit` возвращает `Result<(), SubmitError>` (`Admission(AdmissionError)` или `Closed`); `WindowCommand::Close` заменяет метод `close` | LY41 | `crates/flui-platform/src/{window_state.rs,platform_window.rs}`, `crates/flui-app/src/app/window_control.rs`, файлы платформ в `window/` (`apply`) | `workspace`, `reach` | trybuild: `AdmittedCommand` нельзя построить снаружи и голую `WindowCommand` нельзя отдать в `apply`; conformance «`Unsupported` ровно тогда, когда возможность ложна»; смена возможностей между допуском и применением даёт `Superseded` | L + W + T |
-| **LY43** | **Покадровые глаголы и материал фона** (D4, D10, R3.6). `set_frame_rate_hint` и `set_input_regions` возвращают `Result<(), Unsupported>` и имеют `Availability` в возможностях окна (регионы — в `InputCapabilities`); одна кроссплатформенная команда материала фона вместо `set_background_appearance` с `Availability` в возможностях (набор материалов называет PR; материалы одной ОС достижимы через `flui::native::<os>`, LY37); `WindowBackgroundAppearance` (в т. ч. `MicaBackdrop`, `MicaAltBackdrop`) удалён (ADR-0254 п. 3, 8). Windows: отказ `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` становится `Unsupported(NotOnThisDevice)` вместо записи в журнал; `liquid_glass` остаётся в `window/apple/liquid_glass.rs` | LY42 | `crates/flui-platform/src/{platform_window.rs,window.rs,window_state.rs}`, `crates/flui-native/src/window/{windows,apple}/*`, `crates/flui-app` | `workspace`, `reach`, `cross-typecheck` | conformance; тест на таблице версий (`Since<F>`): ниже порога — `NotOnThisDevice`; Windows — живая смена материала | L + W + T |
+| **LY43** | **Покадровые глаголы и материал фона** (D4, D10, R3.6). `set_frame_rate_hint` и `set_input_regions` возвращают `Result<(), Unsupported>` и имеют `Availability` в возможностях окна (регионы — в `InputCapabilities`); одна кроссплатформенная команда материала фона вместо `set_background_appearance` с `Availability` в возможностях (набор материалов называет PR: общий словарь всех хостов; материалы одной ОС достижимы через `flui::native::<os>`, LY37, ADR-0254 п. 3); `WindowBackgroundAppearance` (в т. ч. `MicaBackdrop`, `MicaAltBackdrop`) удалён (ADR-0254 п. 3, 8). Windows: отказ `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` становится `Unsupported(NotOnThisDevice)` вместо записи в журнал; `liquid_glass` удалён LY36 (его не достигал ни один путь) и возвращается из git в LY37 как методы вида `appkit()`, не в этой строке | LY42 | `crates/flui-platform/src/{platform_window.rs,window.rs,window_state.rs}`, `crates/flui-native/src/window/{windows,apple}/*`, `crates/flui-app` | `workspace`, `reach`, `cross-typecheck` | conformance; тест на таблице версий (`Since<F>`): ниже порога — `NotOnThisDevice`; Windows — живая смена материала | L + W + T |
 | **LY44** | **`WindowHandler` при открытии** (D4, R3.3). `open_window(options, Rc<dyn WindowHandler>)`; обязательства: ввод с результатом доставки (`DispatchEventResult`, включая отложенные формы), изменение состояния, запрос кадра, запрос закрытия с решением, закрыто, смена поверхности; каждый метод получает доказательство owner-потока. Отложенное открытие (`PlatformProxy::open_window`) несёт `Send`-фабрику, собирающую обработчик на owner. Удалить `WindowCallbacks`, `impl_window_callback_setters!`, 14 `on_*` с инертными умолчаниями, очередь раннего ввода и снимок «ещё не зарегистрировано» (ADR-0213 §3), защёлку `WindowCallbacks::clear()` (ADR-0063 §5). Хосты держат обработчик в слоте и вызывают его через точку LY26; `flui-app` не регистрирует колбэки. `WindowOptions::input_latency`, которую сегодня никто выше хоста не задаёт, проводится из конфигурации окна приложения (это её потребитель; D10, R3.10), Web и Android читают значение | LY41 | `crates/flui-platform/src/platform_window.rs`, `crates/flui-native/src/{owner/*,window/*}`, `crates/flui-app/src/app/**`, тестовые двойники | `workspace`, `reach`, `globals`, `markers` | conformance: первое событие после `open_window` доходит; повторный вход из каждого метода (как в LY26); вето закрытия; отложенный ввод сохраняет `DEFERRED` | L + W + T; Dev: Android |
 | **LY45** | **`AppHandler` при `run`** (D12, R3.4). `run(handler)`: `AppHandler` — трейт ядра (`flui-native`), его реализует только `flui-app`; обязательства без умолчаний: `ready(OwnerPlatform)` (bootstrap, который нёс `PlatformReadyCallback`), `quit_requested`, `reopen`, `session_end` (`SessionEndAnswer`), `host_notice`, `exit_policy`, `wake_deadline`; `on_preferences_changed` нет; принятое событие не теряется при замене или отсутствии обработчика; `PlatformHandlers` удалён. `on_open_urls` и `on_keyboard_layout_change` регистрациями не заменяются: обязательство `opened(urls, files)` добавится к трейту вместе с фичей активации (инертной реализации сейчас нет, правило 4 design), а `keyboard_layout` и его событие становятся `pub(crate)` ядра (LY55). Доставка предпочтений сохраняет правила ADR-0172 (R9.7) | LY44, LY8 | `crates/flui-native/src/{platform.rs,owner/*,lifecycle/*,preferences/*}`, `crates/flui-app/src/app/runner/host.rs` | `workspace`, `reach`, `globals` | headless: каждое событие доходит один раз; замена обработчика в вызове; отсутствие обработчика не теряет принятое | L + W + T |
 | **LY46** | **`!Send` окно и `SurfaceTarget`** (D4, R3.5). `PlatformWindow` теряет `Send + Sync`; поток растеризации получает `SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static`, отвечающий `HandleError::Unavailable` после закрытия, с обязательным `pre_present_notify` (поток растеризации зовёт его перед каждым present; на Wayland он взводит frame callback); `unsafe impl Send` хоста остаётся только на нём, а `SAFETY` называет инвариант (что держит цель и как проверяется жизнь окна), не операцию (macOS); правила `Unavailable` по хостам из ADR-0063 п. 5 (Win32 — проба идентичности, AppKit — флаг закрытия, Android — только для завершённого окна, headless — всегда) переезжают на цель. `PendingWindow::wait()` отдаёт рабочему потоку идентификатор, а не `Arc<dyn HostWindow>`. Рассказ в документации `request_redraw` (около 50 строк) превращается в ошибку компиляции; `thread_local!` в `flui-app/src/app/runner/host.rs` теряет свою причину и удаляется, если другой не найдено. Заменяет ADR-0063 в части `Send + Sync` окна | LY44 | `crates/flui-platform/src/platform_window.rs`, `crates/flui-native/src/{owner/*,window/*}`, `crates/flui-engine`, `crates/flui-rendering`, `crates/flui-app/src/app/runner/*`, реализации `PlatformWindow` (семь хостов и 15 вне ядра, ADR-0254) | `workspace`, `reach`, `globals` | `static_assertions::assert_not_impl_any!`; trybuild; `SurfaceTarget` после закрытия; Win32: `state_changed` синхронно в OS-колбэке живого resize | L + W + T |
@@ -258,11 +258,11 @@ graph LR
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY78** | **Wayland: основа** (D20, R7.1). Соединение, привязки глобалов, цикл событий на owner-потоке с пробуждением (по образцу ADR-0249), окно `xdg-shell`, снимок и команды окна, дисплеи на живом слое Linux (`display/linux/`), таблица `Wayland` в `hosts/linux.rs` (тип на каждую позицию, чего нет — `Absent<F>`) и `HostWindow`, цель поверхности для wgpu (raw-handles), выбор хоста в `current_platform()` | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/wayland.rs`, `hosts/linux.rs`, `lib.rs`, `Cargo.toml` (фичи `wayland`) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на безголовом композиторе; правила — на хосте | L; Dev: Linux (Wayland) |
+| **LY78** | **Wayland: основа** (D20, R7.1). Соединение, привязки глобалов, цикл событий на owner-потоке с пробуждением (по образцу ADR-0249), окно `xdg-shell`, снимок и команды окна, дисплеи на живом слое Linux (`display/linux/`), таблица `Wayland` в `hosts/linux.rs` (тип на каждую позицию, чего нет — `Absent<F>`) и `HostWindow`, цель поверхности для wgpu (raw-handles), выбор хоста в `current_platform()`. `zbus` и `accesskit_unix` становятся безусловными зависимостями Linux (из `winit-backend` уходят), условие `accessibility::{bridge, linux}` в `accessibility/mod.rs` — `target_os = "linux"` (ADR-0151 §15 с поправкой 2026-10-22) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/wayland.rs`, `hosts/linux.rs`, `lib.rs`, `accessibility/mod.rs`, `Cargo.toml` (фичи `wayland`, зависимости Linux) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на безголовом композиторе; правила — на хосте | L; Dev: Linux (Wayland) |
 | **LY79** | **Wayland: ввод** (D20). Клавиатура (xkb, раскладка), указатель, касание, перо (`tablet-v2`), жесты pinch и pan (`pointer-gestures`), форма курсора (`cursor-shape`), сборка через `pointer_assembly` | LY29, LY78 | `crates/flui-native/src/input/linux/wayland.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс Wayland | L; Dev: Linux (Wayland, сенсорный ввод или перо при наличии) |
 | **LY80** | **Wayland: IME, clipboard, drag and drop** (D20, D8). `text-input-v3` и text-store host; провайдер clipboard и primary selection через `wl_data_device`; DnD как цель и источник | LY30, LY32, LY50, LY78 | `crates/flui-native/src/{text,clipboard,drag}/linux/wayland.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (Wayland) |
 | **LY81** | **Wayland: окно и экран** (D20). Декорации (`xdg-decoration`, запасные клиентские), дробный масштаб, видимость и перекрытие, темп по `frame`-колбэкам, перенос окна между выходами одного масштаба, экспорт `xdg-foreign` для родителя порталов, AT-SPI (живой слой) | LY32, LY78 | `crates/flui-native/src/{window,display}/linux/*`, `accessibility/linux.rs` | `module-dag`, `file-length` | conformance окна и дисплеев | L; Dev: Linux (Wayland, два выхода) |
-| **LY82** [P] | **X11: основа** (D20). Соединение, цикл событий на owner-потоке, окно, EWMH-состояние и команды, дисплеи (RandR, живой слой), таблица `X11` в `hosts/linux.rs` и `HostWindow`, цель поверхности, AT-SPI | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/x11.rs`, `hosts/linux.rs`, `Cargo.toml` (фича `x11`) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на Xvfb с оконным менеджером | L; Dev: Linux (X11) |
+| **LY82** [P] | **X11: основа** (D20). Соединение, цикл событий на owner-потоке, окно, EWMH-состояние и команды, дисплеи (RandR, живой слой), таблица `X11` в `hosts/linux.rs` и `HostWindow`, цель поверхности, AT-SPI. Если LY82 сливается раньше LY78, безусловные `zbus` и `accesskit_unix` и условие `target_os = "linux"` в `accessibility/mod.rs` — его (строка LY78) | LY28, LY31, LY45, LY46 | `crates/flui-native/src/{owner,window}/linux/x11.rs`, `hosts/linux.rs`, `Cargo.toml` (фича `x11`) | `module-dag`, `globals`, `file-length`, `deps` | conformance окна на Xvfb с оконным менеджером | L; Dev: Linux (X11) |
 | **LY83** | **X11: ввод** (D20). XInput2 (касание, перо, плавная прокрутка), XKB, указатель, курсор | LY29, LY82 | `crates/flui-native/src/input/linux/x11.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс X11 | L; Dev: Linux (X11) |
 | **LY84** | **X11: IME, clipboard, drag and drop** (D20, D8). XIM/IBus для IME и text-store host; провайдер clipboard и primary (селекции, INCR); XDND как цель и источник | LY30, LY32, LY50, LY82 | `crates/flui-native/src/{text,clipboard,drag}/linux/x11.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (X11) |
 | **LY85** | **Conformance на обоих и parity** (D20, R7.1). `assert_backend_conforms` и записи нативных трасс на Wayland и X11; `docs/platform-parity.md` и `docs/gaps.md` (запись 5) обновлены по исполненным прогонам; ✅ только после них | LY79, LY80, LY81, LY83, LY84 | `crates/flui-native/tests/*`, `docs/platform-parity.md`, `docs/gaps.md` | `platform-test`, `docs-paths` | вся conformance-таблица на двух хостах | L; Dev: Linux (Wayland и X11) |
@@ -276,7 +276,7 @@ graph LR
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY88** [P] | **Доступность всегда включена** (D24, R11.1). Удалить фичу `a11y` из `flui-native` (`a11y = [dep:accesskit_unix, dep:accesskit_windows, dep:accesskit_macos]`), `flui-app` (`a11y = ["flui-native/a11y"]`) и фасада: адаптеры AccessKit становятся безусловными зависимостями своих ОС; AT-SPI на Linux идёт по D-Bus, который нативному хосту нужен и так (logind, порталы). Мобильные адаптеры (LY65, LY70) и ARIA DOM (LY76) фичи не имеют с самого начала. Убрать `a11y` из `feature-matrix`, `facade-combos`, README и документов | LY32, LY34 | `crates/flui-native/Cargo.toml`, `crates/flui-app/Cargo.toml`, корневой `Cargo.toml`, `crates/flui-native/src/accessibility/*`, `docs/*` | `feature-matrix`, `facade-combos`, `deps`, `workspace`, `cross-typecheck` | `rg` по `feature = "a11y"` пуст; тесты моста доступности идут без `--features`; адаптеры собираются на каждой ОС | L + T |
+| **LY88** [P] | **Доступность всегда включена** (D24, R11.1). Удалить фичу `a11y` из `flui-native` (`a11y = [dep:accesskit_unix, dep:accesskit_windows, dep:accesskit_macos]`), `flui-app` (`a11y = ["flui-native/a11y"]`) и фасада: адаптеры AccessKit становятся безусловными зависимостями своих ОС; AT-SPI на Linux идёт по D-Bus, который нативному хосту нужен и так (logind, порталы). Мобильные адаптеры (LY65, LY70) и ARIA DOM (LY76) фичи не имеют с самого начала. Убрать `a11y` из `feature-matrix`, `facade-combos`, README и документов. Отступление (решение координатора 2026-10-22, ADR-0151 `Amended`): адаптер AT-SPI приходит с хостом Linux — пока это winit, `accesskit_unix` включает `winit-backend` (его `flui-app` включает на Linux всегда), условие `accessibility::{bridge, linux}` — `all(target_os = "linux", feature = "winit-backend")`, и тест моста AT-SPI идёт с `winit-backend` (в CI — `--all-features`); безусловной зависимостью Linux вместе с `zbus` его делает LY78 | LY32, LY34 | `crates/flui-native/Cargo.toml`, `crates/flui-app/Cargo.toml`, корневой `Cargo.toml`, `crates/flui-native/src/accessibility/*`, `docs/*` | `feature-matrix`, `facade-combos`, `deps`, `workspace`, `cross-typecheck` | `rg` по `feature = "a11y"` пуст; тесты моста доступности идут без `--features`; адаптеры собираются на каждой ОС | L + T |
 | **LY89** | **Ноль CPU в простое: предпочтения без опроса** (D25, R11.2). Предпочтения macOS и Android приходят уведомлениями вместо таймера в 500 мс: macOS — `NSWorkspace` и `NSNotificationCenter` (параметры отображения доступности, локаль), Android — `ContentObserver` и `ComponentCallbacks2`/`ConfigChanged` через `FluiView` и очередь LY62; цикл Android после Home не просыпается без события (ADR-0249). Счётчик пробуждений цикла — тест на headless в виртуальном времени и измерение на устройстве | LY8, LY9, LY33, LY62 | `crates/flui-native/src/preferences/{apple,android}*`, `crates/flui-native/android/java/*` | `cross-typecheck`, `android-dex`, `globals` | простой N секунд в виртуальном времени — ноль пробуждений; смена предпочтения — ровно одно; тест падает при возврате таймера | L + T; Dev: macOS и Android (пробуждения за минуту после Home) |
 | **LY90** [P] | **Гейт границы паники** (D25, R11.3). Новая задача xtask: по AST каждая `extern "C"` и `extern "system"` функция и каждый OS-колбэк в FFI-модулях файлов платформ проходит `owner::panic_boundary`; текущие 210 мест сверяются, пропущенные исправляются; allowlist пуст | LY26, LY34 | `tools/xtask/src/panic_boundary*` (новый), `crates/flui-native/src/{owner,window,input,text,display,clipboard,drag,accessibility,haptics,preferences,lifecycle}/*` | сама задача: `panic-boundary` (+ `--self-test`), `markers` | самотест: посаженная `extern "C"` без границы не проходит; существующие тесты границы | L |
 | **LY91** | **Один таймлайн и обратная связь о показе кадра** (D25, R11.4, R11.5). `EventTime` — единственная шкала ввода, кадров и показа. Контракт получает обратную связь «кадр показан в момент T» на этой шкале (форму называет PR); источники: Windows — DXGI frame statistics, macOS и iOS — `addPresentedHandler`, Wayland — `wp_presentation_time` (LY81), Android — frame timelines; где ОС не даёт (Web: метки `requestAnimationFrame` — начало кадра, не показ; X11) — `Unsupported` с причиной. Frame clock (`flui-scheduler`, `flui-runtime`) использует её для планирования кадра; headless-инъекция | LY46, LY81 | `crates/flui-platform/src/*` (значение обратной связи), `crates/flui-native/src/{window,display}/*`, `crates/flui-scheduler`, `crates/flui-runtime` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | headless-инъекция: метка показа доходит до frame clock и сравнима с меткой ввода; conformance-строка на каждой ОС | L + W + T; Dev: macOS, iOS, Android, Linux (Wayland), Web |
@@ -288,7 +288,7 @@ graph LR
 | **LY97** | **Записи нативного ввода: IME, lifecycle, предпочтения, дисплеи** (D25, R11.11). `native_recording` и `recording_vocabulary` расширяются на композицию IME, lifecycle (состояние окна, host notices), предпочтения и дисплеи; `--record` `os`-lane драйвера пишет их на Windows, macOS, Android и Web; headless воспроизводит детерминированно | LY41, LY44, LY45 | `crates/flui-native/tests/native_recording/*`, `crates/flui-testing/src/*`, `tools/xtask/src/recording_vocabulary.rs`, `crates/flui-driver/*` | `recording-vocabulary`, `workspace` | replay-тест на каждый вид записи на headless; `assert_backend_conforms` по ним | L + W; Dev: macOS, Android |
 | **LY98** | **Журнал нативного ввода в ядро** (D28, R11.13). `tests/native_recording/{codec,mod}.rs` → `src/owner/journal/`; схема записи (заголовок `flui_native_recording`, версия, семейства событий) объявляется во `flui-protocol`; фича `native-capture` сливается с `driver`; golden-записи в `tests/` читаются через `flui-protocol`; `record.start{native}` драйвера пишет этим кодеком | LY26, LY34 | `crates/flui-native/src/owner/journal/*`, `crates/flui-protocol/src/`, `crates/flui-native/Cargo.toml` | `workspace`, `reach`, `globals` | golden-записи без правок; запись во время работы на headless; `flui-driver` читает запись без ребра к ядру | L |
 | **LY99** | **Conformance как сценарии драйвера** (D27, R11.12). Строки conformance, которым нужна ОС, — сценарии `flui-driver` в его крейте; тот же сценарий на headless в CI; отчёт драйвера пишет lane и результат в формате, из которого обновляется строка parity. Совместно со спекой flui-driver (её задачи владеют самим драйвером) | LY98; спека flui-driver | `crates/flui-driver/*`, `crates/flui-native/tests/backend_conformance/*` | `checks` | один сценарий прошёл на headless и на Windows (`os`-lane) | L + W |
-| **LY100** | **Фича `scripted` и один двойник окна** (D29, R11.14). Сценарный примитив контракта — под `scripted`; `flui-testing` и `flui-app[driver]` включают её; 15 реализаций `PlatformWindow` вне ядра сводятся к `flui_testing::MockWindow` | LY44, LY50, LY54 | `crates/flui-platform/src/capability/`, `crates/flui-testing/src/`, `crates/flui-app/Cargo.toml`, тесты `flui-interaction`, `flui-runtime`, `flui-app` | `testing` (ADR-0243), `workspace` | `rg "impl .*PlatformWindow for"` вне ядра и kit — ноль; сценарий диалога через драйвер на headless | L |
+| **LY100** | **Фича `scripted` и один двойник окна** (D29, R11.14). Сценарный примитив контракта — под `scripted`; `flui-testing` и `flui-app[driver]` включают её; 15 реализаций `PlatformWindow` вне ядра сводятся к `flui_testing::MockWindow`; двойники ядра в корне (`FakeAccessibility`, `FakeTextInput`, `MockWindow`, `HeadlessPlatform` и прочие `Headless*`) уходят за `scripted` — часть R4.10, которую LY36 оставил | LY44, LY50, LY54 | `crates/flui-platform/src/capability/`, `crates/flui-native/src/lib.rs` (двойники в корне), `crates/flui-testing/src/`, `crates/flui-app/Cargo.toml`, тесты `flui-interaction`, `flui-runtime`, `flui-app` | `testing` (ADR-0243), `workspace` | `rg "impl .*PlatformWindow for"` вне ядра и kit — ноль; сценарий диалога через драйвер на headless | L |
 | **LY101** | **Фасад: `flui::services::<name>` за фичами** (D31, R5.15, ADR-0154 п. 8). Фасад `flui` получает по фиче на каждый официальный крейт возможности: сейчас `system` для `flui-system` — фича подключает крейт необязательной зависимостью и реэкспортирует его как `flui::services::system`; каждый следующий крейт возможности добавляет свою фичу тем же образцом в своём PR (`flui = { features = ["location", "bluetooth"] }` даёт `flui::services::location::*`). Крейты остаются отдельными: несовместимое изменение в одном задевает только приложения, включившие его фичу. `flui add <capability>` (команда и декларации — LY56) включает фичу фасада, а не добавляет зависимость на крейт напрямую. Kind-правило `workspace` допускает ребро «фасад → крейт возможности» только необязательное, за фичей, и требует фичу фасада у каждого официального крейта возможности | LY57 | `Cargo.toml` (фичи фасада), `src/lib.rs` (`pub mod services`), `crates/flui-cli/src/add*`, `tests/surface.rs`, `docs/crates.md`, `tools/xtask/src/workspace/*` | `workspace` (+ `--self-test`), `facade-combos`, `feature-matrix`, `doc-strict` | `tests/surface.rs`: `flui::services::system` есть ровно при включённой фиче; `facade-combos` собирает каждую фичу отдельно и все вместе; golden-тест `flui add` на fixture-крейте включает фичу фасада и пишет декларации; самотест: обязательная зависимость фасада на крейт возможности и такая же зависимость другого крейта фреймворка отказывают | L + T |
 | **LY102** | **Контракт по областям** (D26, R2.10). Модули `flui-platform` группируются: `window/` (опции, состояние, команды, возможности, размещение, трейт окна, `SurfaceTarget`, яркость), `input/`, `text/`, `display/`, `preferences/`, `transfer/`, `haptics/`, `capability/`, `menu/` (резерв), `unsupported`, `notice`, `system_chrome`, `storage`, `target_platform`; корневые реэкспорты имён, которыми пользуются фасад и `flui-sdk`, остаются (`flui::platform::WindowOptions` не меняется) | LY100, LY101 | `crates/flui-platform/src/**`, `docs/crates.md` | `workspace`, `doc-strict`, `docs-paths` | `cargo public-api diff`: корневые пути без изменений; workspace собирается | L |
 
@@ -1575,6 +1575,508 @@ graph LR
   `flui-app` под macOS и iOS (сборочный скрипт `psm` требует C-компилятора Apple и `xcrun`); Mac и
   iPhone: перенос чтения версии iOS в `AppleVersion::read`, публичные имена macOS и iOS от корня и
   тесты реального цикла на macOS (там они `ignore`) проверены только сборкой.
+- [x] **LY36** — ветка `platform/os-types`, на `main` @ `fc8f8ebaa` (LY34). Ни один публичный путь
+  ядра, скрытые включая, не называет OS-тип, AccessKit или tokio ни на одной цели, где ядро строит
+  хост (R4.10). `as_any` — с `PlatformWindow` на `HostWindow` (обязательный, без тела): каждое окно
+  ядра реализует его рядом с прочим `HostWindow`, двойники `PlatformWindow` (`flui-app`,
+  `flui-runtime`, `flui-interaction`, `flui-testing`, тесты ядра) его теряют, тесты, приводившие
+  headless-окно, держат `Arc<dyn HostWindow>` (`headless_host_window`, `test_host_window`); doc
+  контракта — compile_fail E0599 на `window.as_any()` у `dyn PlatformWindow`. Расширения ОС:
+  `WindowsWindowExt` и `MacOSWindowExt` реализованы для `dyn HostWindow + '_` поверх `as_any`, берут
+  `&self` и отвечают `Option` — `None` для окна другого хоста, у которого ничего не просят (сеттеры
+  — `Option<()>`); тела — `pub(crate)` методы `WindowsWindow` и `MacOSWindow`, заглушки, не
+  трогающие окно (прогресс на панели задач, тень, анимации, tiling), — связанные функции;
+  `add_tab_to_window(&self, &dyn HostWindow) -> Option<bool>` отвечает `Some(false)`, если другое
+  окно не AppKit. Скрыто: модуль `win32` удалён (его не называл никто); `WindowsWindow`,
+  `MacOSWindow`, `IOSWindow`, `WinitWindow` ушли из корня — по правилу строки «не называет никто вне
+  крейта», как только `tests/` перешли на `raw-window-handle` (номинально они `pub` в
+  `pub(crate)`-модулях: тип позиции `Host::Window` в публичной реализации); `WindowsWindow::hwnd`,
+  `toggle_fullscreen_for_hwnd`, `WindowsAccessibility::new` — `pub(crate)`; `HostPlatform::app`
+  macOS и Android и `WebWindow::canvas` удалены (вызывающих нет); `BackgroundExecutor::handle` —
+  `pub(crate)` под `cfg(all(linux, winit-backend))`, его зовут источники Linux; `liquid_glass` — типы
+  не публичны, `set_liquid_glass*` и `clear_liquid_glass` ушли из `MacOSWindowExt` в `pub(crate)`
+  методы окна с `expect(dead_code)` (после ревью удалены, см. ниже);
+  `WindowConfiguration` — `pub(crate)` под `cfg(any(windows, macos))` с одним полем, которое читает
+  хост (`fullscreen_hotkey`, F11), `FullscreenMonitor` и `resize_debounce_ms` удалены (их не читал
+  ни один хост), `with_config` Windows и macOS — тоже; `FakeAccessibility::{published,
+  request_action}` удалены (называли `accesskit`, вызывающих нет): двойник считает опубликованное
+  (`published_count`), а не хранит деревья, слушатель действий держит до замены и не зовёт; из
+  корня ушли `FakeSystemChrome`, `IOSExecutor` и `FakeHaptics` (это `flui_platform::haptics::
+  FakeHaptics`, один путь — ADR-0151 §9). Остались: `HeadlessDeferredWindowOpens`
+  (`enable_deferred_window_open`, его зовёт `flui-app`), `HeadlessInputDevices`,
+  `HeadlessWindowPolicy`, `DisplayChangeError` (`tests/`), `IOSSceneAttachmentId` (поле
+  `IOSSceneEvent`), `InputCallback`, `InputWake` (`WindowCallbacks`), `InstallationCancelled`;
+  `PlatformReadyCallback` — LY45; `PlatformExecutor`, `WaitError`, `PlatformResult`, `Task`,
+  `TaskLabel`, `PathPromptOptions` — LY61. Вход Android: `flui_native::android_platform(app:
+  android_activity::AndroidApp) -> Box<dyn Platform>` (`cfg(target_os = "android")`, `#[must_use]`),
+  рядом с `current_platform()` и `headless_platform()`; `AndroidPlatform` (псевдоним, `new`, `app`)
+  ушёл, `HostPlatform<Android>::new` — `pub(crate)`; других типов `android_activity` вход не
+  называет, фасад новых не получает (`run_app_android` берёт тот же `AndroidApp`), а
+  `current_platform()` на Android отвечает ошибкой с именем входа. `tests/` берут `HWND` как
+  встраивающий код — через `raw-window-handle` (`win32_handle` в `tests/main.rs`; `contract.rs`,
+  `windows_window_commands.rs`, `windows_host_events.rs` меняют только приведение на этот хелпер и
+  импорты); тесты в крейте — пути `crate::window::windows::WindowsWindow` и
+  `crate::haptics::headless::FakeHaptics`. Примеров `windows11_demo` и `resize_jitter_probe` нет с
+  #1827 — переводить нечего (строка LY37 их тоже называет). Гейт API-замыкания, решения сверх
+  строки: (1) `targets` — rustdoc-JSON по сборке на цель (`features` или `all-features`): Linux,
+  Windows, macOS — все фичи, iOS, Android, wasm32 — по умолчанию; хостом CI одним `HWND` не увидеть
+  никогда; находка называет сборку; rustdoc идёт с `DOCS_RS=1`, как сборка docs.rs
+  (`objc2-exception-helper` на iOS не компилирует C); (2) `entries` — одному элементу `deny`-пакета
+  можно назвать один запрещённый крейт (`flui_native::android_platform` → `android_activity`),
+  ненужная запись — находка; (3) под `deny` метод реализации трейта другого крейта workspace —
+  сигнатура этого трейта, за неё отвечает его крейт: окна и `Absent<position::Accessibility>`
+  (скрытый публичный `host`) реализуют `PlatformAccessibility` из `flui-semantics`, чьи методы
+  называют дерево AccessKit; заголовок реализации и её ассоциированные типы проверяются; (4)
+  `workspace` не знал ключа `api-closure` (LY39 таблиц не заводил) — добавлен. `deny` ядра — 37
+  крейтов (`windows`, `windows_core`, семейство `objc2`, `core_foundation`, `core_graphics`,
+  `dispatch{,2}`, `block2`, `android_activity`, `ndk{,_sys}`, `jni{,_sys}`, `libc`, `web_sys`,
+  `js_sys`, `wasm_bindgen`, `winit`, `ui_events_winit`, `arboard`, `x11rb`, `wayland_*`, `rustix`,
+  `zbus`, `accesskit*`, `tokio`). CI: job `doc` ставит nightly с пятью целями, таймаут 40 мин.
+  ADR-0151 — `Amended` (вход Android в §8, подтверждение гейтом по целям), ADR-0089 — проверка
+  называет новые случаи самотеста; `docs/architecture.md`, README и ARCHITECTURE.md ядра (инвариант
+  «No public path names an OS type»), строка материала фона в `docs/platform-parity.md`;
+  `changelog.d/platform-os-types.md`, а из фрагмента LY34 убраны имена, которых больше нет.
+  Исключения `module-dag` не менялись: 33. Тесты: строка
+  `the_windows_extension_answers_only_for_a_win32_window` в `native_window_commands` (headless —
+  `None` у `backdrop`, `set_backdrop`, `set_corner_preference`, `is_dark_mode`, `dpi`,
+  `convert_point_to_device`, `set_taskbar_progress`; Win32 — `dpi() > 0`, `Some(())`, `Some(_)`):
+  без исправления не компилируется, с `expect` в приведении (как `unwrap` winit) падает —
+  «failing cases: ["the_windows_extension_answers_only_for_a_win32_window"]»; xtask —
+  `a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list`,
+  `an_entry_admits_its_item_and_crate_until_no_build_needs_it`,
+  `an_entry_one_build_needs_is_needed_and_each_build_reports_its_own` (без пропуска метода трейта
+  workspace падает первый, без поиска записи — два других), самотест — 6 случаев (+2). Гейт до
+  правок (Windows, `nightly-2026-10-12`, хост, пробный `deny`) — 23 находки: `win32` (5), `hwnd`,
+  `toggle_fullscreen_for_hwnd`, `FakeAccessibility` (3), `Absent<Accessibility>::publish`,
+  `BackgroundExecutor::handle` и 11 сеттеров `WindowCallbacks` с `parking_lot`, который в итоговый
+  `deny` не вошёл; после — пусто на всех шести целях (`1.99.0` с `RUSTC_BOOTSTRAP=1`: у nightly на
+  этой машине только цель Windows), переименованная запись даёт находку сборки Android и «names no
+  `android_activity` item». Проверки (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-platform
+  -p flui-native -p flui-app --all-targets`, `-p flui-native -p flui-app --all-targets --features
+  flui-native/winit-backend,flui-native/a11y`, `-p flui-runtime -p flui-interaction -p flui-testing
+  -p flui --all-targets`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app -p
+  flui-platform` — 343 (2 пропущены), `-p flui-native -p flui-app` с `winit-backend,a11y` — 337 (2),
+  `-p xtask` — 48; doctest'ы `flui-platform` и `flui-native`; clippy Android `-p flui-native -p
+  flui-app --all-targets`, macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`), wasm32 lib;
+  `wasm-check`, `wasm-test` — 51; `checks` (taplo, `android-dex`, `module-dag` — 290 модулей, 33
+  исключения, — и самотест, `globals` — 56 — и самотест, `file-length`, `markers`, `testing`,
+  `docs-paths`, `workspace` — 28 крейтов, 229 рёбер, `reach`), `doc-strict`; `api-closure -p flui -p
+  flui-platform -p flui-protocol` на `nightly-2026-10-12` — чисто. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY`
+  и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform -p flui-native -p flui-app --all-targets` и с
+  `winit-backend,a11y` (первый прогон нашёл `BackgroundExecutor::handle` у источников Linux — отсюда
+  `pub(crate)` выше); nextest `FLUI_HEADLESS=1` `-p flui-native -p flui-app -p flui-platform` — 360:
+  358, два теста X11 (`x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`,
+  `x11_window_takes_commands_and_publishes_what_the_server_holds`) падают на X-сервере WSLg, как в
+  LY29 и LY34; `--all-features` под xvfb (команда CI) — 278 из 278; rustdoc `-D warnings
+  --document-private-items` без фич и с `winit-backend,a11y`; `api-closure` трёх Stable-пакетов и
+  самотест на nightly — чисто, 6 случаев (nightly в WSL поставил сам `rustup +nightly target list`;
+  целей, кроме Linux, у него нет). Устройства не нужны: путь Android меняет только имя входа (тот же
+  `HostPlatform::<Android>::new`), его держит clippy Android. Не запускалось: `cross-typecheck` (нет
+  `zig`; job в CI); `api-closure -p flui-native` хостом Linux на nightly — его первый прогон в job
+  `doc`; Mac и iPhone (расширение macOS поверх `dyn HostWindow`, `liquid_glass`, корень iOS) — в
+  очереди vanyastaff/flui#1840.
+  После ревью PR #1874 и слияния с `main` @ `59e63b27c` (LY88: фичи `a11y` нет; конфликтов кода не
+  было, кроме строки LY88 в `tests/contract.rs`, которая приводила окно к `WindowsWindow`, — теперь
+  `win32().is_some()`). Расширения ОС — по одному методу: `WindowsWindowExt::win32() ->
+  Option<Win32Window<'_>>`, `MacOSWindowExt::appkit() -> Option<AppKitWindow<'_>>` (`#[must_use]`);
+  37 однострочных пересылок `Option<()>` ушли, тела — методы видов, отказать по чужому хосту они
+  не могут; `AppKitWindow::add_tab_to_window -> Result<(), TabJoinError>` (`NotAppKit`,
+  `SameWindow`, `NotOnTheMainLane`, `Closed`). Удалены заглушки, отвечавшие успехом без действия:
+  Windows — прогресс на панели задач (с `TaskbarProgressState`), тень, анимации; macOS — tiling
+  (`enable_tiling`, `disable_tiling`, `is_tiling_enabled` и пять типов модуля `tiling`); удалён
+  `liquid_glass` (≈330 строк `unsafe` AppKit, недостижимых, под `expect(dead_code)`), вернётся из git
+  в LY37 методами вида `appkit()` (ADR-0254 п. 3: материалы одной ОС — через `flui::native::<os>`;
+  строки LY37 и LY43 это называют). `HostWindow::as_any` — одно тело через
+  печать (`Sealed::any` в обобщённой реализации над `CoreHostWindow: 'static`), девять ручных тел
+  ушли; doc больше не утверждает, что снаружи нечего привести (`MockWindow` публичен).
+  `FakeAccessibility` бросает слушатель действий сразу (вне замка). Ошибки и doc не называют
+  удалённые `MacOSPlatform::with_config` и `AndroidPlatform`. Гейт: список `allow` вместо `deny`
+  (`cursor_icon`, `parking_lot`, `raw_window_handle`, `smallvec`, `web_time` — что API называет
+  сегодня на шести целях): запретный список открыт по умолчанию (`windows-sys`, `objc2-metal`,
+  `objc2-core-graphics` в lockfile его миновали), разрешающий — закрыт; изъятие для методов трейта
+  workspace — поимённое (`traits`: `flui_semantics::platform::PlatformAccessibility` →
+  `accesskit`, ненужное — находка); таблица читается с `deny_unknown_fields`; упавший rustdoc
+  отсылает к своим ошибкам выше. CI: job `doc` упал на nightly rustdoc `-D warnings` под
+  `x86_64-pc-windows-msvc` — две избыточные ссылки в `input/windows/direct_manipulation.rs`
+  (у Linux они не разрешались, теперь путь — подпись ссылки); таймаут `doc` возвращён к 25 мин
+  (`main` — 13 мин, шесть сборок ядра — около минуты каждая). Строки: LY36 называет `entries` и
+  `traits` и отдаёт LY100 часть R4.10 про двойники (строка LY100 и таблица трассировки — тоже),
+  R4.10 в `requirements.md` называет единственный вход Android; LY37 — форма видов, примеров нет,
+  заглушек нет, Liquid Glass возвращается в ней методами `AppKitWindow`; LY43 — общий словарь
+  материалов в команде окна, материалы одной ОС — через `flui::native::<os>` (ADR-0254 п. 3,
+  ADR не менялся: это решение владельца). Тест таблицы чужих хостов —
+  `tests/os_extensions.rs`, свой харнесс (`libtest-mimic`, один поток: winit строит цикл только
+  на главном потоке): `the_windows_extension_has_no_view_of_another_hosts_window` — окна headless и
+  winit (`winit-backend`) без вида Win32, окно Win32 с видом (`dpi() > 0`); с `expect` в приведении
+  падает на главном потоке; `the_macos_extension_has_no_view_of_another_hosts_window` — только
+  проверка типов (cross-typecheck). xtask: `an_allow_list_reports_every_crate_it_does_not_name`,
+  `an_admitted_trait_lets_its_implementations_methods_name_its_crate`,
+  `a_misspelled_key_of_the_table_is_an_error_not_a_narrower_build`, тесты записей переведены на
+  `allow`; самотест — 7 случаев (+ ОС-крейт, которого нет ни в одном списке; допущенный, другой и
+  отсутствующий трейт). Проверки после слияния (Windows): `cargo fmt`; clippy `-D warnings` `-p
+  flui-platform -p flui-native -p flui-app --all-targets` и с `flui-native/winit-backend`, `-p
+  flui-runtime -p flui-testing -p flui-interaction -p flui -p xtask --all-targets`; nextest `-p
+  flui-platform -p flui-native -p flui-app -p xtask` — 393 (2 пропущены), `-p flui-native -p
+  flui-app` с `winit-backend` — 338 (2), `-p flui-runtime -p flui-testing -p flui` — 138;
+  doctest'ы `flui-platform`, `flui-native`; clippy Android `--all-targets`, macOS lib (и с
+  `winit-backend`), iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51; `checks`
+  (`module-dag` — 288 модулей, 33 исключения; `globals` — 56), `doc-strict`; `api-closure` всех
+  четырёх пакетов на шести целях с `RUSTDOCFLAGS=-D warnings` (`1.99.0`, `RUSTC_BOOTSTRAP=1`) —
+  чисто, самотест — 7; nightly `2026-10-12` — Stable-пакеты чисто, rustdoc ядра под Windows со
+  всеми фичами и `-D warnings` — чисто. WSL (без `WAYLAND_DISPLAY`): clippy с `winit-backend` и без,
+  `--all-features` под xvfb — 279 из 279, rustdoc `-D warnings --document-private-items` с
+  `winit-backend` и без, самотест гейта на nightly — 7.
+- [x] **LY88** — ветка `platform/a11y-always`, на `main` @ `fc8f8ebaa` (LY34). Фичи `a11y` нет ни в
+  `flui-native`, ни в `flui-app`, ни в фасаде. `accesskit_windows` и `accesskit_macos` — безусловные
+  зависимости своих ОС: каждое окно Win32 и AppKit строит адаптер, таблица Win32 называет
+  `WindowsAccessibility` без двойника `Absent`, таблица Apple — `MacosAccessibility` на macOS и
+  `Absent` на iOS. Отступление от строки (решение координатора, записано поправкой `Amended` к
+  ADR-0151 §15 и в строках LY88, LY78 и LY82): адаптер AT-SPI приходит с хостом Linux. Linux-хоста,
+  кроме winit, нет, без `winit-backend` адаптер никто не называет, и безусловная зависимость собирала
+  бы около 66 крейтов (zbus, atspi), которых не зовёт ни один код; поэтому `accesskit_unix` приносит
+  `winit-backend` рядом с `zbus` (его `flui-app` включает на Linux всегда, так что AT-SPI есть в
+  каждой сборке приложения), а условие `accessibility::linux` и Linux-ветви `bridge` —
+  `all(target_os = "linux", feature = "winit-backend")`, записанное один раз, в
+  `accessibility/mod.rs` (файлы winit говорят только `target_os = "linux"`: они сами под
+  `winit-backend`). `build.rs` у ядра нет, и заводить его ради псевдонима `cfg` — вернуть сборочный
+  скрипт, удаление которого записано в ARCHITECTURE.md. LY78 (или LY82, если раньше) делает
+  `accesskit_unix` и `zbus` безусловными и условие — `target_os = "linux"`. Тест моста AT-SPI идёт с
+  `winit-backend` (в CI — `--all-features`), а не без признаков. `cargo shear` находок по
+  зависимостям не даёт (12 его предупреждений — о файлах trybuild, не о зависимостях).
+  Остальные условия: `accessibility::{apple, windows}` — `cfg(target_os = "macos")` и `cfg(windows)`,
+  таблица winit — `UnixAccessibility` на Linux и `Absent` на Windows и macOS, поля и
+  `HostWindow::accessibility` окон Win32, AppKit и winit (Linux) — без `cfg(feature)`,
+  `owner::panic_boundary::retain_off_owner_resource` — `any(windows, macos, test)`. xtask:
+  `facade-combos` — 9 сочетаний (без `--features a11y`), `cross-typecheck` включает из объявленных
+  только `testing`. Документы: README (абзац вместо строки таблицы фич), документация фасада и
+  `flui-native`, `docs/testing.md` (`cross-typecheck`), `docs/platform-parity.md` (заметка «Tree and
+  actions»; клетки те же: прогона со скринридером нет), `docs/gaps.md` (запись 2),
+  попутная правка документации `PlatformWindow::request_redraw` в `flui-platform` (слушатель
+  активации AccessKit принадлежит `flui_runtime`, не `flui_app`, и в сборке по умолчанию он теперь
+  достижим), ARCHITECTURE.md ядра (абзац о зависимостях адаптеров); таблицы истории и шапки
+  «Last updated» в `docs/platform-parity.md` и `docs/gaps.md` получили строку этого изменения;
+  `changelog.d/platform-a11y-always.md` — `### Removed` (имя по ветке, как велит
+  `changelog.d/README.md`). ADR-0084 своих строк про `a11y` не переписывает: это запись; `rg
+  'feature = "a11y"'` вне `docs/plans` и ADR-0084 пуст. Тесты: новый
+  `window::winit::real_loop_tests::a_linux_winit_window_hands_out_its_at_spi_bridge` открывает окно
+  winit на настоящем цикле (Xvfb в CI, `--all-features`) и требует его мост AT-SPI; с выключенным
+  `HostWindow::accessibility` окна winit он падает, с исправлением прошёл 5 раз из 5.
+  `test_window_lifecycle_contract` получил пункт 9 — окно Win32 (проверка типа
+  `WindowsWindow`, так что двойник headless, у которого мост есть всегда, его не проходит) отдаёт мост
+  UI Automation; с выключенным `HostWindow::accessibility` окна Win32 (то, что давала сборка по
+  умолчанию с `a11y` выключенной) он падает. Окно macOS тест не открывает (там он `ignore`), окно
+  winit на Linux вне `run()` не открывается — его держит тест реального цикла. Исключений
+  `module-dag` по-прежнему 33. Проверки (Windows): `cargo fmt`; clippy `-D
+  warnings` `-p flui-native -p flui-app -p flui-platform --all-targets` и `-p flui-native -p
+  flui-app` с `winit-backend`, `-p xtask`; nextest `-p flui-native -p flui-app` — 304 (2 пропущены),
+  с `winit-backend` — 337 (2), `-p xtask` — 45; `facade-combos` (9); clippy macOS lib `-p
+  flui-native` (и с `winit-backend`) и `--all-targets` (`clang` из LLVM), Android `--all-targets` `-p
+  flui-native -p flui-app`, iOS lib (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51;
+  `checks` (с `android-dex` и taplo), `module-dag` (291 модуль, 321 ребро, 33 исключения) и самотест
+  (54), `globals` (56) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`,
+  `doc-strict`, `workspace` (28 крейтов, 229 рёбер), `reach` (68 корневых сборок), `deps --only
+  policy`. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-native -p
+  flui-app --all-targets` и с `winit-backend`; проходы `feature-matrix` (cargo-hack в WSL нет, его
+  `--each-feature` повторён руками): `flui-native` — по умолчанию, `--no-default-features` и каждая
+  из `desktop`, `winit-backend`, `web`, `wayland`, `x11`, `native-capture`, каждый и с `--tests
+  --benches --examples` (16), `flui-app` — 6, фасад — те же 9 сочетаний; nextest без признаков и без
+  дисплея `-p flui-native` — 199 (в первой редакции, с dev-зависимостью; см. «После ревью»), `-p
+  flui-app` под xvfb — 45 (1 пропущен), `--all-features` под xvfb (команда CI) — 278, `winit-backend`
+  под xvfb — 322 (1); в первом прогоне `logind_lock_and_unlock_reach_the_owner` не дождался события
+  за 5 с, отдельно прошёл 5 раз из 5 и в повторе всего набора; rustdoc `-D warnings
+  --document-private-items` с `winit-backend` и без. Устройства: Android и Web не тронуты (адаптеров
+  нет); Mac — сборка адаптера AppKit без фичи проверена только clippy, прогон в
+  vanyastaff/flui#1840. Не запускалось: `cross-typecheck` (нет `zig`; job в CI). После ревью
+  (vanyastaff/flui#1871): dev-зависимость `accesskit_unix` и ветвь `test` условия сняты, поправка
+  ADR-0151, тест реального цикла, пункт 9 только для окна Win32, строки истории документов.
+  Проверки: `cargo fmt`; Windows — clippy `-p flui-native -p flui-app --all-targets` и с
+  `winit-backend`, nextest — 304 (2 пропущены) и с `winit-backend` — 337 (2;
+  `haptics::windows::tests::a_stalled_pen_worker_plays_only_the_newest_request_and_never_late`
+  однажды не уложился в 5 с под нагрузкой хоста и прошёл повторно); clippy macOS lib (и с
+  `winit-backend`) и `--all-targets`, Android `--all-targets`, iOS lib (`DOCS_RS=1`), wasm32 lib;
+  WSL — clippy с `winit-backend` и без, 16 проходов `feature-matrix` по ядру, nextest без признаков
+  и без дисплея — 198 (тест моста AT-SPI теперь идёт с `winit-backend`), `--all-features` под xvfb
+  — 279 (с новым тестом), новый тест под xvfb — 5 из 5; `checks`, `module-dag`, `facade-combos`,
+  `deps --only policy`, `docs-paths`, `markers`.
+- [x] **LY90** — ветка `platform/panic-boundary-gate`, на LY34 (`dbbb8d7d9`); слиты `fc8f8ebaa`,
+  LY88 (`ccda248ee`, признака `a11y` больше нет), `59e63b27c` и LY35 (`5cf18f936`). Граница —
+  одна функция: `owner::panic_boundary::os_entry<A: Copy + Debug, R>(entry: &'static str, args: A,
+  after_panic: AfterPanic<A, R>, body: impl FnOnce() -> R) -> R`,
+  `AfterPanic::{Answer(fn(A) -> R), Abort}`.
+  `args` — то, с чем ОС вызвала вход (сообщение и окно, делегат): лог паники несёт их (кроме
+  ZST) и текст паники под именем входа, ответ строится из них. Ответ — `fn`-указатель: ничего не
+  захватывает и создаётся только после паники (ошибка COM читает `GetErrorInfo` потока в момент
+  создания). Порядок: лог (погашен — подписчик лога пользовательский), удержание нагрузки, ответ;
+  `Abort` и ответ, который сам паникует, завершают процесс (`end_process`), так что первый отказ
+  всегда в логе раньше. `Abort` — где состояние может быть порвано посреди диспетчеризации:
+  процедура окна Win32 (в логе снова `msg` и `hwnd`), хук cloak (`hwnd`), `configuration` и
+  `init` UIKit, страж полосы владельца macOS; на Android и Linux его нет
+  (`cfg_attr(…, expect(dead_code))`). Шаги внутри входа гасятся порознь, каждый с текстом паники
+  под именем входа: `contain_os_entry(entry, body) -> Option<R>` (Windows, macOS) — каждый
+  подписчик широковещательного приёмника, каждый хук окна владельца, провайдер drag, ветка `Now`
+  `loop_control`; `contain_owner_callback` тоже логирует текст. Ответы после паники:
+  широковещательный приёмник — TRUE на `WM_QUERYENDSESSION` (и запрос, оставленный без ответа
+  паникующим подписчиком, разрешается: паника не держит выход из сеанса), иначе 0; окно
+  владельца — 0; `applicationShouldTerminate:` — `TerminateNow`, пока идёт завершение сеанса
+  (`terminate_gate::session_ending`), иначе Cancel; `windowShouldClose:` NO; reopen и
+  `didFinishLaunching` false; диапазоны `NSTextInputClient` `{NSNotFound, 0}`; COM —
+  `E_UNEXPECTED`; перечисления — FALSE; делегаты WinRT — `Ok(())`; JNI — `T::default()`. Шесть
+  входов — константа (тело — литерал или путь, код не выполняется): `GiveFeedback`,
+  `accepts_first_responder`, `is_opaque`, `accepts_touch_events`, `character_index_for_point`,
+  `takes_focus`. TSF: `TextServices::enter` возвращает гард `Depth`, `leave(entered)` его
+  отпускает — глубина снимается и при панике мимо отравления документа (раньше оставалась 1, и
+  каждая следующая операция хоста вставала в очередь навсегда). Тела GCD — `move`: захваты
+  уничтожаются внутри границы. Wake pump: тик с поколением (`Tick`), страж
+  `StopUnlessFinished(Option<Tick>)` снимает `pending_at` через `compare_exchange`, только если
+  хук не запланировал новый тик до паники (старое пробуждение не стирает новое обязательство).
+  Адаптеры (8, по виду объекта ОС): `com_method` (drag, input scope, TSF без состояния),
+  `com_hresult` (drag), `TsfStore::document_method`, `Handler::com_method` (DirectManipulation),
+  `jni_native`, `Self::scene_event` (сцены UIKit). Гейт — `cargo xtask panic-boundary`
+  (`tools/xtask/src/panic_boundary{.rs,/scan.rs,/fixture.rs,/tests.rs}`); дерево модулей, cfg с
+  тремя значениями, атрибуты и источники `Disk`/`Memory` — общий `tools/xtask/src/source_tree.rs`,
+  им же читает `globals`. Код под cfg, ложным в любой сборке (`test`), не читается. Точки входа:
+  fn с чужим ABI — свободная, метод `impl` или умолчание трейта (процедуры, колбэки
+  перечисления, JNI, методы `ClassBuilder`, NDK); метод `define_class!` с
+  `#[unsafe(method(…))]`/`method_id`; метод `impl I…_Impl for …` (vtable COM); методы
+  `ActionHandler`/`ActivationHandler`/`DeactivationHandler` (AccessKit зовёт их из своих входов
+  UIA, NSAccessibility, AT-SPI); замыкание, отданное ОС, — любой литерал замыкания в вызове
+  функции или конструктора крейта привязок ОС (`windows`, `objc2*`, `block2`, `dispatch*`, `jni`,
+  `ndk`, `android_activity`, …) по пути или по импортированному имени, так что незнакомая функция
+  ОС не проходит молча; конструкторы блоков и делегатов по имени (14 типов) — где их прячет
+  glob-импорт; методы GCD по имени (`exec_async`, `exec_sync`, `exec_after`, `after`,
+  `barrier_async`, `barrier_sync`), их тело обязано быть `move`; синхронный `autoreleasepool` —
+  не вход. Правило: тело — одно выражение: константа, вызов `os_entry` (`…panic_boundary::os_entry`
+  или импортированный оттуда) или адаптера — свободной функции того же файла, определённой один
+  раз на уровне модуля и не затенённой импортом (`name(…)`), либо метода того же файла,
+  определённого один раз на `Self` или названном типе (`Self::name(…)`, `Type::name(…)`); вызов
+  `self.name(…)` — не адаптер (тип получателя гейту не виден). Аргументы вычисляются до границы,
+  поэтому каждый — литерал, путь, замыкание, кортеж, ссылка, поле, приведение, скобки от них или
+  `AfterPanic::Answer(…)` от такого. Идентичность: `fn os_entry` один, в `owner::panic_boundary`;
+  другой элемент, модуль или импорт под именем `os_entry`/`panic_boundary` — находка. Тело
+  `define_class!` разбирается (атрибуты класса до `struct Name;` отброшены: `#[ivars = Weak<T>]`
+  не синтаксис атрибута Rust); в токенах других макросов определение `extern fn`, конструктор
+  блока или делегата и метод GCD — находка. Вид находки — `Problem::{Unguarded, Argument,
+  Identity, Unread}`. Allowlist нет. Пределы (в доке гейта и ARCHITECTURE.md): методы ОС
+  узнаются по имени — новый метод, берущий замыкание, вносится в список GCD, конструктор за
+  glob-импортом — в список типов колбэков; захваты блока или делегата живут, пока ОС его держит, и
+  уничтожаются вне любого вызова, поэтому это значения без пользовательского `Drop`. Вне охвата по
+  виду: замыкания `wasm_bindgen` (wasm32 всегда `panic=abort`), процедуры winit и
+  android-activity (своя граница: winit поднимает панику в `run_app`, android-activity —
+  `abort_on_panic`), ABI плагинов `flui-hot-reload` (`flui_scene_build`, `flui_app_build` из
+  `scene_plugin!`/`app_plugin!`: их зовёт процесс-хост в плагине, вне `flui-native`; граница там
+  нужна та же, но своя — крейт строится на `flui-sdk`, отдельной задачей), тестовый код (паника
+  заглушки роняет процесс теста). Самотест — 30 посаженных находок, по одной на правило и вид
+  (среди них: метод с чужим ABI в `impl` и умолчание трейта, адаптер, затенённый импортом,
+  `self.name`, метод чужого типа, вычисление внутри `AfterPanic::Answer`, тело `exec_after` без
+  `move`, блок и метод GCD в токенах макроса, незнакомая функция ОС с замыканием), и тихие случаи
+  (`#[cfg(test)]`, блок `extern {}`, тип указателя, константное тело, `autoreleasepool`,
+  адаптеры); таблица `panic_boundary_contract` — 13 строк. Подключён в `checks`
+  (`panic-boundary --self-test`, `panic-boundary`), значит и в job `checks` CI. Сверка «210 мест»:
+  это число строк с `panic_boundary|catch_unwind` в `crates/flui-platform/src` на `b4ff641e5`
+  (импорты, тесты, внутренние гашения), а не мест входа. Перепись гейта — 169 точек входа: 57
+  extern fn, 26 методов Objective-C, 56 методов COM, 7 обработчиков AccessKit, 23 замыкания; 163 —
+  через `os_entry` (67 из них — через 8 адаптеров), 6 — константы; 205 файлов. До исправления 63
+  гасили всё тело, 12 — часть, 94 — ничего. Без границы были: Win32 — процедура окна-владельца
+  буфера обмена, `enum_proc` мониторов, `first_visible`, `low_memory_fired`; COM — 12 методов OLE
+  drag (`GetDataHere`, `GetCanonicalFormatEtc`, `SetData`, три `*Advise`, четыре
+  `IEnumFORMATETC`, `QueryContinueDrag`, `GiveFeedback`), `OnViewportUpdated`, 8 методов TSF с
+  постоянным ответом (без проверки отравления — ответ не читает документ) и 5 методов input scope;
+  AccessKit — 7 (Windows 2, macOS 2, Linux 3); AppKit — 41 (14 методов вида ввода, 11
+  `NSTextInputClient`, 15 делегата окна, `takes_focus`); GCD macOS — тик wake pump (хук дедлайна
+  поднимал панику через `or_resume` в трамплин `extern "C"` — abort) и пробуждение повтора
+  предпочтений; UIKit — 14 (`configuration`, `init` делегата сцены, hover, четыре touches,
+  display link, два метода контроллера, четыре блока Core Haptics). Частично: 6 входов iOS через
+  `with_platform` (заём `DELEGATE_STATE` вне гашения), 4 метода вида iOS (pin и super вне
+  гашения), `OnContentUpdated` (`GetContentTransform` до границы), status bar iOS. Ещё: `dealloc`
+  вида macOS гасит разбор контекста отдельно, и super `dealloc` идёт и после его паники;
+  завершение перезапуска Core Haptics снимает `restart_in_flight` до лога; `exec_async_guarded`
+  и исполнитель iOS логируют через `os_entry`; `LoopControl::after` стал `run_after` (имя `after`
+  — метод GCD). Тесты: `owner::panic_boundary::tests::an_os_entry_logs_the_first_failure_then_answers`,
+  `an_os_entry_answers_from_its_arguments_and_logs_them` (без аргументов в логе — падает),
+  `a_contained_callback_is_logged_with_its_text` (без текста — падает),
+  `a_panicking_log_stays_inside_the_entry` (лог вне гашения — падает);
+  `owner::windows::tests::a_failing_subscriber_is_logged_and_a_session_end_still_granted` (с
+  прежним общим гашением — ответ 0, выход из сеанса отклонён); строка TSF
+  `a_tsf_call_failing_past_its_poisoning_leaves_no_depth` (с ручными enter/leave — глубина 1);
+  `accessibility::windows::tests::a_panicking_listener_stays_inside_its_handler` и
+  `accessibility::linux::…` (с откатом обработчика — «a listener's panic unwound out of its
+  handler»); только macOS — `owner::apple::macos::wake_pump::tests::a_tick_whose_hook_panics_leaves_no_tick_queued`,
+  `a_tick_whose_hook_rearms_then_panics_keeps_the_newer_tick`,
+  `owner::apple::terminate_gate::tests::a_session_end_is_under_way_from_its_announcement_to_its_answer`
+  (здесь модули Apple не собираются в тестах: `psm` требует `cc`); xtask `panic_boundary_contract`
+  и самотест, мутации ветвей гейта (разрешение адаптера мимо импорта, `move`, `Answer`, ABI в
+  `impl`) — «MISSED». Исключения `module-dag` — 33, `globals` — 56, как было. Проверки на Windows:
+  `cargo fmt`; clippy `-D warnings` `-p flui-native -p flui-app --all-targets` и с
+  `flui-native/winit-backend`, `-p xtask --all-targets`; nextest `-p flui-native -p flui-app` — 317
+  (2 пропущены), с `winit-backend` — 350 (2), `-p xtask` — 46; clippy Android `--all-targets`
+  (`-p flui-native -p flui-app`), macOS lib `-p flui-native` и с `winit-backend` (`flui-app` под
+  macOS требует `cc`: `psm` через `flui-rendering`), iOS lib (`DOCS_RS=1`), wasm32 lib;
+  `wasm-check`, `wasm-test` — 51; `checks` целиком: `module-dag` (295 модулей, 325 рёбер, 33
+  исключения) и самотест (54), `globals` (56) и самотест (15), `panic-boundary` (169) и самотест
+  (30), `file-length`, `markers`, `testing`, `docs-paths`, `workspace`, `reach`, `changelog`;
+  `doc-strict`; rustdoc `--document-private-items -D warnings`. WSL Ubuntu 24.04
+  (`WAYLAND_DISPLAY`, `XDG_SESSION_TYPE` сняты): clippy с `winit-backend` и без; nextest
+  `FLUI_HEADLESS=1` — 335: 334, падает `x11_window_takes_commands_and_publishes_what_the_server_holds`
+  на X-сервере WSLg (как на `origin/main`, см. LY34; в прогоне до слияния LY35 однажды упал и
+  `x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`, отдельно он прошёл 5
+  из 5); `--all-features` под xvfb — 291 из 291; `accessibility::linux` и `owner::panic_boundary`
+  с `winit-backend` — 7; rustdoc с `winit-backend` и без. Не запускалось: Mac и iPhone — 41 вход
+  AppKit, 14 UIKit и блоки только собраны (библиотека), тесты wake pump и terminate gate не
+  собирались, в очереди vanyastaff/flui#1840 (пункт 4 `docs/gaps.md`);
+  `cross-typecheck` (нет `zig`; job в CI); устройство Android (JNI-методы меняют только имя входа
+  в логе и ответ по умолчанию). Браузер: проверять нечего — Web входов не имеет.
+- [x] **LY35** — ветка `platform/duplicates` (vanyastaff/flui#1873), начата на вершине LY34
+  `dbbb8d7d9`, перенесена на `main` @ `fc8f8ebaa` после его слияния (дерево то же), после ревью —
+  слияние `main` @ `ccda248ee` (LY88). Слияния дублей внутри моделей фич; `flui-app` не тронут.
+  `changelog.d/platform-duplicates.md`: `### Added` — `RefreshPeriod::from_secs_f64` в контракте,
+  `### Changed` — ось колеса без движения `+0.0` на каждом хосте.
+  Режим окна. Одно правило — `window::state::mode_of(ModeFlags)` (свёрнуто, затем полноэкранно,
+  затем развёрнуто); `ModeFlags { minimized, fullscreen, maximized }` — что оконная система говорит
+  об окне. Ушли `mode_of` AppKit (`window/apple/geometry.rs`), `window_mode` X11
+  (`window/linux/x11.rs`) и `NativeMode::public()` Win32; каждый читает свой отчёт во флаги, и только:
+  winit — три запроса как есть; X11 — `mode::mode_flags(wm_state, net)` (`WM_STATE` решает
+  свёрнутость, `_NET_WM_STATE_HIDDEN` — только без него, развёрнуто — по обеим осям); AppKit —
+  `WindowFlags::mode_flags()` (зум — только у окна, меняющего размер); Win32 — `NativeMode::flags()`.
+  `NativeMode` переехал из `proc.rs` в чистую половину `window::windows::mode` (встроенный модуль
+  `mod.rs`, `forbid(unsafe_code)`, вне Windows — для тестов, с `allow(dead_code, reason)`).
+  Win32 держит один `enum`, но свёрнутое из полноэкранного окно несёт два факта, и какой сильнее —
+  это и есть один порядок `mode_of`; прямое отображение `enum` в `WindowMode` повторило бы его, поэтому
+  `flags()` (это сказано в его документации). Расхождение копий: AppKit ставил полноэкранность выше
+  свёрнутости (строка `FMZR` → `Fullscreen` в `flags_become_a_mode`), остальные — свёрнутость выше.
+  Порядок один — у `mode_of`; закреплённое поведение AppKit сохранено его чтением флагов:
+  `isMiniaturized` считается только вне полноэкранного режима (AppKit не сворачивает полноэкранное окно,
+  а сначала выходит из него — так строит запросы и `steps_to`); строка `FMZR` не правлена. winit на
+  macOS для тех же фактов давал `Minimized` и даёт; AppKit такого сочетания не сообщает.
+  Видимость. Одно правило — `window::visibility::ReportedVisibility` (`report`, и `report_in` для
+  окна, держащего его в `Cell`): рантайм слышит ответ, только когда он меняется. Его держат окна winit
+  (`Mutex`; ответ читается под замком, как раньше), Win32 (`report_in`), AppKit (в состоянии окна) и
+  Web (`report_in`; проверка приёма — до правила, как раньше); ушли `visibility_edge` и три сравнения
+  `replace(..) != visible`. Правила одной платформы ушли из модели в её файл: `WM_SIZE`,
+  `WM_SHOWWINDOW` и стиль создания — `window::windows::surface` (`initial_visibility`,
+  `size_visibility`, `show_window_visibility`, `SIZE_*`, `WS_VISIBLE_STYLE_BIT`; три теста перенесены
+  с именами), бит `NSWindowOcclusionStateVisible` — его двойник `window::apple::geometry::surface`
+  (`occlusion_state_is_visible`, тест `appkit_occlusion_reports_the_visible_bit`). Android
+  (`publish_activity_fact`, факт lifecycle) и headless (`simulate_visibility`, двойник) фильтра не
+  имели и не получили.
+  Период обновления. «Один конструктор … с одной проверкой» строки — конструкторы контракта:
+  `RefreshPeriod::{from_hz, from_ratio, from_millihertz}` и новый `from_secs_f64` для измеренного
+  интервала (общий код ушёл вниз; тест `measured_interval_is_the_period` в
+  `refresh_value_classification_table`); одна их проверка отвергает не конечное, не большее нуля и
+  вне 1 мс…1 с. Каждый источник отдаёт отчёт своей ОС прямо конструктору своей единицы. Один издатель —
+  `display::source::MeasuredPeriod`: `offer` публикует измерение, только когда оно выходит из полосы
+  (`outside_band`, доля опубликованного; первое — всегда), `departs` спрашивает без публикации,
+  `forget`; публиковать в обход полосы нечем. Ушли `display::android::sample::refresh_period` (вызов
+  на месте), модуль `display::apple::period` (`core_graphics_refresh_period`),
+  `refresh_period_for_screen` (macOS читает `refresh_rate_of_screen -> Option<f64>` и отдаёт её
+  `from_hz`), `refresh_period` Wayland (вызов на месте) и
+  `display::windows::sample::{rational_refresh_period, frequency_period}` — их место заняло одно
+  правило Windows, `display_period(target_rate, mode_frequency)` (рациональная частота пути, иначе
+  `dmDisplayFrequency`, читаемая только тогда; её 0 и 1 — «по умолчанию оборудования»). Ссылка
+  дисплея iOS (`LinkPeriod::observe`) и оценка браузера (`RefreshEstimator`) строят период через
+  `from_secs_f64` и публикуют через `offer`; полосы прежние (5 % и 3 %), согласие последних интервалов
+  и устойчивость оценки судятся тем же `outside_band`. Отступления от строки:
+  `ScreenPeriods::period_of` период не строит, а выбирает, чей опубликованный период несёт экран
+  (первого живого окна), — это учёт iOS, он остался, а строитель `link_rate` (`LinkPeriod::observe`)
+  переведён; `refresh_estimate` остался как оценщик (усечённое среднее, выбросы), ушли его построение
+  периода и полоса. headless (`DisplaySpec::with_refresh_period(Duration)`) остался на
+  `TryFrom<Duration>`: это период, заданный тестом, не отчёт ОС. Расхождений копии не имели — все шли
+  через конструкторы контракта; полоса браузера считается теперь в секундах, а не в миллисекундах
+  (округление расходится лишь на самой границе, тесты её не задевают); 1 Гц из `dmDisplayFrequency`
+  неизвестен только у Windows, сохранено.
+  `Location` клавиши. Одна таблица — `input::keys::LOCATIONS`, строки — `LocationRow { location,
+  dom_number, codes }`: номер, которым DOM называет место, и коды клавиш этого места. `location_of_number`
+  (`pub(crate)`, только DOM) читает веб, `location_for_code` — Win32 и AppKit; посторонний `WM_CHAR`
+  Win32 — именованная константа `CHARACTER_WITHOUT_A_KEY` вместо литерала. Адаптер keyboard-types
+  (winit, Android) сопоставляет `keyboard_types::Location` по вариантам, исчерпывающим `match`
+  (вариант, добавленный keyboard-types, не соберётся, пока его не назовут), и таблица `mapping`
+  сверяет его со строками. Ушли `match` веба (4) и литерал Win32; `location_for_code` стал поиском
+  по таблице. Расхождений нет: неизвестный номер DOM — `Standard`, как было.
+  Шаг колеса. Одно правило — `input::scroll::wheel_step(unit, x: WheelAmount, y: WheelAmount) ->
+  Result<ScrollDelta, InputValueError>` с `WheelAmount::{offset, content}` (`WheelDirection`):
+  количества платформы в выбранной ею единице, каждая ось поворачивается в направление FLUI. Ушли
+  `from_win32_wheel`, `from_win32_hwheel` и `from_web`; потребители — Win32 (`ContactRegistry::wheel`
+  с `WHEEL_DETENT`), Web (чистая половина `input::web::wheel::step`: `deltaMode` → единица), winit
+  (`scroll_step`, был `wheel_step`; `ScrollStep { delta, precision }`), Android (`AxisPolicy::delta`)
+  и AppKit (не в строке, то же правило; шаг переехал в чистую половину `input::apple::wheel::step` по
+  R4.2). Расхождения: (1) неконечное значение — winit и AppKit давали нулевой шаг в единице события,
+  Web и Android отбрасывали событие, у Win32 его не бывает (`i16`): правило отвечает ошибкой, и каждый
+  потребитель решает, как раньше; (2) ось без движения — Win32 давал `+0.0`, Web пропускал знак нуля
+  из `WheelEvent` (`deltaX: -0` → `-0.0`), winit, AppKit, Android (`-x` от нуля) и вертикальное колесо
+  Win32 с нулевым расстоянием давали `-0.0`: правило поворачивает вычитанием из нуля, а оставленное
+  значение складывает с нулём, так что ось без движения везде `+0.0` (так закрепляет запись
+  `win32_sent_mouse_and_wheel`: `Detents(0, -1)`, `Detents(1, 0)`); прочие значения те же бит в бит.
+  Это видно потребителю (`signum()` такой оси был `-1.0`), отсюда `### Changed`.
+  Тесты — по одной таблице `mapping` на правило, в модели, и каждая читает строки через пути
+  потребителей, что собираются на хосте:
+  `window::state::mapping::every_window_system_decides_the_mode_alike` (8 строк × флаги winit,
+  свойства X11, сырые флаги AppKit с его режимом в строке, где свёрнутое окно ещё и полноэкранно, режим
+  Win32), `window::visibility::mapping::every_change_is_reported_once` (правила Win32 `WM_SIZE` и
+  `WM_SHOWWINDOW` и бит перекрытия AppKit через правило; winit и Web читают ответ через FFI и
+  сообщают его как есть), `display::source::mapping::every_display_source_reads_a_cadence_alike`
+  (11 каденций × Android через `RawDisplay::info`, Windows через `display_period`, Wayland через
+  `WaylandOutputs::apply` и `views`, RandR через `RandrState::views`, ссылка дисплея через
+  `LinkPeriod::observe`, браузер через `RefreshEstimator`; у macOS чтение — FFI, столбца нет),
+  `a_measured_period_is_published_outside_its_band`, `macos_shim_keeps_the_period_it_reports_today`
+  (перенесён из удалённого `display::apple::period` с именем, его цитирует ARCHITECTURE.md),
+  `input::keys::mapping::every_backend_reads_a_key_at_one_location` (7 клавиш × скан-код Win32,
+  код AppKit, номер DOM, адаптер keyboard-types при `winit-backend`),
+  `input::scroll::mapping::every_backend_steps_a_turn_alike` (7 поворотов, среди них ось `-0` DOM, ×
+  Win32, DOM, Android, AppKit, winit при `winit-backend`; бит в бит) и
+  `a_turn_that_is_not_finite_steps_nothing`. В них слиты `window_mode_precedence` и строки
+  `android_refresh_value_table`; `windows_zero_or_one_hz_is_unknown` и `rational_refresh_converts_exactly`
+  идут через `display_period` (добавлен откат пути без частоты на частоту режима). Мутации — таблица
+  падает, когда потребитель расходится: `NativeMode::flags` без «свёрнуто из полноэкранного» — «Win32:
+  minimized from fullscreen»; X11 без полноэкранности при развёрнутости — «X11: fullscreen that kept its
+  maximized flag»; AppKit, считающий `isMiniaturized` и в полноэкранном режиме, — «AppKit: minimized
+  from fullscreen»; `report`, всегда отвечающий `Some`, — «an unchanged visible window»; инвертированный
+  бит AppKit — «AppKit: an unchanged visible window»; `size_visibility` без сворачивания — «Win32
+  WM_SIZE: hidden, then shown»; Wayland и RandR, читающие миллигерцы как герцы, — «Wayland: 60 Hz is
+  None», «RandR: 60 Hz is None»; `LinkPeriod`, строящий период как герцы, — «display link: 60 Hz is
+  None»; `offer` без полосы — «inside the band»; Android и winit с прежним `-x` — «a notch down stepped
+  … x: -0.0»; AppKit, не поворачивающий ось, — «AppKit: two notches right»; правило без `+ 0.0` — «DOM: a
+  still axis reported as negative zero»; адаптер, не читающий место, — «winit and Android: the left
+  Shift». Мутация `size_visibility`, отвечающая на каждое восстановление, таблицу не роняет: сообщения
+  те же, повтор снимает правило (её держит `a_win32_size_message_reports_only_the_minimize_edges`).
+  Потребители, чей путь — только FFI (чтение CoreGraphics, клавиатура и колесо Web, ответ видимости
+  winit и Web), зовут правило или конструктор напрямую. Записи нативных трасс и conformance не тронуты
+  и проходят.
+  Ревью (vanyastaff/flui#1873): `Refresh` удалён (он лишь пересылал конструкторам контракта и держал
+  вторую копию их проверки), `from_secs_f64` добавлен в контракт; `MeasuredPeriod::offer` вместо
+  безусловного `publish`, `outside_band` — одна формула полосы вместо `differs` оценки; столбцы
+  CoreGraphics и миллигерц больше не зовут конструктор сами — Wayland и RandR идут через модели;
+  таблица видимости идёт через читателей Win32 и AppKit; шаг AppKit — в чистой половине и в таблице;
+  исчерпывающий `match` keyboard-types вернулся, `LOCATIONS` — именованные строки, `location_of_number`
+  — `pub(crate)`; `+ 0.0` для оставленной оси и строка `-0` DOM; таблица режима кормит AppKit сырыми
+  флагами; `report_in` — одна последовательность `Cell` для Win32 и Web; бит перекрытия AppKit —
+  `apple::geometry::surface`; константа `CHARACTER_WITHOUT_A_KEY`. Слияние `main` с LY88: конфликт
+  только в этом разделе (обе ветки дописали запись), признака `a11y` в изменениях ветки не было.
+  `module-dag`: исключений 33, новых нет (`window::apple::ios` → `display::apple` остаётся: окно iOS
+  называет `LinkPeriod` и `change_screen`); `globals` — 56, без изменений. Документы: ARCHITECTURE.md
+  ядра называет одно правило каждой пары, конструкторы контракта и что читает каждая таблица; раздел
+  периода macOS — `refresh_rate_of_screen` и `RefreshPeriod::from_hz`.
+  Проверки после ревью и слияния (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-native -p
+  flui-app --all-targets` с `winit-backend` и без, `-p flui-platform --all-targets`; nextest
+  `-p flui-native -p flui-app -p flui-platform` — 349 (2 пропущены), `-p flui-native -p flui-app` с
+  `winit-backend` — 343 (2); clippy Android `--all-targets`, macOS lib (и с `winit-backend`), iOS lib
+  (`DOCS_RS=1`), wasm32 lib; `wasm-check`, `wasm-test` — 51 (45 у `flui-native`); `module-dag`
+  (295 модулей, 10 фич с 77 файлами платформ, 3 base, 324 ребра, 33 исключения) и самотест (54),
+  `globals` (56) и самотест (15), `file-length`, `markers`, `testing`, `docs-paths`, `doc-strict`,
+  `workspace` (28 крейтов, 229 рёбер), `reach` (68 корневых сборок), `checks` (с `android-dex` и taplo).
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-native -p flui-app
+  -p flui-platform --all-targets` и `-p flui-native -p flui-app` с `winit-backend`; nextest
+  `FLUI_HEADLESS=1` под xvfb с `winit-backend` `-p flui-native -p flui-app` — 329 (1 пропущен),
+  `--all-features` под xvfb (команда CI) — 285, без признаков (`FLUI_HEADLESS=1`) — 204; rustdoc `-D
+  warnings --document-private-items` с `winit-backend` и без. Galaxy S21, 2026-10-22, Android 15, два
+  коротких прогона пробы `flui create --template counter` (до ревью и после слияния, чтение частоты
+  Android перешло на `from_hz` на месте); лог обратного вызова частоты и ревизий снимка временно поднят
+  до `info` (правка не закоммичена): обратный вызов сообщает 8333333 ↔ 16666666 нс (адаптивная частота
+  при простое и касаниях), ревизии снимка 1–7 и 1–5 — 1080×2400 с периодом попеременно 8333 и
+  16666 мкс; Back — «Destroy — shutting down», «Android platform event loop finished», предупреждения
+  «outlived its thread» нет; `FATAL`, паник и ANR нет; настройки устройства не менялись, пробы удалены.
+  Браузер — у координатора, проба `inputprobe` вне репозитория: последняя клавиша и её место, шаг
+  колеса, видимость и lifecycle. Не запускалось: `cross-typecheck` (нет `zig`; job в CI),
+  `web_browser` (нет ChromeDriver); Mac и iPhone — в очереди vanyastaff/flui#1840 (чтение флагов и бита
+  перекрытия AppKit, шаг колеса AppKit, чтение CoreGraphics, `LinkPeriod` iOS) — только сборкой.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
@@ -1967,7 +2469,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 | R4.7 | LY35 |
 | R4.8 | LY27–LY33, LY78, LY82 |
 | R4.9 | LY24; LY34 (проверка по всему `src/`) |
-| R4.10 | LY36 |
+| R4.10 | LY36, LY100 |
 | R4.11 | LY22; сохраняют LY27–LY34, LY78, LY82, LY87 |
 | R5.1 | LY50 |
 | R5.2 | LY50 |

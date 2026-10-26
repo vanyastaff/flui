@@ -54,6 +54,7 @@ use windows::Win32::{
     },
 };
 
+use super::mode::NativeMode;
 use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, restore_rectangle,
 };
@@ -61,6 +62,7 @@ use super::window::WindowsWindow;
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::control::OwnerPreferences;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
@@ -69,7 +71,8 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::WindowStateCell;
+use crate::window::state::{WindowStateCell, mode_of};
+use crate::window::visibility::ReportedVisibility;
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -192,9 +195,9 @@ pub(crate) struct WindowContext {
     /// The window's visibility as the runtime sees it (hidden-surface
     /// gating): the surface, which `WM_SIZE` (minimize/restore) and
     /// `WM_SHOWWINDOW` (hide/show) report through the pure rules in
-    /// `crate::window::visibility`, less a cloak or a locked session. Seeded
+    /// `super::surface`, less a cloak or a locked session. Seeded
     /// from the window's ACTUAL creation style
-    /// (`win32_initial_visibility(GWL_STYLE)`, see its doc) — a decorated
+    /// (`surface::initial_visibility(GWL_STYLE)`, see its doc) — a decorated
     /// window is created hidden (`false`, and the creation-time
     /// `ShowWindow`'s `WM_SHOWWINDOW` edge flips it), while an undecorated
     /// window is created `WS_POPUP | WS_VISIBLE` (`true`, and no
@@ -879,9 +882,7 @@ impl WindowProc {
                 }
 
                 WM_SIZE => {
-                    use crate::window::visibility::{
-                        SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
-                    };
+                    use super::surface::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
 
                     // WM_SIZE dimensions are unsigned16, unlike signed
                     // mouse and WM_MOVE coordinates packed in the same shape.
@@ -1016,12 +1017,10 @@ impl WindowProc {
                         // reaches `dispatch_visibility_status_change`, the wire
                         // the runtime's `FrameClock` gate and `AppLifecycleState`
                         // derivation hang off. Decided by the pure rule in
-                        // `window::visibility` (host-tested).
+                        // `surface` (host-tested).
                         if !ctx.visibility_muted.get()
-                            && let Some(visible) = crate::window::visibility::win32_size_visibility(
-                                size_type,
-                                prev_mode.is_minimized(),
-                            )
+                            && let Some(visible) =
+                                super::surface::size_visibility(size_type, prev_mode.is_minimized())
                         {
                             ctx.report_surface_visibility(visible);
                         }
@@ -1074,11 +1073,10 @@ impl WindowProc {
                         ctx.update_window_state(|state| state.visible = shown);
                         ctx.publish_window_state(hwnd);
                         if !ctx.visibility_muted.get()
-                            && let Some(visible) =
-                                crate::window::visibility::win32_show_window_visibility(
-                                    shown,
-                                    ctx.mode.get().is_minimized(),
-                                )
+                            && let Some(visible) = super::surface::show_window_visibility(
+                                shown,
+                                ctx.mode.get().is_minimized(),
+                            )
                         {
                             ctx.report_surface_visibility(visible);
                         }
@@ -1332,90 +1330,6 @@ pub(crate) struct WindowRecord {
     pub(crate) focused: bool,
 }
 
-/// How the window occupies its monitor, with what the way back needs: the
-/// native tracking behind the public [`WindowMode`].
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) enum NativeMode {
-    #[default]
-    Normal,
-    /// Iconified. A fullscreen window that was minimized keeps the rectangle it
-    /// returns to, so restoring it brings fullscreen back.
-    Minimized {
-        from_fullscreen: Option<Bounds<i32>>,
-    },
-    /// Maximized.
-    Maximized,
-    /// Borderless over the whole monitor; `restore_bounds` is the outer
-    /// rectangle in device pixels the window returns to.
-    Fullscreen { restore_bounds: Bounds<i32> },
-}
-
-impl NativeMode {
-    pub(crate) fn is_fullscreen(&self) -> bool {
-        matches!(self, Self::Fullscreen { .. })
-    }
-
-    /// The rectangle a fullscreen window returns to, also while it is minimized
-    /// (a minimized fullscreen window is still the fullscreen window it comes
-    /// back as); `None` for every other mode.
-    pub(crate) fn fullscreen_bounds(&self) -> Option<Bounds<i32>> {
-        match *self {
-            Self::Fullscreen { restore_bounds }
-            | Self::Minimized {
-                from_fullscreen: Some(restore_bounds),
-            } => Some(restore_bounds),
-            _ => None,
-        }
-    }
-
-    /// Whether this is fullscreen, or minimized out of fullscreen.
-    pub(crate) fn holds_fullscreen(&self) -> bool {
-        self.fullscreen_bounds().is_some()
-    }
-
-    /// The same mode with the rectangle a fullscreen window returns to
-    /// replaced; any other mode is returned as it is.
-    pub(crate) fn with_fullscreen_bounds(self, bounds: Bounds<i32>) -> Self {
-        match self {
-            Self::Fullscreen { .. } => Self::Fullscreen {
-                restore_bounds: bounds,
-            },
-            Self::Minimized {
-                from_fullscreen: Some(_),
-            } => Self::Minimized {
-                from_fullscreen: Some(bounds),
-            },
-            other => other,
-        }
-    }
-
-    pub(crate) fn is_minimized(&self) -> bool {
-        matches!(self, Self::Minimized { .. })
-    }
-
-    pub(crate) fn is_maximized(&self) -> bool {
-        matches!(self, Self::Maximized)
-    }
-
-    pub(crate) fn is_normal(&self) -> bool {
-        matches!(self, Self::Normal)
-    }
-
-    /// Every transition is allowed except to the same mode.
-    pub(crate) fn can_transition_to(&self, next: &Self) -> bool {
-        std::mem::discriminant(self) != std::mem::discriminant(next)
-    }
-
-    fn public(&self) -> WindowMode {
-        match self {
-            Self::Normal => WindowMode::Normal,
-            Self::Minimized { .. } => WindowMode::Minimized,
-            Self::Maximized => WindowMode::Maximized,
-            Self::Fullscreen { .. } => WindowMode::Fullscreen,
-        }
-    }
-}
-
 /// What the owner context knows about a window that Win32 does not say: the
 /// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
 /// fullscreen window returns to, the limits the app set and the display the
@@ -1530,7 +1444,7 @@ pub(crate) fn sample_state(
         )
     });
     WindowState::new(outer, if mode.is_minimized() { cached } else { content })
-        .with_mode(mode.public())
+        .with_mode(mode_of(mode.flags()))
         .with_normal_geometry(normal)
         .with_visible(visible)
         .with_focused(focused)
@@ -1572,7 +1486,7 @@ impl WindowsWindow {
     /// // Toggle fullscreen on F11 key press (from WM_KEYDOWN handler)
     /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
     /// ```
-    pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
+    pub(crate) fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
         use windows::Win32::{
             Graphics::Gdi::{
                 GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
@@ -1950,7 +1864,7 @@ pub(crate) struct Visibility {
     occlusion: Cell<Occlusion>,
     /// Last value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change`.
-    reported: Cell<bool>,
+    reported: Cell<ReportedVisibility>,
 }
 
 impl Visibility {
@@ -1965,7 +1879,9 @@ impl Visibility {
         Self {
             surface: Cell::new(surface),
             occlusion: Cell::new(occlusion),
-            reported: Cell::new(surface && !occlusion.session_locked),
+            reported: Cell::new(ReportedVisibility::new(
+                surface && !occlusion.session_locked,
+            )),
         }
     }
 
@@ -2026,7 +1942,7 @@ impl WindowContext {
 
     fn settle_visibility(&self) {
         let visible = self.visibility.visible();
-        if self.visibility.reported.replace(visible) != visible {
+        if let Some(visible) = ReportedVisibility::report_in(&self.visibility.reported, visible) {
             tracing::debug!(visible, "window visibility changed");
             self.callbacks.dispatch_visibility_status_change(visible);
         }
@@ -2131,29 +2047,19 @@ unsafe extern "system" fn cloak_changed(
     _thread: u32,
     _time: u32,
 ) {
-    if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
-        return;
-    }
-    // The visibility callback is user code. As in `window_proc`, a panic must
-    // not unwind across the `extern "system"` boundary: it is logged, then the
-    // process aborts. `AssertUnwindSafe` is sound because nothing observes
-    // the state the unwind tore.
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // The visibility callback is user code. As in `window_proc`, the state
+    // behind a panic mid-dispatch may be torn: it is logged, then the process
+    // aborts.
+    os_entry("the cloak-change hook", hwnd, AfterPanic::Abort, || {
+        if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
+            return;
+        }
         let _ = with_window_context(hwnd, "cloak change", |ctx| {
             if ctx.cloak_watch.is(hook) {
                 ctx.refresh_cloaked(hwnd);
             }
         });
-    }));
-    if let Err(payload) = outcome {
-        tracing::error!(
-            hwnd = ?hwnd,
-            panic = crate::owner::panic_boundary::panic_payload_message(&*payload),
-            "panic in a cloak-change callback; aborting — it must not unwind across \
-             the extern \"system\" boundary"
-        );
-        std::process::abort();
-    }
+    });
 }
 
 /// Wake deadlines while the system runs a modal loop for the window (moving

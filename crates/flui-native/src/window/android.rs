@@ -831,10 +831,6 @@ impl PlatformWindow for AndroidWindow {
     fn mouse_position(&self) -> Point<f64> {
         Point::default()
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 mod safe_area {

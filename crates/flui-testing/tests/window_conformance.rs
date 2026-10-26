@@ -3,7 +3,6 @@
 //! pass the first and name the check that catches every fault. Checks that
 //! cannot fail prove nothing.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{DeviceSize, Size};
@@ -70,9 +69,6 @@ impl PlatformWindow for RefusesForNow {
     }
     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
         self.0.system_chrome()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

@@ -1,21 +1,13 @@
 //! The self-test's crates: source files in memory and their entries, with
 //! one planted violation per rule and one silent case per exemption.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use super::scan::{Source, Target};
+use super::scan::Target;
 use super::{HOST, Krate, PLATFORM};
-
-/// In-memory files, repository-relative.
-pub(super) struct Memory(pub(super) BTreeMap<String, String>);
-
-impl Source for Memory {
-    fn read(&self, rel: &str) -> Option<String> {
-        self.0.get(rel).cloned()
-    }
-}
+pub(super) use crate::source_tree::Memory;
 
 /// The ADRs the fixture entries may name.
 pub(super) fn adrs() -> BTreeSet<String> {

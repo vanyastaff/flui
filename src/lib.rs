@@ -86,10 +86,10 @@ await its returned request or poll `try_result` to obtain the window result."
 //! an otherwise supported cross-target build.
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
-//! harness, normally enabled in a development dependency), `a11y` (native
-//! accessibility adapters on supported platforms), and `serde` (serialization
-//! for framework value types). Emitting widget semantics alone does not enable
-//! a native accessibility adapter; select `a11y` for that integration.
+//! harness, normally enabled in a development dependency) and `serde`
+//! (serialization for framework value types). Native accessibility is not a
+//! feature: on Windows, macOS and Linux every window offers its semantics tree
+//! to the operating system's assistive technology through AccessKit.
 //!
 //! # Using a design system
 //!

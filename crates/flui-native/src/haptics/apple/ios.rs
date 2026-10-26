@@ -46,6 +46,7 @@ use crate::haptics::degradation::{
     IosImpact, IosNotification, ios_feedback, ios_pattern, ios_pattern_parts,
 };
 use crate::owner::apple::ios::NativeOwner;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
@@ -136,10 +137,22 @@ impl CoreHaptics {
         };
         let stopped_owner = Arc::downgrade(self);
         let stopped = RcBlock::new(move |_reason: CHHapticEngineStoppedReason| {
-            Self::engine_down(&stopped_owner);
+            os_entry(
+                "the Core Haptics stopped handler",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || Self::engine_down(&stopped_owner),
+            );
         });
         let reset_owner = Arc::downgrade(self);
-        let reset = RcBlock::new(move || Self::engine_down(&reset_owner));
+        let reset = RcBlock::new(move || {
+            os_entry(
+                "the Core Haptics reset handler",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || Self::engine_down(&reset_owner),
+            );
+        });
         // SAFETY: both pointers are live heap blocks of the handler types
         // these setters take; the engine copies each block, so dropping the
         // `RcBlock`s afterwards leaves its copies alive.
@@ -177,9 +190,16 @@ impl CoreHaptics {
     /// Ask the owner (the main thread) to restart the engine.
     fn schedule_restart(owner: Weak<Self>) {
         DispatchQueue::main().exec_async(move || {
-            if let Some(core) = owner.upgrade() {
-                core.restart();
-            }
+            os_entry(
+                "the Core Haptics restart",
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
+                    if let Some(core) = owner.upgrade() {
+                        core.restart();
+                    }
+                },
+            );
         });
     }
 
@@ -199,16 +219,28 @@ impl CoreHaptics {
             return;
         };
         let owner = Arc::downgrade(self);
+        // The restart is settled before the diagnostic: a log that panics
+        // must not leave it in flight, which would refuse every later restart.
         let completion = RcBlock::new(move |error: *mut NSError| {
-            let Some(core) = owner.upgrade() else {
-                return;
-            };
-            if error.is_null() {
-                core.state.store(RUNNING, Ordering::Release);
-            } else {
-                tracing::warn!("the Core Haptics engine did not restart; patterns fall back");
-            }
-            core.restart_in_flight.store(false, Ordering::Release);
+            os_entry(
+                "the Core Haptics restart's completion",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    let Some(core) = owner.upgrade() else {
+                        return;
+                    };
+                    if error.is_null() {
+                        core.state.store(RUNNING, Ordering::Release);
+                    }
+                    core.restart_in_flight.store(false, Ordering::Release);
+                    if !error.is_null() {
+                        tracing::warn!(
+                            "the Core Haptics engine did not restart; patterns fall back"
+                        );
+                    }
+                },
+            );
         });
         // SAFETY: the pointer is a live heap block of the completion type
         // `startWithCompletionHandler:` takes; the engine copies it.

@@ -5,8 +5,8 @@
 //!
 //! Two parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; and [`ext`],
-//! [`MacOSWindowExt`] with the tiling configuration it takes, the public
-//! AppKit features beyond the cross-platform window.
+//! [`MacOSWindowExt`] and the [`AppKitWindow`] it gives, the public AppKit
+//! features beyond the cross-platform window.
 //!
 //! The loop holds the windows it tracks as `CallbackWindow`s
 //! (`owner::apple::macos`).
@@ -23,8 +23,9 @@ pub(crate) mod delegate;
 pub(crate) mod ext;
 
 use delegate::{create_window_delegate, display_of_screen};
-pub use ext::tiling::{TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState};
-pub use ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
+pub use ext::{
+    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
+};
 
 use std::sync::{
     Arc,
@@ -49,7 +50,7 @@ use crate::window::apple::geometry::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
-    mode::{ModeSequence, ModeStep, WindowFlags, is_shown, mode_of},
+    mode::{ModeSequence, ModeStep, WindowFlags, is_shown},
 };
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -83,8 +84,11 @@ use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
 use crate::text::TextInput;
 use crate::{
-    owner::OpenWindowError, owner::handlers::WindowCallbacks, window::config::WindowConfiguration,
-    window::state::WindowStateCell,
+    owner::OpenWindowError,
+    owner::handlers::WindowCallbacks,
+    window::config::WindowConfiguration,
+    window::state::{WindowStateCell, mode_of},
+    window::visibility::ReportedVisibility,
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, WindowEvent, WindowId, WindowOptions, WindowReveal,
@@ -100,11 +104,10 @@ pub struct MacOSWindow {
     /// accessibility bridge, and is the `ns_view` of the raw window handle.
     ///
     /// Fixed for the window's lifetime and read from here, never from
-    /// `-[NSWindow contentView]`: Liquid Glass makes an `NSVisualEffectView`
-    /// the content view and re-parents this view inside it. Not retained by
-    /// the wrapper: the window's view hierarchy holds it, and the one code
-    /// path that detaches it (the Liquid Glass swap) retains it across the
-    /// swap.
+    /// `-[NSWindow contentView]`: a backdrop material makes an
+    /// `NSVisualEffectView` the content view and re-parents this view inside
+    /// it. Not retained by the wrapper: the window's view hierarchy holds it,
+    /// and a path that detaches it retains it across the detach.
     view: ObjcId,
 
     /// Window state
@@ -268,10 +271,10 @@ struct MacOSWindowState {
     /// gating), fed by `windowDidChangeOcclusionState:`. Edge filter:
     /// AppKit documents that the notification may fire for reasons other
     /// than the visible bit flipping, so an unchanged value is never
-    /// re-dispatched (`window::visibility::visibility_edge`). Starts
+    /// re-dispatched (`window::visibility::ReportedVisibility`). Starts
     /// `true` — a freshly created window is treated as visible until AppKit
     /// says otherwise, matching every other backend's initial state.
-    occlusion_visible: bool,
+    occlusion_visible: ReportedVisibility,
 
     /// The window was opened `visible: true` with
     /// [`WindowReveal::AfterFirstFrame`] and is ordered front, but at
@@ -627,7 +630,7 @@ impl MacOSWindow {
                     cursor: CursorIcon::default(),
                     normal: None,
                     sequence: ModeSequence::default(),
-                    occlusion_visible: true,
+                    occlusion_visible: ReportedVisibility::new(true),
                     first_reveal_pending,
                 })),
                 windows_map: Arc::clone(&windows_map),
@@ -1631,10 +1634,6 @@ impl PlatformWindow for MacOSWindow {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         HasDisplayHandle::display_handle(self)
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 // Implement raw-window-handle for wgpu integration
@@ -1657,8 +1656,8 @@ impl HasWindowHandle for MacOSWindow {
         }
 
         // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
-        // the NSWindow: the FLUI view, which stays the surface view while
-        // Liquid Glass is applied.
+        // the NSWindow: the FLUI view, which stays the surface view whatever
+        // the window's content view is.
         let ns_view = NonNull::new(self.view.cast::<std::ffi::c_void>())
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);
@@ -1873,7 +1872,7 @@ impl MacOSWindow {
                     }
                 };
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-                let mode = mode_of(flags);
+                let mode = mode_of(flags.mode_flags());
                 let position = primary_screen_height().and_then(|height| {
                     top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                 });
@@ -1941,7 +1940,7 @@ impl MacOSWindow {
     /// window is about to leave it, and AppKit keeps no record of where it
     /// returns to.
     fn record_normal(&self) {
-        self.record_normal_if(|flags| mode_of(flags) == WindowMode::Normal);
+        self.record_normal_if(|flags| mode_of(flags.mode_flags()) == WindowMode::Normal);
     }
 
     /// [`record_normal`](Self::record_normal) for `windowWillEnterFullScreen:`,
@@ -2044,7 +2043,7 @@ impl MacOSWindow {
                 let flags = self.read_flags();
                 if bit == NSWindowStyleMask::Resizable
                     && !on
-                    && mode_of(flags) != WindowMode::Normal
+                    && mode_of(flags.mode_flags()) != WindowMode::Normal
                 {
                     return Err(WindowCommandError::Backend {
                         message: "a window is made fixed-size only in normal mode".into(),

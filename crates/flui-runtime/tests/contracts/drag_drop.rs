@@ -943,9 +943,6 @@ impl PlatformWindow for WithDragSource {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         self.window.system_chrome()
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Two drags leave their window and the backend's first start panics: that

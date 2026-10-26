@@ -544,10 +544,6 @@ impl flui_platform::PlatformWindow for RedrawCounter {
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no

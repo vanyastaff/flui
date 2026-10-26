@@ -41,6 +41,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
 use crate::owner::handlers::WindowCallbacks;
+use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
 
 /// What the host's table makes for each content view: its input and its text
 /// input, each one per view.
@@ -285,15 +286,22 @@ pub(crate) unsafe fn with_content_view<R>(
 
 /// An input `NSEvent` reached the view: the input converts and dispatches it.
 extern "C-unwind" fn input_event(this: &AnyObject, _sel: Sel, event: *mut AnyObject) {
-    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes a method on
-    // an object that declares it); `event` is a valid NSEvent* for the
-    // duration of the call.
-    unsafe {
-        let Some(event) = event.cast::<NSEvent>().as_ref() else {
-            return;
-        };
-        with_this(this, |view| view.context.input.event(view, event));
-    }
+    os_entry(
+        "FLUIContentView's input",
+        (),
+        AfterPanic::Answer(|()| ()),
+        || {
+            // SAFETY: `this` is a live FLUIContentView (AppKit only invokes a
+            // method on an object that declares it); `event` is a valid
+            // NSEvent* for the duration of the call.
+            unsafe {
+                let Some(event) = event.cast::<NSEvent>().as_ref() else {
+                    return;
+                };
+                with_this(this, |view| view.context.input.event(view, event));
+            }
+        },
+    );
 }
 
 /// `keyDown:` — the input method's route while the text input composes, the
@@ -314,23 +322,25 @@ extern "C-unwind" fn input_event(this: &AnyObject, _sel: Sel, event: *mut AnyObj
 /// clear would leave the outer event's `doCommandBySelector:` reading null and
 /// dropping a command that belongs to this press.
 extern "C-unwind" fn key_down(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-    // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent* for
-    // the duration of the call, and `interpretKeyEvents:` retains it for the
-    // span of its own dispatch. The array is created by an NSArray class
-    // constructor and autoreleased.
-    unsafe {
-        let composes = with_this(this, |view| view.context.text.takes_key_presses());
-        if composes != Some(true) {
-            input_event(this, sel, event);
-            return;
+    os_entry("keyDown:", (), AfterPanic::Answer(|()| ()), || {
+        // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent*
+        // for the duration of the call, and `interpretKeyEvents:` retains it
+        // for the span of its own dispatch. The array is created by an NSArray
+        // class constructor and autoreleased.
+        unsafe {
+            let composes = with_this(this, |view| view.context.text.takes_key_presses());
+            if composes != Some(true) {
+                input_event(this, sel, event);
+                return;
+            }
+            let previous = with_this(this, |view| view.context.pending_key_event.replace(event));
+            let events: *mut AnyObject = msg_send![objc2::class!(NSArray), arrayWithObject: event];
+            let _: () = msg_send![this, interpretKeyEvents: events];
+            if let Some(previous) = previous {
+                with_this(this, |view| view.context.pending_key_event.set(previous));
+            }
         }
-        let previous = with_this(this, |view| view.context.pending_key_event.replace(event));
-        let events: *mut AnyObject = msg_send![objc2::class!(NSArray), arrayWithObject: event];
-        let _: () = msg_send![this, interpretKeyEvents: events];
-        if let Some(previous) = previous {
-            with_this(this, |view| view.context.pending_key_event.set(previous));
-        }
-    }
+    });
 }
 
 /// `keyUp:` — the input's, except while a composition is open: the press was
@@ -338,12 +348,14 @@ extern "C-unwind" fn key_down(this: &AnyObject, sel: Sel, event: *mut AnyObject)
 /// application never saw go down. A commit closes the composition before the
 /// release arrives, so a typed character still reports its release.
 extern "C-unwind" fn key_up(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
-    // live objects).
-    let reported = unsafe { with_this(this, |view| view.context.text.reports_key_release()) };
-    if reported != Some(false) {
-        input_event(this, sel, event);
-    }
+    os_entry("keyUp:", (), AfterPanic::Answer(|()| ()), || {
+        // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods
+        // on live objects).
+        let reported = unsafe { with_this(this, |view| view.context.text.reports_key_release()) };
+        if reported != Some(false) {
+            input_event(this, sel, event);
+        }
+    });
 }
 
 /// Dispatch a hover status change through the window's callbacks.
@@ -361,14 +373,18 @@ fn dispatch_hover_change(this: &AnyObject, is_hovered: bool) {
 
 /// `mouseEntered:` — report hover gained, then forward the pointer event.
 extern "C-unwind" fn mouse_entered(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-    dispatch_hover_change(this, true);
-    input_event(this, sel, event);
+    os_entry("mouseEntered:", (), AfterPanic::Answer(|()| ()), || {
+        dispatch_hover_change(this, true);
+        input_event(this, sel, event);
+    });
 }
 
 /// `mouseExited:` — report hover lost, then forward the pointer event.
 extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
-    dispatch_hover_change(this, false);
-    input_event(this, sel, event);
+    os_entry("mouseExited:", (), AfterPanic::Answer(|()| ()), || {
+        dispatch_hover_change(this, false);
+        input_event(this, sel, event);
+    });
 }
 
 // ============================================================================
@@ -385,48 +401,61 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 /// moment a `setNeedsDisplay:` is discarded; the display pass marks this
 /// thread for the duration, so the window defers only that case.
 extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) {
-    // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
-    // is the documented NSView handling of the dirty region.
-    unsafe {
-        let _display_pass = super::display_pass::DisplayPassGuard::enter();
-        let callbacks = with_this(this, |view| view.context.callbacks.upgrade()).flatten();
-        if let Some(callbacks) = callbacks {
-            tracing::trace!("FLUIContentView drawRect: dispatching frame request");
-            callbacks.dispatch_request_frame();
-        } else {
-            // The window's callbacks are gone (torn down, or the view outlived
-            // its window). AppKit still owns this display pass, so the super
-            // call below runs either way — but a missing callback here is why a
-            // frame that AppKit asked for produced no frame request, which is
-            // otherwise indistinguishable from AppKit never asking at all.
-            tracing::trace!("FLUIContentView drawRect: no live callbacks; frame request dropped");
-        }
+    os_entry("drawRect:", (), AfterPanic::Answer(|()| ()), || {
+        // SAFETY: `this` is a live FLUIContentView; the super `drawRect:`
+        // message is the documented NSView handling of the dirty region.
+        unsafe {
+            let _display_pass = super::display_pass::DisplayPassGuard::enter();
+            let callbacks = with_this(this, |view| view.context.callbacks.upgrade()).flatten();
+            if let Some(callbacks) = callbacks {
+                tracing::trace!("FLUIContentView drawRect: dispatching frame request");
+                callbacks.dispatch_request_frame();
+            } else {
+                // The window's callbacks are gone (torn down, or the view
+                // outlived its window). AppKit still owns this display pass, so
+                // the super call below runs either way — but a missing callback
+                // here is why a frame that AppKit asked for produced no frame
+                // request, which is otherwise indistinguishable from AppKit
+                // never asking at all.
+                tracing::trace!(
+                    "FLUIContentView drawRect: no live callbacks; frame request dropped"
+                );
+            }
 
-        let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
-    }
+            let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
+        }
+    });
 }
 
 /// `viewDidChangeEffectiveAppearance` — AppKit re-resolved this view's
 /// appearance: the system theme flipped, or something that keeps it did.
 extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel: Sel) {
-    // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
-    // thread; the super call is NSView's own (empty) implementation.
-    unsafe {
-        let _: () = msg_send![
-            super(this, NSViewClass::class()),
-            viewDidChangeEffectiveAppearance
-        ];
-        let appearance = effective_appearance(as_view(this));
-        let callbacks = with_this(this, |view| {
-            (view.context.appearance.replace(appearance) != appearance)
-                .then(|| view.context.callbacks.upgrade())
-                .flatten()
-        })
-        .flatten();
-        if let Some(callbacks) = callbacks {
-            callbacks.dispatch_appearance_changed();
-        }
-    }
+    os_entry(
+        "viewDidChangeEffectiveAppearance",
+        (),
+        AfterPanic::Answer(|()| ()),
+        || {
+            // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on
+            // the main thread; the super call is NSView's own (empty)
+            // implementation.
+            unsafe {
+                let _: () = msg_send![
+                    super(this, NSViewClass::class()),
+                    viewDidChangeEffectiveAppearance
+                ];
+                let appearance = effective_appearance(as_view(this));
+                let callbacks = with_this(this, |view| {
+                    (view.context.appearance.replace(appearance) != appearance)
+                        .then(|| view.context.callbacks.upgrade())
+                        .flatten()
+                })
+                .flatten();
+                if let Some(callbacks) = callbacks {
+                    callbacks.dispatch_appearance_changed();
+                }
+            }
+        },
+    );
 }
 
 // ============================================================================
@@ -524,13 +553,18 @@ extern "C-unwind" fn insert_text(
     // SAFETY: `this` is a live FLUIContentView; `string` is the live argument
     // for the duration of the call, and its bytes are copied before this
     // function returns.
-    unsafe {
-        let Some(text) = insert_text_argument_string(string) else {
-            tracing::trace!("insertText: carried no readable string; commit dropped");
-            return;
-        };
-        with_this(this, |view| view.context.text.commit(view, text));
-    }
+    os_entry(
+        "insertText:replacementRange:",
+        (),
+        AfterPanic::Answer(|()| ()),
+        || unsafe {
+            let Some(text) = insert_text_argument_string(string) else {
+                tracing::trace!("insertText: carried no readable string; commit dropped");
+                return;
+            };
+            with_this(this, |view| view.context.text.commit(view, text));
+        },
+    );
 }
 
 /// `setMarkedText:selectedRange:replacementRange:` — the composition changed.
@@ -544,36 +578,59 @@ extern "C-unwind" fn set_marked_text(
 ) {
     // SAFETY: `this` is a live FLUIContentView; `string` is the live argument
     // for the duration of the call, copied out immediately.
-    unsafe {
-        let text = ns_string_to_owned(string).unwrap_or_default();
-        let selected = (selected_range.location, selected_range.length);
-        with_this(this, |view| view.context.text.compose(view, text, selected));
-    }
+    os_entry(
+        "setMarkedText:selectedRange:replacementRange:",
+        (),
+        AfterPanic::Answer(|()| ()),
+        || unsafe {
+            let text = ns_string_to_owned(string).unwrap_or_default();
+            let selected = (selected_range.location, selected_range.length);
+            with_this(this, |view| view.context.text.compose(view, text, selected));
+        },
+    );
 }
 
 /// `unmarkText` — the composition was abandoned; nothing is committed.
 extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView.
-    unsafe {
+    os_entry("unmarkText", (), AfterPanic::Answer(|()| ()), || unsafe {
         with_this(this, |view| view.context.text.unmark(view));
-    }
+    });
 }
 
 /// `hasMarkedText` — is a composition in progress?
 extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
-    // SAFETY: `this` is a live FLUIContentView.
-    let marked = unsafe { with_this(this, |view| view.context.text.marked_range().is_some()) };
-    Bool::new(marked == Some(true))
+    os_entry(
+        "hasMarkedText",
+        (),
+        AfterPanic::Answer(|()| Bool::NO),
+        || {
+            // SAFETY: `this` is a live FLUIContentView.
+            let marked =
+                unsafe { with_this(this, |view| view.context.text.marked_range().is_some()) };
+            Bool::new(marked == Some(true))
+        },
+    )
+}
+
+/// `range` as AppKit's, `{NSNotFound, 0}` for none.
+fn ns_range(range: Option<(usize, usize)>) -> NSRange {
+    range.map_or_else(not_found, |(location, length)| {
+        NSRange::new(location, length)
+    })
 }
 
 /// `markedRange` — the range of the composition, in UTF-16 units.
 extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
-    // SAFETY: `this` is a live FLUIContentView.
-    unsafe { with_this(this, |view| view.context.text.marked_range()) }
-        .flatten()
-        .map_or_else(not_found, |(location, length)| {
-            NSRange::new(location, length)
-        })
+    os_entry(
+        "markedRange",
+        (),
+        AfterPanic::Answer(|()| not_found()),
+        || {
+            // SAFETY: `this` is a live FLUIContentView.
+            ns_range(unsafe { with_this(this, |view| view.context.text.marked_range()) }.flatten())
+        },
+    )
 }
 
 /// `selectedRange` — the caret's range within the composition; `{NSNotFound,
@@ -581,12 +638,17 @@ extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
 /// a selection the application has not reported, and AppKit documents that
 /// pair as "no selection".
 extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
-    // SAFETY: `this` is a live FLUIContentView.
-    unsafe { with_this(this, |view| view.context.text.selected_range()) }
-        .flatten()
-        .map_or_else(not_found, |(location, length)| {
-            NSRange::new(location, length)
-        })
+    os_entry(
+        "selectedRange",
+        (),
+        AfterPanic::Answer(|()| not_found()),
+        || {
+            // SAFETY: `this` is a live FLUIContentView.
+            ns_range(
+                unsafe { with_this(this, |view| view.context.text.selected_range()) }.flatten(),
+            )
+        },
+    )
 }
 
 /// `validAttributesForMarkedText` — empty: the composing text is rendered by
@@ -598,7 +660,12 @@ extern "C-unwind" fn valid_attributes_for_marked_text(
 ) -> *mut AnyObject {
     // SAFETY: `+[NSArray array]` is a class constructor on a class AppKit
     // always provides; it returns an autoreleased empty array.
-    unsafe { msg_send![objc2::class!(NSArray), array] }
+    os_entry(
+        "validAttributesForMarkedText",
+        (),
+        AfterPanic::Answer(|()| std::ptr::null_mut()),
+        || unsafe { msg_send![objc2::class!(NSArray), array] },
+    )
 }
 
 /// `attributedSubstringForProposedRange:actualRange:` — `nil`, with
@@ -611,10 +678,17 @@ extern "C-unwind" fn attributed_substring_for_proposed_range(
     _range: NSRange,
     actual_range: *mut NSRange,
 ) -> *mut AnyObject {
-    // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
-    // null or a valid writable `NSRange*`.
-    unsafe { write_actual_range(actual_range, not_found()) };
-    std::ptr::null_mut()
+    os_entry(
+        "attributedSubstringForProposedRange:actualRange:",
+        (),
+        AfterPanic::Answer(|()| std::ptr::null_mut()),
+        || {
+            // SAFETY: `actual_range` is AppKit's own out-parameter for this
+            // call — null or a valid writable `NSRange*`.
+            unsafe { write_actual_range(actual_range, not_found()) };
+            std::ptr::null_mut()
+        },
+    )
 }
 
 /// `firstRectForCharacterRange:actualRange:` — where to place candidates: the
@@ -633,30 +707,35 @@ extern "C-unwind" fn first_rect_for_character_range(
     // out-parameter; `window` is AppKit's own getter on that live view, and
     // the window is nil-checked before `convertRectToScreen:` — a view with no
     // window (mid-teardown) has no screen rectangle to answer with.
-    unsafe {
-        write_actual_range(actual_range, not_found());
-        let Some((area, corresponding, height)) = with_this(this, |view| {
-            view.context
-                .text
-                .candidate_area()
-                .map(|(area, corresponding)| (area, corresponding, view.height()))
-        })
-        .flatten() else {
-            return zero_rect();
-        };
-        let flipped_y = height - (area.origin.y + area.size.height);
-        let window_rect = NSRect::new(
-            NSPoint::new(area.origin.x, flipped_y),
-            NSSize::new(area.size.width, area.size.height),
-        );
-        let window: *mut AnyObject = msg_send![this, window];
-        if window.is_null() {
-            return zero_rect();
-        }
-        let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
-        write_actual_range(actual_range, NSRange::new(corresponding.0, corresponding.1));
-        screen_rect
-    }
+    os_entry(
+        "firstRectForCharacterRange:actualRange:",
+        (),
+        AfterPanic::Answer(|()| zero_rect()),
+        || unsafe {
+            write_actual_range(actual_range, not_found());
+            let Some((area, corresponding, height)) = with_this(this, |view| {
+                view.context
+                    .text
+                    .candidate_area()
+                    .map(|(area, corresponding)| (area, corresponding, view.height()))
+            })
+            .flatten() else {
+                return zero_rect();
+            };
+            let flipped_y = height - (area.origin.y + area.size.height);
+            let window_rect = NSRect::new(
+                NSPoint::new(area.origin.x, flipped_y),
+                NSSize::new(area.size.width, area.size.height),
+            );
+            let window: *mut AnyObject = msg_send![this, window];
+            if window.is_null() {
+                return zero_rect();
+            }
+            let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
+            write_actual_range(actual_range, NSRange::new(corresponding.0, corresponding.1));
+            screen_rect
+        },
+    )
 }
 
 /// `characterIndexForPoint:` — `NSNotFound`: the view owns no text, so it can
@@ -679,15 +758,22 @@ extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _comman
     // null or an `NSEvent*` AppKit keeps alive across the `interpretKeyEvents:`
     // call whose dispatch is on this stack frame, the only window in which
     // this callback runs.
-    unsafe {
-        let pending = with_this(this, |view| view.context.pending_key_event.get())
-            .unwrap_or(std::ptr::null_mut());
-        if pending.is_null() {
-            tracing::trace!("doCommandBySelector: outside a pending key press; command dropped");
-            return;
-        }
-        input_event(this, sel!(keyDown:), pending);
-    }
+    os_entry(
+        "doCommandBySelector:",
+        (),
+        AfterPanic::Answer(|()| ()),
+        || unsafe {
+            let pending = with_this(this, |view| view.context.pending_key_event.get())
+                .unwrap_or(std::ptr::null_mut());
+            if pending.is_null() {
+                tracing::trace!(
+                    "doCommandBySelector: outside a pending key press; command dropped"
+                );
+                return;
+            }
+            input_event(this, sel!(keyDown:), pending);
+        },
+    );
 }
 
 // ============================================================================
@@ -707,6 +793,7 @@ fn view_class() -> &'static AnyClass {
         // The boxed ViewContext, as a raw `*mut c_void`.
         builder.add_ivar::<*mut std::ffi::c_void>(CONTEXT_IVAR);
 
+        // A constant answer runs no code, so it needs no boundary.
         extern "C-unwind" fn yes(_this: &AnyObject, _sel: Sel) -> Bool {
             Bool::YES
         }
@@ -714,28 +801,40 @@ fn view_class() -> &'static AnyClass {
         // `flagsChanged:` — modifier state is carried on every converted
         // event, so flag-only transitions are observed but not dispatched.
         extern "C-unwind" fn flags_changed(_this: &AnyObject, _sel: Sel, _event: *mut AnyObject) {
-            tracing::trace!("Modifier flags changed");
+            os_entry("flagsChanged:", (), AfterPanic::Answer(|()| ()), || {
+                tracing::trace!("Modifier flags changed");
+            });
         }
 
+        // A context whose teardown panics is contained apart, so the
+        // mandatory super `dealloc` still runs after it.
         extern "C-unwind" fn dealloc(this: &AnyObject, _sel: Sel) {
-            // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
-            // in `create`; reclaiming it here (exactly once, on dealloc) is the
-            // matching release. The super dealloc message is the mandatory
-            // NSObject teardown.
-            unsafe {
-                let class = AnyClass::get(c"FLUIContentView")
-                    .expect("BUG: dealloc only runs on a registered FLUIContentView");
-                let ivar = class
-                    .instance_variable(CONTEXT_IVAR)
-                    .expect("BUG: FLUIContentView declares the context ivar");
-                let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(this);
-                let context = std::mem::replace(&mut *slot, std::ptr::null_mut());
-                if !context.is_null() {
-                    drop(Box::from_raw(context.cast::<ViewContext>()));
-                }
+            os_entry(
+                "FLUIContentView's dealloc",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: the ivar holds either null or a Box<ViewContext>
+                    // leaked in `create`; reclaiming it here (exactly once, on
+                    // dealloc) is the matching release. The super dealloc
+                    // message is the mandatory NSObject teardown.
+                    unsafe {
+                        let class = AnyClass::get(c"FLUIContentView")
+                            .expect("BUG: dealloc only runs on a registered FLUIContentView");
+                        let ivar = class
+                            .instance_variable(CONTEXT_IVAR)
+                            .expect("BUG: FLUIContentView declares the context ivar");
+                        let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(this);
+                        let context = std::mem::replace(&mut *slot, std::ptr::null_mut());
+                        if !context.is_null() {
+                            let context = Box::from_raw(context.cast::<ViewContext>());
+                            contain_owner_callback(|| drop(context));
+                        }
 
-                let _: () = msg_send![super(this, NSViewClass::class()), dealloc];
-            }
+                        let _: () = msg_send![super(this, NSViewClass::class()), dealloc];
+                    }
+                },
+            );
         }
 
         // Conformance, not just the methods: AppKit's `NSTextInputContext`

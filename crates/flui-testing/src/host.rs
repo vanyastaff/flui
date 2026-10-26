@@ -306,10 +306,6 @@ impl PlatformWindow for HeadlessWindow {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// The operating system's drag sessions as a [`HeadlessWindow`] plays them: a

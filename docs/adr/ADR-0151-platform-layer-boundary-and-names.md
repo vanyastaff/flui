@@ -3,6 +3,20 @@
 - **Status:** Accepted (2026-10-20); not implemented: the renames, the moves, the gates and the
   layout land as separate changes, the renames first (section 12)
 - **Date:** 2026-10-20
+- **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
+  `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
+  a host for.
+- **Amended:** 2026-10-22 — section 15: the Linux AT-SPI adapter comes with the Linux host. While
+  that host is winit (section 11), `accesskit_unix` rides `winit-backend`, which `flui-app` turns
+  on for every Linux build; it becomes an unconditional Linux dependency together with `zbus` when
+  the native Wayland and X11 host arrives. The Windows and macOS adapters compile always; the
+  confirmation reads the same way.
+- **Amended:** 2026-10-22 — section 16: the boundary every OS entry's body calls is
+  `owner::panic_boundary::os_entry` (`crates/flui-native/src/owner/panic_boundary.rs`), and
+  `cargo xtask panic-boundary` is the gate. A panic out of an `extern "C"` frame is not undefined
+  behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
+  diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
+  for it. Containment buys a logged failure and an answer the OS understands.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -446,7 +460,10 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 - OS types in the core host's public paths (`HWND` and the `win32` re-exports at
   `crates/flui-platform/src/platforms/windows/mod.rs:50-59`, `NSApplication`, `AndroidApp`,
   `HtmlCanvasElement`, `tokio::runtime::Handle`) become `pub(crate)`. Deeper control from outside goes through
-  capability crates and the host bridge (ADR-0152).
+  capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
+  the application's `android_main`, enters through one function of the core host,
+  `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands
+  back names it.
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 
@@ -650,6 +667,13 @@ The cost the feature avoids is paid anyway on Linux. The winit fallback already 
 `crates/flui-app/Cargo.toml:137`), and the native Linux host of section 11 needs D-Bus for
 logind notices (`crates/flui-platform/src/platforms/linux/host_notices/logind.rs`) and for portals.
 
+*Amended 2026-10-22:* the invariant on Linux is that the AT-SPI adapter comes with the Linux host.
+Until the native host of section 11 exists that host is winit, so `accesskit_unix` is enabled by
+`winit-backend` beside `zbus`, and every application build has it because `flui-app` enables
+`winit-backend` on Linux; a build of the core host without it has no Linux window to make
+accessible. With the native host, `accesskit_unix` and `zbus` become unconditional Linux
+dependencies together.
+
 ### 16. Quality bar
 
 The lines `docs/platform-parity.md` lists under "Quality bar" are requirements of the platform
@@ -743,6 +767,13 @@ directories). They add no area to it.
   request that touches a host or either rename.
 - Before the first publication: the API-closure gate of ADR-0089 §6 and `clippy::exhaustive_enums`
   on the contract, with every closed enum carrying its reason.
+- Section 8: `cargo xtask api-closure` documents `flui-native`, hidden items included, as each
+  target it builds a host for builds it (Linux, Windows and macOS with every feature; iOS, Android
+  and wasm32) and finds, outside the workspace, no crate but those its manifest's `allow` list
+  names, so an OS binding, AccessKit or tokio in a public path is a finding even if nobody listed
+  it. The two admitted exceptions are named in the manifest: the Activity's entry, and the methods
+  of `flui-semantics`' accessibility trait, whose signature takes AccessKit's tree; one no build
+  needs is a finding.
 - The `forbid(unsafe_code)` of a pure module holds under its parent's `expect(unsafe_code)`: a
   planted `unsafe` block in a pure module fails the build. This is unverified in the repository
   today and is proven when the first pure module lands. A planted host table that omits one
@@ -751,8 +782,10 @@ directories). They add no area to it.
 - Each rename: the map re-run on its own output changes nothing; regenerated trybuild snapshots
   are reviewed as diffs. The second rename's opening check finds no `flui-platform` or
   `flui_platform` token outside the archival roots and this ADR.
-- No manifest declares an `a11y` feature, and `cargo heli xtask cross-typecheck` builds each OS's
-  AccessKit adapter without a flag.
+- No manifest declares an `a11y` feature; `cargo heli xtask cross-typecheck` builds the Windows
+  and macOS AccessKit adapters without a flag, and the AT-SPI adapter builds in every build of the
+  Linux host (`winit-backend` until the native host, then every Linux build), where a real-loop
+  test reads it from a window under Xvfb.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not
   pass `panic_boundary` (a `--self-test` case, as the other gates have).
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked

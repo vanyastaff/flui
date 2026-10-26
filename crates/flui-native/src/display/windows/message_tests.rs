@@ -4,9 +4,9 @@
 //! both in either order.
 
 use crate::WindowsPlatform;
-use crate::WindowsWindow;
 use crate::owner::windows::broadcast::send_for_test;
 use crate::platform::Platform;
+use crate::window::windows::WindowsWindow;
 use flui_platform::WindowOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

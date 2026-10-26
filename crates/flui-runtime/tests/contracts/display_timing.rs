@@ -144,10 +144,6 @@ impl PlatformWindow for CountingWindow {
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

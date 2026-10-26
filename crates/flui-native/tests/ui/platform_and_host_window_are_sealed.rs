@@ -2,7 +2,6 @@
 //! `flui-native` that writes every item still does not compile, and the only
 //! error is the seal. `PlatformWindow` stays open, so the window below is one.
 
-use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -195,10 +194,6 @@ impl PlatformWindow for OutsideWindow {
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

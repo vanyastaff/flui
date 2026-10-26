@@ -25,8 +25,8 @@
 //!
 //! # Verification scope
 //!
-//! The native exit-policy check, built with `a11y`, executes adapter creation
-//! and last-window/explicit-quit teardown on macOS. Its native weak references
+//! The native exit-policy check executes adapter creation and
+//! last-window/explicit-quit teardown on macOS. Its native weak references
 //! must clear after autorelease-pool drain. `BridgeShared` tests cover retention
 //! and dispatch mechanics independently. These checks do not certify a VoiceOver
 //! client session, tree announcements, or action delivery end to end.
@@ -43,6 +43,7 @@ use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::BridgeShared;
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -50,13 +51,24 @@ use flui_semantics::{
 
 struct Activation(Arc<BridgeShared>);
 
+// Each handler runs the composition root's listener inside AccessKit's
+// NSAccessibility methods, which AppKit calls through `extern "C-unwind"`: a
+// panic in it is contained here and answers as if no listener ran.
+
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        // Order matters: mark active and tell the composition root *before*
-        // reading the retained tree — see the Windows twin for the cold-start
-        // rationale.
-        self.0.notify_activation(true);
-        self.0.retained()
+        os_entry(
+            "AccessKit's activation",
+            (),
+            AfterPanic::Answer(|()| None),
+            || {
+                // Order matters: mark active and tell the composition root *before*
+                // reading the retained tree — see the Windows twin for the cold-start
+                // rationale.
+                self.0.notify_activation(true);
+                self.0.retained()
+            },
+        )
     }
 }
 
@@ -64,7 +76,14 @@ struct Action(Arc<BridgeShared>);
 
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
-        self.0.notify_action(request);
+        os_entry(
+            "an AccessKit action",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                self.0.notify_action(request);
+            },
+        );
     }
 }
 

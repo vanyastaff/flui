@@ -182,10 +182,6 @@ impl PlatformWindow for DragWindow {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn window(source: Option<OsDragStart>) -> Arc<dyn PlatformWindow> {

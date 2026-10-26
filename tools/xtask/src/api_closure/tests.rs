@@ -5,7 +5,9 @@ use std::path::Path;
 
 use serde_json::{Value as Json, json};
 
-use super::{Exception, Finding, Mode, Rule, check};
+use super::{
+    Admission, Build, Entry, Exception, Finding, Mode, Rule, Table, check, findings, scan,
+};
 
 /// A rustdoc JSON document with no items.
 fn empty() -> Json {
@@ -42,20 +44,53 @@ fn rule(mode: Mode, exceptions: Vec<Exception>) -> Rule {
         lib: "pkg".to_owned(),
         mode,
         exceptions,
+        entries: Vec::new(),
+        traits: Vec::new(),
+        builds: vec![Build::HOST],
     }
 }
 
-/// `item -> named` for each finding, and `unused <crate>` for an unused exception.
-fn found(doc: &Json, rule: &Rule) -> Vec<String> {
-    let workspace = BTreeSet::from(["flui_foundation".to_owned()]);
-    check(doc, rule, &workspace, Path::new(""))
-        .expect("well-formed document")
+/// A rule over the allow list `allowed`.
+fn allow(allowed: &[&str]) -> Rule {
+    rule(
+        Mode::Allow(allowed.iter().map(|krate| (*krate).to_owned()).collect()),
+        Vec::new(),
+    )
+}
+
+/// The workspace the rule follows no further than.
+fn workspace() -> BTreeSet<String> {
+    BTreeSet::from(["flui_foundation".to_owned()])
+}
+
+/// `item -> named` for each finding, `unused <crate>` for an unused exception,
+/// `unused entry <item>` for an unused entry and `unused trait <path>` for an
+/// unused admission.
+fn named(findings: Vec<Finding>) -> Vec<String> {
+    findings
         .into_iter()
         .map(|finding| match finding {
             Finding::Names { item, named, .. } => format!("{item} -> {named}"),
             Finding::UnusedException { krate, .. } => format!("unused {krate}"),
+            Finding::UnusedEntry { item, .. } => format!("unused entry {item}"),
+            Finding::UnusedTrait { path, .. } => format!("unused trait {path}"),
         })
         .collect()
+}
+
+fn found(doc: &Json, rule: &Rule) -> Vec<String> {
+    named(check(doc, rule, &workspace(), Path::new("")).expect("well-formed document"))
+}
+
+/// An implementation of the trait `trait_id` with the methods `items`.
+fn implementing(trait_id: u64, items: &[u64]) -> Json {
+    json!({ "impl": {
+        "trait": { "path": "Trait", "id": trait_id, "args": null },
+        "for": { "resolved_path": { "path": "Own", "id": 99, "args": null } },
+        "items": items,
+        "blanket_impl": null,
+        "is_synthetic": false,
+    } })
 }
 
 #[test]
@@ -183,18 +218,124 @@ fn an_exception_admits_its_crate_until_nothing_needs_it() {
 }
 
 #[test]
-fn a_deny_list_reports_only_the_crates_it_names() {
+fn an_allow_list_reports_every_crate_it_does_not_name() {
     let mut doc = empty();
     let hwnd = upstream(&mut doc, 1, &["windows", "Win32", "Foundation", "HWND"]);
-    let span = upstream(&mut doc, 2, &["tracing", "Span"]);
+    let device = upstream(&mut doc, 2, &["objc2_metal", "MTLDevice"]);
+    let span = upstream(&mut doc, 3, &["tracing", "Span"]);
     item(&mut doc, 1, Some("hwnd"), returning(hwnd));
-    item(&mut doc, 2, Some("span"), returning(span));
-    let deny = rule(
-        Mode::Deny(BTreeSet::from(["windows".to_owned()])),
-        Vec::new(),
-    );
+    item(&mut doc, 2, Some("device"), returning(device));
+    item(&mut doc, 3, Some("span"), returning(span));
     assert_eq!(
-        found(&doc, &deny),
-        ["hwnd -> windows::Win32::Foundation::HWND"]
+        found(&doc, &allow(&["tracing"])),
+        [
+            "hwnd -> windows::Win32::Foundation::HWND",
+            "device -> objc2_metal::MTLDevice"
+        ]
     );
+}
+
+#[test]
+fn an_admitted_trait_lets_its_implementations_methods_name_its_crate() {
+    let mut doc = empty();
+    let tree = upstream(&mut doc, 1, &["accesskit", "TreeUpdate"]);
+    let admitted = upstream(&mut doc, 2, &["flui_foundation", "Publish"]);
+    let other = upstream(&mut doc, 2, &["flui_foundation", "Other"]);
+    let rule = Rule {
+        traits: vec![
+            Admission {
+                path: "flui_foundation::Publish".to_owned(),
+                krate: "accesskit".to_owned(),
+            },
+            Admission {
+                path: "flui_foundation::Gone".to_owned(),
+                krate: "accesskit".to_owned(),
+            },
+        ],
+        ..allow(&[])
+    };
+    // The admitted trait's method names the tree its signature takes.
+    item(&mut doc, 1, None, implementing(admitted, &[2]));
+    item(&mut doc, 2, Some("publish"), returning(tree));
+    assert_eq!(found(&doc, &rule), ["unused trait flui_foundation::Gone"]);
+    // Another workspace trait's method, and the same signature as an inherent
+    // function, are the package's own.
+    item(&mut doc, 3, None, implementing(other, &[4]));
+    item(&mut doc, 4, Some("other"), returning(tree));
+    item(&mut doc, 5, Some("published"), returning(tree));
+    assert_eq!(
+        found(&doc, &rule),
+        [
+            "other -> accesskit::TreeUpdate",
+            "published -> accesskit::TreeUpdate",
+            "unused trait flui_foundation::Gone"
+        ]
+    );
+}
+
+#[test]
+fn an_entry_admits_its_item_and_crate_until_no_build_needs_it() {
+    let mut doc = empty();
+    let app = upstream(&mut doc, 1, &["android_activity", "AndroidApp"]);
+    let event = upstream(&mut doc, 1, &["android_activity", "MainEvent"]);
+    let rule = Rule {
+        entries: vec![Entry {
+            item: "start".to_owned(),
+            krate: "android_activity".to_owned(),
+        }],
+        ..allow(&[])
+    };
+    assert_eq!(found(&doc, &rule), ["unused entry start"]);
+    item(&mut doc, 1, Some("start"), returning(app));
+    item(&mut doc, 2, Some("events"), returning(event));
+    assert_eq!(
+        found(&doc, &rule),
+        ["events -> android_activity::MainEvent"]
+    );
+}
+
+#[test]
+fn an_entry_one_build_needs_is_needed_and_each_build_reports_its_own() {
+    let mut android = empty();
+    let app = upstream(&mut android, 1, &["android_activity", "AndroidApp"]);
+    item(&mut android, 1, Some("start"), returning(app));
+    let mut windows = empty();
+    let hwnd = upstream(&mut windows, 1, &["windows", "Win32", "Foundation", "HWND"]);
+    item(&mut windows, 1, Some("hwnd"), returning(hwnd));
+    let rule = Rule {
+        entries: vec![Entry {
+            item: "start".to_owned(),
+            krate: "android_activity".to_owned(),
+        }],
+        ..allow(&[])
+    };
+    let build = |target: &str| Build {
+        target: Some(target.to_owned()),
+        all_features: false,
+        features: Vec::new(),
+    };
+    let scans = [
+        (&android, build("aarch64-linux-android")),
+        (&windows, build("x86_64-pc-windows-msvc")),
+    ]
+    .into_iter()
+    .map(|(doc, build)| {
+        scan(doc, &rule, &build, &workspace(), Path::new("")).expect("well-formed document")
+    })
+    .collect();
+    let all = findings(&rule, scans);
+    assert!(matches!(
+        all.as_slice(),
+        [Finding::Names { build, .. }] if build == "x86_64-pc-windows-msvc"
+    ));
+    assert_eq!(named(all), ["hwnd -> windows::Win32::Foundation::HWND"]);
+}
+
+#[test]
+fn a_misspelled_key_of_the_table_is_an_error_not_a_narrower_build() {
+    let read = |table: Json| serde_json::from_value::<Table>(table);
+    let build = |key: &str| json!({ "allow": [], "targets": [{ "target": "x86_64-pc-windows-msvc", (key): true }] });
+    assert!(read(build("all-features")).is_ok());
+    assert!(read(build("all_features")).is_err());
+    assert!(read(json!({ "allow": [], "entry": [] })).is_err());
 }

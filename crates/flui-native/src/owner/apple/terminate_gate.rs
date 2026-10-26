@@ -105,6 +105,12 @@ impl TerminateGate {
         }
     }
 
+    /// Whether a session end is announced or its reply owed: what a terminate
+    /// request whose handling failed is answered by (a session end goes on).
+    pub(crate) fn session_ending(&self) -> bool {
+        !matches!(self.state, State::Idle)
+    }
+
     /// The system asked the application to terminate.
     pub(crate) fn terminate_requested(&mut self) -> Termination {
         match self.state {
@@ -165,6 +171,24 @@ mod tests {
             Termination::Later { epoch } => epoch,
             other => panic!("a blocked session end defers the answer, got {other:?}"),
         }
+    }
+
+    /// What a terminate request whose handling panicked is answered by: a
+    /// session end is under way from its announcement until its request is
+    /// answered at once or its owed reply is settled.
+    #[test]
+    fn a_session_end_is_under_way_from_its_announcement_to_its_answer() {
+        let mut gate = TerminateGate::new();
+        assert!(!gate.session_ending(), "no announcement, an ordinary quit");
+        gate.announced(true);
+        assert!(gate.session_ending(), "announced");
+        let epoch = deferred(&mut gate);
+        assert!(gate.session_ending(), "the reply is owed");
+        assert!(gate.deferral_ran_out(epoch));
+        assert!(!gate.session_ending(), "the owed reply was settled");
+        gate.announced(false);
+        assert_eq!(gate.terminate_requested(), Termination::Now);
+        assert!(!gate.session_ending(), "answered at once");
     }
 
     #[test]

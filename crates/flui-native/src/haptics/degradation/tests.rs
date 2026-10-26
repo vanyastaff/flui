@@ -15,7 +15,8 @@ use crate::haptics::degradation::{
     ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
     web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
-use crate::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
+use crate::haptics::headless::FakeHaptics;
+use crate::{HeadlessPlatform, OwnerPlatform, Platform as _};
 use flui_platform::WindowOptions;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,

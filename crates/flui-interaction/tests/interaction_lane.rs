@@ -492,10 +492,6 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn capture_wake_failure_preserves_release_debt() {

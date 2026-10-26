@@ -7,7 +7,6 @@
 //! windows the loop tracks (`owner::winit::LoopWindows`).
 
 use std::{
-    any::Any,
     cell::Cell,
     sync::{
         Arc,
@@ -40,7 +39,8 @@ use crate::owner::winit::{
 use crate::text::{TextInput, WindowTextInput};
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
-use crate::window::state::{WindowStateCell, mode_of};
+use crate::window::state::{ModeFlags, WindowStateCell, mode_of};
+use crate::window::visibility::ReportedVisibility;
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
     WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
@@ -146,7 +146,7 @@ pub struct WinitWindow {
     occluded: AtomicBool,
     /// What `on_visibility_status_change` last reported (at first, what the
     /// window opened as): a report is raised only when it changes.
-    reported_visible: parking_lot::Mutex<bool>,
+    reported_visible: parking_lot::Mutex<ReportedVisibility>,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -247,7 +247,7 @@ impl WinitWindow {
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
-            reported_visible: parking_lot::Mutex::new(options.visible),
+            reported_visible: parking_lot::Mutex::new(ReportedVisibility::new(options.visible)),
             callbacks: crate::owner::handlers::WindowCallbacks::new(),
             accessibility,
             haptics,
@@ -561,11 +561,11 @@ fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) 
         logical(window.inner_size()),
     )
     .with_mode(facts.probed_mode.unwrap_or_else(|| {
-        mode_of(
+        mode_of(ModeFlags {
             minimized,
-            window.fullscreen().is_some(),
-            window.is_maximized(),
-        )
+            fullscreen: window.fullscreen().is_some(),
+            maximized: window.is_maximized(),
+        })
     }))
     .with_visible(facts.visible)
     .with_focused(facts.focused)
@@ -830,10 +830,6 @@ impl PlatformWindow for WinitWindow {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.chrome))
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl crate::host_window::CoreHostWindow for WinitWindow {}
@@ -915,12 +911,11 @@ impl LoopWindow for WinitWindow {
     /// answer is read under the report's lock, so two reporters cannot leave an
     /// older one last, and the lock is released before the dispatch.
     fn report_visibility(&self) {
-        let (previous, visible) = {
-            let mut reported = self.reported_visible.lock();
-            let visible = PlatformWindow::is_visible(self);
-            (std::mem::replace(&mut *reported, visible), visible)
-        };
-        if previous != visible {
+        let report = self
+            .reported_visible
+            .lock()
+            .report(PlatformWindow::is_visible(self));
+        if let Some(visible) = report {
             self.callbacks.dispatch_visibility_status_change(visible);
         }
     }

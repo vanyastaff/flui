@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-#[cfg(all(target_os = "macos", feature = "a11y"))]
+#[cfg(target_os = "macos")]
 use crate::accessibility::apple::MacosAccessibility;
 #[cfg(target_os = "ios")]
 use crate::clipboard::apple::IOSClipboard;
@@ -92,11 +92,10 @@ impl Host for Apple {
     #[cfg(target_os = "ios")]
     type Text = IosTextSizing;
 
-    // The AppKit bridge exists with the `a11y` feature; UIKit windows hand out
-    // no accessibility yet.
-    #[cfg(all(target_os = "macos", feature = "a11y"))]
+    // UIKit windows hand out no accessibility yet.
+    #[cfg(target_os = "macos")]
     type Accessibility = MacosAccessibility;
-    #[cfg(not(all(target_os = "macos", feature = "a11y")))]
+    #[cfg(target_os = "ios")]
     type Accessibility = Absent<position::Accessibility>;
 
     #[cfg(target_os = "macos")]
@@ -157,8 +156,8 @@ pub type MacOSPlatform = HostPlatform<Apple>;
 ///
 /// `UIApplicationMain` owns the main thread for the process's life, and UIKit
 /// is main-thread-only, so every window, view and pasteboard access happens on
-/// that thread; the only background work is Grand Central Dispatch's
-/// ([`IOSExecutor`](crate::IOSExecutor)). The loop runs the bootstrap from the
+/// that thread; the only background work is Grand Central Dispatch's (the
+/// loop's executor). The loop runs the bootstrap from the
 /// application delegate and attaches each scene's window from the scene
 /// delegate (`owner::apple::ios`); a `CADisplayLink` paces the frames.
 ///
@@ -224,17 +223,12 @@ impl IosHost for Apple {
 
 #[cfg(target_os = "macos")]
 impl HostPlatform<Apple> {
-    /// Create a new macOS platform with default configuration
+    /// Create a new macOS platform.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::with_config(WindowConfiguration::default())
-    }
-
-    /// Create a new macOS platform with custom configuration
-    pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         // The loop keeps the open windows itself; what they share is the
         // configuration they open with.
         Self::try_from_parts(
-            |positions| MacOSWindows::new(config, positions),
+            |positions| MacOSWindows::new(WindowConfiguration::default(), positions),
             |_| MacOSLoop::new::<Apple>(),
         )
     }

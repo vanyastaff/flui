@@ -122,10 +122,6 @@ impl PlatformWindow for ReentrantIdentityWindow {
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn native_identity_is_observed_before_registry_publication() {
@@ -228,13 +224,14 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
             .run(Box::new(move |owner| {
                 let shared = owner.shared();
                 install_owner_platform(owner)?;
-                let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
+                let host = with_owner_platform(|owner| {
                     owner.open_window(flui_platform::WindowOptions::default())
                 })
                 .expect("installed owner")
                 .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless native window");
-                let native = window
+                let window: Arc<dyn PlatformWindow> = host.clone();
+                let native = host
                     .as_any()
                     .downcast_ref::<flui_native::MockWindow>()
                     .expect("headless window");
@@ -446,6 +443,17 @@ fn test_window() -> std::sync::Arc<dyn flui_platform::PlatformWindow> {
     crate::app::window_test_support::headless_test_window()
 }
 
+/// A headless window as the host hands it out, and the same window as the
+/// runner holds it: the first reaches the headless window's own controls.
+fn test_host_window() -> (
+    std::sync::Arc<dyn flui_native::HostWindow>,
+    std::sync::Arc<dyn PlatformWindow>,
+) {
+    let host = crate::app::window_test_support::headless_test_host_window();
+    let window: std::sync::Arc<dyn PlatformWindow> = host.clone();
+    (host, window)
+}
+
 fn install_test_ui_runtime() -> PresentationDispatcher {
     install_platform_ui_runtime(
         crate::app::ui_runtime::UiRuntime::for_test(),
@@ -645,11 +653,11 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
     use flui_interaction::events::{Code, Modifiers};
     use flui_interaction::testing::input::KeyEventBuilder;
 
-    let window = test_window();
+    let (host, window) = test_host_window();
     let dispatcher =
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window);
     install_input_wiring(dispatcher, window.as_ref());
-    let native = window
+    let native = host
         .as_any()
         .downcast_ref::<flui_native::MockWindow>()
         .expect("headless test window");
@@ -680,7 +688,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
         Rc::clone(&delivered),
         Rc::clone(&in_turn),
     );
-    let turn_window = std::sync::Arc::clone(&window);
+    let turn_window = std::sync::Arc::clone(&host);
     dispatch_platform_ui_runtime(
         dispatcher,
         RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
@@ -893,7 +901,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
 
     for posted in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        let window = test_window();
+        let (host, window) = test_host_window();
         let runtime = crate::app::ui_runtime::UiRuntime::for_test();
         let trace = Rc::new(RefCell::new(Vec::new()));
         let key_trace = Rc::clone(&trace);
@@ -952,7 +960,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         .expect("first callback");
         assert!(trace.borrow().is_empty());
         with_owner_callback(|_| {
-            let native = window
+            let native = host
                 .as_any()
                 .downcast_ref::<flui_native::MockWindow>()
                 .expect("native mock");
@@ -1802,8 +1810,8 @@ fn platform_brightness_follows_the_window_appearance() {
         }
     }
     let _clear = OwnerHostClearGuard::arm();
-    let window = test_window();
-    let native = window
+    let (host, window) = test_host_window();
+    let native = host
         .as_any()
         .downcast_ref::<flui_native::MockWindow>()
         .expect("headless window")

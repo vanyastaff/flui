@@ -19,7 +19,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
-use flui_native::{HostWindow, Platform as _, WindowsPlatform, WindowsWindow};
+use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use flui_platform::{
     DispatchEventResult, SizeConstraints, WindowCommand, WindowCommandError, WindowGeometry,
     WindowMode, WindowOptions, WindowReveal, WindowState,
@@ -72,11 +72,7 @@ fn open(platform: &WindowsPlatform, options: WindowOptions) -> Arc<dyn HostWindo
 }
 
 fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
-    window
-        .as_any()
-        .downcast_ref::<WindowsWindow>()
-        .expect("the Win32 backend")
-        .hwnd()
+    crate::win32_handle(window.as_ref())
 }
 
 fn shown(window: &Arc<dyn HostWindow>) -> bool {
