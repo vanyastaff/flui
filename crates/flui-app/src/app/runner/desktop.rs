@@ -95,7 +95,10 @@ where
     // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
     // gives it its own strong ref rather than a borrow of `window`.
     let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+    let renderer = pollster::block_on(Renderer::with_surface_color(
+        Arc::clone(&window),
+        config.surface_color,
+    ));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
@@ -106,6 +109,7 @@ where
         }
     };
     renderer.resize(phys_size.width as u32, phys_size.height as u32);
+    renderer.set_frame_latency(config.frame_latency);
     // The platform's frame-pacing signal (Wayland frame callbacks) is
     // armed by the renderer right before each present — see
     // `install_pre_present_hook`'s own doc and ADR-0058.
@@ -255,8 +259,8 @@ where
             source: Arc::new(error),
         })?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+    window.on_request_frame(Box::new(move |request| {
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     }));
 
     // 7. Register resize callback -> typed Resized event; the applier

@@ -139,10 +139,10 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
             .expect("ready B");
             let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
             let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
-            a_window.on_request_frame(Box::new(move || {
+            a_window.on_request_frame(Box::new(move |_| {
                 a_seen.fetch_add(1, Ordering::SeqCst);
             }));
-            b_window.on_request_frame(Box::new(move || {
+            b_window.on_request_frame(Box::new(move |_| {
                 b_seen.fetch_add(1, Ordering::SeqCst);
             }));
             APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&a_window)));

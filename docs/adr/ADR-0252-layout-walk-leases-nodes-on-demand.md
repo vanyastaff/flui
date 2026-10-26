@@ -27,14 +27,22 @@ parent can hand a clean boundary new constraints.
 ## Decision
 
 1. **Own the slot storage.** `RenderTree` keeps nodes in a `NodeSlab`: a `Vec` of slots, each
-   `{ in_flight: Cell<bool>, state: UnsafeCell<SlotState> }` with
-   `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. Inserting and
-   removing go through `&mut NodeSlab` only, never during a lease: `remove` swaps the state to
-   `Vacant` (dropping the node, in that call) and pushes the slot on the free list, `insert` pops
-   it, so a vacant slot owns no `RenderNode` and nothing is double-dropped or left to `MaybeUninit`.
-   The generation table stays where it is and is bumped on remove, so a stale id fails
-   resolution before the state is read; `acquire` still checks `Occupied` as a second guard. The
-   `slab` dependency leaves `flui-rendering`.
+   `{ in_flight: Cell<bool>, parent: Cell<Option<RenderId>>, state: UnsafeCell<SlotState> }` with
+   `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. The header
+   fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live. The
+   parent link lives only in the header: `RenderTree::parent` reads it, `set_parent_link` and
+   `insert_*_child` write it, and neither `RenderNode` nor `NodeLinks` keeps a copy, so the two
+   cannot disagree. Code that holds only a node (the layout walk) asks the lease.
+
+   Inserting and removing go through `&mut NodeSlab` only, never during a lease. `remove` commits
+   in this order, so unwinding out of the last step leaves a consistent slab: (a) move the node
+   out with `mem::replace(state, Vacant { next_free: head })`; (b) bump the slot's generation;
+   (c) set the free-list head to the slot and clear the header; (d) drop the moved-out node last.
+   A `Drop` that panics therefore leaves a vacant, reusable slot whose old ids already fail
+   resolution, and a caller that catches the panic sees a consistent tree. `insert` pops the free
+   list. A vacant slot owns no `RenderNode`, so nothing is double-dropped and no `MaybeUninit`
+   exists. A stale id fails the generation check before the state is read; `acquire` checks
+   `Occupied` as a second guard. The `slab` dependency leaves `flui-rendering`.
 
 2. **One lease per walk.** `RenderTree::lease(&mut self) -> TreeLease<'_>` takes the slot base
    pointer once (from `Vec::as_mut_ptr`, so every slot pointer has whole-allocation provenance)
@@ -42,19 +50,25 @@ parent can hand a clean boundary new constraints.
    the lease drops, so the Miri objection above cannot arise.
 
 3. **Acquire along edges.** `TreeLease::acquire(parent, child) -> Result<NodeGuard, RenderError>`:
-   resolves `child` with the existing generation check (O(1)), rejects an id that is not a
-   current child of `parent` (`NodeNotFound`, as an id outside the subtree is today), sets the
+   resolves `child` with the existing generation check (O(1)), rejects an id whose header
+   `parent` is not `parent` (`NodeNotFound`, as an id outside the subtree is today), sets the
    slot's `in_flight` bit or returns `LayoutCycle`, and yields the `&mut RenderNode` for exactly the
-   guard's life. The bit lives beside the `UnsafeCell`, never inside it, so reading it while a
-   node's `&mut` is live up the stack touches no aliased memory. This is the invariant the arena's
-   side map provides today, without the map.
+   guard's life. Every read `acquire` makes is of slot headers, never of a `RenderNode`: it is
+   called from `layout_child` while the parent's guard exposes `&mut RenderNode` to
+   `perform_layout`, so an edge check that read the parent's child list would alias that borrow.
+   The header is the non-aliased side storage for exactly this reason, and it is the invariant the
+   arena's side map provides today, without the map. A child that left the parent's list during
+   the walk is not possible: structure changes through `&mut RenderTree`, which the lease holds.
 
 4. **`SubtreeArena` becomes a thin walker over the lease.** Its sinks (`laid_out`, failures,
-   poison retries, child requests) stay as they are; `by_id`, `parent_data_seeds` collection and
-   `from_tree` go. The test-only parent-data seed lookup becomes a lookup by id on demand.
+   poison retries, child requests) stay as they are; `by_id` and the per-walk copy of the parent-data seeds go, and
+   `from_tree` takes the lease. The test-only seed lookup reads the owner's map directly.
 
-5. **Dead code goes.** `collect_subtree_ids` (one remaining caller in `accessors.rs`, which takes
-   a plain iterator walk instead), `get_subtree_mut` and `collect_disjoint_mut` are deleted.
+5. **Dead code goes.** `SubtreeArena::new(ids, refs)`, its id map and the per-walk seed copy are
+   deleted, and so are `RenderTree::get_subtree_mut` and the query walks' up-front collection: the
+   dry intrinsic, layout and baseline queries (`query.rs`) enter nodes through the same lease
+   (`QueryWalk`), so they cost the nodes they visit. `collect_subtree_ids` stays for
+   `remove_recursive`.
 
 ## Diagram
 
@@ -82,7 +96,8 @@ parent can hand a clean boundary new constraints.
   `nodes_acquired` equals laid-out plus cache-hit roots, not the item count), re-entry of an
   ancestor still reports `LayoutCycle`, an id outside the walked subtree still reports
   `NodeNotFound`, remove-then-insert churn reuses a slot under a new generation without leaking or
-  double-dropping a node, a panicking `perform_layout` leaves no `in_flight` bit set, and the existing
+  double-dropping a node, a `Drop` that panics during `remove` leaves a vacant slot whose old id
+  no longer resolves, a panicking `perform_layout` leaves no `in_flight` bit set, and the existing
   poison and degradation tests run unchanged. The `pipeline::owner` Miri sweep covers the new
   `unsafe`, which stays in the one sanctioned file.
 - `layout/scroll_10k` joins the frame benches.

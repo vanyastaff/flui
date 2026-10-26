@@ -19,7 +19,7 @@ fn frame_callback_is_restored_after_real_dispatch_panics() {
     let weak_callbacks = Arc::downgrade(&callbacks);
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_in_callback = Arc::clone(&calls);
-    *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+    *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
         let call = calls_in_callback.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
             weak_callbacks
@@ -113,7 +113,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         }));
         let nested = Arc::downgrade(&callbacks);
         let notice = Arc::clone(&retired);
-        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
             let callbacks = nested.upgrade().expect("owner");
             callbacks.dispatch_state_changed();
             callbacks.dispatch_close();
@@ -165,7 +165,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         let healthy = WindowCallbacks::new();
         let delivered = Arc::new(AtomicBool::new(false));
         let observation = Arc::clone(&delivered);
-        *healthy.on_request_frame.lock() = Some(Box::new(move || {
+        *healthy.on_request_frame.lock() = Some(Box::new(move |_| {
             observation.store(true, Ordering::SeqCst);
         }));
         healthy.dispatch_request_frame();
@@ -412,7 +412,7 @@ fn a_retirement_notice_contains_its_capture_failure() {
         }
         let callbacks = Arc::new(WindowCallbacks::new());
         let nested = Arc::downgrade(&callbacks);
-        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
             let hostile = Hostile;
             nested
                 .upgrade()
@@ -468,10 +468,10 @@ fn a_replaced_callback_capture_cannot_replace_its_invocation_failure() {
         let callbacks = Arc::new(WindowCallbacks::new());
         let nested = Arc::downgrade(&callbacks);
         let hostile = Hostile;
-        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+        *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
             let _ = &hostile;
             let owner = nested.upgrade().expect("owner");
-            *owner.on_request_frame.lock() = Some(Box::new(|| {}));
+            *owner.on_request_frame.lock() = Some(Box::new(|_| {}));
             owner.clear();
             panic!("first invocation failure");
         }));

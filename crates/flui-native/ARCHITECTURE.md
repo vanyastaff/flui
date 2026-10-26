@@ -914,6 +914,17 @@ replayed. An opaque FnOnce environment that double-panics during invocation
 before reaching the containment boundary cannot be rescued. These checks do
 not establish wasm panic-abort recovery.
 
+On the Web the containment is inert. wasm32 builds with `panic=abort`, so a panic
+in a browser callback traps the module before `contain_owner_callback`, the
+provider containment or any drop-based cleanup runs; the first failure is the
+panic hook's console message and the page stays dead until reloaded. Everything
+above that recovers after a caught panic (retained first failure, capture
+release, the next healthy owner turn) holds on the targets with unwinding and is
+not claimed for browser builds. Web code therefore reports a failure it expects
+as a typed error and never relies on a caught panic. Building the target with
+unwinding is not an option yet: it needs a nightly toolchain and
+`-Zbuild-std`, which the pinned stable toolchain does not use.
+
 Browser compilation alone does not prove the DOM delivery contracts. Headless
 source-focus controls are distinct from real system/page focus transitions.
 A controlled `Document.hidden` source is not a real background-tab transition.

@@ -330,7 +330,10 @@ impl ScriptStep {
                     ),
                 )))
             }
-            Self::Frame { at } => HostInput::Frame { vsync: base + at },
+            Self::Frame { at } => HostInput::Frame {
+                vsync: base + at,
+                target_present: None,
+            },
         }
     }
 }

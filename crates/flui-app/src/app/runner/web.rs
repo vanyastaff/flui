@@ -147,6 +147,8 @@ where
                     window,
                     gpu_loss,
                     owner_wake: wake,
+                    surface_color: config.surface_color,
+                    frame_latency: config.frame_latency,
                 }),
                 &owner.shared(),
             )
@@ -199,6 +201,10 @@ pub(super) struct WebFrameDriver {
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// The colour capability the window asked of its surface.
+    surface_color: flui_engine::SurfaceColor,
+    /// The swapchain latency a first-built renderer is given; a rebuilt one keeps its own.
+    frame_latency: flui_engine::FrameLatency,
 }
 
 impl WebFrameDriver {
@@ -356,8 +362,10 @@ impl WebFrameDriver {
     ) {
         use std::sync::Arc;
         let renderer_slot = Arc::clone(&self.renderer);
+        let surface_color = self.surface_color;
         let window = Arc::clone(&self.window);
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
+        let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
             if !authority.is_live() {
                 return;
@@ -368,8 +376,16 @@ impl WebFrameDriver {
                     let built = renderer.recover().await;
                     (Some(renderer), built)
                 }
-                None => match flui_engine::Renderer::new(Arc::clone(&window)).await {
-                    Ok(renderer) => (Some(renderer), Ok(())),
+                None => match flui_engine::Renderer::with_surface_color(
+                    Arc::clone(&window),
+                    surface_color,
+                )
+                .await
+                {
+                    Ok(mut renderer) => {
+                        renderer.set_frame_latency(frame_latency);
+                        (Some(renderer), Ok(()))
+                    }
                     Err(error) => (None, Err(error)),
                 },
             };

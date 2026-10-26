@@ -3569,11 +3569,11 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     // Recovery must report the observer's earlier failure rather than the
     // competing focus listener.
     harness.with_build_owner_mut(|owner| {
-        owner.set_error_view_builder(Some(|error| {
+        owner.capabilities_mut().error_view_builder = Some(|error| {
             assert_eq!(error.message, "observer failure on status");
             OBSERVER_FAILURE_RECOVERED.store(true, std::sync::atomic::Ordering::Relaxed);
             Box::new(flui_view::ErrorView::from_error(error))
-        }));
+        });
     });
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
     assert!(

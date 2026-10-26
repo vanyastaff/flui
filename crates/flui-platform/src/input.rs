@@ -84,6 +84,62 @@ impl Default for DispatchEventResult {
     }
 }
 
+/// The pointer events a backend sampled at one instant, in the order it
+/// sampled them: the contacts a touch screen reported together, or the motion
+/// of one display frame.
+///
+/// A recognizer that measures the relation between contacts (a pinch) is
+/// settled once, after the last event, so it never sees one finger moved and
+/// the other not. A backend reports a lone event as a frame of one
+/// ([`PointerFrame::single`]) or as [`PlatformInput::Pointer`]; the two are
+/// the same input.
+#[derive(Debug, Clone)]
+pub struct PointerFrame(Vec<PointerEvent>);
+
+/// A [`PointerFrame`] needs at least one event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a pointer frame holds at least one event")]
+pub struct EmptyPointerFrame;
+
+impl PointerFrame {
+    /// The frame of `events`, which must not be empty.
+    ///
+    /// # Errors
+    ///
+    /// [`EmptyPointerFrame`] when `events` is empty.
+    pub fn new(events: Vec<PointerEvent>) -> Result<Self, EmptyPointerFrame> {
+        if events.is_empty() {
+            return Err(EmptyPointerFrame);
+        }
+        Ok(Self(events))
+    }
+
+    /// A frame of one event.
+    #[must_use]
+    pub fn single(event: PointerEvent) -> Self {
+        Self(vec![event])
+    }
+
+    /// The events, in the order they were sampled.
+    #[must_use]
+    pub fn events(&self) -> &[PointerEvent] {
+        &self.0
+    }
+
+    /// The events, in the order they were sampled.
+    #[must_use]
+    pub fn into_events(self) -> Vec<PointerEvent> {
+        self.0
+    }
+
+    /// How many events the frame holds; at least one.
+    #[must_use]
+    #[expect(clippy::len_without_is_empty, reason = "a frame is never empty")]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Platform input event wrapper
 ///
 /// This enum carries FLUI-owned types for platform-specific dispatching.
@@ -103,6 +159,9 @@ impl Default for DispatchEventResult {
 pub enum PlatformInput {
     /// Pointer, scrolling, trackpad or device-lifecycle event.
     Pointer(PointerEvent),
+
+    /// Pointer events sampled at one instant; see [`PointerFrame`].
+    PointerFrame(PointerFrame),
 
     /// Keyboard event
     Keyboard(KeyEvent),
@@ -131,6 +190,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Pointer(event) => Some(event),
             PlatformInput::Keyboard(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Ime(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -143,6 +203,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Ime(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -155,6 +216,7 @@ impl PlatformInput {
         match self {
             PlatformInput::Ime(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Keyboard(_)
             | PlatformInput::DragDrop(_)
             | PlatformInput::Capabilities(_) => None,
@@ -167,6 +229,7 @@ impl PlatformInput {
         match self {
             PlatformInput::DragDrop(event) => Some(event),
             PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
             | PlatformInput::Keyboard(_)
             | PlatformInput::Ime(_)
             | PlatformInput::Capabilities(_) => None,

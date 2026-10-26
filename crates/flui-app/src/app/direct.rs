@@ -144,7 +144,10 @@ pub fn run_direct(
         // own strong ref rather than a borrow, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+        let renderer = pollster::block_on(Renderer::with_surface_color(
+            Arc::clone(&window),
+            config.surface_color,
+        ));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -153,6 +156,7 @@ pub fn run_direct(
             }
         };
         renderer.resize(phys_size.width as u32, phys_size.height as u32);
+        renderer.set_frame_latency(config.frame_latency);
 
         tracing::info!(
             gpu = %renderer.capabilities().adapter_name,
@@ -167,7 +171,7 @@ pub fn run_direct(
         // 4. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         let render_fn_frame = Arc::clone(&render_fn);
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
 

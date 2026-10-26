@@ -9,6 +9,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use super::{BlitPipeline, FullscreenVertex, OffscreenRenderer};
+use crate::surface_color::OutputEncoding;
 
 impl OffscreenRenderer {
     /// Presents a retained image into the allocation backing its default view.
@@ -20,23 +21,36 @@ impl OffscreenRenderer {
         retained: &wgpu::Texture,
         surface: &wgpu::Texture,
         view: &wgpu::TextureView,
+        output: OutputEncoding,
     ) -> EngineResult<()> {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let permit = self.encode_presentation(retained, surface, view, &mut encoder)?;
+        let permit = self.encode_presentation(retained, surface, view, output, &mut encoder)?;
         self.domain
             .submit(self.domain.prepare(vec![encoder.finish()], vec![permit])?)?;
         Ok(())
     }
 
+    /// Writes `retained` to the surface, converting its colours when `output`
+    /// asks for it.
     pub(crate) fn encode_presentation(
         &mut self,
         retained: &wgpu::Texture,
         surface: &wgpu::Texture,
         view: &wgpu::TextureView,
+        output: OutputEncoding,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+        if let OutputEncoding::Transform(transform) = output {
+            return self.encode_transform_blit(
+                retained,
+                view,
+                surface.format(),
+                transform,
+                encoder,
+            );
+        }
         let can_copy = retained.format() == surface.format()
             && retained.size() == surface.size()
             && retained.dimension() == wgpu::TextureDimension::D2

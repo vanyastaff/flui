@@ -1,5 +1,6 @@
 //! Application configuration.
 
+use flui_engine::FrameLatency;
 use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
@@ -133,6 +134,13 @@ pub struct AppConfig {
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
+    /// How many frames a window's swapchain holds ahead of the display (ADR-0257).
+    ///
+    /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades throughput for the
+    /// newest frame on screen, for drawing and games. Every window the application opens starts
+    /// with it.
+    pub frame_latency: FrameLatency,
+
     /// The development reload driver, if the application installed one with
     /// [`Self::with_dev_reload`] (ADR-0094 §1).
     ///
@@ -211,6 +219,10 @@ pub struct AppConfig {
     pub frame_failure_detail: FrameFailureDetail,
     /// Pointer interpolation for this window's presentation; disabled by default.
     pub pointer_resampling: PointerResampling,
+    /// The colour capability requested of this window's surface; `Srgb8` by default.
+    /// The renderer grants as much as the surface and display allow and reports
+    /// the rest through `Renderer::surface_color`.
+    pub surface_color: flui_engine::SurfaceColor,
 
     /// Optional per-window close-request veto (issue #558): asked, for
     /// each window opened with this config, whether that window may
@@ -292,6 +304,7 @@ impl Default for AppConfig {
             resizable: true,
             decorations: true,
             show_performance_overlay: false,
+            frame_latency: FrameLatency::Balanced,
             dev_reload: None,
             dev_agent: None,
             exit_policy: ExitPolicy::default(),
@@ -301,6 +314,7 @@ impl Default for AppConfig {
             error_view_builder: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
+            surface_color: flui_engine::SurfaceColor::Srgb8,
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
@@ -339,6 +353,15 @@ impl AppConfig {
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
+        self
+    }
+
+    /// Ask for a wider or brighter surface than 8-bit sRGB. The request is met
+    /// as far as the surface and the display allow; read what was granted from
+    /// `Renderer::surface_color`.
+    #[must_use]
+    pub fn with_surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
+        self.surface_color = color;
         self
     }
 
@@ -425,6 +448,13 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
+        self
+    }
+
+    /// Set how many frames each window's swapchain holds ahead of the display.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_frame_latency(mut self, latency: FrameLatency) -> Self {
+        self.frame_latency = latency;
         self
     }
 

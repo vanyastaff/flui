@@ -181,16 +181,12 @@ impl<P: Protocol> RenderEntry<P> {
         }
     }
 
-    /// Creates a new render entry with a parent.
-    pub fn with_parent(
-        render_object: Box<dyn RenderObject<P>>,
-        parent: RenderId,
-        depth: u16,
-    ) -> Self {
+    /// Creates a new render entry at `depth` in the tree.
+    pub fn with_depth(render_object: Box<dyn RenderObject<P>>, depth: u16) -> Self {
         Self {
             render_object: Some(render_object),
             state: RenderState::new(),
-            links: NodeLinks::with_parent(parent, depth),
+            links: NodeLinks::with_depth(depth),
             attachment: AttachmentState::Detached(None),
             local_invalidation: None,
         }
@@ -338,12 +334,6 @@ impl<P: Protocol> RenderEntry<P> {
 
     // Convenience methods for common link operations
 
-    /// Returns the parent ID.
-    #[inline]
-    pub fn parent(&self) -> Option<RenderId> {
-        self.links.parent()
-    }
-
     /// Returns the children IDs.
     #[inline]
     pub fn children(&self) -> &[RenderId] {
@@ -398,8 +388,8 @@ impl<P: Protocol> RenderEntry<P> {
     /// # Production non-leaf path
     ///
     /// `PipelineOwner::layout_dirty_root` is the production entry point
-    /// for parent-children layout: it obtains disjoint mut refs via
-    /// `RenderTree::get_subtree_mut` and constructs a typed
+    /// for parent-children layout: it leases the tree and acquires nodes as the walk reaches them, and
+    /// constructs a typed
     /// `BoxLayoutCtx` with the child slice via
     /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
     /// bypassing this method entirely. Callers wanting parent-children
@@ -433,6 +423,7 @@ impl<P: Protocol> RenderEntry<P> {
         &mut self,
         constraints: ProtocolConstraints<P>,
         text: crate::pipeline::TextSource<'_>,
+        has_parent: bool,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Clone,
@@ -552,7 +543,6 @@ impl<P: Protocol> RenderEntry<P> {
         // for `SliverProtocol`, no-op (relayout-boundary semantics not
         // used). Before this bootstrap runs, `PipelineOwner::mark_needs_layout`
         // treats every node as non-boundary and walks to root.
-        let has_parent = self.links.parent().is_some();
         let sized_by_parent = self.render_object().sized_by_parent();
         <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(
             &self.state,

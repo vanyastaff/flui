@@ -200,6 +200,7 @@ request.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
+- Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. Wayland through winit frames the touches of one loop turn, because winit does not report `wl_touch.frame` (a turn holds whole frames but may hold several; no touchscreen run). Android frames the fingers of one `ACTION_MOVE` (cross-checked in CI, no run on a device), and iOS (a touch set) still reports each contact on its own, as frames of one.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
 
 ### 16. Mobile system UI
@@ -263,15 +264,16 @@ request.
 > **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
 - Nothing reports when a frame reached the screen.
-- No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
+- Web and Win32 feed the frame clock (the animation-frame timestamp; DWM's last and next refresh), neither run on its platform yet. No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, Android frame timelines (Choreographer frame time) or `CADisplayLink` `timestamp`/`targetTimestamp` feed it, so on those hosts animations schedule on the admission time and input-to-photon latency cannot be measured or regressed.
 - A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
 
 ### 24. No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
-- The platform layer has no surface colour space, headroom query or display-profile change.
-- The engine's colour spaces stop at images and gradients.
+- The engine requests a surface colour capability per window (`AppConfig::surface_color`, [ADR-0256](adr/ADR-0256-surface-colour-is-requested-and-converted-at-presentation.md)) and converts to Display P3, scRGB, extended sRGB or HDR10 at presentation; no run on an HDR or P3 display backs it yet, and no Metal space has run.
+- The platform layer has no headroom query or display-profile change; headroom comes from wgpu when the surface is configured.
+- Sources are still sRGB: images with a profile, video and HDR images enter the working space as sRGB values.
 - Android has public headroom APIs (`Display.getHdrSdrRatio`, API 34, with a listener for changes); the Web reports capability only and cannot observe headroom. HDR and SDR-white change events are a parity row of their own.
 
 ### 25. Sandbox-aware file access is absent
@@ -456,5 +458,7 @@ request.
 | 2026-10-21 | minor | Entry 23 closes: Android preferences arrive through `FluiView`'s setting, contrast and inset callbacks, and the Galaxy S21 loop made no turn in 10 s idle, resumed or behind Home; entries 24–41 become 23–40. Entry 14 becomes "System preferences missing or never run" |
 | 2026-10-22 | minor | Entry 2: the desktop accessibility adapters are always on (no `a11y` feature; AT-SPI comes with the Linux host), still unrun with a screen reader |
 | 2026-10-22 | minor | Entry 30 closes: `cargo xtask panic-boundary` holds every OS entry into the core host (169: extern fns, Objective-C and COM methods, AccessKit handlers, blocks, delegates and GCD work items) to a constant or one call of `owner::panic_boundary::os_entry`; the AppKit, UIKit, Win32 and Android entries it found unguarded go through it now, and the Apple ones, type-checked only, join entry 4's runs still owed ([#1840](https://github.com/vanyastaff/flui/issues/1840)); entries 31–40 become 30–39 |
+| 2026-10-26 | minor | Entry 15: the interaction layer has the pointer frame (`dispatch_pointer_frame_on`, `pointer_frame_end`); no backend reports frames yet. Follow-ups: Win32 `GetPointerFrameInfoHistory`, Android `ACTION_MOVE` with all pointers, Wayland `wl_touch.frame`, iOS touch sets |
+| 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
 
 </details>

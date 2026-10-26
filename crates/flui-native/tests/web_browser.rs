@@ -11,6 +11,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{HostWindow, Platform, WebPlatform};
@@ -199,10 +200,17 @@ export function typeIntoEditor(value, caret, composing) {
         inputType: composing ? 'insertCompositionText' : 'insertText' }));
 }
 export function editorComposition(type) { editor().dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
+// Hold the page's thread for `ms` at the start of the next animation frame, before any
+// callback registered after this one.
+export function holdNextFrame(ms) {
+    requestAnimationFrame(() => { const end = performance.now() + ms; while (performance.now() < end) {} });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = freshCanvas)]
     fn fresh_canvas();
+    #[wasm_bindgen(js_name = holdNextFrame)]
+    fn hold_next_frame(millis: f64);
     #[wasm_bindgen(js_name = pageCanvas)]
     fn page_canvas();
     #[wasm_bindgen(js_name = touchAction)]
@@ -497,7 +505,7 @@ async fn a_redraw_waits_for_the_next_animation_frame() {
     let canvas = HostedCanvas::open();
     let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (counted, window) = (Arc::clone(&frames), Arc::clone(&canvas.window));
-    canvas.window.on_request_frame(Box::new(move || {
+    canvas.window.on_request_frame(Box::new(move |_| {
         if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < ANIMATION {
             window.request_redraw();
         }
@@ -1336,4 +1344,39 @@ fn a_textarea_serves_the_field_without_edit_context() {
     canvas.host.focus_store(None);
     assert!(editor().is_none(), "the textarea is gone");
     assert!(canvas.window.is_focused(), "focus went back to the canvas");
+}
+
+/// A frame request carries the browser's own frame time, not the moment the callback ran: a frame
+/// the page's thread was held for before the backend's callback sees a vsync that old.
+#[wasm_bindgen_test]
+async fn an_animation_frame_request_is_stamped_with_the_browsers_frame_time() {
+    const HELD_MS: f64 = 25.0;
+    let canvas = HostedCanvas::open();
+    // `(requests seen, how long before the callback ran the second one's vsync was)`.
+    let seen = Arc::new(std::sync::Mutex::new((0_usize, Duration::ZERO)));
+    let record = Arc::clone(&seen);
+    canvas.window.on_request_frame(Box::new(move |request| {
+        let now = flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns());
+        let mut seen = record.lock().expect("the frame record");
+        seen.0 += 1;
+        if seen.0 == 2 {
+            seen.1 = now.saturating_duration_since(request.vsync);
+        }
+        if seen.0 == 1 {
+            // Registered inside the callback, so it runs ahead of the backend's own callback for
+            // the following frame and holds the thread between the frame's start and that callback.
+            hold_next_frame(HELD_MS);
+        }
+        assert!(
+            request.target_present.is_none(),
+            "the browser names no present time"
+        );
+    }));
+    wait(300).await;
+    let (requests, age) = *seen.lock().expect("the frame record");
+    assert!(requests >= 2, "{requests} frame requests in 300 ms");
+    assert!(
+        age >= Duration::from_millis(20),
+        "the frame after a {HELD_MS} ms hold was stamped {age:?} before its callback"
+    );
 }

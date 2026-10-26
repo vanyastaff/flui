@@ -77,6 +77,8 @@ pub fn start() {
                     _ => {}
                 }
             }
+            // The web backend reports each pointer on its own.
+            PlatformInput::PointerFrame(_) => {}
             PlatformInput::Keyboard(ke) => {
                 web_sys::console::log_1(
                     &format!("Key {:?}: {:?} (code={:?})", ke.state(), ke.key, ke.code).into(),
@@ -98,7 +100,7 @@ pub fn start() {
     }));
 
     // Register frame callback
-    window.on_request_frame(Box::new(|| {
+    window.on_request_frame(Box::new(|_| {
         // Frame rendered -- no-op for now (no GPU renderer in this demo)
     }));
 

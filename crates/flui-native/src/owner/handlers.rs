@@ -21,8 +21,8 @@ use parking_lot::Mutex;
 use flui_platform::input_capabilities::InputCapabilities;
 
 use flui_platform::{
-    DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
-    WindowExecutionState,
+    DispatchEventResult, FrameRequest, PlatformInput, SessionEndAnswer, SessionEndPhase,
+    WindowEvent, WindowExecutionState,
 };
 
 use super::call_point::{Called, HandlerSlot, call, retire};
@@ -318,7 +318,7 @@ pub struct WindowCallbacks {
     unanswered_keys: Mutex<VecDeque<flui_platform::keyboard::KeyEvent>>,
 
     /// Called when the platform requests a new frame to be rendered.
-    pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    pub on_request_frame: Mutex<Option<Box<dyn FnMut(FrameRequest) + Send>>>,
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
@@ -418,7 +418,7 @@ type StatusCallback = Box<dyn FnMut(bool) + Send>;
 
 enum WindowCallbackEvent {
     Input(PlatformInput),
-    RequestFrame,
+    RequestFrame(FrameRequest),
     Resize(WindowMetrics),
     StateChanged,
     Close,
@@ -933,12 +933,12 @@ impl WindowCallbacks {
                         .or_resume(DispatchEventResult::default());
                     input_result.get_or_insert(result);
                 }
-                WindowCallbackEvent::RequestFrame => {
+                WindowCallbackEvent::RequestFrame(request) => {
                     call(&self.queued(&self.on_request_frame), |callback| {
                         // Counted before the call, so a frame that unwinds
                         // still counts as one that ran.
                         self.frames_run.fetch_add(1, Ordering::Relaxed);
-                        callback();
+                        callback(request);
                     })
                     .or_resume(());
                 }
@@ -1362,11 +1362,18 @@ impl WindowCallbacks {
         }
     }
 
-    /// Dispatch a frame request.
+    /// Dispatch a frame request that carries no platform timestamp: its vsync is the event clock's
+    /// reading now (ADR-0257).
     pub fn dispatch_request_frame(&self) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::RequestFrame)
-        else {
+        self.dispatch_frame(frame_request_now());
+    }
+
+    /// Dispatch a frame request with what the platform reported for the frame.
+    pub fn dispatch_frame(&self, request: FrameRequest) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::RequestFrame(request),
+        ) else {
             return;
         };
         self.drain_events(drain);
@@ -1670,7 +1677,7 @@ macro_rules! impl_window_callback_setters {
             self.$callbacks_field.set_input_callback(callback);
         }
 
-        fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        fn on_request_frame(&self, callback: Box<dyn FnMut(flui_platform::FrameRequest) + Send>) {
             $crate::owner::call_point::install(&self.$callbacks_field.on_request_frame, callback);
         }
 
@@ -1788,6 +1795,51 @@ impl std::fmt::Debug for WindowCallbacks {
     }
 }
 
+/// A frame request for a backend whose platform reports no frame timestamp: the vsync is this
+/// reading of the event clock, and the target present time is unknown (ADR-0257).
+#[must_use]
+pub fn frame_request_now() -> FrameRequest {
+    frame_request_aged(std::time::Duration::ZERO)
+}
+
+/// A frame request whose vsync the platform stamped `age` before this reading of the event clock,
+/// for a platform that reports its frame time on its own clock (the browser's animation frame
+/// timestamp): the age is the one quantity both clocks agree on, so no epoch has to be aligned.
+/// An age past the start of the timeline is the start of it.
+#[must_use]
+pub fn frame_request_aged(age: std::time::Duration) -> FrameRequest {
+    frame_request_timed(age, None)
+}
+
+/// [`frame_request_aged`] for a platform that also knows when the frame will next reach the
+/// screen, `until_present` after this reading.
+#[must_use]
+pub fn frame_request_timed(
+    age: std::time::Duration,
+    until_present: Option<std::time::Duration>,
+) -> FrameRequest {
+    #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
+    let now = flui_foundation::event_epoch().elapsed().as_nanos() as u64;
+    frame_request_at(now, age, until_present)
+}
+
+fn frame_request_at(
+    now_nanos: u64,
+    age: std::time::Duration,
+    until_present: Option<std::time::Duration>,
+) -> FrameRequest {
+    let nanos = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    let request = FrameRequest::new(flui_platform::EventTime::from_nanos(
+        now_nanos.saturating_sub(nanos(age)),
+    ));
+    match until_present {
+        Some(wait) => request.with_target_present(flui_platform::EventTime::from_nanos(
+            now_nanos.saturating_add(nanos(wait)),
+        )),
+        None => request,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -1797,6 +1849,32 @@ mod tests {
     use crate::owner::signal::OwnerSignal;
 
     use super::*;
+
+    /// A platform's frame stamp, given as an age, lands that long before the reading, and an age
+    /// longer than the timeline is its start.
+    #[test]
+    fn an_aged_frame_request_is_stamped_before_the_reading() {
+        use std::time::Duration;
+
+        let at = |now, age| frame_request_at(now, age, None).vsync.as_nanos();
+        assert_eq!(at(5_000_000, Duration::from_millis(2)), 3_000_000);
+        assert_eq!(at(5_000_000, Duration::ZERO), 5_000_000);
+        assert_eq!(at(1_000, Duration::from_secs(1)), 0);
+        assert_eq!(at(1_000, Duration::MAX), 0);
+
+        let request = frame_request_at(
+            5_000_000,
+            Duration::from_millis(2),
+            Some(Duration::from_millis(3)),
+        );
+        assert_eq!(request.vsync.as_nanos(), 3_000_000);
+        assert_eq!(
+            request
+                .target_present
+                .map(flui_platform::EventTime::as_nanos),
+            Some(8_000_000)
+        );
+    }
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
         accepted_status_observations_survive_dispatch_unwind(false);
@@ -1982,7 +2060,7 @@ mod tests {
         }));
         let inner = callbacks.clone();
         if queued {
-            *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+            *callbacks.on_request_frame.lock() = Some(Box::new(move |_| {
                 inner.dispatch_close();
                 inner.clear();
             }));

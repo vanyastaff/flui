@@ -1254,8 +1254,11 @@ fn preferences_wake_each_isolated_window() {
                     .outcome()
                     .expect("publication")
                     .expect("installed");
-                dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-                    .expect("initial frame");
+                dispatch_platform_ui_runtime(
+                    dispatcher,
+                    RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+                )
+                .expect("initial frame");
                 installed
                     .borrow_mut()
                     .push((dispatcher, frame.binding, window, redraws, observed));
@@ -1280,8 +1283,11 @@ fn preferences_wake_each_isolated_window() {
             redraws.load(Ordering::SeqCst) > 0,
             "each isolated native window must be woken"
         );
-        dispatch_platform_ui_runtime(*dispatcher, RuntimeTask::Frame(*frame))
-            .expect("requested frame");
+        dispatch_platform_ui_runtime(
+            *dispatcher,
+            RuntimeTask::Frame(*frame, flui_native::frame_request_now()),
+        )
+        .expect("requested frame");
         assert_eq!(
             &*observed.borrow(),
             &[
@@ -1412,7 +1418,7 @@ impl SourceDrivenReader {
     fn frame(&self) {
         dispatch_platform_ui_runtime(
             self.presented.dispatcher,
-            RuntimeTask::Frame(self.presented.frame),
+            RuntimeTask::Frame(self.presented.frame, flui_native::frame_request_now()),
         )
         .expect("frame");
     }
@@ -1775,7 +1781,11 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
     // The frame turn comes first, as a paint does, and it is the only turn:
     // its frame must not see the command, and the command must not wait for
     // another turn (the one its wake asked for may never come).
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("frame");
     assert!(
         drawn
             .borrow()
@@ -1850,14 +1860,22 @@ fn platform_brightness_follows_the_window_appearance() {
         }))
         .expect("headless bootstrap");
     let (dispatcher, frame) = installed.borrow().expect("installed frame");
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("initial frame");
     assert_eq!(
         &*observed.borrow(),
         &[Some(Brightness::Dark)],
         "the first build saw a light theme on a dark desktop"
     );
     native.simulate_appearance(WindowAppearance::Light);
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("changed frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("changed frame");
     assert_eq!(
         &*observed.borrow(),
         &[Some(Brightness::Dark), Some(Brightness::Light)],
@@ -2701,8 +2719,11 @@ fn recovered_surface_notification_resubmits_the_scene() {
         .expect("idle host")
         .expect("published recovery window");
     let pump = || {
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-            .expect("frame dispatches");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+        .expect("frame dispatches");
     };
     pump();
     assert_eq!(submits.load(Ordering::SeqCst), 1, "initial scene submitted");

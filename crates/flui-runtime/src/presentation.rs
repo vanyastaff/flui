@@ -34,7 +34,7 @@ use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
-    GlobalKeyScope, WidgetsBinding,
+    BuildInProgress, GlobalKeyScope, WidgetsBinding,
 };
 use web_time::{Duration, Instant};
 
@@ -59,6 +59,8 @@ fn format_millis(duration: Duration) -> String {
 pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
     pub(crate) global_key_scope: GlobalKeyScope,
+    /// Which build is running across this UI runtime's presentations (ADR-0074).
+    pub(crate) build_in_progress: BuildInProgress,
     /// A `Weak` handle to the UI runtime's shared async tasks (UI runtime-level; see
     /// the presentation-teardown contract for the consequence of that when
     /// this presentation closes).
@@ -358,9 +360,10 @@ pub struct PresentationState {
     pub(super) window_display: Rc<Cell<Option<flui_platform::WindowDisplay>>>,
     pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
-    /// The vsync of the frame being delivered, on the event timeline
-    /// (`HostInput::Frame`): the interaction layer samples motion there.
-    pub(super) frame_vsync: Cell<Option<flui_platform::EventTime>>,
+    /// The request of the frame being delivered, on the event timeline
+    /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
+    /// the frame's time and idle deadline from it (ADR-0257).
+    pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -788,17 +791,17 @@ impl PresentationState {
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
+            owner.set_build_in_progress(capabilities.build_in_progress);
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
-            owner.set_text_input_handle(text_input.handle());
-            owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
+            let presentation = owner.capabilities_mut();
+            presentation.text_input = Some(text_input.handle());
+            presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
             ));
-            owner.set_texture_registry(textures.clone());
-            if let Some(storage) = capabilities.storage {
-                owner.set_storage(storage);
-            }
+            presentation.textures = Some(textures.clone());
+            presentation.storage = capabilities.storage;
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -882,14 +885,18 @@ impl PresentationState {
             let request_frame = Arc::clone(&request_frame);
             move || request_frame()
         });
-        widgets.with_build_owner_mut(|owner| owner.set_haptics_handle(haptics.handle()));
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().haptics = Some(haptics.handle());
+        });
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
             id,
             Arc::downgrade(&window),
             gestures.mouse_tracker(),
         );
-        widgets.with_build_owner_mut(|owner| owner.set_drag_and_drop(drag_and_drop));
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().drag_and_drop = Some(drag_and_drop);
+        });
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || request_frame());
         });
@@ -932,7 +939,7 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
-            frame_vsync: Cell::new(None),
+            frame_request: Cell::new(None),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1053,7 +1060,7 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
-            frame_vsync: Cell::new(None),
+            frame_request: Cell::new(None),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1282,7 +1289,7 @@ impl PresentationState {
 
     pub(crate) fn set_error_view_builder(&self, builder: Option<flui_view::ErrorViewBuilder>) {
         self.widgets
-            .with_build_owner_mut(|owner| owner.set_error_view_builder(builder));
+            .with_build_owner_mut(|owner| owner.capabilities_mut().error_view_builder = builder);
     }
 
     pub(crate) fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
@@ -1374,7 +1381,7 @@ impl PresentationState {
         not(any(test, feature = "testing")),
         expect(
             dead_code,
-            reason = "Self::new wires set_text_input_handle from the local \
+            reason = "Self::new installs the text input capability from the local \
                       text_input binding directly (before self exists to call \
                       this wrapper through); this accessor's one production \
                       caller moved inline when assembly moved into this \

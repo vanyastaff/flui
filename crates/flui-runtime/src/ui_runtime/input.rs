@@ -8,7 +8,7 @@ use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
-use flui_platform::{DragDropEvent, EventTime, PlatformInput};
+use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -138,7 +138,9 @@ pub(super) fn input_dropped_by_lifecycle(
         | PresentationLifecycle::Closing
         | PresentationLifecycle::Closed => true,
         PresentationLifecycle::Suspended => match input {
-            PlatformInput::Pointer(_) | PlatformInput::DragDrop(_) => true,
+            PlatformInput::Pointer(_)
+            | PlatformInput::PointerFrame(_)
+            | PlatformInput::DragDrop(_) => true,
             // Keyboard/IME keep flowing; capabilities describe the session,
             // not an interaction, so a suspended window keeps them current.
             PlatformInput::Keyboard(_) | PlatformInput::Ime(_) | PlatformInput::Capabilities(_) => {
@@ -156,6 +158,7 @@ pub(super) fn input_dropped_by_lifecycle(
 pub(super) fn input_kind(input: &PlatformInput) -> &'static str {
     match input {
         PlatformInput::Pointer(_) => "pointer",
+        PlatformInput::PointerFrame(_) => "pointer_frame",
         PlatformInput::Keyboard(_) => "keyboard",
         PlatformInput::Ime(_) => "ime",
         PlatformInput::DragDrop(_) => "drag_drop",
@@ -354,7 +357,7 @@ impl UiRuntime {
         input: &PlatformInput,
     ) -> InputTarget {
         match input {
-            PlatformInput::Pointer(_) => InputTarget {
+            PlatformInput::Pointer(_) | PlatformInput::PointerFrame(_) => InputTarget {
                 presentation: presentation_id,
                 surface,
             },
@@ -450,6 +453,62 @@ impl UiRuntime {
                 let dispatch =
                     Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event)
                         .map(|dispatched| sequence = dispatched);
+                self.finish_addressed_input_dispatch(presentation, dispatch);
+                Applied {
+                    sequence,
+                    ..Applied::default()
+                }
+            }
+            PlatformInput::PointerFrame(frame) => {
+                let should_hold_pointer = presentation.frame_commit_state()
+                    != FrameCommitState::Committed
+                    || !presentation.held_pointer_input().borrow().is_empty();
+                if should_hold_pointer {
+                    // Without a committed tree the events wait one by one,
+                    // each with its own row: what is held is replayed in
+                    // order once the tree commits.
+                    let mut applied = Applied::default();
+                    for event in frame.into_events() {
+                        let held = self.apply_platform_input(
+                            presentation_id,
+                            target,
+                            PlatformInput::Pointer(event),
+                            recording,
+                        );
+                        applied.held |= held.held;
+                        applied.handled |= held.handled;
+                    }
+                    return applied;
+                }
+                let mut sequence = None;
+                let mut first_panic = None;
+                let framed = catch_unwind(AssertUnwindSafe(|| {
+                    presentation.gestures().pointer_frame(|| {
+                        for event in frame.events() {
+                            match Self::route_pointer_event_entered(
+                                presentation,
+                                surface,
+                                event,
+                                false,
+                            ) {
+                                Ok(dispatched) => sequence = sequence.or(dispatched),
+                                Err(payload) => preserve_first_input_panic(
+                                    &mut first_panic,
+                                    Some(payload),
+                                    "pointer frame event",
+                                ),
+                            }
+                        }
+                    });
+                }))
+                .err();
+                preserve_first_input_panic(&mut first_panic, framed, "pointer frame end");
+                let deferred = catch_unwind(AssertUnwindSafe(|| {
+                    presentation.gestures().drain_deferred_arena_resolutions();
+                }))
+                .err();
+                preserve_first_input_panic(&mut first_panic, deferred, "deferred arena resolution");
+                let dispatch = first_panic.map_or(Ok(()), Err);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied {
                     sequence,
@@ -557,6 +616,19 @@ impl UiRuntime {
         surface: InputSurface,
         pointer_event: &PointerEvent,
     ) -> Result<Option<InputSequenceId>, Box<dyn std::any::Any + Send>> {
+        Self::route_pointer_event_entered(presentation, surface, pointer_event, true)
+    }
+
+    /// [`dispatch_pointer_event_entered`](Self::dispatch_pointer_event_entered),
+    /// leaving the lone-member wins the event deferred to the caller when
+    /// `drain_deferred` is false: a pointer frame drains them once, after its
+    /// last event.
+    fn route_pointer_event_entered(
+        presentation: &PresentationState,
+        surface: InputSurface,
+        pointer_event: &PointerEvent,
+        drain_deferred: bool,
+    ) -> Result<Option<InputSequenceId>, Box<dyn std::any::Any + Send>> {
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
         // The pointer's kind reaches hit testing, so an expanded hit area
@@ -605,10 +677,14 @@ impl UiRuntime {
             }
         }))
         .err();
-        let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
-            presentation.gestures().drain_deferred_arena_resolutions();
-        }))
-        .err();
+        let deferred_panic = if drain_deferred {
+            catch_unwind(AssertUnwindSafe(|| {
+                presentation.gestures().drain_deferred_arena_resolutions();
+            }))
+            .err()
+        } else {
+            None
+        };
 
         // The back button (X1) is also the Back key, after its pointer event
         // reached the widgets under it.
@@ -765,8 +841,8 @@ impl UiRuntime {
         }
     }
 
-    /// Note the vsync of the frame about to be delivered to `presentation_id`
-    /// (`HostInput::Frame`): that frame samples resampled motion there, on
+    /// Note the request of the frame about to be delivered to `presentation_id`
+    /// (`HostInput::Frame`): that frame samples resampled motion at its vsync, on
     /// the event timeline, instead of at the frame clock's own reading.
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
@@ -776,16 +852,19 @@ impl UiRuntime {
     /// (assistive requests among it) before it renders, so their rows precede
     /// the frame's row and a replay applies them before rendering it too. A
     /// drain failure is resumed after the frame's row is recorded.
-    pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+    pub fn note_frame_request(&self, presentation_id: PresentationId, request: FrameRequest) {
         let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
-            presentation.frame_vsync.set(Some(vsync));
+            presentation.frame_request.set(Some(request));
         }
         if recording {
             self.record_applied(
                 presentation_id,
-                crate::HostInput::Frame { vsync },
+                crate::HostInput::Frame {
+                    vsync: request.vsync,
+                    target_present: request.target_present,
+                },
                 crate::owner::InputOutcome::Handled,
             );
         }

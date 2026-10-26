@@ -364,7 +364,7 @@ mod tests {
         // stack) would deadlock on the slot's own non-reentrant lock.
         let saw_marker_window = Arc::new(AtomicBool::new(false));
         let saw_marker_window_cb = Arc::clone(&saw_marker_window);
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let matches_marker = APP_RUNTIME
                 .with(|slot| {
                     slot.borrow()

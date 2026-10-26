@@ -3196,8 +3196,8 @@ layout, carries the rest of the step in the presentation's plane and converts th
 focal point, `consumed_by_child` and a velocity at each participant: the linear part of an
 affine plane, the chord and the tangent of a projection. A participant that takes all it was
 offered takes the presentation's offer exactly, so identity and translated planes, the common
-case, round nothing. The latch is per presentation axis; `held_above` and `leaf_holds` read it
-through the screen axis the leaf's own axis runs closest to. A plane that cannot be crossed
+case, round nothing. The latch is per axis of the leaf's plane (`LatchFrame` carries a remainder into it
+and back); `held_above` and `leaf_holds` read it by the leaf's own axes. A plane that cannot be crossed
 offers its participant nothing, and a runner whose plane has no way back takes its step alone.
 Every step names its focal point (the contact, the wheel's pointer, else the middle of the
 leaf, set by `ScrollSequence::aim`) and the pixel ratio of the sequence's latest user input; a

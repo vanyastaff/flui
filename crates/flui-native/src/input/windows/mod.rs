@@ -892,7 +892,10 @@ impl InputWindow {
 
     /// A `WM_POINTER*` `message` for the pointer `wparam` names.
     fn pointer_message(&self, hwnd: HWND, message: u32, wparam: WPARAM) {
-        use windows::Win32::UI::WindowsAndMessaging::{WM_POINTERCAPTURECHANGED, WM_POINTERLEAVE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERLEAVE, WM_POINTERUP,
+            WM_POINTERUPDATE,
+        };
 
         let raw = (wparam.0 & 0xffff) as u32;
         let mouse = raw::is_mouse_pointer(raw);
@@ -902,14 +905,34 @@ impl InputWindow {
         // hover is read from the cursor once its input is delivered.
         let hover =
             (mouse && message != WM_POINTERCAPTURECHANGED).then_some(message != WM_POINTERLEAVE);
-        let inputs = raw::native_pointer_input(
-            hwnd,
-            message,
-            (raw, mouse),
-            self.scale_factor(),
-            &self.message_clock,
-            &self.registry,
-        );
+        let members = (!mouse
+            && matches!(message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE))
+        .then(|| raw::pointer_frame_members(raw))
+        .flatten();
+        let inputs = if let Some(members) = members {
+            let contacts = members.into_iter().map(|(id, message)| {
+                raw::native_pointer_input(
+                    hwnd,
+                    message,
+                    (id, false),
+                    self.scale_factor(),
+                    &self.message_clock,
+                    &self.registry,
+                )
+            });
+            let frame = crate::input::assembly::framed(contacts.collect::<Vec<_>>());
+            raw::skip_frame_messages(raw);
+            frame
+        } else {
+            raw::native_pointer_input(
+                hwnd,
+                message,
+                (raw, mouse),
+                self.scale_factor(),
+                &self.message_clock,
+                &self.registry,
+            )
+        };
         // The hover is settled before any of the message's input reaches user
         // code: a callback that pumps messages may see the cursor come back,
         // and nothing written after it may undo that.
@@ -1578,6 +1601,58 @@ mod raw {
             decode(registry, &reading(current))
         };
         assembled.unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    /// The pointers of the frame `raw` belongs to, each with the message its
+    /// own state change reads as, when the frame holds more than one. The
+    /// system sends one message per pointer of a frame; the others are
+    /// skipped once the frame is read ([`skip_frame_messages`]).
+    pub(super) fn pointer_frame_members(raw: u32) -> Option<Vec<(u32, u32)>> {
+        use windows::Win32::UI::{
+            Input::Pointer::{
+                GetPointerFrameInfo, POINTER_FLAG_DOWN, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
+            },
+            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE},
+        };
+        let mut count = 0u32;
+        // SAFETY: a null buffer asks only for the count, into a live local.
+        unsafe { GetPointerFrameInfo(raw, &raw mut count, None) }.ok()?;
+        if count < 2 {
+            return None;
+        }
+        let mut frame = read_history(count, |count, buffer: &mut [POINTER_INFO]| {
+            // SAFETY: `*count` is `buffer.len()` (`read_history`).
+            unsafe { GetPointerFrameInfo(raw, count, Some(buffer.as_mut_ptr())) }
+        })?;
+        // The system lists the frame newest first; deliver in sample order.
+        frame.reverse();
+        frame
+            .iter()
+            .map(|info| {
+                let flags = info.pointerFlags;
+                let message = if flags.contains(POINTER_FLAG_DOWN) {
+                    WM_POINTERDOWN
+                } else if flags.contains(POINTER_FLAG_UP) {
+                    WM_POINTERUP
+                } else if flags.contains(POINTER_FLAG_UPDATE) {
+                    WM_POINTERUPDATE
+                } else {
+                    return None;
+                };
+                Some((info.pointerId, message))
+            })
+            .collect()
+    }
+
+    /// The frame `raw` belongs to was read whole: the system sends no message
+    /// for its other pointers.
+    pub(super) fn skip_frame_messages(raw: u32) {
+        use windows::Win32::UI::Input::Pointer::SkipPointerFrameMessages;
+        // SAFETY: only the id of the message being handled is passed; a refused
+        // call leaves the other messages to arrive, each a frame of its own.
+        if unsafe { SkipPointerFrameMessages(raw) }.is_err() {
+            tracing::warn!(raw, "pointer frame messages could not be skipped");
+        }
     }
 
     /// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id

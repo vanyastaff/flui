@@ -182,6 +182,37 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
     (owner, leaf_ids)
 }
 
+/// N list items, each a repaint boundary around a row of inline leaves and one
+/// inner repaint boundary (the caret of a text field in an item), painted once.
+///
+/// Returns the owner and the leaf inside item 0's inner boundary: marking it
+/// dirties only that inner boundary, the case a blinking caret produces.
+pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>, RenderId) {
+    let spec = box_node(RenderFlex::row()).children((0..n).map(|i| {
+        let caret = box_node(RenderColoredBox::red(1.0, 1.0));
+        let caret = if i == 0 { caret.label("caret") } else { caret };
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderFlex::row())
+                .child(box_node(RenderColoredBox::red(4.0, 4.0)))
+                .child(box_node(RenderColoredBox::red(4.0, 4.0)))
+                .child(box_node(RenderRepaintBoundary::new()).child(caret)),
+        )
+    }));
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let (root_id, registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+    let caret = registry.get("caret").expect("item 0 labels its caret");
+
+    let mut owner = advance_to_paint(owner.into_layout());
+    owner
+        .run_paint()
+        .expect("the first paint must succeed on a freshly composited tree");
+    drop(owner.take_layer_tree());
+    (owner, caret)
+}
+
 // ============================================================================
 // Effect: what a property change costs on the update arm vs. the repaint arm.
 //

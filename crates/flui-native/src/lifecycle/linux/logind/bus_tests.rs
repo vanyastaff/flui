@@ -70,6 +70,10 @@ struct Held {
     ends: Mutex<Vec<StdOwnedFd>>,
     /// How long the stand-in takes to answer a session lookup.
     session_delay: Mutex<Duration>,
+    /// How many times the adapter read the session's `LockedHint`, the last
+    /// step of its session setup: past the first, `Lock` and `Unlock` signals
+    /// have a subscriber.
+    hint_reads: AtomicUsize,
 }
 
 impl Held {
@@ -114,13 +118,14 @@ impl Manager {
     async fn prepare_for_shutdown(emitter: &SignalEmitter<'_>, start: bool) -> zbus::Result<()>;
 }
 
-struct Session(bool);
+struct Session(Arc<Held>, bool);
 
 #[interface(name = "org.freedesktop.login1.Session")]
 impl Session {
     #[zbus(property)]
     fn locked_hint(&self) -> bool {
-        self.0
+        self.0.hint_reads.fetch_add(1, Ordering::SeqCst);
+        self.1
     }
 
     #[zbus(signal)]
@@ -187,7 +192,7 @@ impl Harness {
             .expect("a bus name")
             .serve_at(MANAGER, Manager(Arc::clone(&held), SESSION))
             .expect("serve the manager")
-            .serve_at(SESSION, Session(locked))
+            .serve_at(SESSION, Session(Arc::clone(&held), locked))
             .expect("serve the session")
             .build()
             .await
@@ -206,6 +211,15 @@ impl Harness {
             held.taken.load(Ordering::SeqCst) == 1
         })
         .await;
+        // A `Lock` sent before the adapter subscribed to the session is lost,
+        // so the tests start signalling once the setup has read the hint. A
+        // slow lookup is the exception: its test signals the manager only.
+        if session_delay.is_zero() {
+            until("the session subscription", || {
+                held.hint_reads.load(Ordering::SeqCst) >= 1
+            })
+            .await;
+        }
         Some(Self {
             held,
             server,

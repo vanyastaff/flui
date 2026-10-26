@@ -463,7 +463,7 @@ impl UiRuntime {
         }
         // Paint commits the layer tree (which carries its own leader index)
         // before semantics runs; a semantics error retains it for the retry.
-        let layer_tree = widgets.run_settled_frame(presentation.pipeline())?;
+        let layer_tree = presentation.pipeline().run_frame()?;
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 
@@ -625,7 +625,10 @@ impl UiRuntime {
             );
             // A delivered frame's vsync, when the host reported one, anchors
             // motion sampling on the event timeline (ADR-0207 §2).
-            let vsync = presentation.frame_vsync.take();
+            let vsync = presentation
+                .frame_request
+                .take()
+                .map(|request| request.vsync);
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {

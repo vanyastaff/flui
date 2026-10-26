@@ -4,12 +4,15 @@ use crate::device_domain::{DeviceDomain, PreparedCost};
 use crate::error::EngineResult;
 use std::sync::Arc;
 mod blit;
+mod transform_blit;
 /// Cached presentation resources for intermediate-to-surface copies.
 #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
 pub struct OffscreenRenderer {
     domain: Arc<DeviceDomain>,
     device: Arc<wgpu::Device>,
     blit_pipeline: Option<BlitPipeline>,
+    transform_pipelines:
+        std::collections::HashMap<wgpu::TextureFormat, transform_blit::TransformPipeline>,
 }
 struct BlitPipeline {
     pipeline: Arc<wgpu::RenderPipeline>,
@@ -32,6 +35,7 @@ impl OffscreenRenderer {
             domain,
             device,
             blit_pipeline: None,
+            transform_pipelines: std::collections::HashMap::new(),
         }
     }
 }

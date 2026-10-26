@@ -1766,7 +1766,7 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+    fn on_request_frame(&self, callback: Box<dyn FnMut(flui_platform::FrameRequest) + Send>) {
         self.register("on_request_frame", move |callbacks| {
             install(&callbacks.on_request_frame, callback);
         });

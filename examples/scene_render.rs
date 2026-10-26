@@ -194,7 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer_frame = Arc::clone(&renderer);
     let window_for_frame = window.clone();
     let hot_reload_frame = hot_reload.clone();
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         let size = window_for_frame.physical_size();
         let w = size.width as f64;
         let h = size.height as f64;

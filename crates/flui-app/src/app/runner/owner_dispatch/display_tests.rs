@@ -137,7 +137,7 @@ fn install_window(
     let fail_redraw = Arc::new(AtomicBool::new(false));
     let counter = Arc::clone(&redraws);
     let failing = Arc::clone(&fail_redraw);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         assert!(
             !failing.load(Ordering::SeqCst),
             "injected redraw wake failure"
@@ -270,7 +270,7 @@ fn snapshot_is_committed_before_observers_run() {
     let win = open_window(&rig, None);
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
-    win.native.on_request_frame(Box::new(move || {
+    win.native.on_request_frame(Box::new(move |_| {
         let accepted = APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
         log.lock()
             .push(accepted.map(|snapshot| snapshot.revision().get()));
@@ -345,7 +345,7 @@ fn foreign_thread_invalidation_wakes_the_owner() {
     let owner_thread = std::thread::current().id();
     let ran_on = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&ran_on);
-    win.native.on_request_frame(Box::new(move || {
+    win.native.on_request_frame(Box::new(move |_| {
         log.lock().push(std::thread::current().id());
     }));
 
@@ -604,8 +604,11 @@ fn armed_gap(win: &Win, frame: super::super::frame_driver::FrameBinding) -> Dura
     (0..5)
         .map(|_| {
             let before = web_time::Instant::now();
-            dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame))
-                .expect("deliver a frame");
+            dispatch_platform_ui_runtime(
+                win.dispatcher,
+                RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+            )
+            .expect("deliver a frame");
             frame_deadline()
                 .expect("the frame armed the fallback")
                 .saturating_duration_since(before)
@@ -700,7 +703,11 @@ fn a_deadline_unanswered_for_ten_ms_is_abandoned_after_a_move_to_an_8_ms_display
     rig.turns.drive();
     let deadlines = wake_deadlines();
     let (win, frame) = open_paced_window(&rig, Some(LEFT), &deadlines);
-    dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    dispatch_platform_ui_runtime(
+        win.dispatcher,
+        RuntimeTask::Frame(frame, flui_native::frame_request_now()),
+    )
+    .expect("frame");
     let deadline = frame_deadline().expect("armed on the 16 ms display");
 
     // Let the deadline pass by 10 ms; the loop looks at it then, which reports

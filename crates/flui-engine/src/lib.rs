@@ -273,6 +273,7 @@ mod effects_pipeline;
 mod external_texture_registry;
 /// The frame protocol the windowed renderer and the headless retained
 /// capture share: damage, retained target, and the plan-to-GPU sequence.
+mod frame_latency;
 mod frame_protocol;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
@@ -358,6 +359,7 @@ pub(crate) mod state_stack;
 // own `//!` doc for details; no outer doc here to avoid duplicating it in a
 // scope where its intra-doc links resolve differently (rustdoc quirk).
 mod glyph_atlas;
+mod surface_color;
 mod surface_lease;
 mod tessellator;
 pub(crate) mod texture_cache;
@@ -484,7 +486,9 @@ pub use flui_foundation::GpuResourceGeneration;
 pub use headless::HeadlessRenderer;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
+pub use frame_latency::FrameLatency;
 pub use renderer::{GpuCapabilities, Renderer};
+pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 // What a windowed `Renderer` draws into (issue #1043); exported beside
 // `Renderer` here at `flui_engine::wgpu`.
 pub use window_target::WindowTarget;

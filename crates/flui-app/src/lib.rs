@@ -55,6 +55,7 @@ pub use app::{
     AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling, RootRenderElement,
     RootRenderView, run_app, run_app_with_config,
 };
+pub use flui_engine::FrameLatency;
 // The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{

@@ -131,9 +131,55 @@ struct Node {
     element_readers: Membership<ElementId>,
 }
 
+/// The build that is running anywhere in a UI runtime: the graph whose element
+/// is building, and that element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveBuild {
+    graph: u32,
+    element: ElementId,
+}
+
+/// Which build is running across the graphs of one UI runtime.
+///
+/// Every presentation has its own [`Reactive`] graph, so a graph's own
+/// `building` cannot see another window's build. The UI runtime hands one
+/// `BuildInProgress` to every `BuildOwner` it assembles
+/// ([`BuildOwner::set_build_in_progress`](crate::BuildOwner::set_build_in_progress));
+/// each graph publishes its builds there and consults it before accepting a
+/// write or a slot creation, so a write that reaches window A's graph (through
+/// the runtime's `Writer` routing) while window B builds is refused with
+/// [`SignalError::WrittenDuringBuild`] just like a write into B's own graph.
+///
+/// Reads need no such cell: a slot minted by another graph is
+/// [`SignalError::ForeignGraph`] on read, so a cross-window read is refused
+/// rather than left untracked.
+#[derive(Clone, Default)]
+pub struct BuildInProgress(Rc<std::cell::Cell<Option<ActiveBuild>>>);
+
+impl BuildInProgress {
+    /// A cell with no build running.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Debug for BuildInProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("BuildInProgress")
+            .field(&self.0.get())
+            .finish()
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     closed: bool,
+    /// The runtime-wide build cell, once the owner is wired into a UI runtime.
+    build_in_progress: Option<BuildInProgress>,
+    /// What the shared cell held when this graph's current build began, put
+    /// back when it ends so a nested build of another graph stays guarded.
+    outer_build: Option<ActiveBuild>,
     preserving_close: bool,
     nodes: Vec<Node>,
     free: Vec<u32>,
@@ -183,6 +229,16 @@ impl fmt::Debug for Reactive {
     }
 }
 
+impl Inner {
+    /// Put the shared cell back to what it held before this graph's build.
+    fn restore_outer_build(&mut self) {
+        let outer = self.outer_build.take();
+        if let Some(shared) = &self.build_in_progress {
+            shared.0.set(outer);
+        }
+    }
+}
+
 /// A snapshot of one live slot, for tests, tooling and agents
 /// ([`Reactive::snapshot`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +281,15 @@ impl Reactive {
         let mut inner = self.inner.borrow_mut();
         inner.closed = true;
         inner.preserving_close |= preserving;
+        // A closed window must not keep the runtime's other windows from
+        // writing: drop the build it may have left published.
+        if inner
+            .build_in_progress
+            .as_ref()
+            .is_some_and(|shared| shared.0.get().is_some_and(|active| active.graph == self.id))
+        {
+            inner.restore_outer_build();
+        }
         // Values and scheduler ownership remain in the closed graph; no user
         // destructor is required to revoke their scheduling authority.
     }
@@ -246,7 +311,7 @@ impl Reactive {
         if inner.closed {
             return Err((SignalError::OwnerClosed, value));
         }
-        if let Some(element) = inner.building {
+        if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
                 target: "flui::signals",
                 element = ?element,
@@ -510,6 +575,31 @@ impl Reactive {
             .map_or_default(Membership::snapshot);
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
+        if let Some(shared) = &inner.build_in_progress {
+            let outer = shared.0.replace(Some(ActiveBuild {
+                graph: self.id,
+                element,
+            }));
+            inner.outer_build = outer;
+        }
+    }
+
+    /// The element building right now in this graph, or, failing that, in
+    /// another graph of the same UI runtime.
+    fn building_element(inner: &Inner, graph: u32) -> Option<ElementId> {
+        inner.building.or_else(|| {
+            inner
+                .build_in_progress
+                .as_ref()
+                .and_then(|shared| shared.0.get())
+                .filter(|active| active.graph != graph)
+                .map(|active| active.element)
+        })
+    }
+
+    /// Join the UI runtime's build cell (see [`BuildInProgress`]).
+    pub(crate) fn share_build_in_progress(&self, shared: BuildInProgress) {
+        self.inner.borrow_mut().build_in_progress = Some(shared);
     }
 
     /// Called by `build_or_recover` right after `element`'s `build` returned
@@ -524,6 +614,7 @@ impl Reactive {
         let previous = std::mem::take(&mut inner.previous_reads);
         if inner.building == Some(element) {
             inner.building = None;
+            inner.restore_outer_build();
         }
         if completed {
             return;
@@ -756,7 +847,7 @@ impl Reactive {
     fn refuse_if_building(&self, slot: SignalSlot) -> Result<(), SignalError> {
         let inner = self.inner.borrow();
         self.check(&inner, slot)?;
-        if let Some(element) = inner.building {
+        if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
                 target: "flui::signals",
                 slot = ?slot,

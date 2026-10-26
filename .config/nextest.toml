@@ -106,6 +106,9 @@ system-clipboard = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
 # `cargo metadata`; one at a time keeps it off the other tests' timing.
 xtask-binary = { max-threads = 1 }
+# flui-native's X11 window tests share the one X server `xvfb-run` starts for
+# the run (see `x11-server` below).
+x11-server = { max-threads = 1 }
 # Named, not limited: see the trybuild and nested-cargo overrides at the top.
 nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
@@ -125,6 +128,18 @@ priority = 90
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
+
+# flui-native's X11 window tests map real windows on the one X server the run
+# shares and read back what the server holds (map state, position, stacking),
+# so another test's window opened or moved meanwhile makes a report not its
+# own: `x11_window_takes_commands_and_publishes_what_the_server_holds` failed
+# once in a full local run beside the other X tests and passes alone. They
+# keep to separate screen regions, but only a process-wide lock rules the
+# overlap out, and nextest's process per test cannot share an in-process one:
+# the group runs them one at a time.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & test(/^window::linux::x11::/)'
+test-group = 'x11-server'
 
 # `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
 [[profile.default.overrides]]

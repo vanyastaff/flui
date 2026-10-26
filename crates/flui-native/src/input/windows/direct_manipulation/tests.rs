@@ -132,7 +132,7 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
         DispatchEventResult::default()
     }));
     let frames = Arc::clone(&log);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         frames.lock().expect("log").push("frame".to_owned());
     }));
     // What the viewport reported while it was built is not a manipulation.

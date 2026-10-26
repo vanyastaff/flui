@@ -41,7 +41,7 @@ pub use owner::{
 };
 pub use receiver::{Autoscroll, DragPoint, DropReceiver, DropReceiverSlot, SpringLoading};
 pub use sessions::PendingOsDrag;
-pub use view::{DragFetch, DragIdentity, DragScope, DragView};
+pub use view::{DragFetch, DragIdentity, DragScope, DragView, OwnerWake};
 
 /// What starts a drag from a press: at once, or after the contact holds still
 /// for a long press. The `Draggable` widget turns it into an arena branch

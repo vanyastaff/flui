@@ -316,7 +316,10 @@ where
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
     // strong `Arc` of the window as the surface target (issue #1043).
     let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+    let renderer = pollster::block_on(Renderer::with_surface_color(
+        Arc::clone(&window),
+        config.surface_color,
+    ));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
@@ -325,6 +328,7 @@ where
         }
     };
     renderer.resize(phys_size.width as u32, phys_size.height as u32);
+    renderer.set_frame_latency(config.frame_latency);
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
@@ -402,8 +406,8 @@ where
             surface_recreation_retry,
         }))?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+    window.on_request_frame(Box::new(move |request| {
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     }));
 
     // 7. Resize -> typed Resized event; the applier installed above touches

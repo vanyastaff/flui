@@ -290,7 +290,9 @@ pub enum EngineError {
 
     /// No advertised format/color-space pair accepts encoded sRGB shader output.
     /// Retrying the same surface cannot repair this unsupported configuration.
-    #[error("Surface requires an SDR UNorm/Srgb presentation pair; advertised: {supported:?}")]
+    #[error(
+        "Surface offers no sRGB presentation pair the renderer can paint into; advertised: {supported:?}"
+    )]
     UnsupportedSurfaceColorConfiguration {
         /// Per-format presentation color spaces reported by the adapter.
         supported: Vec<wgpu::SurfaceFormatCapabilities>,

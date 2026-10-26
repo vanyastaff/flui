@@ -393,7 +393,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             wait_for_map_len(&platform_for_worker, 1, "window registration");
 
             let flag = DropFlag(Arc::clone(&callback_dropped_for_worker));
-            window.on_request_frame(Box::new(move || {
+            window.on_request_frame(Box::new(move |_| {
                 let _ = &flag;
             }));
             let close_thread_for_callback = Arc::clone(&close_thread_for_worker);

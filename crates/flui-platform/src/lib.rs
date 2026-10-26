@@ -109,6 +109,7 @@ mod display;
 pub mod drag;
 mod event_time;
 mod flag_set;
+mod frame_request;
 mod haptic_feedback;
 pub mod haptics;
 mod host_notice;
@@ -143,6 +144,7 @@ pub use display::{
     WindowDisplay,
 };
 pub use event_time::EventTime;
+pub use frame_request::FrameRequest;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
@@ -151,8 +153,8 @@ pub use host_notice::{
 };
 pub use ime::ImeEvent;
 pub use input::{
-    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
-    logical_to_device, offset_from_coords,
+    DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
+    delta_offset_from_coords, device_to_logical, logical_to_device, offset_from_coords,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};

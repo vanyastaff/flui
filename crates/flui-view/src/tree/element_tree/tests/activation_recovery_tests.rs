@@ -86,7 +86,7 @@ fn assert_failed_activation_diagnostic(
 fn activation_factory_panic_drops_staged_record_and_preserves_prior_record() {
     let (mut tree, mut owner, keyed, destination, prior) = active_retake_fixture();
     seed_prior_record(&mut owner, prior);
-    owner.set_error_view_builder(Some(recovery_factory_panics));
+    owner.capabilities_mut().error_view_builder = Some(recovery_factory_panics);
 
     let (payload, captured_log) = flui_testing::log_capture::capture(|| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

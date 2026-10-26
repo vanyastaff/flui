@@ -928,7 +928,7 @@ mod native_windows {
                 let callback_state = Arc::clone(&state);
                 let callback_proxy = owner.proxy();
                 let weak = Arc::downgrade(&window);
-                window.on_request_frame(Box::new(move || {
+                window.on_request_frame(Box::new(move |_| {
                     let count = {
                         let mut state = callback_state.lock().expect("readmission state");
                         if state.0.is_none_or(|due| web_time::Instant::now() < due) {
@@ -1087,7 +1087,7 @@ mod native_windows {
                 let due = web_time::Instant::now() + Duration::from_millis(60);
                 let pending = Arc::new(AtomicUsize::new(obligations));
                 let callback_pending = Arc::clone(&pending);
-                window.on_request_frame(Box::new(move || {
+                window.on_request_frame(Box::new(move |_| {
                     if callback_pending.load(Ordering::SeqCst) == 0
                         || web_time::Instant::now() < due
                     {
@@ -1216,7 +1216,7 @@ mod native_windows {
                 let callback_pending = Arc::clone(&pending);
                 let proxy = owner.proxy();
                 let raw_hwnd = hwnd.0 as isize;
-                window.on_request_frame(Box::new(move || {
+                window.on_request_frame(Box::new(move |_| {
                     let mut pending = callback_pending.lock().expect("deadline state");
                     if pending.is_none_or(|due| web_time::Instant::now() < due) {
                         return;
@@ -1294,7 +1294,7 @@ mod native_windows {
                     let callback_early = Arc::clone(&early);
                     let callback_armed = Arc::clone(&armed);
                     let weak = Arc::downgrade(&window);
-                    window.on_request_frame(Box::new(move || {
+                    window.on_request_frame(Box::new(move |_| {
                         let now = web_time::Instant::now();
                         let count = {
                             let mut deadlines = callback_deadlines.lock().expect("deadline state");
