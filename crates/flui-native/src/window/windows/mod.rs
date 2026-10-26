@@ -25,6 +25,7 @@
 
 #[cfg(windows)]
 pub(crate) mod backdrop;
+pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;

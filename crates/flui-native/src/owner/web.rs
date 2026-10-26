@@ -486,7 +486,7 @@ impl WebLoop {
 
             // Dispatch frame request to window callbacks
             if let Some(ref cbs) = callbacks {
-                cbs.dispatch_request_frame();
+                cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
                 // The frame callback can close and reopen the canvas. An old
                 // frame receipt cannot produce a redraw for the newer slot.
                 let current = state
@@ -743,4 +743,17 @@ impl host::Lifecycle<WebLoop> for WebLoop {
     fn activate(_: &WebLoop, _: bool) {
         // A page cannot bring its tab to the front.
     }
+}
+
+/// The frame request an animation-frame callback with `timestamp` (milliseconds on the page's
+/// high-resolution timeline) stands for: the vsync is the browser's own frame time, rebased by its
+/// age against `performance.now()`. A timestamp the page's clock cannot place (no `performance`,
+/// or one ahead of it) is the callback's own arrival.
+fn frame_request_for_animation_frame(timestamp: f64) -> flui_platform::FrameRequest {
+    let age_ms = web_sys::window()
+        .and_then(|window| window.performance())
+        .map(|performance| performance.now() - timestamp)
+        .filter(|age| age.is_finite() && *age >= 0.0)
+        .unwrap_or(0.0);
+    crate::frame_request_aged(std::time::Duration::from_secs_f64(age_ms / 1000.0))
 }

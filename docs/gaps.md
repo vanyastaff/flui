@@ -264,7 +264,7 @@ request.
 > **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
 - Nothing reports when a frame reached the screen.
-- No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
+- Web and Win32 feed the frame clock (the animation-frame timestamp; DWM's last and next refresh), neither run on its platform yet. No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, Android frame timelines (Choreographer frame time) or `CADisplayLink` `timestamp`/`targetTimestamp` feed it, so on those hosts animations schedule on the admission time and input-to-photon latency cannot be measured or regressed.
 - A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
 
 ### 24. No HDR, wide gamut or colour management

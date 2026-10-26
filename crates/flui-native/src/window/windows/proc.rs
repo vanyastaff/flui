@@ -52,6 +52,7 @@ use windows::Win32::{
     },
 };
 
+use super::frame_timing::{RefreshTiming, refresh_timing};
 use super::mode::NativeMode;
 use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, restore_rectangle,
@@ -238,11 +239,47 @@ pub(crate) struct WindowContext {
     pub ledger: std::cell::RefCell<ContextLedger>,
 }
 
+/// The compositor's last and next refresh around now, from the desktop window manager's timing
+/// report and the performance counter it is measured on (ADR-0257). `None` when the window manager
+/// is not compositing (it has no timing to report) or the report cannot be placed.
+fn compositor_refresh() -> Option<RefreshTiming> {
+    use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+
+    let mut info = DWM_TIMING_INFO {
+        cbSize: u32::try_from(std::mem::size_of::<DWM_TIMING_INFO>()).ok()?,
+        ..DWM_TIMING_INFO::default()
+    };
+    let (mut now, mut frequency) = (0_i64, 0_i64);
+    // SAFETY: `info` is an initialized structure whose `cbSize` is its size, which the call fills
+    // in; a null window handle asks for the system-wide timing, which needs no window to be alive.
+    // The counter calls write one `i64` each through pointers to initialized locals.
+    unsafe {
+        DwmGetCompositionTimingInfo(HWND::default(), &raw mut info).ok()?;
+        QueryPerformanceCounter(&raw mut now).ok()?;
+        QueryPerformanceFrequency(&raw mut frequency).ok()?;
+    }
+    refresh_timing(
+        u64::try_from(now).ok()?,
+        info.qpcVBlank,
+        info.qpcRefreshPeriod,
+        u64::try_from(frequency).ok()?.try_into().ok()?,
+    )
+}
+
 impl WindowContext {
     /// Runs this window's frame callback; its callbacks count it on the
-    /// platform only if one is registered to run.
+    /// platform only if one is registered to run. The request carries the
+    /// compositor's last and next refresh when DWM reports them, and the
+    /// event clock's reading otherwise.
     pub(crate) fn request_frame(&self) {
-        self.callbacks.dispatch_request_frame();
+        match compositor_refresh() {
+            Some(timing) => self.callbacks.dispatch_frame(crate::frame_request_timed(
+                timing.since_refresh,
+                Some(timing.until_refresh),
+            )),
+            None => self.callbacks.dispatch_request_frame(),
+        }
     }
 
     /// Tell the class's hooks that this window, `hwnd`, took `step`. A hook
