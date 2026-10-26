@@ -880,10 +880,14 @@ fn focused_beside(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 
 /// A key a surface of window A reported after window B gained focus goes to
 /// B, and its row names B's window, not the surface that reported it: the
-/// row says where the key went, and a replay delivers it there again.
+/// row says where the key went.
+///
+/// A replay delivers keys by the replaying host's focus, as the recorded host
+/// did, so it cannot tell the right row from the wrong one; only the row's
+/// window is asserted.
 fn a_key_records_the_window_focus_dispatched_it_to() {
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::WindowId;
+    use flui_platform::PlatformWindow;
     use flui_platform::keyboard::Code;
     use flui_runtime::RecordedSurface;
 
@@ -896,6 +900,19 @@ fn a_key_records_the_window_focus_dispatched_it_to() {
     });
     assert_eq!(fired, ["key on b"]);
     let recording = replayable(&bytes).expect("a whole recording");
+    let a = focused_beside(&Rc::new(RefCell::new(Vec::new())))
+        .window()
+        .id();
+    let [b] = recording
+        .header()
+        .windows
+        .iter()
+        .map(|window| window.window)
+        .filter(|window| *window != a)
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("the recording names window A and one other");
+    };
     let keys: Vec<_> = recording
         .rows()
         .iter()
@@ -908,17 +925,11 @@ fn a_key_records_the_window_focus_dispatched_it_to() {
             _ => None,
         })
         .collect();
-    // `open_window` gives the first window it opens the identity after the
-    // primary's.
     assert_eq!(
         keys,
-        [(WindowId(2), RecordedSurface::Window, InputOutcome::Handled)],
-        "the row names the window the key was dispatched to"
+        [(b, RecordedSurface::Window, InputOutcome::Handled)],
+        "the row names the window the key was dispatched to, not window {a:?}"
     );
-
-    let log = Rc::new(RefCell::new(Vec::new()));
-    let _ = focused_beside(&log).replay(&recording);
-    assert_eq!(*log.borrow(), ["key on b"]);
 }
 
 /// Every input row names where its dispatch placed it: a pointer row the
