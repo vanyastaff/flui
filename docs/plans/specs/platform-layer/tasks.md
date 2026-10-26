@@ -2106,22 +2106,35 @@ graph LR
   так что окно не может сделать другой тип, чем называет таблица. Окно держит сделанное, отдаёт через
   `PlatformWindow::{text_input, haptics, system_chrome}` и `HostWindow::{accessibility,
   capture_text_sizing, text_store_host}` и при уходе зовёт `TextInput::detach` и
-  `WindowAccessibility::detach` (у мостов ещё `focus_changed`: ключевое окно AppKit для VoiceOver). У
-  `HostWindow::accessibility` и `PlatformWindow::{text_input, haptics, system_chrome}` умолчаний нет
-  (у `text_store_host` и `capture_text_sizing` тело осталось: его зовёт только внешняя реализация, которую
-  отвергает печать и которая не может назвать токен). Окно без позиции отдаёт `Absent` своей таблицы:
-  мост, который никогда не активен, вместо `None`. Android: метод ввода держит поле каждого окна по
+  `WindowAccessibility::detach` (у мостов ещё `focus_changed`: ключевое окно AppKit для VoiceOver).
+  Позиции делают четыре части окна вместе (`WindowPositions::for_window` → `host::WindowFacets`), окно
+  держит их одним значением; окно AppKit ставит content view до того, как они сделаны, и мост больше не
+  слот, заполняемый после конструктора. Умолчаний нет у `HostWindow::{accessibility,
+  text_store_host, capture_text_sizing}` и `PlatformWindow::{text_input, haptics, system_chrome,
+  drag_source, show}`: окна Android, iOS и Web сами отвечают `show` — `NotOnThisPlatform`, окна AppKit,
+  UIKit и winit сами отвечают `drag_source` — `None`; внешняя реализация `HostWindow` кроме печати
+  получает E0046 (написать методы с токеном она не может). Умолчания `PlatformWindow`, которые
+  остались: регистрации `on_*`, `pre_present_notify`, `set_input_regions`, `set_frame_rate_hint` и
+  геттеры — их снимают LY41–LY44. Окно без позиции отдаёт `Absent` своей таблицы: мост, который
+  никогда не активен, вместо `None`. Android: метод ввода держит поле каждого окна по
   `ActivityWindowId` (`ActivityWindowIds` — `checked_add`, тест
   `activity_window_identities_never_repeat_or_wrap`), источник drag отдаёт хук лупера `ViewTransfer`,
   ночной режим, плотность и геометрию касаний — `ActivityPreferences`; Web: редактор холста — хук
   `owner::web::CanvasEditor`, слушатели — `CanvasListener` владельца.
-  **Win32 (форма b и c).** TSF: хук `Tsf` держит соединение окна по `WindowIdentity`, окно отдаёт его через
-  `WindowClass.text` (`WindowTexts`, `owner::windows::window_texts`), масштаб — шаг `Rescaled`, сдвиг
-  полей после прямоугольника нового DPI — новый шаг `ScaleApplied`, деактивация — новый шаг `Closed`
-  между колбэками закрытия и уходом контекста (ADR-0135 §3, поправлен; документ TSF читает масштаб у
-  соединения, не у контекста). Drop target: транспорт держит цели по идентичности, хук
-  `DropTargetRegistration` регистрирует (`HostDrag` приходит в `CreatedWindow.drag`), масштабирует и
-  отзывает их; цель держит колбэки и DPI окна и не трогает контекст. Сессия: хук
+  **Win32 (форма b и c).** У окна один масштаб: `owner::windows::WindowScale` (DPI, который процедура
+  меняет на `WM_DPICHANGED`; засевается один раз при открытии — DPI от системы, иначе DPI масштаба
+  размещения), его читают контекст окна, TSF, drop target и ввод, копий нет; `WindowStep::Rescaled`
+  больше не несёт DPI. Каждый хук держит свои окна в `owner::windows::WindowTable` (положить при
+  объявлении, читать только для окна, которое называет ссылка, забрать при уничтожении или
+  `WM_NCDESTROY` и завершить с отпущенной таблицей): сессия, drop target, TSF и ввод. TSF: хук `Tsf`
+  держит соединение окна, окно отдаёт его через `WindowClass.text` (`WindowTexts`,
+  `owner::windows::window_texts`: ручка текста — `Send + Sync`, хук — `Rc` owner-потока, поэтому ручка
+  достаёт его через класс своего потока, и поток без класса соединения не находит), сдвиг полей после
+  прямоугольника нового DPI — новый шаг `ScaleApplied`, деактивация — новый шаг `Closed` между
+  колбэками закрытия и уходом контекста (ADR-0135 §3, поправлен). Drop target: хук
+  `DropTargetRegistration` держит регистрацию, которую возвращает `HostDrag::register_target`
+  (`HostDrag` приходит в `CreatedWindow.drag`), и отзывает её; второй карты целей у транспорта нет;
+  цель держит колбэки и `WindowScale` окна и не трогает контекст. Сессия: хук
   `lifecycle::windows::SessionWindows` подписывает каждое окно на `WTS` и отдаёт блокировку шагом
   `SessionLocked`, окно `WM_WTSSESSION_CHANGE` не разбирает. **headless (c):** лупер отдаёт окну
   разложенные дисплеи фактами (`HeadlessState::{window_display, display_bounds, holds_display}`) и
@@ -2141,23 +2154,53 @@ graph LR
   над списком переписан.
   **Закрытые перечисления.** `#![deny(clippy::exhaustive_enums)]` в контракте; из 24 найденных (26 строки
   — с `Availability` и `UnsupportedReason`) `#[non_exhaustive]` — `WindowAppearance`, `WindowEvent`
-  (их сообщает бэкенд приложению); остальные 21 закрыты с причиной: набор задан тем, что они называют
-  (`KeyState`, `Location`, `KeyRepeat`, `ImeComposition`, `PointerRole`, `ButtonChange`, вид, ожидание и
-  исход блокировки TSF, `PointMode`, `Brightness`, `TransferUri`, `OsDragEnd`, `OsOffer`, `HapticEvent`),
-  открытый конец — `Custom` (`TransferFormat`, `TransferPayload`), или новый вариант обязан обработать
-  каждый потребитель (`PlatformInput`, `DragDropEvent`, `OsDragStart`, `WindowBackgroundAppearance` —
-  его отображает каждый бэкенд запечатанного окна).
+  (их сообщает бэкенд приложению); остальные 22 закрыты с причиной (23 `allow` вместе с
+  `Availability`): набор задан тем, что они называют (`KeyState`, `Location`, `KeyRepeat`,
+  `ImeComposition`, `PointerRole`, `ButtonChange`, блокировка TSF — `LockKind`, `LockTiming` (флаг
+  `TS_LF_SYNC`), `LockGrant`, `LockOutcome`, — `PointMode`, `Brightness`, `TransferUri`, `OsDragEnd`,
+  `OsOffer`, `HapticEvent`), открытый конец — `Custom` (`TransferFormat`, `TransferPayload`), или новый
+  вариант обязан обработать каждый потребитель (`PlatformInput`, `DragDropEvent`, `OsDragStart`,
+  `WindowBackgroundAppearance` — его отображает каждый бэкенд запечатанного окна).
+  **Сверх строки.** Актуатор iOS делается вместе с окном, а не при первом обращении; у TSF новые шаги
+  окна `ScaleApplied` и `Closed`; `ActivityWindowIds` Android с `checked_add`; `Persisted` отвечает
+  `NotRegistered`, когда хранилище не зарегистрировано. Причина выбрана по месту и по смыслу
+  `UnsupportedReason`: временно и повтор может помочь — `Unavailable` (перо Win32 вне зоны, браузер до
+  активации, drag без нажатой кнопки мыши); нет у этого устройства — `NotOnThisDevice` (перо без
+  контроллера, браузер без вибрации, файловая система без блокировок); нет на платформе ни на одном
+  устройстве — `NotOnThisPlatform` (`Absent`, `show` на Android, iOS и Web, OS-drag пером или касанием
+  на Win32: цикл OLE ведёт только мышь); окна нет — `NoWindow`; не зарегистрировано — `NotRegistered`.
   **Conformance.** `capabilities_are_honest` ещё требует, чтобы отказ в команде вне возможностей не
   просил повтора (`Unavailable`).
   Тесты (новое поведение; «падает без» проверено откатом): `every_error_carries_its_reason`
   (`flui-platform/tests/unsupported.rs`, строки по всем восьми носителям и исходу haptics;
   `StorageError::unsupported`, всегда `None`, роняет его), doctest `compile_fail,E0639`,
-  `a_drop_target_follows_its_window_to_a_new_scale` (пустой `rescale_target` роняет),
-  `a_rescaled_window_answers_layout_at_its_new_scale` (без `services.rescale` роняет),
+  `a_drop_target_follows_its_window_to_a_new_scale` и
+  `a_rescaled_window_answers_layout_at_its_new_scale` (до общего масштаба роняли пустой
+  `rescale_target` и пропуск `services.rescale`),
   `a_move_to_a_display_the_platform_does_not_hold_is_refused`,
   `a_window_that_refuses_for_now_what_it_never_takes_is_caught` (без новой ветки проверки роняет),
-  `activity_window_identities_never_repeat_or_wrap`. Блокировка сессии через хук — существующий
-  `windows_window_commands` (сообщение окну), порядок TSF — существующие тесты `tsf`.
+  `activity_window_identities_never_repeat_or_wrap`; по ревью — таблица `absent_positions_say_not_here`
+  (`flui-native/tests/absent.rs`: `OpenWindowError` и `PlatformError` с `NotOnThisPlatform`, мост, который
+  никогда не активен и не держит слушателей; все три строки падают при другой причине у `Absent` и при
+  удержанном слушателе), `a_window_opens_at_one_dpi_its_hooks_share` (правило засева и одно значение
+  для хуков), строка `a_window_hands_its_drop_target_and_text_services_its_one_scale` таблицы OLE (при
+  открытии и на 120 или 144 DPI окно, drop target и TSF читают одно; открыть окно не на 100% хост не
+  даёт, поэтому засев при открытии проверяет правило), строки причин в
+  `the_os_loop_carries_only_a_drag_a_mouse_button_holds` и
+  `a_drag_the_os_loop_cannot_carry_stays_in_its_window` (без кнопки — `Unavailable`, повторяемо). Блокировка сессии через
+  хук — существующий `windows_window_commands` (сообщение окну), порядок TSF — существующие тесты `tsf`.
+  **Ревью (vanyastaff/flui#1909).** Не сделано, с причиной: (1) `PlatformWindow::{haptics,
+  system_chrome}` остаются `Option`: ADR-0151 §5 и ADR-0254 п. 7 держат грань сверх обязательного ядра
+  за `Option` (открытый трейт, двойники); отсутствие возможности говорит объект грани своим
+  `Unsupported`, и каждое окно ядра его отдаёт; `None` у `text_input` — модель pull (TSF), а не
+  отсутствие. (2) `Availability` в `WindowCapabilities` (последняя часть R3.7) — строка LY40
+  («`activates` и сходные признаки — `Availability`, а не `bool`») и LY43 (подсказка частоты кадров,
+  регионы ввода, материал фона). (3) Импорты `crate::text::{TextInput, WindowTextInput}` и
+  `crate::input::availability` в файлах окон — модели других фич, которые R4.3 разрешает (запрещены
+  файлы платформ других фич); `module-dag` их пропускает по тому же правилу. (4) Потребитель
+  `unsupported()` в production — очередь команд окна `flui-app` пишет причину и `is_retryable`;
+  остальные носители читают: `AdmissionError::Unsupported` у `WindowControl::submit` — LY42, причина
+  провайдера до виджета без изменений — LY50.
   Проверки на слитом состоянии: Windows — clippy рабочего пространства (`--all-targets -D warnings`),
   nextest `flui-native`, `flui-app`, `flui-platform`, `flui-testing`, `flui-runtime` — 498/498;
   `flui-native` и `flui-app` с `winit-backend` — 359/359; trybuild рабочего пространства по одному

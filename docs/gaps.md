@@ -353,7 +353,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
-- Honest absence: nine spellings of "not here" exist today, and the Android clipboard is an in-process mock (ADR-0152, ADR-0254). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
+- Honest absence: the nine spellings of "not here" are one now, `Unsupported` with its reason in every contract error (ADR-0151 §4); the Android clipboard is still an in-process mock (ADR-0152). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
 - Replay: pointer, key and wheel traces replay on the headless host; IME, lifecycle, preference and display recordings do not exist.
 - The `native-capture` journal records pointers only, so a failure in any other event family cannot be replayed.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.

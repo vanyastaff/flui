@@ -78,7 +78,9 @@ trait depends on `flui-platform` instead.
   `owner::android::ActivityRef`, `owner::web::CanvasRef`, the winit window,
   `()` headless). `HostPlatform` builds the table's `host::WindowPositions`, one
   function per position, and hands it to the window position's `Shared`, so a
-  window cannot make another type than its table names. The window keeps what
+  window cannot make another type than its table names. The positions make a
+  window's four parts together (`WindowPositions::for_window`, one
+  `host::WindowFacets` the window keeps as one value). The window keeps what
   they made, hands it out through `PlatformWindow::{text_input, haptics,
   system_chrome}` and `HostWindow::{accessibility, text_store_host,
   capture_text_sizing}`, and tells the text input and the bridge when it goes
@@ -187,7 +189,13 @@ trait depends on `flui-platform` instead.
     answers goes to `DefWindowProcW`. A created window is announced to the
     same hooks in order (`window_created`, through the owner's state,
     `OwnerShares::window_hooks`) as a `CreatedWindow` that carries its
-    `WindowIdentity` and its DPI; after each hook
+    `WindowIdentity` and its `WindowScale`: the window's one DPI, which its
+    procedure changes at `WM_DPICHANGED` and every hook reads, keeping no
+    copy (seeded once as the window opens: the DPI the system reports, else
+    that of the scale it was placed at). A hook keeps its windows in an
+    `owner::windows::WindowTable`, put at announcement, read only for the
+    window a reference names, taken at destruction or `WM_NCDESTROY` and
+    ended with the table released; after each hook
     the window must still be the one created, or no later hook hears of it and
     its open fails (`WindowGone`). Windows holds the class once per process,
     so the class registration records its host and a loop for another host is
@@ -211,8 +219,8 @@ trait depends on `flui-platform` instead.
     window's session notification, and the lock and unlock it answers as the
     window's step) and the drop target
     (`drag::windows::DropTargetRegistration`, which registers each window
-    created with the loop's `HostDrag` the announcement carries, tells it
-    the window's scale and revokes the target as the window is destroyed;
+    created with the loop's `HostDrag` the announcement carries, keeps the
+    registration it hands back and revokes it as the window is destroyed;
     it answers nothing). The reference a hook is handed a window by,
     `owner::windows::WindowRef` (the handle and the identity of its context),
     is the owner's; only the window feature reaches the context through it
@@ -399,13 +407,13 @@ trait depends on `flui-platform` instead.
   the loop's `ViewTransfer` hook (`drag_source`), and the Win32 and Web
   windows reach theirs through the loop's `HostDrag`; the headless window
   takes its drag source from its loop, which the table's
-  `HeadlessHost::drag_source` tells how to make it. The Win32 transport keeps
-  each window's drop target by the window's identity, which the drop-target
-  hook registers as the window is created, rescales and revokes as it is
-  destroyed. The Win32 drag transport and actuator name a window by
-  `owner::windows::WindowRef`, the owner's vocabulary, and never reach its
-  context: the drop target keeps the window's callbacks and DPI from the
-  announcement, and what they read of the window's input (the kind of a
+  `HeadlessHost::drag_source` tells how to make it. The Win32 drop-target hook
+  keeps each window's registration, which the transport makes as the window
+  is created and the hook revokes as it is destroyed. The Win32 drag
+  transport and actuator name a window by `owner::windows::WindowRef`, the
+  owner's vocabulary, and never reach its context: the drop target keeps the
+  window's callbacks and its `WindowScale` from the announcement, and what
+  they read of the window's input (the kind of a
   press, the pen in range) the input answers read-only
   (`owner::windows::WindowInputs`). The Web drag answers
   its events and reads their position as the input does, through the
@@ -1724,16 +1732,16 @@ by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 
 ### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
 
-A window's TSF connection (`text::windows::TextServices`, ADR-0135 §3) lives in its
-`WindowContext`, activated on the owner thread once the context is installed, by the text
-feature's hook on FLUI's window class (`text::windows::Tsf`, whose `created` the class's hooks
-hear first, before the drop target and the precision touchpad; TSF's calls read the context's
-scale), so the host exists
+A window's TSF connection (`text::windows::TextServices`, ADR-0135 §3) lives in the text
+feature's hook on FLUI's window class (`text::windows::Tsf`, a `WindowTable` by the window's
+identity), activated on the owner thread once the window's context is installed (the class's
+hooks hear the hook's `created` first, before the drop target and the precision touchpad; TSF's
+calls read the window's `WindowScale`), so the host exists
 before any field can focus; a lazy activation would put the first `ITfThreadMgr::Activate`
 inside a focus change, under owner code. A failed activation leaves `None` and the `WM_CHAR`
 path; a window a message of the activation destroyed fails its open
-(`a_window_destroyed_during_activation_fails_the_open`). `WM_DESTROY` deactivates it
-after the close callbacks (the presentation's close unfocuses its field through the still
+(`a_window_destroyed_during_activation_fails_the_open`). The hook deactivates it at the
+window's `Closed` step, which `WM_DESTROY` tells after the close callbacks (the presentation's close unfocuses its field through the still
 active host) and before the context retires; the shutdown is a host operation, so one that
 arrives inside a TSF call into a store waits for that call. Its application-code failures are
 logged, contained: the window procedure aborts on a panic. Test:
