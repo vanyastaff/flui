@@ -213,22 +213,6 @@ impl Plane {
         apply(invert(self.tangent(focal)?)?, root)
     }
 
-    /// The presentation axis (`0` is `x`) this plane's `local` axis runs
-    /// closest to at `focal`; the local axis itself when the plane cannot
-    /// be crossed.
-    pub(crate) fn root_axis(self, local: usize, focal: Point) -> usize {
-        let unit = if local == 0 {
-            Vec2::new(1.0, 0.0)
-        } else {
-            Vec2::new(0.0, 1.0)
-        };
-        match self.to_root_velocity(unit, focal) {
-            Some(root) if root.x.abs() > root.y.abs() => 0,
-            Some(root) if root.y.abs() > root.x.abs() => 1,
-            _ => local,
-        }
-    }
-
     /// The derivative of the map to the presentation at `focal`, as a 2×2
     /// matrix: the linear part of an affine plane, the projection's tangent
     /// otherwise.
