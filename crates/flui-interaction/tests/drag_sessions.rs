@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
@@ -325,6 +326,8 @@ struct Fixture {
     windows: RefCell<Vec<Arc<dyn PlatformWindow>>>,
     /// The pointer kinds an OS drag's hit tests asked for, in order.
     hit_kinds: Rc<RefCell<Vec<PointerKind>>>,
+    /// How many times the owner was woken for a drop it can now conclude.
+    wakes: Arc<AtomicUsize>,
 }
 
 fn presentation(n: usize) -> PresentationId {
@@ -343,7 +346,16 @@ impl Fixture {
     fn in_runtime(lane: &InteractionLane, runtime: usize, nonce: ProcessNonce) -> Self {
         let dispatch = lane.dispatch_handle();
         let source = Arc::new(RecordingSource::default());
-        let owner = DragOwner::new(nonce, UiRuntimeId::new(runtime), source.clone());
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let wake = Arc::clone(&wakes);
+        let owner = DragOwner::new(
+            nonce,
+            UiRuntimeId::new(runtime),
+            source.clone(),
+            Arc::new(move || {
+                wake.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
         let probe = Rc::new(Probe {
             spots: RefCell::new(Vec::new()),
         });
@@ -362,6 +374,7 @@ impl Fixture {
             presentation: presentation(1),
             windows: RefCell::default(),
             hit_kinds: Rc::default(),
+            wakes,
         }
     }
 
@@ -652,8 +665,13 @@ fn concurrent_sessions_are_independent() {
 fn session_id_exhaustion_refuses_permanently() {
     let lane = InteractionLane::try_new().expect("lane");
     let f = Fixture::new(&lane);
-    let owner = DragOwner::new(nonce(), UiRuntimeId::new(1), f.source.clone())
-        .with_session_mint(IdMint::<DragSessionId>::starting_after(u64::MAX - 1));
+    let owner = DragOwner::new(
+        nonce(),
+        UiRuntimeId::new(1),
+        f.source.clone(),
+        Arc::new(|| {}),
+    )
+    .with_session_mint(IdMint::<DragSessionId>::starting_after(u64::MAX - 1));
     let handle = owner.handle();
     let begin = || {
         handle.start(DragStart::new(
@@ -2509,6 +2527,65 @@ fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffe
     (offer, fetch)
 }
 
+/// The last fetch of a dropped offer ends on another thread while the owner's
+/// loop sleeps: releasing it wakes the owner, which then has the drop to
+/// conclude. Without the wake nothing would tick the owner until unrelated
+/// input arrived, and the OS would wait on the target all that time.
+fn the_last_fetch_resolved_off_thread_wakes_the_owner() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        let (_, index, completer) = f
+            .source
+            .requests
+            .lock()
+            .pop()
+            .expect("the receiver's request reached the source");
+        assert_eq!(index, RepresentationIndex(0));
+        assert_eq!(
+            f.wakes.load(Ordering::SeqCst),
+            0,
+            "the fetch is outstanding"
+        );
+        assert_eq!(f.owner.next_deadline(), None, "nothing to conclude yet");
+
+        completer.complete(Ok(TransferPayload::Text("hello".into())));
+        std::thread::spawn(move || {
+            let mut fetch = std::pin::pin!(fetch);
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(matches!(
+                fetch.as_mut().poll(&mut context),
+                std::task::Poll::Ready(Ok(_))
+            ));
+        })
+        .join()
+        .expect("the fetch resolves off the owner's thread");
+
+        assert_eq!(
+            f.wakes.load(Ordering::SeqCst),
+            1,
+            "the owner is woken when the last request of the drop resolves"
+        );
+        assert_eq!(f.owner.next_deadline(), Some(EventTime::from_nanos(0)));
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// A fetch dropped on another thread before it resolves releases the drop the
+/// same way.
+fn the_last_fetch_dropped_off_thread_wakes_the_owner() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        std::thread::spawn(move || drop(fetch))
+            .join()
+            .expect("the fetch is dropped off the owner's thread");
+
+        assert_eq!(f.wakes.load(Ordering::SeqCst), 1);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
 /// An offer over two windows, a receiver over the second fetching from it,
 /// dropped over the first: the drop and the outstanding fetch.
 fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
@@ -2664,6 +2741,14 @@ fn drag_sessions() {
             (
                 "a_drop_waits_for_a_fetch_made_over_another_window",
                 a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
+            (
+                "the_last_fetch_resolved_off_thread_wakes_the_owner",
+                the_last_fetch_resolved_off_thread_wakes_the_owner,
+            ),
+            (
+                "the_last_fetch_dropped_off_thread_wakes_the_owner",
+                the_last_fetch_dropped_off_thread_wakes_the_owner,
             ),
             (
                 "a_fetch_from_a_hover_that_left_holds_the_drop_open",
