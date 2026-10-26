@@ -1180,7 +1180,7 @@ mod tests {
     assert_not_impl_any!(RenderTree: Send, Sync);
 
     #[test]
-    fn a_lease_refuses_a_double_enter_and_a_non_child_edge() {
+    fn lease_refuses_a_double_enter_and_a_non_child_edge() {
         let mut tree = RenderTree::new();
         let root = tree.insert_box(make_leaf());
         let child = tree.insert_box_child(root, make_leaf()).expect("child");
@@ -1213,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reparented_node_moves_its_header_edge() {
+    fn lease_header_edge_follows_a_reparent() {
         let mut tree = RenderTree::new();
         let root = tree.insert_box(make_leaf());
         let a = tree.insert_box_child(root, make_leaf()).expect("a");
@@ -1227,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_node_leaves_no_resolvable_id() {
+    fn lease_resolves_no_id_of_a_removed_node() {
         let mut tree = RenderTree::new();
         let root = tree.insert_box(make_leaf());
         let child = tree.insert_box_child(root, make_leaf()).expect("child");

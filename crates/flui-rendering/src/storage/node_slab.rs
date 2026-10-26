@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_slot_is_reused_and_a_double_enter_is_refused() {
+    fn lease_refuses_a_double_enter_and_slots_are_reused() {
         let mut slab = NodeSlab::new();
         let a = slab.insert(node());
         let b = slab.insert(node());
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn the_header_parent_is_readable_while_a_node_is_borrowed() {
+    fn lease_reads_the_header_parent_while_a_node_is_borrowed() {
         let mut slab = NodeSlab::new();
         let a = slab.insert(node());
         let b = slab.insert(node());
