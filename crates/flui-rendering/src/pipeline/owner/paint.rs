@@ -185,7 +185,23 @@ impl PipelineOwner<PaintPhase> {
                 dirty_set: &dirty_ids,
                 layer_updates: &layer_updates,
             };
-            match self.paint_subtree(&mut composer, root_id, Offset::ZERO, None, &inputs) {
+            // A root that is a repaint boundary is retained and replayed like
+            // any other; one that is not paints inline every pass.
+            let painted = match &root_stamp {
+                Some((_, content)) => {
+                    let root_layer = composer.root_layer();
+                    self.serve_boundary(
+                        &mut composer,
+                        root_id,
+                        root_layer,
+                        content.clone(),
+                        None,
+                        &inputs,
+                    )
+                }
+                None => self.paint_subtree(&mut composer, root_id, Offset::ZERO, None, &inputs),
+            };
+            match painted {
                 Ok(()) => {
                     let (
                         layer_tree,
@@ -906,15 +922,49 @@ impl PipelineOwner<PaintPhase> {
             },
         );
 
+        // The boundary's layer space starts at its own origin, so the anchor's
+        // base moves with it.
+        let region_anchor = anchor.map(|frame| frame.rebased(origin + position));
+        let placed = self.serve_boundary(
+            composer,
+            child_id,
+            boundary_root,
+            content,
+            region_anchor,
+            inputs,
+        );
+        // Popped on the error path too, so the stack stays balanced.
+        composer.pop_layer();
+        placed
+    }
+
+    /// Fills the layer `boundary_root`, already pushed or the composer's root,
+    /// with the output of the repaint boundary `boundary_id`: its retained
+    /// capture replayed (with a layer patch when a node asked for one), or a
+    /// fresh paint that is captured for the next frame. `content` is the token
+    /// the boundary is stamped with; `region_anchor` the paint-anchor frame at
+    /// its own origin.
+    fn serve_boundary(
+        &self,
+        composer: &mut FragmentComposer,
+        boundary_id: RenderId,
+        boundary_root: LayerId,
+        content: ContentToken,
+        region_anchor: Option<AnchorFrame>,
+        inputs: &PaintInputs<'_>,
+    ) -> crate::error::RenderResult<()> {
+        let dirty_set = inputs.dirty_set;
         // Three dispositions, read straight off the queue: queued for a
         // repaint, queued only for a composited-layer update, or not queued at
         // all. The last two both reuse the retained output; only the first
         // descends. Sound only because the queue is exact: `run_layout` marks
         // every boundary layout touched and `mark_needs_paint` marks the rest,
         // so absence from `dirty_set` genuinely means unchanged content.
-        let update_targets = inputs.layer_updates.get(&child_id);
-        let queued_for_repaint = update_targets.is_none() && dirty_set.contains(&child_id);
-        let retained = (!queued_for_repaint).then_some(capture).flatten();
+        let update_targets = inputs.layer_updates.get(&boundary_id);
+        let queued_for_repaint = update_targets.is_none() && dirty_set.contains(&boundary_id);
+        let retained = (!queued_for_repaint)
+            .then(|| self.retained_boundaries.get(&boundary_id))
+            .flatten();
         // `None` here means the structure changed under a layer-update request
         // (a node gained or lost an effect layer), which a patch cannot express
         // — fall back to a full repaint, which rebuilds it correctly. An `Err`
@@ -924,25 +974,21 @@ impl PipelineOwner<PaintPhase> {
             .map(|subtree| {
                 self.layer_patches_for(subtree, update_targets.map_or(&[][..], |targets| targets))
             })
-            .transpose()
-            .inspect_err(|_| composer.pop_layer())?
+            .transpose()?
             .flatten();
-        // The boundary's layer space starts at its own origin, so the anchor's
-        // base moves with it.
-        let region_anchor = anchor.map(|frame| frame.rebased(origin + position));
-        let placed = if let (Some(subtree), Some(patch)) = (retained, patch) {
+        if let (Some(subtree), Some(patch)) = (retained, patch) {
             let LayerPatch { patches, consumed } = patch;
             if !patches.is_empty() {
                 tracing::trace!(
-                    boundary = ?child_id,
+                    boundary = ?boundary_id,
                     layers = patches.len(),
                     "paint: composited-layer update, subtree replayed"
                 );
             }
             // Reused rather than descended into, but reached. Same
             // queue-scoped rule as the walk's own record.
-            if dirty_set.contains(&child_id) {
-                composer.visited.insert(child_id);
+            if dirty_set.contains(&boundary_id) {
+                composer.visited.insert(boundary_id);
             }
             let replayed = self.replay(composer, subtree, &patches, region_anchor, inputs);
             composer.consumed_updates.extend(consumed);
@@ -955,11 +1001,11 @@ impl PipelineOwner<PaintPhase> {
             // emitted tree would leave the cache at the old value, and a later
             // frame that replays it for an unrelated reason would silently
             // revert the property for good.
-            composer.layer_patches.push((child_id, content, patches));
+            composer.layer_patches.push((boundary_id, content, patches));
             replayed
         } else {
             let painted =
-                self.paint_subtree(composer, child_id, Offset::ZERO, region_anchor, inputs);
+                self.paint_subtree(composer, boundary_id, Offset::ZERO, region_anchor, inputs);
             // Seal before capturing: the boundary's trailing run is part of its
             // output, and `pop_layer` would otherwise flush it after the
             // snapshot was taken.
@@ -968,12 +1014,9 @@ impl PipelineOwner<PaintPhase> {
                 // `None` evicts: a subtree that GAINED a Leader/Follower must
                 // not be served its pre-link form. See `capture`.
                 let captured = composer.capture(boundary_root, content);
-                composer.retained_captures.push((child_id, captured));
+                composer.retained_captures.push((boundary_id, captured));
             })
-        };
-        // Popped on the error path too, so the stack stays balanced.
-        composer.pop_layer();
-        placed
+        }
     }
 
     /// Re-inserts a capture's entries, in paint order, under the layer the
@@ -1385,6 +1428,11 @@ impl FragmentComposer {
             visited: FxHashSet::default(),
             counts: PaintCounts::default(),
         }
+    }
+
+    /// The layer the whole frame hangs under.
+    fn root_layer(&self) -> LayerId {
+        self.tree.root()
     }
 
     /// Counts one render node whose `paint_raw` ran this pass.

@@ -578,19 +578,7 @@ impl DirtyTracker {
             let Some(node) = tree.get(current) else {
                 return false;
             };
-            // `parent.is_some()` is part of the predicate, not an accident: the
-            // paint root is never grafted. `run_paint` enters through
-            // `paint_subtree(root)` rather than the child-boundary arm that
-            // creates and replays captures, so a root boundary — `RenderView`
-            // declares itself one — has no retained output an update could
-            // patch and would repaint anyway. Queuing it would mean carrying a
-            // request that can never be served and re-scanning every capture
-            // for it once a frame. Falling through to the parentless arm below
-            // degrades to a paint mark, which is what actually happens.
-            if node.is_repaint_boundary_flag()
-                && node.was_repaint_boundary()
-                && tree.parent(current).is_some()
-            {
+            if node.is_repaint_boundary_flag() && node.was_repaint_boundary() {
                 // The requester is recorded in the entry, not just the fact
                 // that the boundary has work. A node whose effect layers did
                 // not exist when the boundary was captured has no slot to
@@ -607,8 +595,8 @@ impl DirtyTracker {
                 return self.enqueue_paint(current, depth, PaintKind::LayerUpdate(smallvec![id]));
             }
             let Some(parent) = tree.parent(current) else {
-                // The paint root itself. There is no enclosing boundary to
-                // patch, so this can only be served by repainting.
+                // The paint root, and it is not a repaint boundary: there is no
+                // retained output to patch, so this is served by repainting.
                 return self.commit_needs_paint(tree, id);
             };
             current = parent;
