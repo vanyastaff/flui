@@ -984,7 +984,19 @@ impl ViewState<Scrollable> for ScrollableState {
         // needed the notify — servicing an `animate_to`/`jump_to` command —
         // is a listener now (`install_command_listener`).
         let gestures = self.drag_gestures(view, &applied, self.viewport_content(view));
-        let listener = Listener::new()
+        // A touchpad pan contests the contact with the recognizers that feed
+        // on it along this axis, while there is anywhere to scroll
+        // (ADR-0251). An anchored drag is moved by its own drag.
+        let listener = Listener::new();
+        let listener = if anchored {
+            listener
+        } else {
+            let pan_position = self.scroll_controller.position();
+            listener.scroll_axis(view.scroll_direction, move || {
+                pan_position.max_scroll_extent() > pan_position.min_scroll_extent()
+            })
+        };
+        let listener = listener
             .on_scroll_claim(self.wheel_claim(
                 view,
                 &applied,
@@ -1196,7 +1208,13 @@ impl ScrollableState {
                     Axis::Horizontal => DragSlot::horizontal(),
                 }
                 .pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
-                .allowed_devices(devices)
+                // The contact a touchpad pan opens is the scroll target's to
+                // contest, not a drag of its own beside it (ADR-0251 §2).
+                .allowed_devices({
+                    let mut own = devices;
+                    own.remove(PointerKindSet::TRACKPAD);
+                    own
+                })
                 .on_start(move |_cx, details| {
                     wheel_drag.borrow_mut().take();
                     // A drag on a scrollable gives it the keys.
