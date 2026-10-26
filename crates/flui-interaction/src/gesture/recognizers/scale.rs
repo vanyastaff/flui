@@ -227,9 +227,21 @@ pub struct ScaleGestureRecognizer {
     next_contact: Cell<u64>,
     gesture_state: RefCell<ScaleState>,
     native: RefCell<Option<NativeScale>>,
+    /// Moves of the open pointer frame, applied when it ends.
+    frame_moves: RefCell<Vec<FrameMove>>,
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
     callbacks: ScaleCallbacks,
+}
+
+/// A contact's move that waits for its pointer frame to end.
+struct FrameMove {
+    pointer: PointerId,
+    position: Offset<f64>,
+    global_position: Offset<f64>,
+    kind: PointerKind,
+    stamp: Option<u64>,
+    history: smallvec::SmallVec<[(Option<u64>, Offset<f64>); 8]>,
 }
 
 impl std::fmt::Debug for ScaleGestureRecognizer {
@@ -994,6 +1006,7 @@ impl ScaleGestureRecognizerBuilder {
                     ..ScaleState::default()
                 }),
                 native: RefCell::new(None),
+                frame_moves: RefCell::new(Vec::new()),
                 settings: self.settings,
                 allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
@@ -1021,6 +1034,7 @@ impl ScaleGestureRecognizer {
     /// immediately. Callers arbitrate native delivery before forwarding the
     /// first Update that can recognize the session.
     pub fn handle_pan_zoom(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
+        self.settle_frame_moves();
         let (local, global) = (dispatch.local, dispatch.global);
         let source = *local.pointer();
         if source.id != global.pointer().id
@@ -1417,7 +1431,10 @@ impl ScaleGestureRecognizer {
         settings.exceeds_pan_slop_for(kind, current.focal - baseline.focal)
     }
 
-    /// Handle a tracked contact's move.
+    /// Handle a move of a tracked contact. Inside a pointer frame the gesture
+    /// is measured when the frame ends, once with every contact of the frame
+    /// where it moved to, not once per contact with the others still where
+    /// they were.
     fn handle_pointer_move(
         &self,
         pointer: PointerId,
@@ -1427,23 +1444,79 @@ impl ScaleGestureRecognizer {
         stamp: Option<u64>,
         history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
     ) {
+        let arena = self.membership.arena();
+        if arena.in_pointer_frame() {
+            let owner: std::rc::Weak<dyn GestureRecognizer> = self.owner.clone();
+            if arena.join_pointer_frame(owner) {
+                self.frame_moves.borrow_mut().push(FrameMove {
+                    pointer,
+                    position,
+                    global_position,
+                    kind,
+                    stamp,
+                    history: history.collect(),
+                });
+                return;
+            }
+        }
+        if let Some(crossed) =
+            self.apply_pointer_move(pointer, position, global_position, kind, stamp, history)
+        {
+            self.measure_after_move(kind, crossed);
+        }
+    }
+
+    /// Apply the moves a pointer frame held back, then measure the gesture
+    /// once. Runs when the frame ends and before anything that must see the
+    /// moves in their order.
+    fn settle_frame_moves(&self) {
+        let moves = std::mem::take(&mut *self.frame_moves.borrow_mut());
+        let mut measured = None;
+        for held in moves {
+            let applied = self.apply_pointer_move(
+                held.pointer,
+                held.position,
+                held.global_position,
+                held.kind,
+                held.stamp,
+                held.history.into_iter(),
+            );
+            if let Some(crossed) = applied {
+                let earlier = measured.is_some_and(|(_, earlier)| earlier);
+                measured = Some((held.kind, crossed || earlier));
+            }
+        }
+        if let Some((kind, crossed)) = measured {
+            self.measure_after_move(kind, crossed);
+        }
+    }
+
+    /// Move a tracked contact: its history, then its place. Returns whether a
+    /// step of the history crossed an admission threshold, or `None` when the
+    /// contact is not tracked. The gesture is measured by
+    /// [`Self::measure_after_move`].
+    fn apply_pointer_move(
+        &self,
+        pointer: PointerId,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerKind,
+        stamp: Option<u64>,
+        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
+    ) -> Option<bool> {
         if !position.is_finite() {
-            return;
+            return None;
         }
         let id = {
             let state = self.gesture_state.borrow();
-            let Some(index) = state.index_of(pointer) else {
-                return;
-            };
+            let index = state.index_of(pointer)?;
             state.contacts[index].id
         };
         let now = self.membership.arena().sample_now();
         let mut state = self.gesture_state.borrow_mut();
-        let Some(index) = state.index_of(pointer) else {
-            return;
-        };
+        let index = state.index_of(pointer)?;
         if state.contacts[index].id != id {
-            return;
+            return None;
         }
         let baseline = state.baseline;
         let mut crossed = false;
@@ -1468,6 +1541,17 @@ impl ScaleGestureRecognizer {
         state.sample_time = Some(now);
         state.contacts[index].position = position;
         state.contacts[index].global_position = global_position;
+        Some(crossed)
+    }
+
+    /// Measure the gesture after the contacts moved: decide the locks, claim
+    /// the contest when a threshold was crossed, publish an update.
+    fn measure_after_move(&self, kind: PointerKind, mut crossed: bool) {
+        let mut state = self.gesture_state.borrow_mut();
+        let Some(now) = state.sample_time else {
+            return;
+        };
+        let baseline = state.baseline;
         let Some(measure) = state.sample() else {
             return;
         };
@@ -1510,6 +1594,7 @@ impl ScaleGestureRecognizer {
 
     /// Handle a tracked contact lifting.
     fn handle_pointer_up(&self, pointer: PointerId, stamp: Option<u64>) {
+        self.settle_frame_moves();
         let id = {
             let state = self.gesture_state.borrow();
             let Some(index) = state.index_of(pointer) else {
@@ -1580,6 +1665,7 @@ impl ScaleGestureRecognizer {
 
     /// Handle a cancel for a tracked contact: the whole sequence ends.
     fn handle_cancel(&self, pointer: PointerId) {
+        self.settle_frame_moves();
         let mut state = self.gesture_state.borrow_mut();
         if state.index_of(pointer).is_none() {
             return;
@@ -1626,7 +1712,11 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    fn pointer_frame_end(&self) {
+        self.settle_frame_moves();
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
+        self.settle_frame_moves();
         if self.native.borrow().is_some() {
             return;
         }
@@ -1770,6 +1860,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     }
 
     fn cancel(&self) -> CancelOutcome {
+        self.settle_frame_moves();
         let native = self.native.borrow_mut().take();
         if let Some(native) = native {
             if native.started {
@@ -1793,6 +1884,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 
 impl GestureArenaMember for ScaleGestureRecognizer {
     fn accept_gesture(&self, contest: GestureContest) {
+        self.settle_frame_moves();
         let pointer = contest.pointer();
         let mut state = self.gesture_state.borrow_mut();
         if state.index_of_contest(contest).is_none() {
@@ -1827,6 +1919,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
     }
 
     fn reject_gesture(&self, contest: GestureContest) {
+        self.settle_frame_moves();
         let pointer = contest.pointer();
         // The contact's arena went to a competitor: it no longer belongs to
         // this scale.

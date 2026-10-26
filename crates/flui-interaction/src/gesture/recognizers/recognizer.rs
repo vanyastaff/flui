@@ -30,6 +30,13 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn allowed_devices(&self) -> PointerKindSet {
         PointerKindSet::all()
     }
+    /// The pointer frame this recognizer joined
+    /// ([`GestureArena::join_pointer_frame`](crate::gesture::arena::GestureArena::join_pointer_frame))
+    /// has ended: every event of the frame was delivered, so a recognizer that
+    /// measures the relation between contacts settles on all of them now.
+    /// Called once per frame however many events joined; the default has
+    /// nothing to settle.
+    fn pointer_frame_end(&self) {}
 }
 
 /// Whether a recognizer allowing `devices` admits a contact of `kind`.

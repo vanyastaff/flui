@@ -664,6 +664,75 @@ fn scale_disposed_from_its_update() {
     assert_eq!(updates.get(), 1, "a disposed scale publishes nothing more");
 }
 
+fn queue_move(rig: &Rig, pointer: u64, x: f64, y: f64) {
+    rig.send(
+        &make_move_event_for_id(id(pointer), Offset::new(x, y), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
+}
+
+/// Both fingers of a pinch move between two frames: the pinch is measured
+/// once, with both where they went, not once with only the first moved.
+fn a_flush_measures_a_pinch_once_with_every_contact_moved() {
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    pinch_out(&rig, 1, 2);
+    let before = log.updates.borrow().len();
+    queue_move(&rig, 1, 20.0, 200.0);
+    queue_move(&rig, 2, 380.0, 200.0);
+    rig.frame();
+    let updates = log.updates.borrow();
+    assert_eq!(
+        updates.len(),
+        before + 1,
+        "one update for the two fingers of the frame"
+    );
+    let scale = updates.last().expect("an update").scale;
+    assert!(
+        (scale - 1.8).abs() < 1e-9,
+        "the scale of the final spread, not of the first finger alone (1.65): {scale}"
+    );
+}
+
+/// A frame the platform reported delivers every event in order, with the
+/// frame open for each, and ends once however many events panic.
+fn a_pointer_frame_delivers_every_event_and_closes_after_a_failure() {
+    let rig = Rig::new();
+    let arena = rig.binding.arena().clone();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&seen);
+    let inside = arena.clone();
+    rig.binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event: &PointerEvent| {
+            let pointer = pointer_of(event).expect("a contact event");
+            log.borrow_mut().push((pointer, inside.in_pointer_frame()));
+            assert!(pointer != 1, "the first contact's handler fails");
+        }));
+    let frame = [
+        make_down_event_for_id(id(1), Offset::new(10.0, 10.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+        make_down_event_for_id(id(2), Offset::new(90.0, 10.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    ];
+    expect_panic("a frame event", || {
+        rig.binding.dispatch_pointer_frame_on(
+            flui_interaction::InputSurface::Window,
+            &frame,
+            |_| HitTestResult::new(),
+        );
+    });
+    assert_eq!(
+        *seen.borrow(),
+        [(1, true), (2, true)],
+        "the second event of the frame is delivered after the first failed"
+    );
+    assert!(
+        !arena.in_pointer_frame(),
+        "the frame ended with the failure"
+    );
+}
+
 #[test]
 fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
     run_rows(
@@ -727,6 +796,14 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
             (
                 "ended from its start",
                 scale_ended_from_its_start_publishes_no_update,
+            ),
+            (
+                "a flush measures a pinch once",
+                a_flush_measures_a_pinch_once_with_every_contact_moved,
+            ),
+            (
+                "a pointer frame delivers every event",
+                a_pointer_frame_delivers_every_event_and_closes_after_a_failure,
             ),
         ],
     );
