@@ -260,6 +260,10 @@ impl PlatformWindow for TestWindow {
         self.system_chrome.clone()
     }
 
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         None
     }

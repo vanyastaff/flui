@@ -91,6 +91,15 @@ impl PlatformWindow for Window {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
         let panic = self.panic_query.swap(false, Ordering::Relaxed);
@@ -365,6 +374,12 @@ impl PlatformWindow for HapticWindow {
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         self.inner.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.inner.drag_source()
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        self.inner.show()
     }
 }
 

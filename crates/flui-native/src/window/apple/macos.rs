@@ -1007,6 +1007,18 @@ impl crate::host_window::HostWindow for MacOSWindow {
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
         self.facets.text.capture_sizing()
     }
+
+    /// None: AppKit's input method is pushed to through the content view
+    /// (`text_input`), and reads no field's store.
+    fn text_store_host(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(crate::text::WindowTextInput::store_host)
+    }
 }
 
 impl CallbackWindow for MacOSWindow {
@@ -1245,6 +1257,12 @@ impl PlatformWindow for MacOSWindow {
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.facets.chrome))
+    }
+
+    /// AppKit starts no OS drag session from this window yet; its input
+    /// capabilities say so.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the

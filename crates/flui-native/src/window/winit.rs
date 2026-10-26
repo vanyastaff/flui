@@ -822,6 +822,11 @@ impl PlatformWindow for WinitWindow {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.facets.chrome))
     }
+
+    /// winit starts no OS drag session; its input capabilities say so.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
 }
 
 impl crate::host_window::CoreHostWindow for WinitWindow {}

@@ -183,6 +183,12 @@ impl PlatformWindow for DragWindow {
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
     }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
 }
 
 fn window(source: Option<OsDragStart>) -> Arc<dyn PlatformWindow> {

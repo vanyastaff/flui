@@ -469,6 +469,17 @@ mod tests {
         fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
             None
         }
+
+        fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+            None
+        }
+
+        fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+            Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NotOnThisPlatform,
+            )
+            .into())
+        }
     }
 
     fn winit_control_cross_thread_request_is_processed_on_the_owner() {

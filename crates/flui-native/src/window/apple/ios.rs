@@ -1171,6 +1171,17 @@ impl crate::host_window::HostWindow for IOSWindow {
         }
         self.native.get(marker).view.capture_text_sizing()
     }
+
+    /// What the table's text position answers: no store host on UIKit yet.
+    fn text_store_host(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(crate::text::WindowTextInput::store_host)
+    }
 }
 
 impl PlatformWindow for IOSWindow {
@@ -1281,6 +1292,21 @@ impl PlatformWindow for IOSWindow {
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.facets.chrome))
+    }
+
+    /// UIKit starts no OS drag session from this window yet; its input
+    /// capabilities say so.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+
+    /// A scene cannot bring itself to the foreground: the user and the system
+    /// decide which app is shown, on every iOS device.
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 
     fn appearance(&self) -> WindowAppearance {

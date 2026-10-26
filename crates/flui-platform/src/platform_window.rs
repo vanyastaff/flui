@@ -14,9 +14,8 @@ use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
 use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    Unsupported, UnsupportedReason, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowId,
-    WindowShowError, WindowState,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -146,6 +145,12 @@ pub enum WindowAt {
 ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
 ///         None
 ///     }
+///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+///         None
+///     }
+///     fn show(&self) -> Result<(), WindowShowError> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
+///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
@@ -209,6 +214,12 @@ pub enum WindowAt {
 ///     }
 ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
 ///         None
+///     }
+///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+///         None
+///     }
+///     fn show(&self) -> Result<(), WindowShowError> {
+///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
 /// }
@@ -434,32 +445,39 @@ pub trait PlatformWindow: Send + Sync {
     /// This window's IME text-input capability: the receiver of the
     /// requests a field makes of the input method (whether it may compose,
     /// where its caret is). `None` for a window whose input method reads the
-    /// field's store instead, or that has no input method. Every
-    /// implementation says which; there is no default (ADR-0151 §5).
+    /// field's store instead (the pull model, ADR-0135: a Win32 window with
+    /// TSF), which is how text input is taken there and not an absence, or
+    /// that has no input method. Every implementation says which; there is
+    /// no default (ADR-0151 §5).
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>>;
 
     /// This window's haptic feedback capability (see [`PlatformHaptics`]'s
-    /// module doc for why it is per window). A window of a platform with no
-    /// actuator hands out one that answers
-    /// [`HapticOutcome::Unsupported`](crate::haptics::HapticOutcome::Unsupported);
-    /// `None` is for a window that has no haptics facet at all (a test
-    /// double). Every implementation says which; there is no default.
+    /// module doc for why it is per window).
+    ///
+    /// Absence of haptics is the actuator's to say: a window of a platform or
+    /// device with no actuator hands out one that answers
+    /// [`HapticOutcome::Unsupported`](crate::haptics::HapticOutcome::Unsupported)
+    /// with its reason, and every window of the core host hands one out. The
+    /// `Option` is the facet's, not the capability's: a facet beyond the
+    /// required core is reached through one (ADR-0151 §5), and `None` says
+    /// the window has no haptics facet at all, as a window built outside the
+    /// hosts may not. Every implementation says which; there is no default.
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>>;
 
     /// This window's system-chrome capability (the system bars' overlay
     /// style). A window of a platform that draws no system bars over its
-    /// content hands out one that styles nothing; `None` is for a window that
-    /// has no such facet at all (a test double). Every implementation says
-    /// which; there is no default.
+    /// content hands out one that styles nothing, as every window of the core
+    /// host hands one out; `None` says the window has no such facet at all
+    /// (ADR-0151 §5), as a window built outside the hosts may not. Every
+    /// implementation says which; there is no default.
     fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>>;
 
     /// Get this window's OS drag source, if the backend can start OS drag
     /// sessions (ADR-0211). `None` for backends without one; their
     /// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
     /// says `Unavailable`, and a drag that needs the OS stays in-window.
-    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>> {
-        None
-    }
+    /// Every implementation says which; there is no default.
+    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>>;
 
     /// Which window's content is topmost under `position`, given in this
     /// window's logical pixels and possibly outside it, honouring the stacking
@@ -503,12 +521,13 @@ pub trait PlatformWindow: Send + Sync {
     /// Preserves maximized/fullscreen mode and the existing widget tree.
     /// Focus is a request: the window manager may decline to grant it.
     ///
+    /// Every implementation says what it does; there is no default, so a
+    /// window that can show itself never answers that it cannot.
+    ///
     /// # Errors
     /// Returns unsupported when the backend cannot perform this operation,
     /// closed after native teardown, or a native operation failure.
-    fn show(&self) -> Result<(), WindowShowError> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
-    }
+    fn show(&self) -> Result<(), WindowShowError>;
 
     /// The embedder has presented the first frame into this window's
     /// surface — or has waited as long as it is willing to for one.

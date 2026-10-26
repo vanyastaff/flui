@@ -648,6 +648,15 @@ impl PlatformWindow for AndroidWindow {
         Some(Arc::clone(&self.facets.chrome))
     }
 
+    /// An Activity cannot bring its task to the front itself: the user and
+    /// the system decide which task is shown, on every Android device.
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
+
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         self.facets
             .text

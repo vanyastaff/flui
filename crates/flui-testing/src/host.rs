@@ -265,6 +265,12 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
     }
 
+    /// The host's window is always shown: there is no window manager to
+    /// raise it.
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
+    }
+
     /// The display the window was [moved to](HeadlessHost::move_to_display).
     fn display_id(&self) -> Option<DisplayId> {
         *self.display.lock()

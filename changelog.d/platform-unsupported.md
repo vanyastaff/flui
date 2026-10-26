@@ -28,9 +28,12 @@
 - **`flui-native`**: a window's haptics answer why nothing played: no pen in range of a Win32
   window is `Unavailable` and a pen without a controller `NotOnThisDevice`; a browser without
   vibration is `NotOnThisDevice` and a page before user activation `Unavailable`.
-- **`flui-platform`**: `PlatformWindow::text_input`, `haptics` and `system_chrome` have no
-  default body: every window says what it hands out, and one without the capability answers
-  `None` itself.
+- **`flui-platform`**: `PlatformWindow::text_input`, `haptics`, `system_chrome`, `drag_source`
+  and `show` have no default body: every window says what it hands out, and one without the
+  facet answers `None` (or, for `show`, its `Unsupported` reason) itself. A window that cannot
+  show itself (Android, iOS, the Web) says so with `NotOnThisPlatform`.
+- **`flui-native`**: `HostWindow::text_store_host` and `capture_text_sizing` have no default
+  body either.
 - **`flui-native`**: every window hands out the text input, accessibility bridge, haptic
   actuator and system chrome its host's table made for it as it opened, and
   `HostWindow::accessibility` has no default body: a window on a host without an

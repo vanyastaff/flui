@@ -1223,6 +1223,15 @@ impl PlatformWindow for WebWindow {
             .map(|facets| Arc::clone(&facets.chrome))
     }
 
+    /// A page cannot raise its own tab or window: the browser decides what is
+    /// shown, in every browser.
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
+
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         self.text_input_of().and_then(WindowTextInput::ime)
     }
