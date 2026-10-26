@@ -227,3 +227,158 @@ fn momentum_after_a_fed_pan_reaches_nobody() {
     ));
     assert_eq!(*rig.scrolled.borrow(), vec![7.0]);
 }
+
+mod identity {
+    use flui_platform::pointer::{
+        PointerButton, PointerButtons, PointerPress, PointerRelease, PointerSample,
+    };
+
+    use super::*;
+
+    /// What the feed saw of a contact, by pointer id.
+    #[derive(Debug, Clone, PartialEq)]
+    enum Logged {
+        Down(u64),
+        Up(u64),
+        Cancel(u64),
+    }
+
+    struct Setup {
+        lane: InteractionLane,
+        binding: Rc<GestureBinding>,
+        path: Rc<HitTestResult>,
+        log: Rc<RefCell<Vec<Logged>>>,
+    }
+
+    /// A feed, and a raw handler that runs `on_scroll` for each scroll packet.
+    fn setup(on_scroll: impl Fn(&GestureBinding, &HitTestResult) + 'static) -> Setup {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = Rc::new(GestureBinding::new());
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut path = HitTestResult::new();
+        let shared: Rc<RefCell<Option<Rc<HitTestResult>>>> = Rc::new(RefCell::new(None));
+        lane.enter(|| {
+            let seen = Rc::clone(&log);
+            let feed: PointerTarget = handle
+                .register_pointer(move |dispatch| match dispatch.global {
+                    PointerEvent::Down(down) => seen
+                        .borrow_mut()
+                        .push(Logged::Down(down.pointer.id.get().get())),
+                    PointerEvent::Up(up) => seen
+                        .borrow_mut()
+                        .push(Logged::Up(up.pointer.id.get().get())),
+                    PointerEvent::Cancel(cancel) => {
+                        seen.borrow_mut()
+                            .push(Logged::Cancel(cancel.pointer.id.get().get()));
+                    }
+                    _ => {}
+                })
+                .expect("feed");
+            handle
+                .declare_scroll_contact_feed(feed)
+                .expect("declaration");
+            let binding = Rc::downgrade(&binding);
+            let route = Rc::clone(&shared);
+            let raw: PointerTarget = handle
+                .register_pointer(move |dispatch| {
+                    if matches!(dispatch.global, PointerEvent::Scroll(_))
+                        && let (Some(binding), Some(path)) =
+                            (binding.upgrade(), route.borrow().clone())
+                    {
+                        on_scroll(&binding, &path);
+                    }
+                })
+                .expect("raw handler");
+            path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(feed));
+            path.add(HitTestEntry::new(RenderId::new(2)).pointer_target(raw));
+        });
+        let path = Rc::new(path);
+        *shared.borrow_mut() = Some(Rc::clone(&path));
+        Setup {
+            lane,
+            binding,
+            path,
+            log,
+        }
+    }
+
+    impl Setup {
+        fn send(&self, event: &PointerEvent) {
+            self.lane.enter(|| {
+                self.binding
+                    .handle_pointer_event(event, |_| (*self.path).clone());
+                self.binding.flush_pending_moves();
+            });
+        }
+    }
+
+    fn native(id: u64, kind: PointerKind) -> PointerInfo {
+        PointerInfo::new(PointerId::try_from(id).expect("pointer"), kind)
+            .with_device(DeviceId::try_from(2_u64).expect("device"))
+    }
+
+    fn sample(x: f64) -> PointerSample {
+        PointerSample::new(
+            EventTime::from_nanos(1),
+            PointerPosition::try_new(Point::new(x, 5.0)).expect("position"),
+        )
+    }
+
+    #[test]
+    fn a_virtual_contact_steps_past_a_live_native_contact_with_its_id() {
+        let setup = setup(|_, _| {});
+        // The first pan's latch is sequence 1 and its contact's Down takes 2,
+        // so the next latch is sequence 4 after one native Down.
+        setup.send(&pan(ScrollPhase::Began, 0.0, 1));
+        setup.send(&pan(ScrollPhase::Ended, 0.0, 2));
+        let held = (1_u64 << 63) | 4;
+        setup.send(&PointerEvent::Down(PointerPress::new(
+            native(held, PointerKind::Touch),
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(10.0),
+        )));
+        setup.log.borrow_mut().clear();
+        setup.send(&pan(ScrollPhase::Began, 0.0, 3));
+        setup.send(&pan(ScrollPhase::Ended, 0.0, 4));
+        let log = setup.log.borrow();
+        assert!(
+            !log.iter()
+                .any(|entry| matches!(entry, Logged::Cancel(id) if *id == held)),
+            "the native contact was cancelled: {log:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|entry| matches!(entry, Logged::Down(id) if *id != held)),
+            "the pan opened its contact under another id: {log:?}"
+        );
+        drop(log);
+        setup.send(&PointerEvent::Up(PointerRelease::new(
+            native(held, PointerKind::Touch),
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(10.0),
+        )));
+    }
+
+    #[test]
+    fn a_sequence_begun_by_a_handler_leaves_no_stale_contact() {
+        let fired = std::cell::Cell::new(false);
+        let setup = setup(move |binding, path| {
+            if !fired.replace(true) {
+                binding.handle_pointer_event(&pan(ScrollPhase::Began, 0.0, 2), |_| path.clone());
+            }
+        });
+        setup.send(&pan(ScrollPhase::Began, 0.0, 1));
+        setup.send(&pan(ScrollPhase::Changed, 10.0, 3));
+        setup.send(&pan(ScrollPhase::Ended, 0.0, 4));
+        let log = setup.log.borrow();
+        let downs = log.iter().filter(|e| matches!(e, Logged::Down(_))).count();
+        let ends = log
+            .iter()
+            .filter(|e| matches!(e, Logged::Up(_) | Logged::Cancel(_)))
+            .count();
+        assert_eq!(downs, ends, "every contact that opened ended: {log:?}");
+    }
+}
