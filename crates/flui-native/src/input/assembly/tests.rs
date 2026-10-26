@@ -1263,3 +1263,33 @@ fn pointer_assembly_contracts() {
         ],
     );
 }
+
+#[test]
+fn two_contacts_reported_together_are_one_pointer_frame() {
+    let mut contacts = registry();
+    let first = decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
+    let second = decode(&mut contacts, &touch(2, PRESS, 1)).expect("valid");
+
+    let framed = crate::input::assembly::framed([first, second]);
+
+    let [PlatformInput::PointerFrame(frame)] = framed.as_slice() else {
+        panic!("one frame, got {framed:?}")
+    };
+    assert_eq!(frame.len(), 2);
+    assert!(
+        frame
+            .events()
+            .iter()
+            .all(|event| matches!(event, PointerEvent::Down(_)))
+    );
+}
+
+#[test]
+fn a_lone_contact_stays_a_pointer_event() {
+    let mut contacts = registry();
+    let only = decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
+
+    let framed = crate::input::assembly::framed([only]);
+
+    assert!(matches!(framed.as_slice(), [PlatformInput::Pointer(_)]));
+}

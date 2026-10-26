@@ -11,6 +11,7 @@ use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
+use flui_platform::PointerFrame;
 use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
@@ -393,6 +394,13 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("WindowObservation", "Brightness") => {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }
+        ("PlatformInput", "PointerFrame") => one(platform(PlatformInput::PointerFrame(
+            PointerFrame::new(vec![
+                PointerEvent::Down(press(touch())),
+                PointerEvent::Down(press(info(PointerKind::Touch, PointerRole::Additional))),
+            ])
+            .expect("not empty"),
+        ))),
         ("PlatformInput", "Keyboard") => one(plain_key(KeyState::Down)),
         ("PlatformInput", "Ime") => one(ime(ImeEvent::Enabled)),
         ("PlatformInput", "DragDrop") | ("DragDropEvent", "Entered") => {

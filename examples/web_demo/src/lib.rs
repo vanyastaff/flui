@@ -77,6 +77,8 @@ pub fn start() {
                     _ => {}
                 }
             }
+            // The web backend reports each pointer on its own.
+            PlatformInput::PointerFrame(_) => {}
             PlatformInput::Keyboard(ke) => {
                 web_sys::console::log_1(
                     &format!("Key {:?}: {:?} (code={:?})", ke.state(), ke.key, ke.code).into(),
