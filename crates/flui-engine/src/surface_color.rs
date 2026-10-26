@@ -643,6 +643,7 @@ mod tests {
         assert!((white[0] - 0.580_7).abs() < 2e-3, "{white:?}");
     }
 
+    #[cfg(feature = "testing")]
     fn f16_bits(value: f32) -> u16 {
         // Round to nearest; the samples are normal, in range and few.
         let bits = value.to_bits();
@@ -657,6 +658,7 @@ mod tests {
         sign | (((exponent as u32) << 10) + rounded) as u16
     }
 
+    #[cfg(feature = "testing")]
     fn f16_value(bits: u16) -> f32 {
         let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
         let exponent = i32::from((bits >> 10) & 0x1f);
