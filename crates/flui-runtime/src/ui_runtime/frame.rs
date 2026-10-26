@@ -463,7 +463,7 @@ impl UiRuntime {
         }
         // Paint commits the layer tree (which carries its own leader index)
         // before semantics runs; a semantics error retains it for the retry.
-        let layer_tree = widgets.run_settled_frame(presentation.pipeline())?;
+        let layer_tree = presentation.pipeline().run_frame()?;
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 

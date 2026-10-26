@@ -264,3 +264,35 @@ pub(crate) fn repeated_churn_cycles_stay_clean_and_generations_protect_every_rou
 // ====================================================================
 // Deferred mutations integration tests
 // ====================================================================
+
+/// `PipelineCell::run_frame` runs the whole frame behind the cell and puts the
+/// owner back: the next frame on the same cell runs, and a dirtied node
+/// paints again.
+#[test]
+fn a_pipeline_cell_runs_frame_after_frame() {
+    use flui_foundation::geometry::Size;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+
+    let cell = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
+    let child = cell.with_mut(|owner| {
+        let root = owner.set_root_render_object(Box::new(RenderPadding::all(2.0)));
+        let child = owner
+            .insert_child_render_object(root, Box::new(RenderColoredBox::red(10.0, 10.0)))
+            .expect("child attaches");
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
+        child
+    });
+
+    let first = cell.run_frame().expect("the first frame runs");
+    assert!(first.is_some(), "a dirty tree paints a layer tree");
+    assert!(
+        !cell.with(PipelineOwner::has_dirty_nodes),
+        "the frame left nothing dirty"
+    );
+
+    cell.with_mut(|owner| owner.mark_needs_paint(child));
+    let second = cell.run_frame().expect("the owner was put back");
+    assert!(second.is_some(), "a repaint request paints again");
+}

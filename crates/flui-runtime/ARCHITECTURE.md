@@ -603,7 +603,7 @@ the first terminal failure remains authoritative and new input recovers.
 A presentation segment runs build, then the build-during-layout fixpoint
 (`WidgetsBinding::settle_layout_with_builders`), then
 `FocusManager::settle_orphaned_focus` with no tree borrow held, then paint
-(`run_settled_frame`). Removal records an orphan marker inside reconciliation
+(`PipelineCell::run_frame`). Removal records an orphan marker inside reconciliation
 and runs no user code, so the one focus edge to the successor is published
 here, in the frame that removed the node, and never through `None` while a
 candidate remains. When that edge moved the primary, the segment rebuilds
