@@ -2,7 +2,7 @@
 //! granted, and the transform from the renderer's working space to it.
 //!
 //! The renderer paints in one working space, extended-range sRGB-encoded
-//! (ADR-0252). A surface that is not plain 8-bit sRGB is reached through the
+//! (ADR-0256). A surface that is not plain 8-bit sRGB is reached through the
 //! presentation blit, which converts working pixels to the surface's gamut and
 //! transfer function; [`ResolvedSurfaceColor`] is what that conversion needs
 //! and what the application can read back.
