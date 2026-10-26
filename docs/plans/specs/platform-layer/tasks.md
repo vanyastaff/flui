@@ -2172,6 +2172,88 @@ graph LR
   отдаёт углы и тему обратно). Не запускалось: `cross-typecheck` (нет `zig`; job в CI); Mac —
   `flui::native::macos`, материал фона и `an_appkit_backdrop_goes_behind_the_content_and_comes_away`
   в очереди vanyastaff/flui#1840.
+  После ревью PR #1910 (коммиты поверх, без перебазирования); где сказанное выше расходится с
+  этим абзацем, верен он. (1) Liquid Glass — настоящий: `MacOSBackdrop` — `Material(MacOSMaterial)`
+  (материалы `NSVisualEffectView`, как были) или `Glass(LiquidGlass { style: GlassStyle, tint:
+  Option<GlassTint>, corner_radius: Option<f64> })` — то, что применяет `NSGlassEffectView`
+  (`style`, `tintColor`, `cornerRadius`; сообщения вручную, `NSInteger` и `CGFloat`). Класс ищется по
+  имени при вызове (`AnyClass::get(c"NSGlassEffectView")`), без шлюза версии и `sw_vers`; до macOS 26
+  — `MacOSBackdropError::NotOnThisSystem`. `GlassTint::new` принимает только конечные каналы в
+  `0..=1`, радиус не конечный или отрицательный — `InvalidCornerRadius`. Код — в своём файле
+  `window/apple/macos/backdrop.rs` (механизм одного объекта ОС, правило 1); `MainThreadMarker`
+  берётся внутри маршрутизированного замыкания (`expect("BUG: …")`) и передаётся каждому шагу;
+  содержимое окна, которое не FLUI-вид и не эффект/стекло, держащее его (`isKindOfClass:` и
+  `superview`/`contentView`), — `ForeignContentView`, а не сообщение неизвестному селектору;
+  `Retained::retain` вида FLUI — `expect("BUG: …")`, ошибкой `Closed` он больше не притворяется.
+  Стекло каждый раз — новый вид (вход `None` — умолчание AppKit), материал поверх материала
+  меняется на месте. (2) Долговременная проверка R3.9: гейт API-замыкания не идёт за реэкспортом
+  элемента workspace (его «Limit», `tools/xtask/src/api_closure.rs`), так что таблица фасада
+  проверяла бы только сами реэкспорты; вместо неё — fixtures trybuild фасада `tests/ui/native/`
+  (`host_window_needs_native` — без фичи не компилируется, с ней компилируется;
+  `windows_extension_needs_windows` и `macos_extension_needs_macos` — с фичей вне своей ОС не
+  компилируются, на своей — компилируются; `.stderr` для Windows-фикстуры снят на Linux), doctest
+  `compile_fail,E0432` (job `doc-test`, фасад без фич) и `flui/native` в `TEST_FEATURES` xtask
+  (`test` и `test-trybuild` в CI идут с ним, так что `tests/surface.rs` и фикстуры исполняются);
+  OS-типы в сигнатурах ядра держит гейт ядра на шести целях. (3) Путь приложения к окну:
+  `flui_app::native::with_window(address, f) -> Option<R>` (фасад — `flui::native::with_window`):
+  адрес — тот, к которому разрешается запрос окна или который называет запрос закрытия, как у
+  `window_handle`; раннер в `presentation_window` (единственное место, где результат
+  `open_window` становится окном UI runtime) кладёт `Weak<dyn HostWindow>` в `AppRuntime`, а поиск
+  идёт от окна очереди команд адреса по адресу выделения (`Arc::as_ptr`), не по `WindowId`, который
+  ОС переиспользует; `f` вызывается вне заимствований runtime, на чужом потоке, по пустому адресу
+  и после ухода презентации — `None`. Виджету, у которого есть только `WindowHandle`, адрес пока
+  не достаётся — это записано в документации `flui::native` (обработчик окна при открытии, LY44).
+  (4) `flui_app::native` — за новой фичей `native` у `flui-app` (выключена — модуля и списка окон
+  нет), фича фасада — `native = ["flui-app/native"]`. (5) Каждая команда и запрос `Win32Window`
+  отвечает `Result<_, Win32WindowError>`: `Closed` и `NotOnTheOwnerThread` (сначала проверяется,
+  что окно всё ещё владеет HWND и вызов на его потоке, через `with_window_context_checked`, так что
+  чужой HWND с тем же значением не тронут), `Refused { request, hresult }` (в т. ч. углы на Windows
+  10), `Unrecognized { request, value }`, `NotOnThisHost` (значение контракта новее хоста);
+  переименованы `set_snap_layouts`, `snap_layouts`, `set_blur_behind`, `dark_mode`; удалён дубль
+  `set_caption_color`. (6) Слот — структура: `WindowOptions::os_options: OsWindowOptions { windows:
+  Option<Win32WindowOptions> }` (`with_os_options`, `OsWindowOptions::with_windows`), то же имя в
+  `AppConfig` (`os_options`, `with_os_options`); опции двух ОС больше не вытесняют друг друга.
+  (7) Типы — в публичном модуле контракта `flui_platform::os_options`, не в корне; все
+  `#[non_exhaustive]`. ADR-0089 даёт уровень крейту, не модулю (§1: обещание следует за элементом),
+  так что они Stable; выбрана наименее обязывающая форма — `#[non_exhaustive]`, построение от
+  `Default` и `with_*`, никаких преобразований в значения ОС; это записано в документации модуля и
+  в ARCHITECTURE.md контракта. (8) В `backdrop.rs` Win32 атрибут DWM — константа `Attribute<T>`,
+  связывающая ординал крейта `windows` (`DWMWA_*`) с типом значения (обязательство `unsafe`
+  выполняется в одном месте, при объявлении); углы и материал — по одной таблице
+  (`DWMWCP_*`, `DWMSBT_*`), читаемой в обе стороны; модуль `dwm_attributes` и ручные числа ушли.
+  `WindowsBackdrop` — `#[non_exhaustive]`, `Auto` добавлен, `Tabbed` (тот же `DWMSBT_TABBEDWINDOW`,
+  что `MicaAlt`) удалён. (9) Тесты: `os_extensions` — `a_win32_window_opens_with_its_options`
+  (повтор «чужого хоста» удалён), новый `a_win32_view_refuses_another_thread_and_a_closed_window`
+  (с обходом проверки HWND падает на `left: Ok(()), right: Err(NotOnTheOwnerThread)`),
+  `an_appkit_backdrop_goes_behind_the_content_and_comes_away` проверяет класс содержимого,
+  материал (`material`), стиль стекла и `contentView`, что вид FLUI — подвид эффекта и первый
+  ответчик, и что снятие возвращает его содержимым (только сборкой, #1840); `flui-app` —
+  `with_window_reaches_the_host_window_of_its_presentation_and_no_other` (без регистрации окна в
+  `presentation_window` падает на `left: None, right: Some(true)`) и строка
+  `every_systems_options_are_kept`; фасад — `with_window_answers_none_where_nothing_is_presented`;
+  в `backdrop.rs` Win32 — `each_mapping_is_one_table_read_both_ways`. Документы: parity (Liquid
+  Glass 🟡 до прогона, #1840), gaps (записи 4 и 20), extending, ARCHITECTURE.md ядра и контракта,
+  README, `docs/testing.md` (`flui/native` в области тестов), changelog.
+  Проверки после ревью (Windows): `cargo fmt`, `taplo fmt`; clippy `-D warnings --all-targets`
+  всего workspace, `-p flui-app -p flui` с `flui/native`, `-p flui-native -p flui-app` с
+  `winit-backend` и `flui-app/native`; macOS lib `-p flui-platform -p flui-native` и с
+  `winit-backend`, iOS lib (`DOCS_RS=1`), wasm32 lib `-p flui-native -p flui-app` с `native`,
+  Android `--all-targets` с `native` (тесты под macOS здесь не собираются: `psm` требует
+  C-компилятор цели); nextest `-p flui-platform -p flui-native -p flui-app` с `native` — 364 из
+  364 (`trybuild_ui` ядра исключён: расхождение `std::default::Default` прежнее), с
+  `winit-backend` — 360 из 360, фасад с `native` — 10 из 10 (`thread_boundary_ui` с фикстурами
+  `native` на Windows), `xtask` — 50; doctest'ы ядра (4 + 3), контракта (40 + 9), фасада без
+  `native` (3 + 5) и с ним, вместе с `flui-app` (4 + 4, 3 + 1); `checks` (`module-dag` — 296
+  модулей, 33 исключения; `globals` — 56; `panic-boundary` — 169 входов: методы зовут AppKit и
+  DWM, входов ОС не прибавилось), `facade-combos` — 10, `doc-strict`, `wasm-check`, `wasm-test` —
+  51. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform
+  -p flui-native -p flui-app` с `flui-app/native`, с `winit-backend`, фасад с `native`; nextest
+  `FLUI_HEADLESS=1` с `native` — 380: 379 и прежний X11 на WSLg; `--all-features` под xvfb — 297
+  из 297; фасад с `native` — 8 из 8 (с `thread_boundary_ui`: Windows-фикстура не компилируется,
+  macOS-фикстура не компилируется), `thread_boundary_ui` без фич — пройден; rustdoc `-D warnings
+  --document-private-items` с `native` и с `winit-backend`, фасад с `native`. Mac — Liquid Glass,
+  материал и тест `an_appkit_backdrop_goes_behind_the_content_and_comes_away` — в очереди
+  vanyastaff/flui#1840; `cross-typecheck` — в CI.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

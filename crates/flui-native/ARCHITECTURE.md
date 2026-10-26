@@ -99,17 +99,25 @@ trait depends on `flui-platform` instead.
   answers `None` for another host's window, and otherwise a view of the OS's
   window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
   host's. The facade publishes the `os` modules, through `flui_app::native`,
-  as `flui::native::<os>` behind its `native` feature (ADR-0254 §8). A view's
-  method does what it says or reports that it cannot: the AppKit backdrop
-  (`AppKitWindow::set_backdrop`, an `NSVisualEffectView` behind FLUI's view)
-  answers `MacOSBackdropError` for a closed window, a window off the AppKit
-  main lane and an effect view AppKit did not create. What a window is
-  created with on one OS is not an extension but a value of that OS's type in
-  the contract's `WindowOptions::os` (`OsWindowOptions::Windows`), which only
-  that OS's host reads: the Win32 window opens with its corners and title-bar
-  theme (`Win32WindowOptions`), and another host opens the window without
-  them, as a window that OS's extension has no view of. Two things name a
-  crate the list leaves out, each named in the
+  as `flui::native::<os>` behind its `native` feature (ADR-0254 §8), and
+  `flui_app::native::with_window` reaches the window a presentation is drawn
+  in. A view's method does what it says or reports that it cannot. A
+  `Win32Window` command or query first checks that its window still owns the
+  handle and that the call is on the window's owner thread
+  (`Win32WindowError::{Closed, NotOnTheOwnerThread}`), and a refusal of the
+  desktop window manager is `Refused` with its `HRESULT`; each attribute is a
+  constant that pairs its ordinal with its value's type, and each mapping is
+  one table read both ways. The AppKit backdrop (`AppKitWindow::set_backdrop`)
+  is an `NSVisualEffectView` material or Liquid Glass, an
+  `NSGlassEffectView` looked up by name (macOS 26; `NotOnThisSystem` before),
+  holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a
+  window off the AppKit main lane, a content view something else put there, a
+  view AppKit did not create and a corner radius that is not finite. What a
+  window is created with on one OS is not an extension but that OS's field of
+  the contract's `WindowOptions::os_options`, which only that OS's host reads:
+  the Win32 window opens with its corners and title-bar theme
+  (`Win32WindowOptions`). Two things name a crate the list leaves out, each
+  named in the
   manifest: the entry `android_platform(app)`, which takes the Activity
   (`entries`), and the implementations of `flui-semantics`'
   `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
@@ -117,9 +125,9 @@ trait depends on `flui-platform` instead.
   embedder does, through `raw-window-handle` (`win32_handle` in
   `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
   its loop on the main thread, pins that a headless and a winit window have
-  no Win32 view and a Win32 window has one, and that a Win32 window opens
-  with the corners and theme its options ask for while a headless or winit
-  window given them opens without.
+  no Win32 view and a Win32 window has one, that a Win32 window opens with
+  the corners and theme its options ask for, that its view refuses another
+  thread and a closed window, and, on a Mac, the AppKit backdrop's views.
 - **The owner thread's machinery lives in `owner/`, which names no feature
   (ADR-0151 §10).** `owner` holds the owner-thread capability (`OwnerPlatform`,
   `SharedPlatform`, `PlatformProxy`, `PendingWindow`, their errors, and the
