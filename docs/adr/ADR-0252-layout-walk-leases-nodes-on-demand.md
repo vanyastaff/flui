@@ -65,10 +65,10 @@ parent can hand a clean boundary new constraints.
    `from_tree` takes the lease. The test-only seed lookup reads the owner's map directly.
 
 5. **Dead code goes.** `SubtreeArena::new(ids, refs)`, its id map and the per-walk seed copy are
-   deleted. `collect_subtree_ids` stays for `remove_recursive`. **Planned, not an accepted
-   deviation:** the dry intrinsic-query walk (`query.rs`) still collects the subtree and uses
-   `get_subtree_mut`, with the same O(subtree) preparation; it moves to the lease, and
-   `get_subtree_mut` and `collect_disjoint_mut`'s subtree use are then deleted.
+   deleted, and so are `RenderTree::get_subtree_mut` and the query walks' up-front collection: the
+   dry intrinsic, layout and baseline queries (`query.rs`) enter nodes through the same lease
+   (`QueryWalk`), so they cost the nodes they visit. `collect_subtree_ids` stays for
+   `remove_recursive`.
 
 ## Diagram
 
