@@ -4,6 +4,7 @@
 
 use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
+use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 use flui_platform::{WindowMode, WindowOptions, WindowReveal};
 
 fn options(config: &AppConfig) -> WindowOptions {
@@ -63,6 +64,20 @@ fn the_mode_is_kept() {
     }
 }
 
+fn every_systems_options_are_kept() {
+    let os_options = OsWindowOptions::default().with_windows(
+        Win32WindowOptions::default().with_corner_preference(WindowsCornerPreference::DoNotRound),
+    );
+    assert_eq!(
+        options(&AppConfig::new().with_os_options(os_options.clone())).os_options,
+        os_options
+    );
+    assert_eq!(
+        options(&AppConfig::new()).os_options,
+        OsWindowOptions::default()
+    );
+}
+
 fn visibility_and_reveal_stay_the_options_own() {
     let defaults = WindowOptions::default();
     let converted = options(
@@ -90,6 +105,10 @@ fn config_to_options_keeps_every_field() {
             ("the_frame_flags_are_kept", the_frame_flags_are_kept as fn()),
             ("the_position_is_kept", the_position_is_kept as fn()),
             ("the_mode_is_kept", the_mode_is_kept as fn()),
+            (
+                "every_systems_options_are_kept",
+                every_systems_options_are_kept as fn(),
+            ),
             (
                 "visibility_and_reveal_stay_the_options_own",
                 visibility_and_reveal_stay_the_options_own as fn(),

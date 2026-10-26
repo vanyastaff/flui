@@ -190,6 +190,22 @@ impl WindowCommandQueues {
         })
     }
 
+    /// The window presented at `address`, while it is open.
+    #[cfg(feature = "native")]
+    pub(crate) fn window_for(
+        &self,
+        address: PresentationAddress,
+    ) -> Option<Arc<dyn PlatformWindow>> {
+        self.queues.borrow().iter().find_map(|(queue, handle)| {
+            let queue = queue.upgrade()?;
+            // A closed window keeps its queue until it is dropped; it is not
+            // handed out.
+            (queue.address == address && handle.capabilities().is_ok())
+                .then(|| queue.window.upgrade())
+                .flatten()
+        })
+    }
+
     fn live(&self) -> Vec<Rc<WindowQueue>> {
         self.queues
             .borrow()

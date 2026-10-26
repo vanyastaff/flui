@@ -2077,6 +2077,204 @@ graph LR
   колеса, видимость и lifecycle. Не запускалось: `cross-typecheck` (нет `zig`; job в CI),
   `web_browser` (нет ChromeDriver); Mac и iPhone — в очереди vanyastaff/flui#1840 (чтение флагов и бита
   перекрытия AppKit, шаг колеса AppKit, чтение CoreGraphics, `LinkPeriod` iOS) — только сборкой.
+- [x] **LY37** — ветка `platform/escape-hatch`, начата на вершине LY36 `0f1b0ac06`, перенесена на
+  `main` @ `8ff5a40d0` (LY36, дерево то же), затем на `main` @ `7eb6bdb7a` (#1899–#1907; конфликты
+  только в таблицах истории `docs/platform-parity.md` и `docs/gaps.md`, обе строки сохранены).
+  Фасад: фича `native` (выключена по умолчанию, Evolving, ADR-0089 п. 5) и `flui::native` —
+  `HostWindow`, `flui::native::windows` под `cfg(windows)` и `flui::native::macos` под
+  `cfg(target_os = "macos")`; фасад не зависит от ядра (`allowed-dependents` ядра — только
+  `flui-app`), поэтому путь идёт через `flui_app::native`, а в ядре расширения ОС ушли из корня в
+  `flui_native::os::{windows, macos}` (модуль `os` — `crate-level` в таблице `module-dag`).
+  Без фичи модуля нет: doctest фасада `compile_fail,E0432` на `use flui::native::HostWindow`, с
+  фичей — тот же doctest компилируется. `facade-combos` — 10 сочетаний (`--features native`).
+  Слот опций одной ОС (ADR-0254 п. 8), форма: `WindowOptions::os: OsWindowOptions`,
+  `#[non_exhaustive] enum { None (по умолчанию), Windows(Win32WindowOptions) }`, `with_os(impl
+  Into<OsWindowOptions>)`; типы — в контракте рядом со слотом, чистые данные на всех целях (кросс-
+  платформенный код задаёт их без своего `cfg`); читает только хост своей ОС (`_ =>` по умолчанию),
+  чужой хост (headless, winit, другая ОС) открывает окно без них, и это видно: расширение этой ОС
+  на таком окне отвечает `None`. Первое значение — `Win32WindowOptions { corner_preference:
+  WindowsCornerPreference, theme: WindowsTheme }`, по умолчанию то, что окно Win32 получало
+  жёстко (углы `Round`, тема пользователя): углы и тема — то, что хост задавал при создании без
+  выбора; Mica не тронута (материал фона — LY43). `WindowCornerPreference` переехал из ядра в
+  контракт как `WindowsCornerPreference`, `WindowsTheme` — тоже, без DWM-преобразований (они —
+  приватные функции хоста). Слот достижим из приложения: `AppConfig::os_window_options` и
+  `with_os_window_options`, `From<&AppConfig> for WindowOptions` его переносит. Решение записано в
+  ARCHITECTURE.md контракта («One operating system's creation options are one typed value»).
+  Материал macOS (бывший Liquid Glass) вернулся из git методами вида:
+  `AppKitWindow::set_backdrop(MacOSBackdrop) -> Result<(), MacOSBackdropError>` и
+  `clear_backdrop`. Решения сверх строки: (1) имя по тому, что рисуется: код до LY36 ставил
+  `NSVisualEffectView` с его материалами и называл это «приближением до API Liquid Glass»;
+  настоящий Liquid Glass — `NSGlassEffectView` (macOS 26, есть в `objc2-app-kit` 0.3.2), ему нужен
+  шлюз версии macOS, которого в `version/` нет, и прогон на Mac — следующая работа, не эта строка;
+  (2) убрано то, что принималось и не делалось: `blur_radius`, `tint`, `vibrancy` (у
+  `NSVisualEffectView` их нет), `is_available()` (запуск `sw_vers`, к тому же ложно отвечал «нет» на
+  macOS ниже 26, где материалы работают), дубль `ControlCenter` (тот же `hudWindow`, что
+  `Prominent`), `BlendingMode::WithinWindow` (у фона окна позади ничего нет) и прозрачный заголовок
+  (`FullSizeContentView` менял область содержимого, которую снимок окна не публиковал, а
+  `clear_liquid_glass` его не снимал); (3) метод делает работу или говорит, почему нет:
+  `Closed`, `NotOnTheMainLane` (вид AppKit живёт на главном потоке), `NoEffectView` (`init`
+  вернул nil); значения материала, смешивания и состояния — типы `objc2-app-kit`
+  (`NSVisualEffectMaterial` и др., `NSInteger`), а не `usize` старого кода, который не прошёл бы
+  проверку кодировок objc2 в debug; +1 эффект-вида и FLUI-вида держат `Retained`. Файл
+  `window/apple/liquid_glass.rs` не восстановлен: перечисление, ошибка и два метода — в
+  `window/apple/macos/ext.rs` рядом с видом. Вход ОС (`os_entry`) не добавлен: методы зовут AppKit,
+  а не принимают вызовы от него; `panic-boundary` — те же 169 входов.
+  Приложению `dyn HostWindow` сегодня не отдаёт ни один путь фасада (окно получают раннеры
+  `flui-app`): `flui::native` достижим из кода, открывающего окна через ядро (тесты, doctest'ы);
+  метод доступа к окну хоста из `WindowHandle` или `PresentationAddress` — следующая работа,
+  естественно — после LY44, которая переделывает владение окнами в раннерах.
+  Документы: строка в `docs/extending.md`, `docs/platform-parity.md` (материал фона macOS ❌ → 🟡,
+  macOS 28% → 29%, общий ~30%; заголовок и история), `docs/gaps.md` (записи 4 и 20, заголовок и
+  история), `docs/crates.md`, README и документация фасада (таблица фич), ARCHITECTURE.md ядра;
+  `changelog.d/platform-escape-hatch.md` (`### Added`, `### Changed`). Исключения `module-dag` не
+  менялись: 33.
+  Тесты: `tests/os_extensions.rs` ядра — новый случай
+  `a_win32_window_opens_with_its_options_and_another_host_without_them` (окна headless и winit с
+  опциями Win32 открываются, вида Win32 нет; окна Win32 с `DoNotRound`/`Dark` и
+  `RoundSmall`/`Light` читают углы и тему из DWM): без чтения опций хостом падает на `left: Round,
+  right: DoNotRound`, без темы из опций — на `left: Dark, right: Light`;
+  `an_appkit_backdrop_goes_behind_the_content_and_comes_away` — только сборкой (Mac, #1840).
+  Фасад — `tests/surface.rs` (`required-features = ["native"]`): каждый элемент `flui::native` по
+  пути фасада, `native_extensions_answer_none_on_a_foreign_host` (имя из подтверждения ADR-0254)
+  и `a_win32_window_narrows_through_the_facade` — настоящее окно Win32, суженное через
+  `flui::native::windows`, читает опции создания и меняет углы, тему и Mica Alt.
+  `flui-app` — строка `one_systems_options_are_kept` в `config_to_options_keeps_every_field`: без
+  переноса слота падает «failing cases: ["one_systems_options_are_kept"]». Doctest'ы:
+  `WindowsWindowExt`, `MacOSWindowExt` (на окне headless — `None`), `OsWindowOptions`.
+  Гейт API-замыкания: фасад не получил таблицы `targets` — гейт не идёт за реэкспортом элемента
+  workspace, так что сборка фасада с `native` на Windows и macOS проверяла бы только сами
+  реэкспорты, а содержимое `os::*` проверяет гейт ядра на шести целях; разовый прогон с временной
+  таблицей (`flui` на Windows с `native`) и `-p flui-native -p flui-platform -p flui-protocol` на
+  `1.99.0` с `RUSTC_BOOTSTRAP=1` и `RUSTDOCFLAGS=-D warnings` — 4 пакета чисто.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings --all-targets` всего workspace
+  (`--affected`: изменился корневой `Cargo.toml`), `-p flui-native -p flui-app` с
+  `winit-backend`, `-p flui --features native`; nextest `-p flui-platform -p flui-native -p
+  flui-app` — 363 (2 пропущены): 362 и `trybuild_ui::ui_tests`, с `winit-backend` — 359: 358 и он
+  же; его единственное расхождение — фикстура только для Windows
+  `tests/ui/windows/owner_thread_token_has_no_default.rs`, `.stderr` которой ждёт
+  `std::default::Default`, а rustc 1.99 печатает `Default` (файлов этой строки не касается, на
+  `main` так же; CI её не собирает); `os_extensions` — 2; фасад с `native` — 9; doctest'ы
+  `flui-native` (4 + 3), `flui-platform` (40 + 9), фасада без `native` (3 + 5, `compile_fail`) и с
+  ним (4 + 4); clippy для macOS lib `-p flui-platform -p flui-native` и `flui-native` с
+  `winit-backend`, iOS lib (`DOCS_RS=1`), wasm32 lib, Android `-p flui-native -p flui-app
+  --all-targets`; `flui-app` и фасад под Apple здесь не собираются (`psm` требует C-компилятор
+  цели) — их держит `cross-typecheck`; `wasm-check`, `wasm-test` — 50; `checks` (`module-dag` —
+  296 модулей, 33 исключения, и самотест; `globals` — 56; `panic-boundary` — 169 входов, без
+  изменений; `workspace` — 28 крейтов, 229 рёбер; `reach` — 69 сборок; `file-length`, `markers`,
+  `testing`, `docs-paths`, `changelog`), `doc-strict`, `facade-combos` — 10. WSL Ubuntu 24.04
+  (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform -p flui-native -p
+  flui-app`, с `winit-backend`, фасад с `native`; nextest `FLUI_HEADLESS=1` — 379: 378,
+  `x11_window_takes_commands_and_publishes_what_the_server_holds` падает на X-сервере WSLg, как в
+  LY29, LY34 и LY36; `--all-features` под xvfb — 297 из 297; rustdoc `-D warnings
+  --document-private-items` без фич и с `winit-backend`, фасад с `native`. Устройства не нужны
+  (Android не затронут). Окно Win32, суженное через `flui::native::windows`, — тест фасада
+  `a_win32_window_narrows_through_the_facade` на этой машине (Windows 11, сборка 26300; DWM
+  отдаёт углы и тему обратно). Не запускалось: `cross-typecheck` (нет `zig`; job в CI); Mac —
+  `flui::native::macos`, материал фона и `an_appkit_backdrop_goes_behind_the_content_and_comes_away`
+  в очереди vanyastaff/flui#1840.
+  После ревью PR #1910 (коммиты поверх, без перебазирования); где сказанное выше расходится с
+  этим абзацем, верен он. (1) Liquid Glass — настоящий: `MacOSBackdrop` — `Material(MacOSMaterial)`
+  (материалы `NSVisualEffectView`, как были) или `Glass(LiquidGlass { style: GlassStyle, tint:
+  Option<GlassTint>, corner_radius: Option<f64> })` — то, что применяет `NSGlassEffectView`
+  (`style`, `tintColor`, `cornerRadius`; сообщения вручную, `NSInteger` и `CGFloat`). Класс ищется по
+  имени при вызове (`AnyClass::get(c"NSGlassEffectView")`), без шлюза версии и `sw_vers`; до macOS 26
+  — `MacOSBackdropError::NotOnThisSystem`. `GlassTint::new` принимает только конечные каналы в
+  `0..=1`, радиус не конечный или отрицательный — `InvalidCornerRadius`. Код — в своём файле
+  `window/apple/macos/backdrop.rs` (механизм одного объекта ОС, правило 1); `MainThreadMarker`
+  берётся внутри маршрутизированного замыкания (`expect("BUG: …")`) и передаётся каждому шагу;
+  содержимое окна, которое не FLUI-вид и не эффект/стекло, держащее его (`isKindOfClass:` и
+  `superview`/`contentView`), — `ForeignContentView`, а не сообщение неизвестному селектору;
+  `Retained::retain` вида FLUI — `expect("BUG: …")`, ошибкой `Closed` он больше не притворяется.
+  Стекло каждый раз — новый вид (вход `None` — умолчание AppKit), материал поверх материала
+  меняется на месте. (2) Долговременная проверка R3.9: гейт API-замыкания не идёт за реэкспортом
+  элемента workspace (его «Limit», `tools/xtask/src/api_closure.rs`), так что таблица фасада
+  проверяла бы только сами реэкспорты; вместо неё — fixtures trybuild фасада `tests/ui/native/`
+  (`host_window_needs_native` — без фичи не компилируется, с ней компилируется;
+  `windows_extension_needs_windows` и `macos_extension_needs_macos` — с фичей вне своей ОС не
+  компилируются, на своей — компилируются; `.stderr` для Windows-фикстуры снят на Linux), doctest
+  `compile_fail,E0432` (job `doc-test`, фасад без фич) и `flui/native` в `TEST_FEATURES` xtask
+  (`test` и `test-trybuild` в CI идут с ним, так что `tests/surface.rs` и фикстуры исполняются);
+  OS-типы в сигнатурах ядра держит гейт ядра на шести целях. (3) Путь приложения к окну:
+  `flui_app::native::with_window(address, f) -> Option<R>` (фасад — `flui::native::with_window`):
+  адрес — тот, к которому разрешается запрос окна или который называет запрос закрытия, как у
+  `window_handle`; раннер в `presentation_window` (единственное место, где результат
+  `open_window` становится окном UI runtime) кладёт `Weak<dyn HostWindow>` в `AppRuntime`, а поиск
+  идёт от окна очереди команд адреса по адресу выделения (`Arc::as_ptr`), не по `WindowId`, который
+  ОС переиспользует; `f` вызывается вне заимствований runtime, на чужом потоке, по пустому адресу
+  и после ухода презентации — `None`. Виджету, у которого есть только `WindowHandle`, адрес пока
+  не достаётся — это записано в документации `flui::native` (обработчик окна при открытии, LY44).
+  (4) `flui_app::native` — за новой фичей `native` у `flui-app` (выключена — модуля и списка окон
+  нет), фича фасада — `native = ["flui-app/native"]`. (5) Каждая команда и запрос `Win32Window`
+  отвечает `Result<_, Win32WindowError>`: `Closed` и `NotOnTheOwnerThread` (сначала проверяется,
+  что окно всё ещё владеет HWND и вызов на его потоке, через `with_window_context_checked`, так что
+  чужой HWND с тем же значением не тронут), `Refused { request, hresult }` (в т. ч. углы на Windows
+  10), `Unrecognized { request, value }`, `NotOnThisHost` (значение контракта новее хоста);
+  переименованы `set_snap_layouts`, `snap_layouts`, `set_blur_behind`, `dark_mode`; удалён дубль
+  `set_caption_color`. (6) Слот — структура: `WindowOptions::os_options: OsWindowOptions { windows:
+  Option<Win32WindowOptions> }` (`with_os_options`, `OsWindowOptions::with_windows`), то же имя в
+  `AppConfig` (`os_options`, `with_os_options`); опции двух ОС больше не вытесняют друг друга.
+  (7) Типы — в публичном модуле контракта `flui_platform::os_options`, не в корне; все
+  `#[non_exhaustive]`. ADR-0089 даёт уровень крейту, не модулю (§1: обещание следует за элементом),
+  так что они Stable; выбрана наименее обязывающая форма — `#[non_exhaustive]`, построение от
+  `Default` и `with_*`, никаких преобразований в значения ОС; это записано в документации модуля и
+  в ARCHITECTURE.md контракта. (8) В `backdrop.rs` Win32 атрибут DWM — константа `Attribute<T>`,
+  связывающая ординал крейта `windows` (`DWMWA_*`) с типом значения (обязательство `unsafe`
+  выполняется в одном месте, при объявлении); углы и материал — по одной таблице
+  (`DWMWCP_*`, `DWMSBT_*`), читаемой в обе стороны; модуль `dwm_attributes` и ручные числа ушли.
+  `WindowsBackdrop` — `#[non_exhaustive]`, `Auto` добавлен, `Tabbed` (тот же `DWMSBT_TABBEDWINDOW`,
+  что `MicaAlt`) удалён. (9) Тесты: `os_extensions` — `a_win32_window_opens_with_its_options`
+  (повтор «чужого хоста» удалён), новый `a_win32_view_refuses_another_thread_and_a_closed_window`
+  (с обходом проверки HWND падает на `left: Ok(()), right: Err(NotOnTheOwnerThread)`),
+  `an_appkit_backdrop_goes_behind_the_content_and_comes_away` проверяет класс содержимого,
+  материал (`material`), стиль стекла и `contentView`, что вид FLUI — подвид эффекта и первый
+  ответчик, и что снятие возвращает его содержимым (только сборкой, #1840); `flui-app` —
+  `with_window_reaches_the_host_window_of_its_presentation_and_no_other` (без регистрации окна в
+  `presentation_window` падает на `left: None, right: Some(true)`) и строка
+  `every_systems_options_are_kept`; фасад — `with_window_answers_none_where_nothing_is_presented`;
+  в `backdrop.rs` Win32 — `each_mapping_is_one_table_read_both_ways`. Документы: parity (Liquid
+  Glass 🟡 до прогона, #1840), gaps (записи 4 и 20), extending, ARCHITECTURE.md ядра и контракта,
+  README, `docs/testing.md` (`flui/native` в области тестов), changelog.
+  Проверки после ревью (Windows): `cargo fmt`, `taplo fmt`; clippy `-D warnings --all-targets`
+  всего workspace, `-p flui-app -p flui` с `flui/native`, `-p flui-native -p flui-app` с
+  `winit-backend` и `flui-app/native`; macOS lib `-p flui-platform -p flui-native` и с
+  `winit-backend`, iOS lib (`DOCS_RS=1`), wasm32 lib `-p flui-native -p flui-app` с `native`,
+  Android `--all-targets` с `native` (тесты под macOS здесь не собираются: `psm` требует
+  C-компилятор цели); nextest `-p flui-platform -p flui-native -p flui-app` с `native` — 364 из
+  364 (`trybuild_ui` ядра исключён: расхождение `std::default::Default` прежнее), с
+  `winit-backend` — 360 из 360, фасад с `native` — 10 из 10 (`thread_boundary_ui` с фикстурами
+  `native` на Windows), `xtask` — 50; doctest'ы ядра (4 + 3), контракта (40 + 9), фасада без
+  `native` (3 + 5) и с ним, вместе с `flui-app` (4 + 4, 3 + 1); `checks` (`module-dag` — 296
+  модулей, 33 исключения; `globals` — 56; `panic-boundary` — 169 входов: методы зовут AppKit и
+  DWM, входов ОС не прибавилось), `facade-combos` — 10, `doc-strict`, `wasm-check`, `wasm-test` —
+  51. WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform
+  -p flui-native -p flui-app` с `flui-app/native`, с `winit-backend`, фасад с `native`; nextest
+  `FLUI_HEADLESS=1` с `native` — 380: 379 и прежний X11 на WSLg; `--all-features` под xvfb — 297
+  из 297; фасад с `native` — 8 из 8 (с `thread_boundary_ui`: Windows-фикстура не компилируется,
+  macOS-фикстура не компилируется), `thread_boundary_ui` без фич — пройден; rustdoc `-D warnings
+  --document-private-items` с `native` и с `winit-backend`, фасад с `native`. Mac — Liquid Glass,
+  материал и тест `an_appkit_backdrop_goes_behind_the_content_and_comes_away` — в очереди
+  vanyastaff/flui#1840; `cross-typecheck` — в CI.
+  Слияние `main` @ `9d091b190` (LY38) слиянием, без перебазирования: конфликты — корень
+  `flui-native/src/lib.rs` (LY38 добавил `UnknownDisplay` к реэкспорту `window::headless`, ветка
+  убрала оттуда расширения ОС: оставлены оба) и раздел хода исполнения (записи LY37 и LY38 обе);
+  parity и gaps слились сами. Словарь LY38 принят: `MacOSBackdropError::{Closed, NotOnThisSystem}`
+  и `Win32WindowError::{Closed, NotOnThisHost}` стали `Unsupported(Unsupported)` — закрытое окно
+  `NoWindow`, нет `NSGlassEffectView` — `NotOnThisDevice` (сборка ОС без класса), значение
+  контракта новее хоста — `NotOnThisPlatform`; `NotOnTheOwnerThread`, `Refused`, `Unrecognized`,
+  `NotOnTheMainLane`, `NoBackdropView`, `ForeignContentView`, `InvalidCornerRadius` остались своими:
+  это не отсутствие. Линты macOS-теста, которые нашёл `cross-typecheck (aarch64-apple-darwin)`:
+  чтения дерева AppKit — типизированный API `objc2-app-kit` (`NSView::window`,
+  `NSWindow::{contentView, firstResponder}`, `NSObjectProtocol::isKindOfClass`,
+  `Retained::downcast::<NSVisualEffectView>()` и `material()`), `unsafe` осталось в трёх функциях
+  с `#[expect(unsafe_code, reason = …)]` и `SAFETY:` на блоке — `Retained::retain` вида FLUI из
+  raw handle, `-[NSView superview]` (в `objc2-app-kit` он unsafe) и свойства `NSGlassEffectView`
+  (`style`, `contentView`), которых `objc2-app-kit` без своей фичи не даёт; лишний импорт
+  `HasWindowHandle` ушёл, `match` на `Option` стал `if let … else`, сравнения видов —
+  `std::ptr::from_ref` (`borrow_as_ptr`). Тесты macOS теперь проверяются здесь: clippy
+  `-p flui-native --all-targets --target aarch64-apple-darwin` (и с `winit-backend`), а также
+  `-p flui -p flui-app -p flui-native -p flui-platform --all-targets` с фичами job'а, — с C-сборкой
+  `psm` через LLVM (`CC_aarch64_apple_darwin=clang`, `AR_…=llvm-ar`,
+  `CFLAGS_…=--target=arm64-apple-macos11`): чисто; `cargo-zigbuild` job'а здесь нет.
 - [x] **LY38** — ветка `platform/unsupported`, от `main` @ `fc8f8ebaa` (LY34), `main` @ `7eb6bdb7a`
   влит слиянием (LY35, LY36, LY88, LY90 и #1899–#1907). Восемь коммитов по шагам строки: словарь,
   встраивание и потребители, оконные позиции, рёбра Win32 и headless, рёбра Apple, закрытые

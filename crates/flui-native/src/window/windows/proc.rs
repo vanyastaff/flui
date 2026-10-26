@@ -158,11 +158,13 @@ pub(crate) struct WindowContext {
     pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
-    /// The system appearance last applied to this window's chrome and
-    /// reported to `on_appearance_changed`.
+    /// The user's app theme as last sampled and reported to
+    /// `on_appearance_changed`; the chrome is drawn in it while
+    /// `chrome_follows_system`.
     pub appearance: std::cell::Cell<WindowAppearance>,
     /// Whether the title bar follows the system theme; `false` once the app
-    /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
+    /// chose it through `Win32Window::set_dark_mode` or `set_theme`, or opened
+    /// with a theme of its own (`Win32WindowOptions::theme`).
     pub chrome_follows_system: std::cell::Cell<bool>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
@@ -1303,7 +1305,8 @@ impl WindowProc {
                         let appearance = super::backdrop::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
                             if ctx.chrome_follows_system.get() {
-                                super::backdrop::apply_chrome(hwnd, appearance);
+                                // A build that refuses the attribute keeps its chrome.
+                                let _ = super::backdrop::apply_chrome(hwnd, appearance);
                             }
                             ctx.callbacks.dispatch_appearance_changed();
                         }

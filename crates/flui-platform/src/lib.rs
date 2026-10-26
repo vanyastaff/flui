@@ -119,6 +119,7 @@ pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
 mod locale;
+pub mod os_options;
 mod placement;
 mod platform_window;
 pub mod pointer;

@@ -689,7 +689,11 @@ edge-exceptions = [
 # cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
 # trybuild inputs to rustc by glob.
 [package.metadata.cargo-shear]
-ignored-paths = ["tests/ui/thread_boundary/*.rs", "tests/ui/unstable_input/*.rs"]
+ignored-paths = [
+    "tests/ui/thread_boundary/*.rs",
+    "tests/ui/unstable_input/*.rs",
+    "tests/ui/native/*.rs",
+]
 
 [lints]
 workspace = true
@@ -804,6 +808,15 @@ gpu-readback-tests = []
 # feature for packages. The platform crates build the types regardless.
 unstable-input = []
 
+# === The escape hatch ===
+# Additive and Evolving (ADR-0089 §5, ADR-0254 §8). Publishes `flui::native`:
+# `HostWindow`, `with_window` (the window a presentation is drawn in) and, on
+# Windows and macOS, `flui::native::windows` and `flui::native::macos`, what one
+# operating system's windows offer beyond the window contract. It turns on
+# `flui-app`'s `native`, which keeps the list of host windows `with_window`
+# reads; the core host builds the extensions regardless.
+native = ["flui-app/native"]
+
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs
 # its hook with `AppConfig::with_dev_reload` (ADR-0094 §1), and flui-app names
@@ -866,6 +879,13 @@ required-features = ["gpu-readback-tests"]
 name = "agent_workflow"
 path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
+
+# The escape hatch's surface: each `flui::native` item through its facade path,
+# and a window of each host narrowed through it.
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["native"]
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary

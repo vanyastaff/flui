@@ -280,6 +280,13 @@ pub(crate) struct AppRuntime {
     /// The commands application code queued for its windows; applied at the
     /// start of each owner turn.
     pub(super) window_commands: Rc<super::window_control::WindowCommandQueues>,
+    /// The windows the runner presents, as the host handed them out, for the
+    /// escape hatch (`flui_app::native::with_window`): the window a command
+    /// queue reaches is found here by allocation, never by a numeric id the
+    /// operating system may reuse.
+    #[cfg(feature = "native")]
+    pub(super) native_windows:
+        std::cell::RefCell<Vec<std::sync::Weak<dyn flui_native::HostWindow>>>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
@@ -493,6 +500,8 @@ impl AppRuntime {
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
             window_commands: Rc::default(),
+            #[cfg(feature = "native")]
+            native_windows: std::cell::RefCell::default(),
             session_end: None,
             host_memory: Arc::default(),
             #[cfg(all(

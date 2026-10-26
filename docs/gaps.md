@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-26 · **Change:** minor (entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -99,6 +99,10 @@ request.
   - unplugging a monitor on Windows
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
+  ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
+- The macOS extension `flui::native::macos` is type-checked only: neither the backdrop material
+  behind the content, nor Liquid Glass (`NSGlassEffectView`, macOS 26), nor the narrowing of an
+  AppKit window to its view has run on a Mac
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
@@ -241,7 +245,7 @@ request.
 > **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
 
 - Backdrop materials, transparency, icon, capture exclusion.
-- Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux.
+- Windows forces Mica; the macOS backdrop material and Liquid Glass (`flui::native::macos`) have never run on a Mac; no window icon on Windows or Linux.
 
 ### 21. Unaudited rows
 
@@ -460,5 +464,6 @@ request.
 | 2026-10-22 | minor | Entry 30 closes: `cargo xtask panic-boundary` holds every OS entry into the core host (169: extern fns, Objective-C and COM methods, AccessKit handlers, blocks, delegates and GCD work items) to a constant or one call of `owner::panic_boundary::os_entry`; the AppKit, UIKit, Win32 and Android entries it found unguarded go through it now, and the Apple ones, type-checked only, join entry 4's runs still owed ([#1840](https://github.com/vanyastaff/flui/issues/1840)); entries 31–40 become 30–39 |
 | 2026-10-26 | minor | Entry 15: the interaction layer has the pointer frame (`dispatch_pointer_frame_on`, `pointer_frame_end`); no backend reports frames yet. Follow-ups: Win32 `GetPointerFrameInfoHistory`, Android `ACTION_MOVE` with all pointers, Wayland `wl_touch.frame`, iOS touch sets |
 | 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
+| 2026-10-26 | minor | Entry 20: the macOS backdrop material and Liquid Glass come back through the escape hatch `flui::native::macos` (`AppKitWindow::set_backdrop`), type-checked only and listed in [#1840](https://github.com/vanyastaff/flui/issues/1840); Windows still forces Mica |
 
 </details>

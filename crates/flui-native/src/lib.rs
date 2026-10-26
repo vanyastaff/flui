@@ -203,6 +203,7 @@ mod hosts;
 pub mod input;
 pub use input::event_timestamp_ns;
 mod lifecycle;
+pub mod os;
 mod owner;
 mod platform;
 mod preferences;
@@ -266,19 +267,6 @@ pub use owner::headless::{
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{HeadlessWindowPolicy, MockWindow, UnknownDisplay};
-// The extensions an application reaches a native host's window by: each is
-// implemented for `dyn HostWindow`, and its one method answers `None` for a
-// window of another host or a typed view of the OS's window (ADR-0151 §8). The
-// windows themselves, and the OS types they hold, are not public; a raw handle
-// leaves through `raw-window-handle`.
-#[cfg(target_os = "macos")]
-pub use window::apple::macos::{
-    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
-};
-#[cfg(windows)]
-pub use window::windows::backdrop::{
-    Win32Window, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
-};
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
 pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
@@ -403,10 +391,10 @@ pub use owner::{
 ///
 /// #[cfg(windows)]
 /// {
-///     use flui_native::{WindowsBackdrop, WindowsWindowExt};
+///     use flui_native::os::windows::{WindowsBackdrop, WindowsWindowExt};
 ///     // A Win32 window's view; `None` under `FLUI_HEADLESS`.
 ///     if let Some(win32) = window.win32() {
-///         win32.set_backdrop(WindowsBackdrop::Mica);
+///         win32.set_backdrop(WindowsBackdrop::Mica)?;
 ///     }
 /// }
 /// ```

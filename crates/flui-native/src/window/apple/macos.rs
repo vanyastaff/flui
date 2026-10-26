@@ -3,10 +3,11 @@
 //! inside a view's display pass, the owner's `display_pass`, decides how a
 //! redraw is asked for), and [`MacOSWindows`], what the windows open with.
 //!
-//! Two parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
-//! one AppKit object with the handlers of what it reports; and [`ext`],
+//! Three parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
+//! one AppKit object with the handlers of what it reports; [`ext`],
 //! [`MacOSWindowExt`] and the [`AppKitWindow`] it gives, the public AppKit
-//! features beyond the cross-platform window.
+//! features beyond the cross-platform window; and [`backdrop`], the view
+//! behind the content ([`MacOSBackdrop`]: a material or Liquid Glass).
 //!
 //! The loop holds the windows it tracks as `CallbackWindow`s
 //! (`owner::apple::macos`).
@@ -19,9 +20,13 @@
 // API this file has not moved to yet.
 #![expect(deprecated)]
 
+pub(crate) mod backdrop;
 pub(crate) mod delegate;
 pub(crate) mod ext;
 
+pub use backdrop::{
+    GlassStyle, GlassTint, LiquidGlass, MacOSBackdrop, MacOSBackdropError, MacOSMaterial,
+};
 use delegate::{create_window_delegate, display_of_screen};
 pub use ext::{
     AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,

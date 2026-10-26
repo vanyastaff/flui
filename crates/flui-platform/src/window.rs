@@ -8,6 +8,7 @@
 
 use flui_foundation::geometry::{Point, Size};
 
+use crate::os_options::OsWindowOptions;
 use crate::{Unsupported, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
@@ -123,6 +124,10 @@ pub struct WindowOptions {
     pub normal_geometry: Option<WindowGeometry>,
     /// How early pointer samples reach the window; see [`InputLatency`].
     pub input_latency: InputLatency,
+    /// What the window is created with on each operating system that has
+    /// options of its own, each read only by that system's host; see
+    /// [`OsWindowOptions`].
+    pub os_options: OsWindowOptions,
 }
 
 impl WindowOptions {
@@ -216,6 +221,14 @@ impl WindowOptions {
         self.input_latency = input_latency;
         self
     }
+
+    /// Set what the window is created with on each operating system that has
+    /// options of its own.
+    #[must_use]
+    pub fn with_os_options(mut self, os_options: OsWindowOptions) -> Self {
+        self.os_options = os_options;
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -234,6 +247,7 @@ impl Default for WindowOptions {
             mode: WindowMode::Normal,
             normal_geometry: None,
             input_latency: InputLatency::Balanced,
+            os_options: OsWindowOptions::default(),
         }
     }
 }

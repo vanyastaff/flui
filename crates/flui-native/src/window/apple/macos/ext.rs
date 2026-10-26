@@ -1,19 +1,9 @@
 //! macOS-specific window extensions: [`MacOSWindowExt`], how an application
 //! reaches the AppKit features beyond the cross-platform window — tabs,
-//! native fullscreen, level, collection behavior, shadow and alpha — on any
-//! window a host hands out, and [`AppKitWindow`], what each asks of the AppKit
-//! window.
-//!
-//! ```rust,ignore
-//! use flui_native::{HostWindow, MacOSWindowExt, MacOSWindowLevel};
-//!
-//! fn float(window: &dyn HostWindow) {
-//!     // A window of another host is not an AppKit window: nothing is asked of it.
-//!     if let Some(appkit) = window.appkit() {
-//!         appkit.set_window_level(MacOSWindowLevel::Floating);
-//!     }
-//! }
-//! ```
+//! native fullscreen, level, collection behavior, shadow, alpha and the
+//! material behind the content — on any window a host hands out
+//! (`flui_native::os::macos`), and [`AppKitWindow`], what each asks of the
+//! AppKit window.
 
 use std::sync::atomic::Ordering;
 
@@ -32,6 +22,28 @@ use crate::host_window::HostWindow;
 /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
 /// host (headless, winit) is not an AppKit window: [`appkit`](Self::appkit)
 /// answers `None` for it, and nothing is asked of it.
+///
+/// ```
+/// use flui_native::os::macos::{MacOSBackdrop, MacOSMaterial, MacOSWindowExt};
+/// use flui_native::{HostWindow, headless_platform};
+/// use flui_platform::WindowOptions;
+///
+/// /// The sidebar material behind the window, if it is an AppKit window.
+/// fn sidebar(window: &dyn HostWindow) -> bool {
+///     window
+///         .appkit()
+///         .is_some_and(|appkit| {
+///             appkit
+///                 .set_backdrop(MacOSBackdrop::Material(MacOSMaterial::Sidebar))
+///                 .is_ok()
+///         })
+/// }
+///
+/// // A headless window is not an AppKit window: nothing is asked of it.
+/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// assert!(!sidebar(window.as_ref()));
+/// # Ok::<(), flui_native::OpenWindowError>(())
+/// ```
 ///
 /// # Platform Availability
 ///
@@ -54,7 +66,7 @@ impl MacOSWindowExt for dyn HostWindow + '_ {
 /// [`MacOSWindowExt::appkit`] gives one only for an AppKit window, so none of
 /// these can meet another host's window.
 #[derive(Debug, Clone, Copy)]
-pub struct AppKitWindow<'a>(&'a MacOSWindow);
+pub struct AppKitWindow<'a>(pub(super) &'a MacOSWindow);
 
 /// Why two windows were not joined as tabs ([`AppKitWindow::add_tab_to_window`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -240,7 +252,7 @@ impl AppKitWindow<'_> {
     /// cannot establish that ownership:
     ///
     /// ```compile_fail,E0308
-    /// use flui_native::{AppKitWindow, TabJoinError};
+    /// use flui_native::os::macos::{AppKitWindow, TabJoinError};
     ///
     /// fn join(window: AppKitWindow<'_>) -> Result<(), TabJoinError> {
     ///     window.add_tab_to_window(1)
@@ -248,7 +260,8 @@ impl AppKitWindow<'_> {
     /// ```
     ///
     /// ```no_run
-    /// use flui_native::{HostWindow, MacOSWindowExt, TabJoinError};
+    /// use flui_native::HostWindow;
+    /// use flui_native::os::macos::{MacOSWindowExt, TabJoinError};
     ///
     /// fn join(window: &dyn HostWindow, other: &dyn HostWindow) -> Option<Result<(), TabJoinError>> {
     ///     window.appkit().map(|appkit| appkit.add_tab_to_window(other))

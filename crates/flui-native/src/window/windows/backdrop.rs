@@ -3,27 +3,32 @@
 //! theme, and the light or dark chrome that follows the user's app theme.
 //!
 //! [`WindowsWindowExt`] is how a Windows application reaches these on any
-//! window a host hands out: [`WindowsWindowExt::win32`] is `None` for a window
-//! of another host, and the [`Win32Window`] it gives otherwise has no other
-//! way to fail. [`system_appearance`] and [`apply_chrome`] are what the window
-//! procedure applies when the theme changes.
+//! window a host hands out (`flui_native::os::windows`):
+//! [`WindowsWindowExt::win32`] is `None` for a window of another host, and
+//! every command of the [`Win32Window`] it gives otherwise does what it says
+//! or answers why not ([`Win32WindowError`]). [`system_appearance`] and
+//! [`apply_chrome`] are what the window procedure applies when the theme
+//! changes; [`apply_corners`] and [`opening_chrome`] are what a window opens
+//! with (`flui_platform::os_options::Win32WindowOptions`).
 //!
-//! ```rust,ignore
-//! use flui_native::{HostWindow, WindowsBackdrop, WindowsWindowExt};
-//!
-//! fn decorate(window: &dyn HostWindow) {
-//!     // A window of another host is not a Win32 window: nothing is asked of it.
-//!     if let Some(win32) = window.win32() {
-//!         win32.set_backdrop(WindowsBackdrop::Mica);
-//!         win32.enable_snap_layouts();
-//!     }
-//! }
-//! ```
+//! Each desktop window manager attribute is an [`Attribute`] constant that
+//! pairs its ordinal with the type of its value, and each mapping between a
+//! FLUI value and the system's is one table read both ways.
+
+use std::marker::PhantomData;
 
 use flui_foundation::geometry::Point;
-use flui_platform::{Brightness, WindowAppearance};
+use flui_platform::os_options::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
+use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowAppearance};
 use windows::Win32::Foundation::{FALSE, HWND, TRUE};
-use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
+use windows::Win32::Graphics::Dwm::{
+    DWM_BB_ENABLE, DWM_BLURBEHIND, DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE,
+    DWMSBT_AUTO, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
+    DWMWA_CAPTION_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL, DWMWINDOWATTRIBUTE,
+    DwmEnableBlurBehindWindow, DwmGetWindowAttribute, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::HRGN;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -35,9 +40,10 @@ use windows::core::w;
 
 use super::WindowsWindow;
 use crate::host_window::HostWindow;
+use crate::owner::hwnd_affinity::UserDataRefusal;
 
 // ============================================================================
-// Windows Window Extension Trait
+// The extension and its view
 // ============================================================================
 
 /// Windows-specific window extensions.
@@ -46,12 +52,23 @@ use crate::host_window::HostWindow;
 /// host (headless, winit) is not a Win32 window: [`win32`](Self::win32) answers
 /// `None` for it, and nothing is asked of it.
 ///
-/// # Platform Availability
+/// ```
+/// use flui_native::os::windows::{WindowsBackdrop, WindowsWindowExt};
+/// use flui_native::{HostWindow, headless_platform};
+/// use flui_platform::WindowOptions;
 ///
-/// - **Mica/Acrylic Materials:** Windows 11 Build 22000+
-/// - **Snap Layouts:** Windows 11 Build 22000+
-/// - **Rounded Corners:** Windows 11 Build 22000+
-/// - **DWM Composition:** Windows Vista+
+/// /// Mica behind the window, if it is a Win32 window that took it.
+/// fn mica(window: &dyn HostWindow) -> bool {
+///     window
+///         .win32()
+///         .is_some_and(|win32| win32.set_backdrop(WindowsBackdrop::Mica).is_ok())
+/// }
+///
+/// // A headless window is not a Win32 window: nothing is asked of it.
+/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// assert!(!mica(window.as_ref()));
+/// # Ok::<(), flui_native::OpenWindowError>(())
+/// ```
 pub trait WindowsWindowExt {
     /// This window's Win32 extras, or `None` for a window of another host.
     #[must_use]
@@ -68,161 +85,242 @@ impl WindowsWindowExt for dyn HostWindow + '_ {
 /// manager's backdrop, corners, title bar and theme, Snap Layouts, and the
 /// window's DPI. [`WindowsWindowExt::win32`] gives one only for a Win32
 /// window, so none of these can meet another host's window.
+///
+/// A Win32 window's attributes are changed and read on its owner thread, the
+/// thread that created it; every command and query does what it says or
+/// answers why not ([`Win32WindowError`]), and none reaches a handle the
+/// window no longer owns.
 #[derive(Debug, Clone, Copy)]
 pub struct Win32Window<'a>(&'a WindowsWindow);
 
+/// Why a [`Win32Window`] command or query did not do what it was asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum Win32WindowError {
+    /// Not here, in the contract's vocabulary: the window is closed
+    /// ([`UnsupportedReason::NoWindow`]), or the value is one of the contract
+    /// newer than this host ([`UnsupportedReason::NotOnThisPlatform`]).
+    #[error(transparent)]
+    Unsupported(#[from] Unsupported),
+    /// The call came from another thread than the window's owner thread, the
+    /// one that created it.
+    #[error("the call is not on the window's owner thread")]
+    NotOnTheOwnerThread,
+    /// The system refused the request: this Windows build does not know it
+    /// (the corners need Windows 11 build 22000, a system backdrop build
+    /// 22621), or it refused the value.
+    #[error("the system refused `{request}` (HRESULT {hresult:#010x})")]
+    Refused {
+        /// The system call or attribute that was refused.
+        request: &'static str,
+        /// The `HRESULT` it failed with.
+        hresult: i32,
+    },
+    /// The system reported a value this host has no FLUI value for.
+    #[error("the system reported {value} for `{request}`, which this host does not know")]
+    Unrecognized {
+        /// The attribute that was read.
+        request: &'static str,
+        /// The value it held.
+        value: i32,
+    },
+}
+
+impl Win32WindowError {
+    /// The window is closed.
+    const CLOSED: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NoWindow));
+    /// A value of the contract newer than this host.
+    const NOT_ON_THIS_HOST: Self =
+        Self::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
+}
+
 // ============================================================================
-// Windows Backdrop Material
+// Backdrop material
 // ============================================================================
 
-/// Windows backdrop material types.
-///
-/// Provides modern translucent effects for Windows 11.
+/// The material the desktop window manager draws behind a window
+/// (`DWM_SYSTEMBACKDROP_TYPE`, Windows 11 build 22621 and later).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WindowsBackdrop {
-    /// No backdrop effect (opaque window).
+    /// As the desktop window manager decides.
+    Auto,
+    /// None: an opaque window.
     None,
-
-    /// Mica material - subtle translucent effect (Windows 11).
-    ///
-    /// Mica is a subtle, semi-transparent material that shows the desktop
-    /// wallpaper. Best for app backgrounds.
+    /// Mica, the long-lived window's material: a tint of the desktop
+    /// wallpaper.
     Mica,
-
-    /// Mica Alt material - darker variant (Windows 11).
-    ///
-    /// Similar to Mica but with darker tinting for better contrast.
+    /// Mica Alt, Mica with a stronger tint, behind a window with tabs in its
+    /// title bar.
     MicaAlt,
-
-    /// Acrylic material - blurred translucent effect (Windows 10/11).
-    ///
-    /// Acrylic provides a frosted-glass effect with blur and noise texture.
-    /// Best for surfaces like sidebars and panels.
+    /// Acrylic, a transient surface's material: a blur of what is behind the
+    /// window.
     Acrylic,
+}
 
-    /// Tabbed backdrop (Windows 11 22H2+).
+/// Every backdrop and the system's value for it, read both ways.
+const BACKDROPS: [(WindowsBackdrop, DWM_SYSTEMBACKDROP_TYPE); 5] = [
+    (WindowsBackdrop::Auto, DWMSBT_AUTO),
+    (WindowsBackdrop::None, DWMSBT_NONE),
+    (WindowsBackdrop::Mica, DWMSBT_MAINWINDOW),
+    (WindowsBackdrop::MicaAlt, DWMSBT_TABBEDWINDOW),
+    (WindowsBackdrop::Acrylic, DWMSBT_TRANSIENTWINDOW),
+];
+
+/// Every corner preference and the system's value for it, read both ways.
+const CORNERS: [(WindowsCornerPreference, DWM_WINDOW_CORNER_PREFERENCE); 4] = [
+    (WindowsCornerPreference::Default, DWMWCP_DEFAULT),
+    (WindowsCornerPreference::DoNotRound, DWMWCP_DONOTROUND),
+    (WindowsCornerPreference::Round, DWMWCP_ROUND),
+    (WindowsCornerPreference::RoundSmall, DWMWCP_ROUNDSMALL),
+];
+
+/// The system's value for `value`, from its table.
+fn to_system<F: PartialEq + Copy, S: Copy>(table: &[(F, S)], value: F) -> Option<S> {
+    table
+        .iter()
+        .find(|(flui, _)| *flui == value)
+        .map(|(_, system)| *system)
+}
+
+/// The FLUI value for the system's `value`, from the same table.
+fn from_system<F: Copy, S: PartialEq + Copy>(table: &[(F, S)], value: S) -> Option<F> {
+    table
+        .iter()
+        .find(|(_, system)| *system == value)
+        .map(|(flui, _)| *flui)
+}
+
+// ============================================================================
+// The desktop window manager's attributes
+// ============================================================================
+
+/// One desktop window manager attribute and the type of its value.
+#[derive(Clone, Copy)]
+struct Attribute<T> {
+    id: DWMWINDOWATTRIBUTE,
+    name: &'static str,
+    value: PhantomData<fn() -> T>,
+}
+
+impl<T> Attribute<T> {
+    /// # Safety
     ///
-    /// Optimized for tabbed interfaces.
-    Tabbed,
-}
-
-impl WindowsBackdrop {
-    /// Convert to DWM_SYSTEMBACKDROP_TYPE value.
-    ///
-    /// Maps to the Windows 11 DwmSetWindowAttribute DWMWA_SYSTEMBACKDROP_TYPE
-    /// values.
-    pub fn to_dwm_value(self) -> i32 {
-        match self {
-            WindowsBackdrop::None => 1, // DWMSBT_NONE
-            WindowsBackdrop::Mica => 2, // DWMSBT_MAINWINDOW (Mica)
-            // DWMSBT_TABBEDWINDOW backs both Mica Alt and Tabbed.
-            WindowsBackdrop::MicaAlt | WindowsBackdrop::Tabbed => 4,
-            WindowsBackdrop::Acrylic => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
-        }
-    }
-
-    /// Check if this backdrop requires Windows 11.
-    pub fn requires_windows_11(self) -> bool {
-        !matches!(self, WindowsBackdrop::None | WindowsBackdrop::Acrylic)
-    }
-}
-
-// ============================================================================
-// Window Corner Preference
-// ============================================================================
-
-/// Window corner rounding preference.
-///
-/// Controls the corner style for Windows 11 windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowCornerPreference {
-    /// Default corner style (usually rounded on Windows 11).
-    Default,
-
-    /// Do not round corners.
-    DoNotRound,
-
-    /// Force rounded corners.
-    Round,
-
-    /// Small rounded corners.
-    RoundSmall,
-}
-
-impl WindowCornerPreference {
-    /// Convert to DWM_WINDOW_CORNER_PREFERENCE value.
-    pub fn to_dwm_value(self) -> i32 {
-        match self {
-            WindowCornerPreference::Default => 0,    // DWMWCP_DEFAULT
-            WindowCornerPreference::DoNotRound => 1, // DWMWCP_DONOTROUND
-            WindowCornerPreference::Round => 2,      // DWMWCP_ROUND
-            WindowCornerPreference::RoundSmall => 3, // DWMWCP_ROUNDSMALL
+    /// `T` is the layout the desktop window manager reads and writes for
+    /// `id`: [`set`] and [`get`] pass `size_of::<T>()` as the value's size.
+    const unsafe fn new(id: DWMWINDOWATTRIBUTE, name: &'static str) -> Self {
+        Self {
+            id,
+            name,
+            value: PhantomData,
         }
     }
 }
 
-// ============================================================================
-// Windows Theme
-// ============================================================================
+// SAFETY: `DWMWA_WINDOW_CORNER_PREFERENCE` holds a `DWM_WINDOW_CORNER_PREFERENCE`
+// (a 4-byte enum, dwmapi.h), the type it is paired with.
+const CORNER_PREFERENCE: Attribute<DWM_WINDOW_CORNER_PREFERENCE> = unsafe {
+    Attribute::new(
+        DWMWA_WINDOW_CORNER_PREFERENCE,
+        "DWMWA_WINDOW_CORNER_PREFERENCE",
+    )
+};
+// SAFETY: `DWMWA_SYSTEMBACKDROP_TYPE` holds a `DWM_SYSTEMBACKDROP_TYPE` (a
+// 4-byte enum), the type it is paired with.
+const SYSTEM_BACKDROP: Attribute<DWM_SYSTEMBACKDROP_TYPE> =
+    unsafe { Attribute::new(DWMWA_SYSTEMBACKDROP_TYPE, "DWMWA_SYSTEMBACKDROP_TYPE") };
+// SAFETY: `DWMWA_USE_IMMERSIVE_DARK_MODE` holds a 4-byte `BOOL`, an `i32`.
+const DARK_MODE: Attribute<i32> = unsafe {
+    Attribute::new(
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+        "DWMWA_USE_IMMERSIVE_DARK_MODE",
+    )
+};
+// SAFETY: `DWMWA_CAPTION_COLOR` holds a 4-byte `COLORREF`, a `u32`.
+const CAPTION_COLOR: Attribute<u32> =
+    unsafe { Attribute::new(DWMWA_CAPTION_COLOR, "DWMWA_CAPTION_COLOR") };
 
-/// Windows window theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowsTheme {
-    /// Light theme (default on most systems).
-    Light,
-
-    /// Dark theme.
-    Dark,
-
-    /// Follow system theme.
-    System,
+/// Set `hwnd`'s `attribute` to `value`.
+fn set<T>(hwnd: HWND, attribute: Attribute<T>, value: T) -> Result<(), Win32WindowError> {
+    // SAFETY: `T` is the layout of `attribute`'s value (the `# Safety` of
+    // `Attribute::new`, discharged where each constant is declared); the
+    // pointer addresses the stack-local `value` for the call, and the size is
+    // its width. A handle that names no window only makes the call fail.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute.id,
+            (&raw const value).cast(),
+            size_of::<T>() as u32,
+        )
+    }
+    .map_err(|error| refused(attribute.name, &error))
 }
 
-impl WindowsTheme {
-    /// Convert to DWMWA_USE_IMMERSIVE_DARK_MODE value.
-    pub fn to_dark_mode_value(self) -> Option<bool> {
-        match self {
-            WindowsTheme::Light => Some(false),
-            WindowsTheme::Dark => Some(true),
-            WindowsTheme::System => None, // Use system default
-        }
+/// `hwnd`'s `attribute`.
+fn get<T: Default>(hwnd: HWND, attribute: Attribute<T>) -> Result<T, Win32WindowError> {
+    let mut value = T::default();
+    // SAFETY: as in `set`: `T` is the layout of `attribute`'s value, so the
+    // system writes at most `size_of::<T>()` bytes into the initialized
+    // stack-local `value`, which is read only when the call succeeded.
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            attribute.id,
+            (&raw mut value).cast(),
+            size_of::<T>() as u32,
+        )
+    }
+    .map_err(|error| refused(attribute.name, &error))?;
+    Ok(value)
+}
+
+fn refused(request: &'static str, error: &windows::core::Error) -> Win32WindowError {
+    Win32WindowError::Refused {
+        request,
+        hresult: error.code().0,
     }
 }
 
 // ============================================================================
-// DWM Attributes
+// Corners and theme
 // ============================================================================
 
-/// DWM (Desktop Window Manager) attribute constants.
-///
-/// These correspond to DWMWINDOWATTRIBUTE values from dwmapi.h.
-#[expect(dead_code)]
-pub(crate) mod dwm_attributes {
-    /// Use immersive dark mode.
-    pub const DWMWA_USE_IMMERSIVE_DARK_MODE: i32 = 20;
-
-    /// Window corner preference.
-    pub const DWMWA_WINDOW_CORNER_PREFERENCE: i32 = 33;
-
-    /// System backdrop type.
-    pub const DWMWA_SYSTEMBACKDROP_TYPE: i32 = 38;
-
-    /// Caption color.
-    pub const DWMWA_CAPTION_COLOR: i32 = 35;
-
-    /// Border color.
-    pub const DWMWA_BORDER_COLOR: i32 = 34;
-
-    /// Enable blur behind window.
-    pub const DWMWA_ENABLE_BLUR_BEHIND: i32 = 10;
+/// Ask the desktop window manager to round `hwnd`'s corners as `preference`
+/// says. Builds before Windows 11 do not know the attribute and keep square
+/// corners: they answer [`Win32WindowError::Refused`].
+pub(super) fn apply_corners(
+    hwnd: HWND,
+    preference: WindowsCornerPreference,
+) -> Result<(), Win32WindowError> {
+    let value = to_system(&CORNERS, preference).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
+    set(hwnd, CORNER_PREFERENCE, value)
 }
 
-// ============================================================================
-// The app theme and the chrome that follows it
-// ============================================================================
+/// The appearance `theme` draws the chrome in, `None` for the user's app
+/// theme, which the window then follows; `Err` for a theme newer than this
+/// host.
+fn chosen_appearance(theme: WindowsTheme) -> Result<Option<WindowAppearance>, Win32WindowError> {
+    match theme {
+        WindowsTheme::Light => Ok(Some(WindowAppearance::Light)),
+        WindowsTheme::Dark => Ok(Some(WindowAppearance::Dark)),
+        WindowsTheme::System => Ok(None),
+        _ => Err(Win32WindowError::NOT_ON_THIS_HOST),
+    }
+}
 
-/// `DWMWA_USE_IMMERSIVE_DARK_MODE`, honoured from Windows 10 20H1.
-const USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20);
+/// The chrome a window opened with `options` starts with, given the user's
+/// app theme `system`: the appearance it draws and whether it follows `system`
+/// from then on. A theme newer than this host opens as the user's.
+pub(super) fn opening_chrome(
+    options: &Win32WindowOptions,
+    system: WindowAppearance,
+) -> (WindowAppearance, bool) {
+    match chosen_appearance(options.theme) {
+        Ok(Some(appearance)) => (appearance, false),
+        Ok(None) | Err(_) => (system, true),
+    }
+}
 
 /// The app theme chosen in Settings › Personalization › Colors.
 ///
@@ -256,76 +354,16 @@ pub(super) fn system_appearance() -> WindowAppearance {
 }
 
 /// Draw `hwnd`'s title bar and borders dark exactly when `appearance` is.
-pub(super) fn apply_chrome(hwnd: HWND, appearance: WindowAppearance) {
-    let dark = i32::from(Brightness::from(appearance).is_dark());
-    // SAFETY: the attribute takes a 4-byte BOOL; the pointer addresses the
-    // stack-local `i32` for the call and the size states its width. A failure
-    // (an older Windows, or a handle already destroyed) leaves the chrome as
-    // it was, which is cosmetic.
-    let _ = unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            USE_IMMERSIVE_DARK_MODE,
-            (&raw const dark).cast(),
-            size_of::<i32>() as u32,
-        )
-    };
-}
-impl WindowsWindow {
-    /// Set DWM window attribute
-    ///
-    /// # Safety
-    ///
-    /// `value` must be a valid, initialized `T` whose size and layout match
-    /// what `attribute` (a `DWMWINDOWATTRIBUTE` ordinal) expects DWM to read
-    /// — the byte count passed to `DwmSetWindowAttribute` is derived from
-    /// `size_of::<T>()`, so calling this with the wrong `T` for a given
-    /// `attribute` has DWM read past `value`'s bytes.
-    unsafe fn set_dwm_attribute<T>(&self, attribute: i32, value: &T) -> windows::core::Result<()> {
-        // SAFETY: per the `# Safety` contract above, the caller guarantees
-        // `T` matches `attribute`'s expected layout; `value` is a live `&T`
-        // for the duration of this call, and `size_of::<T>()` is the
-        // correct byte count for the pointer `std::ptr::from_ref` produces
-        // from it.
-        unsafe {
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
-
-            DwmSetWindowAttribute(
-                self.hwnd(),
-                DWMWINDOWATTRIBUTE(attribute),
-                std::ptr::from_ref::<T>(value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<T>() as u32,
-            )
-        }
-    }
-
-    /// Get DWM window attribute
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the layout DWM writes for `attribute` (a
-    /// `DWMWINDOWATTRIBUTE` ordinal) — `size_of::<T>()` is the byte count
-    /// passed to `DwmGetWindowAttribute`, so the wrong `T` for a given
-    /// `attribute` has DWM write past `value`'s bytes.
-    unsafe fn get_dwm_attribute<T: Default>(&self, attribute: i32) -> windows::core::Result<T> {
-        // SAFETY: per the `# Safety` contract above, `T::default()` seeds a
-        // valid, fully-initialized `value` before `&raw mut value` is handed
-        // to DWM, so even if the call fails without writing anything, `value`
-        // is never read uninitialized; the caller guarantees `T` matches
-        // `attribute`'s expected layout and `size_of::<T>()`.
-        unsafe {
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
-
-            let mut value = T::default();
-            DwmGetWindowAttribute(
-                self.hwnd(),
-                DWMWINDOWATTRIBUTE(attribute),
-                (&raw mut value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<T>() as u32,
-            )?;
-            Ok(value)
-        }
-    }
+/// A build before Windows 10 20H1 refuses the attribute.
+pub(super) fn apply_chrome(
+    hwnd: HWND,
+    appearance: WindowAppearance,
+) -> Result<(), Win32WindowError> {
+    set(
+        hwnd,
+        DARK_MODE,
+        i32::from(Brightness::from(appearance).is_dark()),
+    )
 }
 
 // ============================================================================
@@ -333,302 +371,215 @@ impl WindowsWindow {
 // ============================================================================
 
 impl Win32Window<'_> {
-    /// Set the window backdrop material (Windows 11 Build 22000+ for Mica and
-    /// Acrylic). A refusal by the desktop window manager is logged.
-    pub fn set_backdrop(self, backdrop: WindowsBackdrop) {
-        // SAFETY: `backdrop_value` is `i32`, matching `DWMWA_SYSTEMBACKDROP_TYPE`'s
-        // expected layout, satisfying `set_dwm_attribute`'s `# Safety` contract.
+    /// The window's handle, while this view's window owns it and the call is
+    /// on its owner thread.
+    fn live(self) -> Result<HWND, Win32WindowError> {
+        let window = self.0;
+        match super::proc::with_window_context_checked(window.hwnd(), "Win32Window", |context| {
+            context.identity == window.identity
+        }) {
+            Ok(true) => Ok(window.hwnd()),
+            Err(UserDataRefusal::ForeignThread) => Err(Win32WindowError::NotOnTheOwnerThread),
+            Ok(false)
+            | Err(
+                UserDataRefusal::WindowGone
+                | UserDataRefusal::ForeignClass
+                | UserDataRefusal::EmptySlot,
+            ) => Err(Win32WindowError::CLOSED),
+        }
+    }
+
+    /// Set the material behind the window.
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused (before Windows 11 build 22621).
+    pub fn set_backdrop(self, backdrop: WindowsBackdrop) -> Result<(), Win32WindowError> {
+        let hwnd = self.live()?;
+        let value = to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
+        set(hwnd, SYSTEM_BACKDROP, value)
+    }
+
+    /// The material behind the window.
+    ///
+    /// # Errors
+    /// As [`set_backdrop`](Self::set_backdrop), and
+    /// [`Win32WindowError::Unrecognized`] for a material this host does not
+    /// know.
+    pub fn backdrop(self) -> Result<WindowsBackdrop, Win32WindowError> {
+        let value = get(self.live()?, SYSTEM_BACKDROP)?;
+        from_system(&BACKDROPS, value).ok_or(Win32WindowError::Unrecognized {
+            request: SYSTEM_BACKDROP.name,
+            value: value.0,
+        })
+    }
+
+    /// Show or hide the layouts Windows 11 offers over the maximize button
+    /// (Snap Layouts), which it shows for a window with one.
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused to redraw the frame.
+    pub fn set_snap_layouts(self, enabled: bool) -> Result<(), Win32WindowError> {
+        let hwnd = self.live()?;
+        // SAFETY: plain style reads and writes on the live handle `live`
+        // checked, on its owner thread; `SetWindowPos` with no geometry
+        // flags only redraws the frame for the new style.
         unsafe {
-            let backdrop_value = backdrop.to_dwm_value();
-            if let Err(e) = self
-                .0
-                .set_dwm_attribute(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_value)
-            {
-                tracing::warn!("Failed to set backdrop material: {:?}", e);
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            let style = if enabled {
+                style | WS_MAXIMIZEBOX.0
             } else {
-                tracing::debug!("Set window backdrop to {:?}", backdrop);
-            }
-        }
-    }
-
-    /// Clear the backdrop material and restore an opaque window.
-    pub fn clear_backdrop(self) {
-        self.set_backdrop(WindowsBackdrop::None);
-    }
-
-    /// The current backdrop material.
-    #[must_use]
-    pub fn backdrop(self) -> WindowsBackdrop {
-        // SAFETY: `i32` matches `DWMWA_SYSTEMBACKDROP_TYPE`'s expected
-        // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            match self
-                .0
-                .get_dwm_attribute::<i32>(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE)
-            {
-                // Ok(1) is DWMSBT_NONE — covered by the fallback arm.
-                Ok(2) => WindowsBackdrop::Mica,
-                Ok(3) => WindowsBackdrop::Acrylic,
-                Ok(4) => WindowsBackdrop::MicaAlt,
-                _ => WindowsBackdrop::None,
-            }
-        }
-    }
-
-    /// Enable Snap Layouts, the layouts Windows 11 shows over the maximize
-    /// button (Build 22000+).
-    pub fn enable_snap_layouts(self) {
-        // Snap Layouts are automatically enabled on Windows 11 if the window has
-        // a standard maximize button. No explicit API call needed.
-        // We just need to ensure WS_MAXIMIZEBOX is set
-        //
-        // SAFETY: see `PlatformWindow::is_resizable`/`set_resizable` above —
-        // same `GetWindowLongPtrW`/`SetWindowLongPtrW`/`SetWindowPos` shape.
-        unsafe {
-            let hwnd = self.0.hwnd();
-            let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            style |= WS_MAXIMIZEBOX.0;
-            SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-            if let Err(error) = SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetWindowPos (enable snap layouts style refresh) failed"
-                );
-            }
-
-            tracing::debug!("Snap Layouts enabled (via WS_MAXIMIZEBOX)");
-        }
-    }
-
-    /// Disable Snap Layouts.
-    pub fn disable_snap_layouts(self) {
-        // Disable by removing WS_MAXIMIZEBOX
-        //
-        // SAFETY: see `enable_snap_layouts` above — same call shape.
-        unsafe {
-            let hwnd = self.0.hwnd();
-            let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            style &= !WS_MAXIMIZEBOX.0;
-            SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-            if let Err(error) = SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetWindowPos (disable snap layouts style refresh) failed"
-                );
-            }
-
-            tracing::debug!("Snap Layouts disabled");
-        }
-    }
-
-    /// Whether Snap Layouts are enabled.
-    #[must_use]
-    pub fn is_snap_layouts_enabled(self) -> bool {
-        // SAFETY: see `PlatformWindow::is_resizable` above — same call shape.
-        unsafe {
-            let style = GetWindowLongPtrW(self.0.hwnd(), GWL_STYLE) as u32;
-            (style & WS_MAXIMIZEBOX.0) != 0
-        }
-    }
-
-    /// Set whether the window has rounded or square corners (Windows 11 Build
-    /// 22000+).
-    pub fn set_corner_preference(self, preference: WindowCornerPreference) {
-        // SAFETY: `corner_value` is `i32`, matching
-        // `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected layout, satisfying
-        // `set_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            let corner_value = preference.to_dwm_value();
-            if let Err(e) = self.0.set_dwm_attribute(
-                dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_value,
-            ) {
-                tracing::warn!("Failed to set corner preference: {:?}", e);
-            } else {
-                tracing::debug!("Set corner preference to {:?}", preference);
-            }
-        }
-    }
-
-    /// The window's corner preference.
-    #[must_use]
-    pub fn corner_preference(self) -> WindowCornerPreference {
-        // SAFETY: `i32` matches `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected
-        // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            match self
-                .0
-                .get_dwm_attribute::<i32>(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE)
-            {
-                // Ok(0) is DWMCP_DEFAULT — covered by the fallback arm.
-                Ok(1) => WindowCornerPreference::DoNotRound,
-                Ok(2) => WindowCornerPreference::Round,
-                Ok(3) => WindowCornerPreference::RoundSmall,
-                _ => WindowCornerPreference::Default,
-            }
-        }
-    }
-
-    /// Enable or disable the desktop window manager's blur behind the
-    /// window's transparent areas.
-    pub fn enable_blur_behind(self, enable: bool) {
-        use windows::Win32::Graphics::Dwm::{
-            DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
-        };
-
-        // SAFETY: `bb` is a stack-local `DWM_BLURBEHIND`, fully initialized
-        // above; `&raw const bb` gives `DwmEnableBlurBehindWindow` a valid
-        // pointer to it — the API takes a typed struct pointer, not a
-        // `(pointer, size)` pair, so there is no separate size argument to
-        // get wrong.
-        unsafe {
-            let bb = DWM_BLURBEHIND {
-                dwFlags: DWM_BB_ENABLE,
-                fEnable: if enable { TRUE } else { FALSE },
-                hRgnBlur: HRGN::default(),
-                fTransitionOnMaximized: FALSE,
+                style & !WS_MAXIMIZEBOX.0
             };
-
-            if let Err(e) = DwmEnableBlurBehindWindow(self.0.hwnd(), &raw const bb) {
-                tracing::warn!("Failed to enable blur behind: {:?}", e);
-            } else {
-                tracing::debug!("Blur behind: {}", enable);
-            }
+            SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
         }
+        .map_err(|error| refused("SetWindowPos", &error))
     }
 
-    /// Draw the title bar and chrome dark or light (Windows 10 Build 17763+).
-    /// The choice outlives later system theme changes.
-    pub fn set_dark_mode(self, dark_mode: bool) {
+    /// Whether Windows 11 offers Snap Layouts over the window's maximize
+    /// button.
+    ///
+    /// # Errors
+    /// The window is closed, or the call is off its owner thread.
+    pub fn snap_layouts(self) -> Result<bool, Win32WindowError> {
+        let hwnd = self.live()?;
+        // SAFETY: a plain style read on the live handle `live` checked.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        Ok(style & WS_MAXIMIZEBOX.0 != 0)
+    }
+
+    /// Set how the desktop window manager rounds the window's corners.
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused (Windows 10 has no rounded corners).
+    pub fn set_corner_preference(
+        self,
+        preference: WindowsCornerPreference,
+    ) -> Result<(), Win32WindowError> {
+        apply_corners(self.live()?, preference)
+    }
+
+    /// How the desktop window manager rounds the window's corners.
+    ///
+    /// # Errors
+    /// As [`set_corner_preference`](Self::set_corner_preference).
+    pub fn corner_preference(self) -> Result<WindowsCornerPreference, Win32WindowError> {
+        let value = get(self.live()?, CORNER_PREFERENCE)?;
+        from_system(&CORNERS, value).ok_or(Win32WindowError::Unrecognized {
+            request: CORNER_PREFERENCE.name,
+            value: value.0,
+        })
+    }
+
+    /// Blur what is behind the window's transparent areas, or stop.
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused.
+    pub fn set_blur_behind(self, enabled: bool) -> Result<(), Win32WindowError> {
+        let hwnd = self.live()?;
+        let blur = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE,
+            fEnable: if enabled { TRUE } else { FALSE },
+            hRgnBlur: HRGN::default(),
+            fTransitionOnMaximized: FALSE,
+        };
+        // SAFETY: the call reads the stack-local, fully initialized `blur`
+        // through the typed pointer for its duration.
+        unsafe { DwmEnableBlurBehindWindow(hwnd, &raw const blur) }
+            .map_err(|error| refused("DwmEnableBlurBehindWindow", &error))
+    }
+
+    /// Draw the title bar and borders dark or light, whatever the user's app
+    /// theme does later.
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused (before Windows 10 20H1).
+    pub fn set_dark_mode(self, dark: bool) -> Result<(), Win32WindowError> {
+        let hwnd = self.live()?;
+        set(hwnd, DARK_MODE, i32::from(dark))?;
         // An explicit choice outlives later system theme changes.
-        super::proc::with_window_context(self.0.hwnd(), "set_dark_mode", |ctx| {
-            ctx.chrome_follows_system.set(false);
+        super::proc::with_window_context(hwnd, "set_dark_mode", |context| {
+            context.chrome_follows_system.set(false);
         });
-        // SAFETY: `dark_mode_value` is `i32`, matching
-        // `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected layout, satisfying
-        // `set_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            let dark_mode_value: i32 = i32::from(dark_mode);
-            if let Err(e) = self.0.set_dwm_attribute(
-                dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE,
-                &dark_mode_value,
-            ) {
-                tracing::warn!("Failed to set dark mode: {:?}", e);
-            } else {
-                tracing::debug!("Set dark mode: {}", dark_mode);
-            }
-        }
+        Ok(())
     }
 
-    /// Whether the title bar and chrome are drawn dark.
-    #[must_use]
-    pub fn is_dark_mode(self) -> bool {
-        // SAFETY: `i32` matches `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected
-        // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            self.0
-                .get_dwm_attribute::<i32>(dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE)
-                .unwrap_or(0)
-                != 0
-        }
+    /// Whether the title bar and borders are drawn dark.
+    ///
+    /// # Errors
+    /// As [`set_dark_mode`](Self::set_dark_mode).
+    pub fn dark_mode(self) -> Result<bool, Win32WindowError> {
+        Ok(get(self.live()?, DARK_MODE)? != 0)
     }
 
-    /// Set the chrome's theme; [`WindowsTheme::System`] follows the user's app
-    /// theme now and on each later change.
-    pub fn set_theme(self, theme: WindowsTheme) {
-        if let Some(dark_mode) = theme.to_dark_mode_value() {
-            self.set_dark_mode(dark_mode);
-        } else {
-            // Back to the system theme, now and on each later change.
-            super::proc::with_window_context(self.0.hwnd(), "set_theme", |ctx| {
-                ctx.chrome_follows_system.set(true);
-            });
-            apply_chrome(self.0.hwnd(), system_appearance());
+    /// Set the theme of the title bar and borders; [`WindowsTheme::System`]
+    /// follows the user's app theme now and with each later change of it.
+    ///
+    /// # Errors
+    /// As [`set_dark_mode`](Self::set_dark_mode).
+    pub fn set_theme(self, theme: WindowsTheme) -> Result<(), Win32WindowError> {
+        if let Some(appearance) = chosen_appearance(theme)? {
+            return self.set_dark_mode(Brightness::from(appearance).is_dark());
         }
+        let hwnd = self.live()?;
+        apply_chrome(hwnd, system_appearance())?;
+        super::proc::with_window_context(hwnd, "set_theme", |context| {
+            context.chrome_follows_system.set(true);
+        });
+        Ok(())
     }
 
-    /// The chrome's theme as drawn now.
-    #[must_use]
-    pub fn theme(self) -> WindowsTheme {
-        if self.is_dark_mode() {
+    /// The theme the title bar and borders are drawn in now, light or dark.
+    ///
+    /// # Errors
+    /// As [`set_dark_mode`](Self::set_dark_mode).
+    pub fn theme(self) -> Result<WindowsTheme, Win32WindowError> {
+        Ok(if self.dark_mode()? {
             WindowsTheme::Dark
         } else {
             WindowsTheme::Light
+        })
+    }
+
+    /// Set the title bar's colour, or `None` for the system's (Windows 11).
+    ///
+    /// # Errors
+    /// [`Win32WindowError`]: the window is closed, the call is off its owner
+    /// thread, or the system refused (Windows 10 has no caption colour).
+    pub fn set_title_bar_color(self, color: Option<(u8, u8, u8)>) -> Result<(), Win32WindowError> {
+        let hwnd = self.live()?;
+        // A `COLORREF` is 0x00BBGGRR.
+        let value = color.map_or(DWMWA_COLOR_DEFAULT, |(red, green, blue)| {
+            (u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red)
+        });
+        set(hwnd, CAPTION_COLOR, value)
+    }
+
+    /// The window's DPI.
+    ///
+    /// # Errors
+    /// The window is closed, or the call is off its owner thread.
+    pub fn dpi(self) -> Result<u32, Win32WindowError> {
+        let hwnd = self.live()?;
+        // SAFETY: takes the live handle by value; `0` means it names no
+        // window, which `live` ruled out unless it closed in between.
+        match unsafe { GetDpiForWindow(hwnd) } {
+            0 => Err(Win32WindowError::CLOSED),
+            dpi => Ok(dpi),
         }
-    }
-
-    /// Set the title bar's colour, or `None` for the system's (Windows 10
-    /// Build 17763+).
-    pub fn set_title_bar_color(self, color: Option<(u8, u8, u8)>) {
-        // SAFETY: both `colorref` and `default_color` are `u32`, matching
-        // `DWMWA_CAPTION_COLOR`'s expected `COLORREF` layout, satisfying
-        // `set_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            if let Some((r, g, b)) = color {
-                // Windows expects COLORREF format: 0x00BBGGRR
-                let colorref: u32 = ((b as u32) << 16) | ((g as u32) << 8) | (r as u32);
-
-                if let Err(e) = self
-                    .0
-                    .set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &colorref)
-                {
-                    tracing::warn!("Failed to set title bar color: {:?}", e);
-                } else {
-                    tracing::debug!("Set title bar color: RGB({}, {}, {})", r, g, b);
-                }
-            } else {
-                // Reset to default (0xFFFFFFFF means use default)
-                let default_color: u32 = 0xFFFF_FFFF;
-                if let Err(error) = self
-                    .0
-                    .set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &default_color)
-                {
-                    tracing::warn!(
-                        hwnd = ?self.0.hwnd(),
-                        ?error,
-                        "failed to reset title bar color to default"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Set the caption's colour, which Windows 11 draws as the title bar's.
-    pub fn set_caption_color(self, color: Option<(u8, u8, u8)>) {
-        self.set_title_bar_color(color);
-    }
-
-    /// The window's DPI; `0` once the window is gone.
-    #[must_use]
-    pub fn dpi(self) -> u32 {
-        // SAFETY: `GetDpiForWindow` takes the handle by value, no pointer
-        // arguments — a stale or invalid `hwnd` cannot cause UB here, it is
-        // just an ordinary FFI call either way. NOT a "safe fallback",
-        // though: per its documented contract, an invalid `hwnd` makes this
-        // return a literal `0`, not some usable default DPI — a caller that
-        // divides by this result (e.g. computing a scale factor) would get
-        // infinity or NaN, not graceful degradation. No current caller in
-        // this crate divides by `dpi()`'s result, but a future one should
-        // not assume `0` means "use 96 instead".
-        unsafe { GetDpiForWindow(self.0.hwnd()) }
     }
 
     /// A point in device pixels, in logical pixels.
@@ -646,5 +597,23 @@ impl Win32Window<'_> {
             (point.x * scale).round() as i32,
             (point.y * scale).round() as i32,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BACKDROPS, CORNERS, from_system, to_system};
+
+    /// Each table maps every FLUI value to a distinct system value and back.
+    #[test]
+    fn each_mapping_is_one_table_read_both_ways() {
+        for (flui, system) in CORNERS {
+            assert_eq!(to_system(&CORNERS, flui), Some(system));
+            assert_eq!(from_system(&CORNERS, system), Some(flui));
+        }
+        for (flui, system) in BACKDROPS {
+            assert_eq!(to_system(&BACKDROPS, flui), Some(system));
+            assert_eq!(from_system(&BACKDROPS, system), Some(flui));
+        }
     }
 }

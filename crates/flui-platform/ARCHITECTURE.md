@@ -22,8 +22,9 @@ this one path (ADR-0151 §9).
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except five whose many vocabulary types keep their module
-  path: `haptics`, the second haptic tier with its requests and outcomes, which
+  modules are private except six whose types keep their module path:
+  `os_options`, one operating system's window creation options, which are not
+  everyone's vocabulary; `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
   while `PlatformHaptics` and `HapticFeedback` stay at the root;
   `data_transfer`,
@@ -268,3 +269,26 @@ only degrade, never fail. `PlatformHaptics` gained `perform_with`, `play` and
 keeps compiling; `FakeHaptics` records each request with the actuator that
 played it and the outcome it returned.
 **Tests:** `haptic_pattern_builder_rejects_invalid_patterns`.
+
+### Each operating system's creation options are one typed value of it
+
+What a window is created with on an operating system is a field of
+`WindowOptions::os_options`, an `os_options::OsWindowOptions` with one optional
+value per system that has options of its own, of that system's type:
+`windows: Option<Win32WindowOptions>` today (ADR-0254 §8). Options of every
+system as fields of the common struct (GPUI) would grow it per system; untyped
+keys (SDL) would lose the types; a single slot holding one system's value would
+make a cross-platform application choose one, so setting Windows options and
+then macOS ones would drop the first. The types live here because the slot is
+here; they are pure data, built on every target, so a cross-platform
+application sets every system's options without a `cfg` of its own. Only that
+system's host reads its field. Another host (the headless host, winit, another
+system's) opens the window without it, and the application sees that its
+options were not taken when that system's extension in `flui::native` has no
+view of the window. They sit in their own public module, `os_options`, not at
+the root: they are Stable like every item of this crate (ADR-0089 §1 gives no
+module a tier of its own), so they take the least committal shape, every
+struct and enum `#[non_exhaustive]` and no conversion to the system's own
+values, which stay with the host.
+**Tests:** `a_win32_window_opens_with_its_options` (`flui-native`),
+`config_to_options_keeps_every_field` (`flui-app`).
