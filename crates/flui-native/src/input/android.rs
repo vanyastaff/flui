@@ -595,6 +595,7 @@ pub(crate) mod motion {
             if touchpad && self.touchpad_gesture(&event, &mut output) {
                 return output;
             }
+            let contacts_from = output.len();
             for (index, pointer) in motion.pointers.iter().enumerate() {
                 if matches!(
                     motion.action,
@@ -607,6 +608,13 @@ pub(crate) mod motion {
                     continue;
                 }
                 self.pointer(&event, pointer, touchpad, wheel, &mut output);
+            }
+            // The contacts one event reports were sampled together: one frame.
+            if motion.pointers.len() > 1 {
+                let contacts = output.split_off(contacts_from);
+                output.extend(crate::input::assembly::framed([contacts
+                    .into_iter()
+                    .collect()]));
             }
             output
         }
