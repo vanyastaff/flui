@@ -410,52 +410,6 @@ impl RenderTree {
         Some((parent_ref, children))
     }
 
-    /// Returns mutable references to **every** node id in the given list,
-    /// materialised in a single function scope so all `&mut RenderNode`
-    /// borrows coexist on disjoint slab slots without re-entering the
-    /// slab borrow checker.
-    ///
-    /// Generalises [`get_parent_and_children_mut`](Self::get_parent_and_children_mut)
-    /// from N+1 (parent + direct children) to arbitrary N (whole subtree
-    /// pre-acquisition). The returned `Vec<&mut RenderNode>` is in input
-    /// order so callers indexing by id can pre-compute a
-    /// `HashMap<RenderId, usize>` lookup.
-    ///
-    /// Returns `None` if any id is missing from the slab OR if `ids`
-    /// contains duplicates.
-    ///
-    /// # Use case
-    ///
-    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
-    /// uses this to pre-acquire the entire subtree's `&mut RenderNode`
-    /// borrows up front, then drives `perform_layout_raw` recursively
-    /// against an index-into-pre-acquired-pool — eliminating the
-    /// recursive raw-pointer reborrow pattern the prior implementation
-    /// used (latent Stacked/Tree Borrows UB). All borrows live in one
-    /// stack frame so the aliasing model is satisfied: `&mut Slab` is borrowed once,
-    /// N disjoint `&mut RenderNode` borrows on distinct slots are
-    /// returned, no nested reborrow.
-    ///
-    /// Duplicate ids and stale/missing ids both return `None` (a
-    /// duplicate id resolves to a duplicate slab slot, which
-    /// `collect_disjoint_mut` rejects).
-    ///
-    /// # Complexity
-    ///
-    /// O(slab len + N) average and worst case — one `iter_mut`
-    /// traversal with an early break once all N slots are found, plus
-    /// an O(N) resolve pass. Called once per dirty layout root, not
-    /// per node.
-    pub fn get_subtree_mut<'a>(&'a mut self, ids: &[RenderId]) -> Option<Vec<&'a mut RenderNode>> {
-        // Resolve every id (generation-checked) before borrowing.
-        let indices: Vec<usize> = ids
-            .iter()
-            .map(|&id| self.resolve(id))
-            .collect::<Option<Vec<_>>>()?;
-
-        collect_disjoint_mut(&mut self.nodes, &indices)
-    }
-
     /// Inserts `node` without a parent and returns its id; the caller links it and
     /// sets the root.
     pub fn insert(&mut self, node: RenderNode) -> RenderId {
@@ -1296,7 +1250,6 @@ mod tests {
         assert!(tree.get(old).is_none());
         assert!(tree.get_mut(old).is_none());
         assert!(tree.remove_shallow(old).is_none());
-        assert!(tree.get_subtree_mut(&[old]).is_none());
         assert!(tree.get_two_mut(old, new).is_none());
 
         // New id is live.
