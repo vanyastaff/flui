@@ -148,7 +148,7 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
                     .expect("a contact event carries its time")
                     .as_nanos()
             }
-            HostInput::Frame { vsync } => vsync.as_nanos(),
+            HostInput::Frame { vsync, .. } => vsync.as_nanos(),
             other => panic!("a touch script delivers pointer input and frames: {other:?}"),
         })
         .collect();

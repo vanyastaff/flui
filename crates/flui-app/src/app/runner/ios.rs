@@ -325,6 +325,7 @@ where
         }
     };
     renderer.resize(phys_size.width as u32, phys_size.height as u32);
+    renderer.set_frame_latency(config.frame_latency);
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
@@ -402,8 +403,8 @@ where
             surface_recreation_retry,
         }))?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+    window.on_request_frame(Box::new(move |request| {
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     }));
 
     // 7. Resize -> typed Resized event; the applier installed above touches

@@ -291,7 +291,11 @@ enum HostInputDto {
     #[serde(rename = "window")]
     Window(WindowObservationDto),
     #[serde(rename = "frame")]
-    Frame { vsync: u64 },
+    Frame {
+        vsync: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_present: Option<u64>,
+    },
     #[serde(rename = "accessibility")]
     Accessibility(ActionRequestDto),
 }
@@ -313,8 +317,12 @@ impl TryFrom<&HostInput> for HostInputDto {
         Ok(match input {
             HostInput::Platform(input) => Self::Platform(input.try_into()?),
             HostInput::Window(observation) => Self::Window(observation.try_into()?),
-            HostInput::Frame { vsync } => Self::Frame {
+            HostInput::Frame {
+                vsync,
+                target_present,
+            } => Self::Frame {
                 vsync: vsync.as_nanos(),
+                target_present: target_present.map(EventTime::as_nanos),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
             _ => return Err(unmirrored("HostInput")),
@@ -329,8 +337,12 @@ impl TryFrom<HostInputDto> for HostInput {
         Ok(match input {
             HostInputDto::Platform(input) => Self::Platform(input.try_into()?),
             HostInputDto::Window(observation) => Self::Window(observation.try_into()?),
-            HostInputDto::Frame { vsync } => Self::Frame {
+            HostInputDto::Frame {
+                vsync,
+                target_present,
+            } => Self::Frame {
                 vsync: EventTime::from_nanos(vsync),
+                target_present: target_present.map(EventTime::from_nanos),
             },
             HostInputDto::Accessibility(request) => Self::Accessibility(request.try_into()?),
         })

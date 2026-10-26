@@ -98,7 +98,7 @@ pub fn start() {
     }));
 
     // Register frame callback
-    window.on_request_frame(Box::new(|| {
+    window.on_request_frame(Box::new(|_| {
         // Frame rendered -- no-op for now (no GPU renderer in this demo)
     }));
 

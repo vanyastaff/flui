@@ -273,6 +273,7 @@ mod effects_pipeline;
 mod external_texture_registry;
 /// The frame protocol the windowed renderer and the headless retained
 /// capture share: damage, retained target, and the plan-to-GPU sequence.
+mod frame_latency;
 mod frame_protocol;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
@@ -484,6 +485,7 @@ pub use flui_foundation::GpuResourceGeneration;
 pub use headless::HeadlessRenderer;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
+pub use frame_latency::FrameLatency;
 pub use renderer::{GpuCapabilities, Renderer};
 // What a windowed `Renderer` draws into (issue #1043); exported beside
 // `Renderer` here at `flui_engine::wgpu`.

@@ -497,7 +497,7 @@ async fn a_redraw_waits_for_the_next_animation_frame() {
     let canvas = HostedCanvas::open();
     let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (counted, window) = (Arc::clone(&frames), Arc::clone(&canvas.window));
-    canvas.window.on_request_frame(Box::new(move || {
+    canvas.window.on_request_frame(Box::new(move |_| {
         if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < ANIMATION {
             window.request_redraw();
         }

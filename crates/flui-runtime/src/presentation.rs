@@ -358,9 +358,10 @@ pub struct PresentationState {
     pub(super) window_display: Rc<Cell<Option<flui_platform::WindowDisplay>>>,
     pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
-    /// The vsync of the frame being delivered, on the event timeline
-    /// (`HostInput::Frame`): the interaction layer samples motion there.
-    pub(super) frame_vsync: Cell<Option<flui_platform::EventTime>>,
+    /// The request of the frame being delivered, on the event timeline
+    /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
+    /// the frame's time and idle deadline from it (ADR-0256).
+    pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -934,7 +935,7 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
-            frame_vsync: Cell::new(None),
+            frame_request: Cell::new(None),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1055,7 +1056,7 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
-            frame_vsync: Cell::new(None),
+            frame_request: Cell::new(None),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),

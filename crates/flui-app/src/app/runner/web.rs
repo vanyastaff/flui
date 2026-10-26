@@ -147,6 +147,7 @@ where
                     window,
                     gpu_loss,
                     owner_wake: wake,
+                    frame_latency: config.frame_latency,
                 }),
                 &owner.shared(),
             )
@@ -199,6 +200,8 @@ pub(super) struct WebFrameDriver {
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// The swapchain latency a first-built renderer is given; a rebuilt one keeps its own.
+    frame_latency: flui_engine::FrameLatency,
 }
 
 impl WebFrameDriver {
@@ -358,6 +361,7 @@ impl WebFrameDriver {
         let renderer_slot = Arc::clone(&self.renderer);
         let window = Arc::clone(&self.window);
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
+        let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
             if !authority.is_live() {
                 return;
@@ -369,7 +373,10 @@ impl WebFrameDriver {
                     (Some(renderer), built)
                 }
                 None => match flui_engine::Renderer::new(Arc::clone(&window)).await {
-                    Ok(renderer) => (Some(renderer), Ok(())),
+                    Ok(mut renderer) => {
+                        renderer.set_frame_latency(frame_latency);
+                        (Some(renderer), Ok(()))
+                    }
                     Err(error) => (None, Err(error)),
                 },
             };

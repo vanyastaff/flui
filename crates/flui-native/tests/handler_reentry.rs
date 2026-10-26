@@ -171,7 +171,7 @@ const WINDOW_CALLBACKS: &[(&str, InstallCallback)] = &[
         }));
     }),
     ("on_request_frame", |window, capture| {
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let _ = &capture;
         }));
     }),

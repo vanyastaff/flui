@@ -43,7 +43,7 @@ impl Session {
 fn frame_threads(window: &Arc<dyn HostWindow>) -> Arc<Mutex<Vec<ThreadId>>> {
     let log = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&log);
-    window.on_request_frame(Box::new(move || sink.lock().push(thread::current().id())));
+    window.on_request_frame(Box::new(move |_| sink.lock().push(thread::current().id())));
     log
 }
 

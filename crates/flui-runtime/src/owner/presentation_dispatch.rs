@@ -491,8 +491,16 @@ impl PresentationDispatcher {
                 };
                 core.deliver(work, effects)?
             }
-            HostInput::Frame { vsync } => {
-                core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
+            HostInput::Frame {
+                vsync,
+                target_present,
+            } => {
+                let request = flui_platform::FrameRequest::new(vsync);
+                let request = match target_present {
+                    Some(shown) => request.with_target_present(shown),
+                    None => request,
+                };
+                core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }
             HostInput::Accessibility(request) => {
                 return self.queue_accessibility(&core, request);

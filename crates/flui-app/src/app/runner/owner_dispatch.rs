@@ -212,7 +212,10 @@ pub(in crate::app) enum RuntimeTask {
     Event(RuntimeEvent),
     #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     TestCallback(Box<dyn FnOnce(&crate::app::ui_runtime::UiRuntime)>),
-    Frame(super::frame_driver::FrameBinding),
+    Frame(
+        super::frame_driver::FrameBinding,
+        flui_platform::FrameRequest,
+    ),
     ClosePresentation(flui_foundation::PresentationId),
 }
 
@@ -540,13 +543,6 @@ fn dispatch_platform_input(
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
 }
 
-/// A delivered frame's vsync on the event timeline: the host's reading of the
-/// process event epoch when the frame is admitted. No backend reports the
-/// display's own vsync timestamp yet.
-pub(super) fn frame_vsync() -> flui_platform::EventTime {
-    flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns())
-}
-
 pub(super) fn dispatch_platform_ui_runtime(
     dispatcher: PresentationDispatcher,
     event: RuntimeTask,
@@ -681,7 +677,7 @@ fn dispatch_owner_turn_delivery(
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let after_frame = false;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)));
+    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(..)));
     if !after_frame {
         apply_queued_window_commands(owner_thread);
     }
@@ -713,13 +709,13 @@ fn deliver_owner_turn(turn: OwnerTurn) -> Result<flui_runtime::owner::Delivery, 
                 .presentation_dispatcher(dispatcher.address)
                 .map_err(DispatchError::from)?;
             match task {
-                RuntimeTask::Frame(binding) => {
+                RuntimeTask::Frame(binding, request) => {
                     if binding.address() != dispatcher.address {
                         return Err(DispatchError::StalePresentation);
                     }
                     host.logical()
                         .frame_dispatcher(dispatcher.address)
-                        .and_then(|frame| frame.deliver(frame_vsync(), host.effects()))
+                        .and_then(|frame| frame.deliver(request, host.effects()))
                 }
                 RuntimeTask::ClosePresentation(id) => {
                     let address = flui_foundation::PresentationAddress {

@@ -103,6 +103,7 @@ mod display;
 pub mod drag;
 mod event_time;
 mod flag_set;
+mod frame_request;
 mod haptic_feedback;
 pub mod haptics;
 mod host_notice;
@@ -136,6 +137,7 @@ pub use display::{
     WindowDisplay,
 };
 pub use event_time::EventTime;
+pub use frame_request::FrameRequest;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{

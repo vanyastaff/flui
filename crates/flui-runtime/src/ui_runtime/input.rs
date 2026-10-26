@@ -8,7 +8,7 @@ use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
-use flui_platform::{DragDropEvent, EventTime, PlatformInput};
+use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -765,8 +765,8 @@ impl UiRuntime {
         }
     }
 
-    /// Note the vsync of the frame about to be delivered to `presentation_id`
-    /// (`HostInput::Frame`): that frame samples resampled motion there, on
+    /// Note the request of the frame about to be delivered to `presentation_id`
+    /// (`HostInput::Frame`): that frame samples resampled motion at its vsync, on
     /// the event timeline, instead of at the frame clock's own reading.
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
@@ -776,16 +776,19 @@ impl UiRuntime {
     /// (assistive requests among it) before it renders, so their rows precede
     /// the frame's row and a replay applies them before rendering it too. A
     /// drain failure is resumed after the frame's row is recorded.
-    pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+    pub fn note_frame_request(&self, presentation_id: PresentationId, request: FrameRequest) {
         let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
-            presentation.frame_vsync.set(Some(vsync));
+            presentation.frame_request.set(Some(request));
         }
         if recording {
             self.record_applied(
                 presentation_id,
-                crate::HostInput::Frame { vsync },
+                crate::HostInput::Frame {
+                    vsync: request.vsync,
+                    target_present: request.target_present,
+                },
                 crate::owner::InputOutcome::Handled,
             );
         }

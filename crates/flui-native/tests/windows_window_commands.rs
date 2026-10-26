@@ -272,7 +272,7 @@ fn a_hidden_window_still_runs_its_frame_requests() {
     let window = open(&platform, deferred());
     let frames = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&frames);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
     }));
     window.request_redraw();
@@ -844,7 +844,7 @@ fn a_style_the_system_changes_reaches_the_snapshot() {
 fn count_frames(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
     let frames = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&frames);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
     }));
     frames

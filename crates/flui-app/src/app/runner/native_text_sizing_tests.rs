@@ -338,8 +338,11 @@ fn acquisition_without_progress_releases_document_edits(
             })),
         )
         .expect("actual pending frame owner turn");
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding))
-            .expect("actual installed product pump");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(binding, flui_native::frame_request_now()),
+        )
+        .expect("actual installed product pump");
         dispatch_platform_ui_runtime(
             dispatcher,
             RuntimeTask::TestCallback(Box::new(|runtime| {

@@ -24,7 +24,10 @@ use crate::owner::WindowObservation;
 /// use flui_platform::EventTime;
 /// use flui_runtime::HostInput;
 ///
-/// let frame = HostInput::Frame { vsync: EventTime::from_nanos(16_666_667) };
+/// let frame = HostInput::Frame {
+///     vsync: EventTime::from_nanos(16_666_667),
+///     target_present: None,
+/// };
 /// assert!(matches!(frame, HostInput::Frame { .. }));
 /// ```
 #[derive(Debug, Clone)]
@@ -40,6 +43,9 @@ pub enum HostInput {
     Frame {
         /// When the frame's vsync happened.
         vsync: EventTime,
+        /// When the platform says the frame will be shown, if it says (ADR-0256): idle work
+        /// runs only until then.
+        target_present: Option<EventTime>,
     },
     /// An assistive-technology action request, resolved by the
     /// presentation's semantics owner.
