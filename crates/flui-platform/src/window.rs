@@ -123,6 +123,9 @@ pub struct WindowOptions {
     pub normal_geometry: Option<WindowGeometry>,
     /// How early pointer samples reach the window; see [`InputLatency`].
     pub input_latency: InputLatency,
+    /// What the window is created with on one operating system, as a value
+    /// of that system's type; see [`OsWindowOptions`].
+    pub os: OsWindowOptions,
 }
 
 impl WindowOptions {
@@ -216,6 +219,13 @@ impl WindowOptions {
         self.input_latency = input_latency;
         self
     }
+
+    /// Set what the window is created with on one operating system.
+    #[must_use]
+    pub fn with_os(mut self, os: impl Into<OsWindowOptions>) -> Self {
+        self.os = os.into();
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -234,8 +244,116 @@ impl Default for WindowOptions {
             mode: WindowMode::Normal,
             normal_geometry: None,
             input_latency: InputLatency::Balanced,
+            os: OsWindowOptions::None,
         }
     }
+}
+
+// ==================== One operating system's options ====================
+
+/// What a window is created with on one operating system (ADR-0254 §8): one
+/// value of that system's type, in [`WindowOptions::os`], rather than fields
+/// of every system in the common options.
+///
+/// Only that system's host reads it. Another host (headless, winit, or the
+/// host of another system) opens the window without it, and that system's
+/// extension in `flui::native` has no view of the window it opened (`win32()`
+/// answers `None`), so an application can tell whether its options were
+/// taken.
+///
+/// ```
+/// use flui_platform::{OsWindowOptions, Win32WindowOptions, WindowOptions, WindowsCornerPreference};
+///
+/// let options = WindowOptions::default().with_os(
+///     Win32WindowOptions::default().with_corner_preference(WindowsCornerPreference::DoNotRound),
+/// );
+/// assert!(matches!(options.os, OsWindowOptions::Windows(_)));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OsWindowOptions {
+    /// None beyond the common options (the default): every host opens the
+    /// window as it does without any.
+    #[default]
+    None,
+    /// What a Win32 window is created with.
+    Windows(Win32WindowOptions),
+}
+
+impl From<Win32WindowOptions> for OsWindowOptions {
+    fn from(options: Win32WindowOptions) -> Self {
+        Self::Windows(options)
+    }
+}
+
+/// What a Win32 window is created with beyond the common options.
+///
+/// The defaults are what a Win32 window gets without them: rounded corners,
+/// and a title bar and borders drawn in the user's app theme.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Win32WindowOptions {
+    /// How the desktop window manager rounds the window's corners (Windows 11
+    /// build 22000 and later; earlier builds draw square corners).
+    pub corner_preference: WindowsCornerPreference,
+    /// Whether the title bar and borders are drawn light, dark, or in the
+    /// user's app theme and with each later change of it.
+    pub theme: WindowsTheme,
+}
+
+impl Win32WindowOptions {
+    /// Set how the window's corners are rounded.
+    #[must_use]
+    pub const fn with_corner_preference(
+        mut self,
+        corner_preference: WindowsCornerPreference,
+    ) -> Self {
+        self.corner_preference = corner_preference;
+        self
+    }
+
+    /// Set the theme the title bar and borders are drawn in.
+    #[must_use]
+    pub const fn with_theme(mut self, theme: WindowsTheme) -> Self {
+        self.theme = theme;
+        self
+    }
+}
+
+impl Default for Win32WindowOptions {
+    fn default() -> Self {
+        Self {
+            corner_preference: WindowsCornerPreference::Round,
+            theme: WindowsTheme::System,
+        }
+    }
+}
+
+/// How the Windows 11 desktop window manager rounds a window's corners
+/// (`DWM_WINDOW_CORNER_PREFERENCE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WindowsCornerPreference {
+    /// As the system decides: rounded for a window with a title bar, square
+    /// for one without.
+    Default,
+    /// Square corners.
+    DoNotRound,
+    /// Rounded corners.
+    Round,
+    /// Corners rounded with a smaller radius.
+    RoundSmall,
+}
+
+/// The theme a Win32 window's title bar and borders are drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WindowsTheme {
+    /// Light.
+    Light,
+    /// Dark.
+    Dark,
+    /// The user's app theme (Settings › Personalization › Colors), now and
+    /// with each later change of it.
+    System,
 }
 
 // ==================== Identity and mode ====================

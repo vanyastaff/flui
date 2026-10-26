@@ -6,7 +6,8 @@
 //! Two parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; and [`ext`],
 //! [`MacOSWindowExt`] and the [`AppKitWindow`] it gives, the public AppKit
-//! features beyond the cross-platform window.
+//! features beyond the cross-platform window, the material behind the
+//! content ([`MacOSBackdrop`]) among them.
 //!
 //! The loop holds the windows it tracks as `CallbackWindow`s
 //! (`owner::apple::macos`).
@@ -112,7 +113,8 @@ pub(crate) mod display_pass {
 
 use delegate::{create_window_delegate, display_of_screen};
 pub use ext::{
-    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
+    AppKitWindow, MacOSBackdrop, MacOSBackdropError, MacOSCollectionBehavior, MacOSWindowExt,
+    MacOSWindowLevel, TabJoinError,
 };
 
 use std::sync::{

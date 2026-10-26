@@ -127,7 +127,7 @@ fn test_window_lifecycle_contract() {
             // winit opens no window outside its loop.
             #[cfg(target_os = "windows")]
             {
-                use flui_native::WindowsWindowExt as _;
+                use flui_native::os::windows::WindowsWindowExt as _;
                 if window.win32().is_some() {
                     assert!(
                         window.accessibility().is_some(),

@@ -1,26 +1,22 @@
 //! macOS-specific window extensions: [`MacOSWindowExt`], how an application
 //! reaches the AppKit features beyond the cross-platform window — tabs,
-//! native fullscreen, level, collection behavior, shadow and alpha — on any
-//! window a host hands out, and [`AppKitWindow`], what each asks of the AppKit
-//! window.
-//!
-//! ```rust,ignore
-//! use flui_native::{HostWindow, MacOSWindowExt, MacOSWindowLevel};
-//!
-//! fn float(window: &dyn HostWindow) {
-//!     // A window of another host is not an AppKit window: nothing is asked of it.
-//!     if let Some(appkit) = window.appkit() {
-//!         appkit.set_window_level(MacOSWindowLevel::Floating);
-//!     }
-//! }
-//! ```
+//! native fullscreen, level, collection behavior, shadow, alpha and the
+//! material behind the content — on any window a host hands out
+//! (`flui_native::os::macos`), and [`AppKitWindow`], what each asks of the
+//! AppKit window.
 
 use std::sync::atomic::Ordering;
 
 use flui_foundation::geometry::Point;
-use objc2::msg_send;
+use objc2::rc::Retained;
+use objc2::{class, msg_send};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState,
+};
+use objc2_foundation::NSRect;
 
-use super::{BObjC, MacOSWindow, NIL, NO, YES, route_on_owner};
+use super::{BObjC, MacOSWindow, NIL, NO, ObjcId, YES, route_on_owner};
 use crate::host_window::HostWindow;
 
 // ============================================================================
@@ -32,6 +28,24 @@ use crate::host_window::HostWindow;
 /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
 /// host (headless, winit) is not an AppKit window: [`appkit`](Self::appkit)
 /// answers `None` for it, and nothing is asked of it.
+///
+/// ```
+/// use flui_native::os::macos::{MacOSBackdrop, MacOSWindowExt};
+/// use flui_native::{HostWindow, headless_platform};
+/// use flui_platform::WindowOptions;
+///
+/// /// The sidebar material behind the window, if it is an AppKit window.
+/// fn sidebar(window: &dyn HostWindow) -> bool {
+///     window
+///         .appkit()
+///         .is_some_and(|appkit| appkit.set_backdrop(MacOSBackdrop::Sidebar).is_ok())
+/// }
+///
+/// // A headless window is not an AppKit window: nothing is asked of it.
+/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// assert!(!sidebar(window.as_ref()));
+/// # Ok::<(), flui_native::OpenWindowError>(())
+/// ```
 ///
 /// # Platform Availability
 ///
@@ -73,6 +87,68 @@ pub enum TabJoinError {
     #[error("one of the windows is closed")]
     Closed,
 }
+
+// ============================================================================
+// The material behind the content
+// ============================================================================
+
+/// A material AppKit draws behind a window's content
+/// ([`AppKitWindow::set_backdrop`]): one of `NSVisualEffectView`'s materials,
+/// blended with what is behind the window. FLUI's content shows it where it
+/// draws transparent pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MacOSBackdrop {
+    /// Behind a window's main content (`contentBackground`).
+    ContentBackground,
+    /// A window's background (`windowBackground`).
+    WindowBackground,
+    /// Under everything else in the window (`underWindowBackground`).
+    UnderWindowBackground,
+    /// A sidebar's (`sidebar`).
+    Sidebar,
+    /// A menu's (`menu`).
+    Menu,
+    /// A popover's (`popover`).
+    Popover,
+    /// A heads-up display's: dark and translucent (`hudWindow`).
+    HudWindow,
+}
+
+impl MacOSBackdrop {
+    fn material(self) -> NSVisualEffectMaterial {
+        match self {
+            Self::ContentBackground => NSVisualEffectMaterial::ContentBackground,
+            Self::WindowBackground => NSVisualEffectMaterial::WindowBackground,
+            Self::UnderWindowBackground => NSVisualEffectMaterial::UnderWindowBackground,
+            Self::Sidebar => NSVisualEffectMaterial::Sidebar,
+            Self::Menu => NSVisualEffectMaterial::Menu,
+            Self::Popover => NSVisualEffectMaterial::Popover,
+            Self::HudWindow => NSVisualEffectMaterial::HUDWindow,
+        }
+    }
+}
+
+/// Why AppKit did not change a window's backdrop
+/// ([`AppKitWindow::set_backdrop`], [`AppKitWindow::clear_backdrop`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MacOSBackdropError {
+    /// The window is closed.
+    #[error("the window is closed")]
+    Closed,
+    /// The window is not on the AppKit main thread's owner lane, where its
+    /// views live.
+    #[error("the window is not on the AppKit main thread's owner lane")]
+    NotOnTheMainLane,
+    /// AppKit did not create the view that draws the material.
+    #[error("AppKit did not create the visual effect view")]
+    NoEffectView,
+}
+
+/// A subview that tracks its superview's size.
+const FILL: NSAutoresizingMaskOptions =
+    NSAutoresizingMaskOptions::ViewWidthSizable.union(NSAutoresizingMaskOptions::ViewHeightSizable);
 
 // ============================================================================
 // macOS Window Level
@@ -240,7 +316,7 @@ impl AppKitWindow<'_> {
     /// cannot establish that ownership:
     ///
     /// ```compile_fail,E0308
-    /// use flui_native::{AppKitWindow, TabJoinError};
+    /// use flui_native::os::macos::{AppKitWindow, TabJoinError};
     ///
     /// fn join(window: AppKitWindow<'_>) -> Result<(), TabJoinError> {
     ///     window.add_tab_to_window(1)
@@ -248,7 +324,8 @@ impl AppKitWindow<'_> {
     /// ```
     ///
     /// ```no_run
-    /// use flui_native::{HostWindow, MacOSWindowExt, TabJoinError};
+    /// use flui_native::HostWindow;
+    /// use flui_native::os::macos::{MacOSWindowExt, TabJoinError};
     ///
     /// fn join(window: &dyn HostWindow, other: &dyn HostWindow) -> Option<Result<(), TabJoinError>> {
     ///     window.appkit().map(|appkit| appkit.add_tab_to_window(other))
@@ -286,6 +363,111 @@ impl AppKitWindow<'_> {
                 return Err(TabJoinError::Closed);
             };
             let _: () = msg_send![this.ns_window, addTabbedWindow:other.ns_window ordered:0]; // NSWindowAbove
+            Ok(())
+        })
+    }
+
+    /// Draw `backdrop` behind the window's content, in place of the material
+    /// it had.
+    ///
+    /// An `NSVisualEffectView` becomes the window's content view and FLUI's
+    /// view its subview, filling it: FLUI's view keeps its frame, its input
+    /// and its surface, and stays the first responder. Calling it again changes
+    /// the material of the effect view already there.
+    ///
+    /// # Errors
+    /// [`MacOSBackdropError`]: the window is closed, is not on the AppKit main
+    /// thread's owner lane, or AppKit did not create the effect view; the
+    /// window is then as it was.
+    pub fn set_backdrop(self, backdrop: MacOSBackdrop) -> Result<(), MacOSBackdropError> {
+        let this = self.0;
+        if !this.owner_is_main {
+            return Err(MacOSBackdropError::NotOnTheMainLane);
+        }
+        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+            // SAFETY: the wrapper owns a live NSWindow, constructed with
+            // releasedWhenClosed:NO, and its FLUI view, which the view
+            // hierarchy holds; the route runs on the AppKit main thread (the
+            // check above). The FLUI view is retained while it moves from the
+            // window to the effect view, and the effect view's +1 from `init`
+            // is held until the window has retained it as its content view.
+            if this.closed.load(Ordering::Acquire) {
+                return Err(MacOSBackdropError::Closed);
+            }
+            let view = this.view;
+            let current: ObjcId = msg_send![this.ns_window, contentView];
+            // The effect view goes behind the FLUI view rather than in its
+            // place: the FLUI view carries input, IME, frame requests,
+            // appearance changes and the surface. Its content view is the
+            // FLUI view, or the effect view a previous call put there.
+            let mut created = None;
+            let effect_view = if current == view {
+                let allocated: ObjcId = msg_send![class!(NSVisualEffectView), alloc];
+                let initialized: ObjcId = msg_send![allocated, init];
+                let Some(effect) = Retained::from_raw(initialized) else {
+                    return Err(MacOSBackdropError::NoEffectView);
+                };
+                let Some(_view_pin) = Retained::retain(view) else {
+                    return Err(MacOSBackdropError::Closed);
+                };
+                let effect_view = Retained::as_ptr(&effect).cast_mut();
+                let frame: NSRect = msg_send![view, frame];
+                let _: () = msg_send![effect_view, setFrame: frame];
+                let _: () = msg_send![effect_view, setAutoresizingMask: FILL];
+                let _: () = msg_send![this.ns_window, setContentView: effect_view];
+                let bounds: NSRect = msg_send![effect_view, bounds];
+                let _: () = msg_send![view, setFrame: bounds];
+                let _: () = msg_send![view, setAutoresizingMask: FILL];
+                let _: () = msg_send![effect_view, addSubview: view];
+                // Leaving the window resigned the view's first-responder
+                // status; keyboard and IME input must keep reaching it.
+                let _: BObjC = msg_send![this.ns_window, makeFirstResponder: view];
+                created = Some(effect);
+                effect_view
+            } else {
+                current
+            };
+            let _: () = msg_send![effect_view, setMaterial: backdrop.material()];
+            let _: () =
+                msg_send![effect_view, setBlendingMode: NSVisualEffectBlendingMode::BehindWindow];
+            let _: () = msg_send![effect_view, setState: NSVisualEffectState::Active];
+            // The window holds the effect view now; the +1 of `init` goes.
+            drop(created);
+            Ok(())
+        })
+    }
+
+    /// Take the backdrop away: FLUI's view is the window's content view
+    /// again. A window without a backdrop is left as it is.
+    ///
+    /// # Errors
+    /// [`MacOSBackdropError`]: the window is closed or is not on the AppKit
+    /// main thread's owner lane.
+    pub fn clear_backdrop(self) -> Result<(), MacOSBackdropError> {
+        let this = self.0;
+        if !this.owner_is_main {
+            return Err(MacOSBackdropError::NotOnTheMainLane);
+        }
+        route_on_owner(this.owner, this.owner_is_main, || unsafe {
+            // SAFETY: the wrapper owns a live NSWindow, constructed with
+            // releasedWhenClosed:NO, and its FLUI view, which the view
+            // hierarchy holds; the route runs on the AppKit main thread (the
+            // check above). The FLUI view is retained while it moves from the
+            // effect view back to the window, which then releases the effect
+            // view.
+            if this.closed.load(Ordering::Acquire) {
+                return Err(MacOSBackdropError::Closed);
+            }
+            let view = this.view;
+            let current: ObjcId = msg_send![this.ns_window, contentView];
+            if current != view {
+                let Some(_view_pin) = Retained::retain(view) else {
+                    return Err(MacOSBackdropError::Closed);
+                };
+                let _: () = msg_send![view, removeFromSuperview];
+                let _: () = msg_send![this.ns_window, setContentView: view];
+                let _: BObjC = msg_send![this.ns_window, makeFirstResponder: view];
+            }
             Ok(())
         })
     }

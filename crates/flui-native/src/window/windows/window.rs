@@ -35,10 +35,10 @@ use windows::{
 };
 
 use flui_platform::{
-    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    CursorError, DispatchEventResult, OsWindowOptions, PlatformInput, PlatformWindow,
+    SizeConstraints, Win32WindowOptions, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowState, WindowsCornerPreference,
 };
 
 use super::mode::NativeMode;
@@ -366,12 +366,18 @@ impl WindowsWindow {
             // Remove background brush to allow Mica backdrop
             SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
-            // Apply Windows 11 features automatically
-            Self::apply_windows_features(hwnd);
+            // What the window opens with on Windows: its own options, or
+            // what a window gets without them.
+            let os = match &options.os {
+                OsWindowOptions::Windows(os) => os.clone(),
+                _ => Win32WindowOptions::default(),
+            };
+            Self::apply_windows_features(hwnd, os.corner_preference);
             // One sample seeds both the chrome and the change filter, so the
             // first theme change after creation is never swallowed.
             let appearance = super::backdrop::system_appearance();
-            super::backdrop::apply_chrome(hwnd, appearance);
+            let (chrome, chrome_follows_system) = super::backdrop::opening_chrome(&os, appearance);
+            super::backdrop::apply_chrome(hwnd, chrome);
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} - scale: {}",
@@ -499,7 +505,7 @@ impl WindowsWindow {
                 displays: Arc::clone(&displays),
                 last_monitor: std::cell::Cell::new(None),
                 appearance: std::cell::Cell::new(appearance),
-                chrome_follows_system: std::cell::Cell::new(true),
+                chrome_follows_system: std::cell::Cell::new(chrome_follows_system),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -657,21 +663,20 @@ impl WindowsWindow {
     ///
     /// This applies modern Windows 11 visual features if running on Windows 11:
     /// - Mica backdrop for translucent background with blur
-    /// - Rounded window corners
+    /// - the window's corners, as `corners` asks
     /// - DWM frame extension for proper backdrop rendering
-    fn apply_windows_features(hwnd: HWND) {
+    fn apply_windows_features(hwnd: HWND, corners: WindowsCornerPreference) {
         // SAFETY: every call here (`DwmExtendFrameIntoClientArea`,
-        // `DwmSetWindowAttribute` x2) takes `hwnd` and a pointer to a
+        // `DwmSetWindowAttribute`) takes `hwnd` and a pointer to a
         // stack-local value whose `size_of` matches the `u32` byte-count
         // argument passed alongside it (`MARGINS` by-reference for the first
-        // call; `&raw const <i32>` cast to `c_void` for the rest, each with
+        // call; `&raw const <i32>` cast to `c_void` for the second, with
         // `size_of::<i32>()`). Callers of this function (`WindowsWindow::new`)
         // pass the `hwnd` just returned by `CreateWindowExW`, so it is valid
-        // for the duration of this call. Both `DwmSetWindowAttribute`
-        // results are discarded (`let _ =`) because every attribute here is a
-        // Windows-11-only cosmetic feature — failure on older Windows is
-        // expected and non-fatal, not evidence swallowed silently for an
-        // operation the caller depends on.
+        // for the duration of this call. The results are discarded (`let _ =`)
+        // because every attribute here is a Windows-11-only cosmetic feature —
+        // failure on older Windows is expected and non-fatal, not evidence
+        // swallowed silently for an operation the caller depends on.
         unsafe {
             use windows::Win32::{
                 Graphics::Dwm::{
@@ -700,14 +705,8 @@ impl WindowsWindow {
                 std::mem::size_of::<i32>() as u32,
             );
 
-            // 3. Set rounded corners
-            let corner_value: i32 = 2; // DWMWCP_ROUND
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
-                (&raw const corner_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
+            // 3. The corners
+            let _ = super::backdrop::apply_corners(hwnd, corners);
 
             tracing::debug!("Windows 11 features applied");
         }

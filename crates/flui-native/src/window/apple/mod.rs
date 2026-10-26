@@ -2,7 +2,7 @@
 //! window ([`ios`]), over the pure rules both ask ([`geometry`]).
 //!
 //! The macOS window keeps its AppKit features beyond the cross-platform window
-//! (`MacOSWindowExt`) beside it.
+//! (`MacOSWindowExt`) and the material behind its content beside it.
 
 pub(crate) mod geometry;
 #[cfg(target_os = "ios")]

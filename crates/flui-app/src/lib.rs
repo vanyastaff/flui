@@ -47,6 +47,18 @@ pub mod app;
 pub mod bindings;
 pub mod embedder;
 
+/// What one operating system's windows offer beyond the window contract: the
+/// core host's per-system extensions of [`HostWindow`](native::HostWindow),
+/// which the facade publishes as `flui::native` behind its `native` feature
+/// (ADR-0254 §8). Each answers `None` for a window of another host.
+pub mod native {
+    pub use flui_native::HostWindow;
+    #[cfg(target_os = "macos")]
+    pub use flui_native::os::macos;
+    #[cfg(windows)]
+    pub use flui_native::os::windows;
+}
+
 #[cfg(test)]
 mod table_test;
 

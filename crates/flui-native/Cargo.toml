@@ -624,7 +624,7 @@ platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version", "storage"]
 hosts = "hosts"
-crate-level = ["host", "platform", "host_window", "error", "executor", "task"]
+crate-level = ["host", "platform", "host_window", "error", "executor", "task", "os"]
 # The one edge between platform files of one feature (the winit host on Linux
 # reads the compositor's outputs through the Linux source, which leaves with
 # winit), and each between the window's and another feature's files of one

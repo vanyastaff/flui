@@ -173,8 +173,9 @@ pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowEvent,
-    WindowExecutionState, WindowId, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, InputLatency, OsWindowOptions, Win32WindowOptions, WindowAppearance,
+    WindowBackgroundAppearance, WindowEvent, WindowExecutionState, WindowId, WindowOptions,
+    WindowReveal, WindowShowError, WindowsCornerPreference, WindowsTheme,
 };
 pub use window_state::{
     SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,

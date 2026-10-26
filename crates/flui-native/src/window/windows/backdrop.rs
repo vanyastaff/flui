@@ -3,25 +3,17 @@
 //! theme, and the light or dark chrome that follows the user's app theme.
 //!
 //! [`WindowsWindowExt`] is how a Windows application reaches these on any
-//! window a host hands out: [`WindowsWindowExt::win32`] is `None` for a window
-//! of another host, and the [`Win32Window`] it gives otherwise has no other
-//! way to fail. [`system_appearance`] and [`apply_chrome`] are what the window
-//! procedure applies when the theme changes.
-//!
-//! ```rust,ignore
-//! use flui_native::{HostWindow, WindowsBackdrop, WindowsWindowExt};
-//!
-//! fn decorate(window: &dyn HostWindow) {
-//!     // A window of another host is not a Win32 window: nothing is asked of it.
-//!     if let Some(win32) = window.win32() {
-//!         win32.set_backdrop(WindowsBackdrop::Mica);
-//!         win32.enable_snap_layouts();
-//!     }
-//! }
-//! ```
+//! window a host hands out (`flui_native::os::windows`):
+//! [`WindowsWindowExt::win32`] is `None` for a window of another host, and the
+//! [`Win32Window`] it gives otherwise has no other way to fail.
+//! [`system_appearance`] and [`apply_chrome`] are what the window procedure
+//! applies when the theme changes; [`apply_corners`] and [`opening_chrome`]
+//! are what a window opens with (`flui_platform::Win32WindowOptions`).
 
 use flui_foundation::geometry::Point;
-use flui_platform::{Brightness, WindowAppearance};
+use flui_platform::{
+    Brightness, Win32WindowOptions, WindowAppearance, WindowsCornerPreference, WindowsTheme,
+};
 use windows::Win32::Foundation::{FALSE, HWND, TRUE};
 use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::HRGN;
@@ -45,6 +37,25 @@ use crate::host_window::HostWindow;
 /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
 /// host (headless, winit) is not a Win32 window: [`win32`](Self::win32) answers
 /// `None` for it, and nothing is asked of it.
+///
+/// ```
+/// use flui_native::os::windows::{WindowsBackdrop, WindowsWindowExt};
+/// use flui_native::{HostWindow, headless_platform};
+/// use flui_platform::WindowOptions;
+///
+/// /// Mica behind the window, if it is a Win32 window.
+/// fn mica(window: &dyn HostWindow) -> bool {
+///     window.win32().is_some_and(|win32| {
+///         win32.set_backdrop(WindowsBackdrop::Mica);
+///         true
+///     })
+/// }
+///
+/// // A headless window is not a Win32 window: nothing is asked of it.
+/// let window = headless_platform().open_window(WindowOptions::default().with_visible(false))?;
+/// assert!(!mica(window.as_ref()));
+/// # Ok::<(), flui_native::OpenWindowError>(())
+/// ```
 ///
 /// # Platform Availability
 ///
@@ -128,64 +139,60 @@ impl WindowsBackdrop {
 }
 
 // ============================================================================
-// Window Corner Preference
+// Corners and theme
 // ============================================================================
 
-/// Window corner rounding preference.
-///
-/// Controls the corner style for Windows 11 windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowCornerPreference {
-    /// Default corner style (usually rounded on Windows 11).
-    Default,
-
-    /// Do not round corners.
-    DoNotRound,
-
-    /// Force rounded corners.
-    Round,
-
-    /// Small rounded corners.
-    RoundSmall,
-}
-
-impl WindowCornerPreference {
-    /// Convert to DWM_WINDOW_CORNER_PREFERENCE value.
-    pub fn to_dwm_value(self) -> i32 {
-        match self {
-            WindowCornerPreference::Default => 0,    // DWMWCP_DEFAULT
-            WindowCornerPreference::DoNotRound => 1, // DWMWCP_DONOTROUND
-            WindowCornerPreference::Round => 2,      // DWMWCP_ROUND
-            WindowCornerPreference::RoundSmall => 3, // DWMWCP_ROUNDSMALL
-        }
+/// The `DWM_WINDOW_CORNER_PREFERENCE` value of `preference`.
+fn corner_value(preference: WindowsCornerPreference) -> i32 {
+    match preference {
+        WindowsCornerPreference::Default => 0,    // DWMWCP_DEFAULT
+        WindowsCornerPreference::DoNotRound => 1, // DWMWCP_DONOTROUND
+        WindowsCornerPreference::Round => 2,      // DWMWCP_ROUND
+        WindowsCornerPreference::RoundSmall => 3, // DWMWCP_ROUNDSMALL
     }
 }
 
-// ============================================================================
-// Windows Theme
-// ============================================================================
-
-/// Windows window theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowsTheme {
-    /// Light theme (default on most systems).
-    Light,
-
-    /// Dark theme.
-    Dark,
-
-    /// Follow system theme.
-    System,
+/// Ask the desktop window manager to round `hwnd`'s corners as `preference`
+/// says. Builds before Windows 11 do not know the attribute and keep square
+/// corners; the failure is returned.
+pub(super) fn apply_corners(
+    hwnd: HWND,
+    preference: WindowsCornerPreference,
+) -> windows::core::Result<()> {
+    let value = corner_value(preference);
+    // SAFETY: `DWMWA_WINDOW_CORNER_PREFERENCE` takes a 4-byte
+    // `DWM_WINDOW_CORNER_PREFERENCE`; the pointer addresses the stack-local
+    // `i32` for the call and the size states its width.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            WINDOW_CORNER_PREFERENCE,
+            (&raw const value).cast(),
+            size_of::<i32>() as u32,
+        )
+    }
 }
 
-impl WindowsTheme {
-    /// Convert to DWMWA_USE_IMMERSIVE_DARK_MODE value.
-    pub fn to_dark_mode_value(self) -> Option<bool> {
-        match self {
-            WindowsTheme::Light => Some(false),
-            WindowsTheme::Dark => Some(true),
-            WindowsTheme::System => None, // Use system default
-        }
+/// The appearance `theme` draws the chrome in, `None` for the user's app
+/// theme, which the window then follows.
+fn chosen_appearance(theme: WindowsTheme) -> Option<WindowAppearance> {
+    match theme {
+        WindowsTheme::Light => Some(WindowAppearance::Light),
+        WindowsTheme::Dark => Some(WindowAppearance::Dark),
+        WindowsTheme::System => None,
+    }
+}
+
+/// The chrome a window opened with `options` starts with, given the user's
+/// app theme `system`: the appearance it draws and whether it follows `system`
+/// from then on.
+pub(super) fn opening_chrome(
+    options: &Win32WindowOptions,
+    system: WindowAppearance,
+) -> (WindowAppearance, bool) {
+    match chosen_appearance(options.theme) {
+        Some(appearance) => (appearance, false),
+        None => (system, true),
     }
 }
 
@@ -223,6 +230,9 @@ pub(crate) mod dwm_attributes {
 
 /// `DWMWA_USE_IMMERSIVE_DARK_MODE`, honoured from Windows 10 20H1.
 const USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20);
+
+/// `DWMWA_WINDOW_CORNER_PREFERENCE`, honoured from Windows 11 build 22000.
+const WINDOW_CORNER_PREFERENCE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(33);
 
 /// The app theme chosen in Settings › Personalization › Colors.
 ///
@@ -451,26 +461,17 @@ impl Win32Window<'_> {
 
     /// Set whether the window has rounded or square corners (Windows 11 Build
     /// 22000+).
-    pub fn set_corner_preference(self, preference: WindowCornerPreference) {
-        // SAFETY: `corner_value` is `i32`, matching
-        // `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected layout, satisfying
-        // `set_dwm_attribute`'s `# Safety` contract.
-        unsafe {
-            let corner_value = preference.to_dwm_value();
-            if let Err(e) = self.0.set_dwm_attribute(
-                dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_value,
-            ) {
-                tracing::warn!("Failed to set corner preference: {:?}", e);
-            } else {
-                tracing::debug!("Set corner preference to {:?}", preference);
-            }
+    pub fn set_corner_preference(self, preference: WindowsCornerPreference) {
+        if let Err(error) = apply_corners(self.0.hwnd(), preference) {
+            tracing::warn!("Failed to set corner preference: {:?}", error);
+        } else {
+            tracing::debug!("Set corner preference to {:?}", preference);
         }
     }
 
     /// The window's corner preference.
     #[must_use]
-    pub fn corner_preference(self) -> WindowCornerPreference {
+    pub fn corner_preference(self) -> WindowsCornerPreference {
         // SAFETY: `i32` matches `DWMWA_WINDOW_CORNER_PREFERENCE`'s expected
         // layout, satisfying `get_dwm_attribute`'s `# Safety` contract.
         unsafe {
@@ -479,10 +480,10 @@ impl Win32Window<'_> {
                 .get_dwm_attribute::<i32>(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE)
             {
                 // Ok(0) is DWMCP_DEFAULT — covered by the fallback arm.
-                Ok(1) => WindowCornerPreference::DoNotRound,
-                Ok(2) => WindowCornerPreference::Round,
-                Ok(3) => WindowCornerPreference::RoundSmall,
-                _ => WindowCornerPreference::Default,
+                Ok(1) => WindowsCornerPreference::DoNotRound,
+                Ok(2) => WindowsCornerPreference::Round,
+                Ok(3) => WindowsCornerPreference::RoundSmall,
+                _ => WindowsCornerPreference::Default,
             }
         }
     }
@@ -554,8 +555,8 @@ impl Win32Window<'_> {
     /// Set the chrome's theme; [`WindowsTheme::System`] follows the user's app
     /// theme now and on each later change.
     pub fn set_theme(self, theme: WindowsTheme) {
-        if let Some(dark_mode) = theme.to_dark_mode_value() {
-            self.set_dark_mode(dark_mode);
+        if let Some(appearance) = chosen_appearance(theme) {
+            self.set_dark_mode(Brightness::from(appearance).is_dark());
         } else {
             // Back to the system theme, now and on each later change.
             super::proc::with_window_context(self.0.hwnd(), "set_theme", |ctx| {

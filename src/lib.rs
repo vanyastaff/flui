@@ -72,6 +72,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //! | `dev-agent` | off | re-exports `flui-devtools` as `devtools`, with its agent server; install it with `AppConfig::with_dev_agent` (`flui run --agent`) |
+//! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
@@ -90,6 +91,16 @@ await its returned request or poll `try_result` to obtain the window result."
 //! (serialization for framework value types). Native accessibility is not a
 //! feature: on Windows, macOS and Linux every window offers its semantics tree
 //! to the operating system's assistive technology through AccessKit.
+//!
+//! `native` publishes the escape hatch, `flui::native`: what one operating
+//! system's windows offer beyond the window contract, in `flui::native::windows`
+//! and `flui::native::macos`. It is Evolving rather than Stable (ADR-0089 §5),
+//! so it is off by default and absent without the feature:
+//!
+#![cfg_attr(not(feature = "native"), doc = "```compile_fail,E0432")]
+#![cfg_attr(feature = "native", doc = "```")]
+//! use flui::native::HostWindow;
+//! ```
 //!
 //! # Using a design system
 //!
@@ -141,6 +152,7 @@ fn main() {
 //! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
 //! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
 //! | [`app`] | `flui-app` | — | `run_app` + bindings |
+//! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
 //!
 //! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
 //! contracts for custom drawing, render objects, and gestures. Arena storage,
@@ -183,6 +195,30 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
+/// What one operating system's windows offer beyond the window contract
+/// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
+/// (ADR-0089 §5).
+///
+/// Each system's module has an extension trait implemented for
+/// `dyn HostWindow`, the window as the core host hands it out. Its one method
+/// narrows the window to that system's view of it (`win32()`, `appkit()`) and
+/// answers `None` for a window of any other host (headless, winit, another
+/// system), so nothing is asked of a window that cannot take it and nothing
+/// panics. The views take and return FLUI types; a raw window or display
+/// handle leaves only through `raw-window-handle`'s `HasWindowHandle` and
+/// `HasDisplayHandle`, which every window implements.
+///
+/// What a window is created with on one system is a value of that system's
+/// type in [`platform::OsWindowOptions`], given to
+/// [`AppConfig::with_os_window_options`].
+#[cfg(feature = "native")]
+pub mod native {
+    pub use flui_app::native::HostWindow;
+    #[cfg(target_os = "macos")]
+    pub use flui_app::native::macos;
+    #[cfg(windows)]
+    pub use flui_app::native::windows;
+}
 /// The platform contracts and input vocabulary (`flui-platform`).
 ///
 /// [`input_capabilities`](flui_platform::input_capabilities) and
