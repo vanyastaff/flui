@@ -138,7 +138,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         None
     };
     if factory {
-        owner.set_error_view_builder(Some(failing_factory));
+        owner.capabilities_mut().error_view_builder = Some(failing_factory);
     }
     let subscriber = tracing_subscriber::registry().with(telemetry.then(|| FailedTelemetry {
         calls: Arc::clone(&report_calls),

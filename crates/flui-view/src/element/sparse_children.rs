@@ -679,7 +679,7 @@ pub(crate) fn build_item_or_report(
                 payload.as_ref(),
                 format!("building lazy sliver child {index}"),
             );
-            let substitute = recovery_view_for(&panic.error, owner.error_view_builder);
+            let substitute = recovery_view_for(&panic.error, owner.capabilities.error_view_builder);
             owner.push_recovered_panic(panic);
             Some(substitute)
         }

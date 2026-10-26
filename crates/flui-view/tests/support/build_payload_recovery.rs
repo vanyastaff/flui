@@ -196,7 +196,7 @@ fn run_child(kind: &str) {
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    owner.set_error_view_builder(factory);
+    owner.capabilities_mut().error_view_builder = factory;
     let parent = tree.mount_root_with_pipeline_owner(
         &super::Row {
             children: vec![host.clone().boxed()],

@@ -136,7 +136,7 @@ fn mount_and_build_with(
 ) -> (ElementTree, BuildOwner, flui_view::ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    owner.set_error_view_builder(error_view_builder);
+    owner.capabilities_mut().error_view_builder = error_view_builder;
     let root_id = tree.mount_root(view, &mut owner.element_owner_mut());
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
@@ -222,7 +222,8 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     owner.build_scope(&mut tree);
     let prior_failed = failed_ids.lock().unwrap()[0];
 
-    owner.set_error_view_builder(Some(|_| panic!("configured recovery factory panic")));
+    owner.capabilities_mut().error_view_builder =
+        Some(|_| panic!("configured recovery factory panic"));
     tree.update(
         root,
         &WrapperView {
