@@ -394,6 +394,7 @@ impl Lcg {
 
 struct Spec {
     root: TreeNode,
+    root_is_boundary: bool,
     boundaries: usize,
     opacities: usize,
 }
@@ -444,12 +445,22 @@ fn generate(seed: u64, alphas: &[f64]) -> Spec {
         opacities: 0,
         alphas,
     };
-    let mut root = box_node(RenderFlex::row());
+    let mut row = box_node(RenderFlex::row());
     for _ in 0..3 {
-        root = root.child(builder.node(4));
+        row = row.child(builder.node(4));
     }
+    // Odd seeds put the whole tree under a root boundary, so the root's own capture is exercised.
+    let root_is_boundary = seed % 2 == 1;
+    let root = if root_is_boundary {
+        box_node(RenderRepaintBoundary::new())
+            .label("root")
+            .child(row)
+    } else {
+        row
+    };
     Spec {
         root,
+        root_is_boundary,
         boundaries: builder.boundaries,
         opacities: builder.opacities,
     }
@@ -465,7 +476,8 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
         if spec.boundaries == 0 {
             continue;
         }
-        let (boundaries, opacities) = (spec.boundaries, spec.opacities);
+        let (boundaries, opacities, root_is_boundary) =
+            (spec.boundaries, spec.opacities, spec.root_is_boundary);
         let (owner, registry) = mount(spec.root);
         let id = |name: String| registry.get(&name).expect("labelled");
         let mut alphas = vec![0.5; opacities];
@@ -473,6 +485,9 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
         let (mut owner, _) = frame(owner);
 
         for step in 0..6 {
+            if root_is_boundary && rng.next(4) == 0 {
+                owner.mark_needs_paint(id("root".to_owned()));
+            }
             for _ in 0..=rng.next(3) {
                 owner.mark_needs_paint(id(format!("b{}", rng.next(boundaries))));
             }
@@ -529,4 +544,87 @@ fn the_generator_nests_boundaries() {
 /// Labels are `&'static str`; a test generating a few dozen of them leaks them.
 fn leak(label: String) -> &'static str {
     Box::leak(label.into_boxed_str())
+}
+
+/// Root boundary → row → [tally, boundary "inner" → tally]: the root is retained like any boundary.
+fn rooted() -> (PipelineOwner<Idle>, RenderId, PaintTally, PaintTally) {
+    let (root_tally, inner_tally) = (PaintTally::new(), PaintTally::new());
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderFlex::row())
+                .child(box_node(root_tally.clone()))
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("inner")
+                        .child(box_node(inner_tally.clone())),
+                ),
+        ),
+    );
+    let inner = registry.get("inner").expect("labelled");
+    (owner, inner, root_tally, inner_tally)
+}
+
+/// A root that is a repaint boundary is replayed while only a boundary nested in it repaints.
+#[test]
+fn a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints() {
+    let (owner, inner, root_tally, inner_tally) = rooted();
+    let (mut owner, first) = frame(owner);
+    let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
+    let before = owner.counters();
+
+    owner.mark_needs_paint(inner);
+    let (owner, second) = frame(owner);
+
+    // The inner boundary and the tally under it; the root and its row are replayed.
+    assert_eq!(owner.counters().since(before).nodes_painted, 2);
+    assert_eq!(root_tally.paints(), root_before);
+    assert_eq!(inner_tally.paints(), inner_before + 1);
+    assert_eq!(fingerprint(&first), fingerprint(&second));
+}
+
+/// An effect whose only enclosing boundary is the root is patched, not repainted.
+#[test]
+fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
+    let tally = PaintTally::new();
+    let build = |alpha: f64| {
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderOpacity::new(alpha))
+                .label("opacity")
+                .child(box_node(tally.clone())),
+        )
+    };
+    let (owner, registry) = mount(build(0.5));
+    let opacity = registry.get("opacity").expect("labelled");
+    let (mut owner, _) = frame(owner);
+    let painted = tally.paints();
+
+    update_render_object::<RenderOpacity, _>(&mut owner, opacity, |o| o.set_opacity(0.25));
+    let (_, patched) = frame(owner);
+
+    assert_eq!(
+        tally.paints(),
+        painted,
+        "the root was patched, not repainted"
+    );
+    let (reference, _) = mount(build(0.25));
+    let (_, full) = frame(reference);
+    assert_eq!(fingerprint(&patched), fingerprint(&full));
+}
+
+/// Retained output was recorded for the old pixel ratio, so the next paint under another one
+/// repaints everything, even when only a nested boundary asked for it.
+#[test]
+fn a_pixel_ratio_change_drops_the_retained_output() {
+    let (owner, inner, root_tally, inner_tally) = rooted();
+    let (mut owner, _) = frame(owner);
+    owner.mark_needs_paint(inner);
+    let (mut owner, _) = frame(owner);
+    let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
+
+    owner.set_device_pixel_ratio(2.0);
+    owner.mark_needs_paint(inner);
+    let (_, _) = frame(owner);
+
+    assert_eq!(root_tally.paints(), root_before + 1);
+    assert_eq!(inner_tally.paints(), inner_before + 1);
 }
