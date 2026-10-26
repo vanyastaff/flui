@@ -2416,6 +2416,110 @@ graph LR
   (мультиплексоры AppKit и UIKit, фокус VoiceOver) — в очереди vanyastaff/flui#1840; тесты и doc macOS
   (нужен C-тулчейн), `cross-typecheck`; браузер — у координатора (присоединение и отсоединение
   редактора холста, исходы haptics `NotOnThisDevice`/`Unavailable`, отсоединение при закрытии окна).
+- [x] **LY40** — ветка `platform/window-state`, начата на вершине LY38 `45809e5ea`, перенесена на
+  `main` @ `9d091b190` (LY38) и `f5da90a90` (LY37), конфликт только в журнале
+  `docs/platform-parity.md`. Аддитивно: геттеры и парные `on_*` живут до LY41.
+  **Контракт.** `WindowState` получил `metrics: Option<WindowMetrics>`, `appearance`, `safe_area`,
+  `execution`, `hovered`, `capabilities` и `with_*` к каждому (дисплей, фокус и видимость были);
+  `new` — `None`, `Light`, ноль, `Running`, `false`, `WindowCapabilities::NONE`. Правило «нерисуемое
+  не публикуется» — в `successor`: образец без `metrics` (нулевой размер, неконечный или
+  неположительный масштаб) сохраняет метрики снимка, так что такой отчёт без других перемен
+  ревизии не даёт; `None` — только «ещё ни разу не было рисуемой площади». `is_active` отдельного
+  факта не получил: ADR-0254 §1 его не называет, его умолчание — фокус; `mouse_position` и
+  `modifiers` — поток ввода. `WindowCapabilities`: все 15 полей — `Availability` (и наблюдения
+  `observes_*`, `places_at_open`: «отчёт делает ОС, хост или никто»), `NONE`/`ALL` — через
+  `every`, `availability(&WindowCommand) -> Availability` (`Normal` — всегда `Native`), `permits`
+  остался (`is_available`); `Availability::is_available` новый; `expect(struct_excessive_bools)`
+  ушёл. `admit` отказывает ровно при `Unavailable`, `Emulated` допускается. Хосты: Win32 —
+  `enters_fullscreen: Emulated` (полноэкранность — окно без рамки во весь монитор), прочее
+  `Native`; AppKit и Web — как были, `Native`; winit — `Native`, Wayland и X11 без пробы —
+  `Unavailable` там, где был `false`; Android и iOS — `NONE`. Каждый набор назван по полю, так что
+  новая возможность контракта у хоста `Unavailable`, пока `apply` её не делает.
+  **Публикация.** У `WindowCallbacks` — `StatePublisher` (`Arc<dyn Fn() + Send + Sync>` над слабой
+  ссылкой на окно, `set_state_publisher`, сбрасывается в `clear`): каждая доставка факта (resize и
+  масштаб, фокус, видимость, наведение, внешний вид, дисплей, safe area, исполнение; iOS —
+  `dispatch_metrics_resize` и немедленный lifecycle кроме поверхности) сначала зовёт его без
+  замков набора, так что снимок перечитан и `on_state_changed` поставлен в очередь раньше
+  колбэка факта, в том OS-колбэке, где факт пришёл; наблюдение, фиксируемое в точке доставки
+  (фокус и видимость Web), публикуется сразу после фиксации. `publish_state` — `pub(crate)` для
+  факта без своего колбэка (iOS: размер при нерисуемых метриках, шаг lifecycle — вместо
+  безусловного `dispatch_state_changed`). Наведение — одно правило для всех хостов: что сказал
+  последний `dispatch_hover_status_change` (`WindowCallbacks::hovered`), кто бы его ни сообщил
+  (ввод Win32 и Web, tracking area AppKit, курсор winit), — без ребра от ввода к окну. Хосты ставят
+  издателя при открытии: headless (`publish_window_state`, свободная функция над моделью), Win32
+  (`with_window_context` → `publish_window_state`), winit (`refresh_state`), AppKit, UIKit, Android
+  (`publish_state`), Web (`publisher().publish()`). Выборки: метрики — клиентская область Win32 в
+  пикселях устройства при масштабе записи, `inner_size` winit, область контента AppKit при
+  `backingScaleFactor`, метрики вида UIKit, `ANativeWindow` Android, буфер холста Web; внешний вид
+  — тема пользователя, как применена к окну (ADR-0222): Win32 — то, что последний
+  `WM_SETTINGCHANGE` прочёл (`ctx.appearance`), winit — `appearance_of` (тема winit, иначе портал),
+  AppKit — `effectiveAppearance` окна, UIKit и Android — их отчёт, Web — `prefers-color-scheme`;
+  исполнение — Android `resumed` (`execution_of`), UIKit lifecycle, Web Page Lifecycle, headless —
+  `Detached` после закрытия. Сверх строки: (1) снимок Win32 невидим под маскировкой DWM или при
+  заблокированной сессии (`OwnerTracking::occluded`), как уже говорил геттер `is_visible` и
+  колбэк видимости, — иначе потребитель LY41 видел бы скрытое окно видимым; `settle_visibility`
+  помечает снимок устаревшим и тогда, когда отчёт видимости не меняется; (2) winit объявляет снимок
+  до отчёта видимости, который тянет свёрнутость X11 (`follow_wm_minimized` после
+  `dispatch_state_changed`): прежний порядок давал гонку, которую прогон под xvfb поймал в
+  `x11_window_takes_commands_and_publishes_what_the_server_holds` («a notification»); (3) поле
+  `shell` окна winit удалено (читалось только выборкой); (4) `MockWindow::simulate_hover` — двойник
+  ОС для наведения, как прочие `simulate_*`; закрытие headless публикует скрытое и `Detached` одной
+  ревизией до `on_close`.
+  **Conformance.** `flui_testing::window_conformance`: `Readback { metrics, focused, visible }` и
+  обязательный `WindowFixture::readback` (что говорит оконная система своими средствами, `None` —
+  не читается), проверка `the_snapshot_agrees_with_the_window_system` — при открытии и после
+  каждой принятой команды факты снимка равны прочитанному, а `capabilities` снимка — окна.
+  Headless-фикстура читает модель через геттеры (LY41 переведёт её на модель, когда геттеров не
+  станет). Win32 впервые проходит весь набор против настоящей системы: `the_win32_window_conforms`
+  (`GetClientRect` и `GetDpiForWindow`, `GetFocus`, `IsWindowVisible` и `DWMWA_CLOAKED`). Находка:
+  окно Win32 без рамки не может быть изменяемым (`WS_THICKFRAME` уходит с рамкой), и
+  `SetResizable(true)` на нём сходился бы только после `SetDecorated(true)`; порядок образцовых
+  команд — рамка, затем изменяемость (комментарий в коде). Живой resize:
+  `a_live_resize_publishes_inside_its_modal_loop` — клавиатурный цикл `SC_SIZE`, стрелки и Enter
+  из другого потока; каждый `on_state_changed` внутри цикла читает снимок, чьи метрики равны
+  клиентской области и DPI Win32 на этом шаге, до возврата из цикла. winit conformance не
+  запускалась: харнесс реального цикла (`real_loop_tests`) гоняет сценарий в рабочем потоке, а
+  `apply` и `settle` фикстуры требуют хода владельца между командами.
+  Тесты (новое поведение; «падает без» проверено откатом): `flui-platform` —
+  `each_window_fact_advances_the_revision`, `a_report_that_is_not_drawable_keeps_the_metrics`,
+  `admit_refuses_exactly_when_the_capability_is_unavailable` (переименован из `…_is_false`, строка
+  `Emulated` допускается); `flui-native` — `window_facts_arrive_only_in_the_snapshot` (таблица
+  `window_state_contract`: фокус, видимость, наведение, внешний вид, safe area, исполнение,
+  дисплей, масштаб, размер — одна ревизия, `State` раньше `Fact`, повтор не публикует, NaN-масштаб
+  и пустая площадь метрик не трогают, `capabilities` снимка — окна; с выключенным издателем падают
+  наведение, внешний вид, safe area, исполнение и масштаб: «heard [Fact, State]»),
+  `the_win32_window_conforms` и `a_live_resize_publishes_inside_its_modal_loop`
+  (`native_window_commands`; без метрик в выборке Win32 падают оба); `flui-testing` —
+  `a_snapshot_without_the_windows_facts_is_caught`, а без метрик в выборке headless падает
+  `the_headless_window_conforms_under_every_capability_set`. Записи нативных трасс и conformance
+  ввода не тронуты.
+  `module-dag`: 1 исключение, без изменений; `globals` — 56. Документы: ARCHITECTURE.md ядра
+  (снимок со всеми фактами и `Availability`, новый пункт «каждый колбэк факта идёт после снимка»,
+  iOS публикует из метрик и lifecycle), `docs/platform-parity.md` (свидетельство Windows у
+  «Minimize, maximize, restore, state readback», строка журнала), `changelog.d/platform-window-state.md`.
+  Проверки (Windows, после переноса на `f5da90a90`): `cargo fmt`; clippy `-D warnings` рабочего
+  пространства `--all-targets` и `-p flui-native -p flui-app` с `winit-backend`; nextest
+  `flui-platform`, `flui-native`, `flui-app`, `flui-testing`, `flui-runtime`, `flui-interaction`,
+  `flui-view` — 689 из 690 (16 пропущены), `flui-native` и `flui-app` с `winit-backend` — 364 из
+  365 (2); упал один trybuild `owner_thread_token_has_no_default`: rustc печатает `Default`, а
+  `.stderr` (с LY25) ждёт `std::default::Default`; до переноса на LY37 тот же код ветки давал
+  687 из 687 и 362 из 362, в WSL он проходит, файл не тронут — расхождение пришло с `main`; doctest'ы
+  `flui-platform`, `flui-native`, `flui-testing`; clippy Android `-p flui-native -p flui-app
+  --all-targets`, macOS lib (и с `winit-backend`), iOS lib (`DOCS_RS=1`), wasm32 lib (`flui-native`,
+  `flui-app`); `wasm-check`, `wasm-test` — 51; `checks` (`module-dag` и самотест — 296 модулей,
+  1 исключение; `globals` и самотест — 56; `file-length`, `markers`, `testing`, `docs-paths`,
+  `workspace` — 28 крейтов, 229 рёбер; `reach` — 68 сборок; `android-dex`, taplo), `doc-strict`.
+  WSL Ubuntu 24.04 (`WAYLAND_DISPLAY` и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform -p
+  flui-native -p flui-app -p flui-testing --all-targets`, с `winit-backend` и `flui-native
+  --all-features`; nextest `FLUI_HEADLESS=1` без признаков — 318, под xvfb с `winit-backend` — 446
+  (1 пропущен), `--all-features` под xvfb — 300; X11-тесты пять раз подряд после правки порядка —
+  17 из 17; rustdoc `-D warnings --document-private-items` без признаков и с `winit-backend`;
+  `api-closure -p flui-platform` — чисто. Устройства не нужны (строка — L + W + T): Android меняет
+  выборку и издателя, их держит clippy Android. Не запускалось: Mac и iPhone (выборка AppKit с
+  `effectiveAppearance` и метриками, издатели AppKit и UIKit) — в очереди vanyastaff/flui#1840;
+  `cross-typecheck` (нет `zig`; job в CI); winit conformance (см. выше); браузер — у координатора:
+  снимок холста после наведения мыши, смены `prefers-color-scheme`, `freeze`/`resume` страницы и
+  изменения масштаба страницы несёт эти факты новой ревизией.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
