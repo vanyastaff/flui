@@ -829,7 +829,11 @@ pub(crate) fn start_os_drags(
             Ok(Ok(())) => {}
             Ok(Err(error)) => refused.push((key, error)),
             Err(failure) => {
-                refused.push((key, flui_platform::drag::DragError::Unavailable));
+                // The start never answered: the drag goes back to its window,
+                // and a later one may start.
+                let not_now =
+                    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable);
+                refused.push((key, not_now.into()));
                 crate::lifecycle_state::preserve_first_lifecycle_panic(
                     first,
                     Some(failure),

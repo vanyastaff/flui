@@ -1,4 +1,5 @@
-//! macOS native text input — the `NSTextInputClient` half of the IME contract.
+//! macOS native text input — the composition behind the content view's
+//! `NSTextInputClient` methods.
 //!
 //! AppKit has no "IME enabled" flag a backend can set: composition is a
 //! *protocol the view implements*. `-[NSResponder interpretKeyEvents:]` hands
@@ -8,74 +9,54 @@
 //! `doCommandBySelector:` for keys it declines — and *queries* the view for
 //! state it cannot know (`hasMarkedText`, `markedRange`, `selectedRange`,
 //! `firstRectForCharacterRange:actualRange:` for candidate-window placement).
-//! So the winit backend's shape — a thin wrapper over a platform call — does
-//! not transfer: on macOS this module becomes the implementor.
+//! The view is the owner's (`owner::apple::macos::content_view`), which turns
+//! those methods into Rust calls on each view's [`TextView`]; this module
+//! keeps the composition they read and change, and announces it as
+//! [`ImeEvent`]s.
 //!
-//! [`PlatformTextInput`]: flui_platform::PlatformTextInput
+//! # Where the key press goes
 //!
-//! # The two halves meet at `keyDown:`
-//!
-//! Routing a key event into the input context and converting it on the keyboard
-//! path are mutually exclusive for one physical press: `interpretKeyEvents:`
-//! answers a plain letter with `insertText:`, so a key that took both routes
-//! would reach the application twice — once as `ImeEvent::Commit`, once as
-//! `Key::Character`. [`TextInputState::ime_allowed`] is the switch. It defaults
-//! to `false`, which is the state of every window until a presentation attaches
-//! a text input and calls `set_ime_allowed(true)`; with it `false`, `keyDown:`
-//! takes the keyboard path byte-identically to the way it did before this
-//! module existed. `doCommandBySelector:` is the escape hatch back the other
-//! way, so arrows, Escape and Return still arrive as key events when a text
-//! input *is* attached and the input method declines them.
+//! Routing a key event into the input context and converting it on the
+//! keyboard path are mutually exclusive for one physical press:
+//! `interpretKeyEvents:` answers a plain letter with `insertText:`, so a key
+//! that took both routes would reach the application twice — once as
+//! `ImeEvent::Commit`, once as `Key::Character`. [`TextInputState::ime_allowed`]
+//! is the switch the view asks. It defaults to `false`, the state of every
+//! window until a presentation attaches a text input and calls
+//! `set_ime_allowed(true)`; with it `false`, every key takes the keyboard path.
 //!
 //! # Coordinate space
 //!
 //! [`PlatformTextInput::set_ime_cursor_area`] receives the framework's window
-//! coordinates — top-left origin, Y down, the convention
-//! [`WindowState`] and AppKit pointer conversion's Y flip establish — while
-//! `convertRectToScreen:` speaks AppKit's window base coordinates, bottom-left
-//! origin, Y up. `first_rect_for_character_range:actualRange:` is where the two
-//! meet, and it flips the axis before converting; without that flip the
-//! candidate window would sit mirrored about the window's vertical centre.
+//! coordinates — top-left origin, Y down, the convention [`WindowState`] and
+//! AppKit pointer conversion's Y flip establish; the view flips the axis as it
+//! converts the area to the screen for `firstRectForCharacterRange:`.
 //!
 //! [`WindowState`]: flui_platform::WindowState
 
-// The `NSTextInputClient` methods are Objective-C callbacks the view's class
-// gets at registration: direct objc calls have no safe wrapper. Every
-// `unsafe` block carries its own `// SAFETY:` comment.
+// The content view is reached through its raw AppKit pointer, and the
+// capability that reaches it is shared across threads: the module is one of
+// the crate's `unsafe` islands, opted out at its boundary.
 #![expect(unsafe_code)]
-// `objc2::runtime::Protocol`, which the view's class adopts the protocol
-// through, is the deprecated name of `AnyProtocol`, as in the rest of the
-// AppKit host.
-#![expect(deprecated)]
 
-use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
-use objc2::{msg_send, sel};
-use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
+use std::cell::RefCell;
 
 use flui_foundation::geometry::Bounds;
-use flui_platform::ImeEvent;
+use flui_platform::{ImeEvent, PlatformInput, PlatformTextInput};
 
-use crate::input::apple::macos::{ViewContext, get_context as get_view_context};
-use crate::owner::apple::macos::exec_on_owner;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use flui_platform::PlatformTextInput;
+use crate::owner::apple::macos::content_view::{ContentView, ViewText, with_content_view};
+use crate::owner::apple::macos::{ContentViewRef, exec_on_owner};
 
 // ============================================================================
-// View-owned composition state
+// The composition one view keeps
 // ============================================================================
 
-/// The composition state AppKit drives and queries through the view.
-///
-/// Lives in [`ViewContext`] behind a `RefCell`: every method that reads or
-/// writes it is either an `NSTextInputClient` callback — which AppKit delivers
-/// on the main thread by its own contract — or an owner-routed
-/// [`MacOSTextInput`] body, and `get_context` hands out a *shared* reference to
-/// the context, so the mutability has to be inside it.
+/// The composition AppKit drives and queries through one view.
 #[derive(Debug, Default)]
 pub(crate) struct TextInputState {
-    /// Whether `keyDown:` takes the input-context route. `false` until a
+    /// Whether a key press takes the input method's route. `false` until a
     /// presentation attaches a text input, and the reason a window with no
-    /// text input behaves exactly as it did before this module existed.
+    /// text input takes every key as a key event.
     pub(crate) ime_allowed: bool,
 
     /// The in-progress composition text, empty when nothing is marked.
@@ -98,13 +79,6 @@ pub(crate) struct TextInputState {
     /// [`PlatformTextInput::set_ime_cursor_area`], in the framework's logical
     /// window coordinates (top-left origin) as the trait specifies.
     pub(crate) cursor_area: Option<Bounds<f64>>,
-
-    /// The `NSResponder` `keyDown:` `NSEvent*` currently inside
-    /// `interpretKeyEvents:`, as a `usize` (0 when none). Non-zero only for the
-    /// duration of that call, so `doCommandBySelector:` — which the input
-    /// context invokes *during* it — can hand the same event back to the
-    /// keyboard path when the input method declines it.
-    pub(crate) pending_key_event: usize,
 }
 
 impl TextInputState {
@@ -124,14 +98,12 @@ impl TextInputState {
     ///
     /// False exactly while a composition is open on an attached text input: the
     /// press that opened it went to the input method, so the release describes a
-    /// key the application never saw go down. The view's `keyUp:` handler — the
-    /// one AppKit entry point that consumes this predicate — asks before
-    /// forwarding, and winit's own `keyUp:` arm queues the release only from its
-    /// `Ground` and `Disabled` states, so both layers suppress the same event.
-    /// Deliberately *not* a test of `ime_allowed` alone: an attached input that
-    /// is not composing leaves the release on the ordinary path, which is where
-    /// a typed Latin character's release happens after a commit empties
-    /// [`Self::marked_text`].
+    /// key the application never saw go down. winit's own `keyUp:` arm queues
+    /// the release only from its `Ground` and `Disabled` states, so both layers
+    /// suppress the same event. Deliberately *not* a test of `ime_allowed`
+    /// alone: an attached input that is not composing leaves the release on the
+    /// ordinary path, which is where a typed Latin character's release happens
+    /// after a commit empties [`Self::marked_text`].
     pub(crate) fn reports_key_release(&self) -> bool {
         !self.ime_allowed || self.marked_text.is_empty()
     }
@@ -188,509 +160,126 @@ pub(crate) fn utf16_range_to_byte_range(
 }
 
 // ============================================================================
-// NSString ↔ Rust text
+// TextView — one content view's text input
 // ============================================================================
 
-/// Copy the UTF-8 bytes of an `NSString` into an owned `String`.
-///
-/// # Safety
-///
-/// `string` must be null or a live `NSString*`, or an object that answers
-/// `UTF8String` in its stead.
-unsafe fn ns_string_to_owned(string: *mut AnyObject) -> Option<String> {
-    // SAFETY: per this function's contract the message goes to a live string
-    // object, and `UTF8String` returns an autoreleased buffer valid for the
-    // current pool — the bytes are copied out here, so nothing borrowed
-    // escapes this call.
-    unsafe {
-        if string.is_null() {
-            return None;
-        }
-        let utf8: *const std::ffi::c_char = msg_send![string, UTF8String];
-        if utf8.is_null() {
-            return None;
-        }
-        Some(
-            std::ffi::CStr::from_ptr(utf8)
-                .to_string_lossy()
-                .into_owned(),
-        )
-    }
+/// The text input of one content view: its composition, made with the view
+/// and dropped with it. Every call reaches it on the main thread, from the
+/// view's `NSTextInputClient` methods (AppKit's delivery contract) or from a
+/// [`MacOSTextInput`] body routed onto the owner lane.
+#[derive(Debug, Default)]
+pub(crate) struct TextView {
+    state: RefCell<TextInputState>,
 }
 
-/// Read the `string` argument of `insertText:replacementRange:` as Rust text.
-///
-/// AppKit documents the argument as an `NSString`, but an `NSAttributedString`
-/// arrives on the same path. The two are told apart by the selector
-/// `NSAttributedString` alone answers — `-string` — rather than by a class
-/// check, so a subclass that carries attributes without being one still
-/// converts.
-///
-/// # Safety
-///
-/// `string` must be null or the live argument AppKit passed to `insertText:`.
-unsafe fn insert_text_argument_string(string: *mut AnyObject) -> Option<String> {
-    // SAFETY: `respondsToSelector:` runs before `-string` is sent, so the
-    // message goes only to an object that declares it; both branches end in
-    // `ns_string_to_owned`'s own contract.
-    unsafe {
-        if string.is_null() {
-            return None;
+/// Announce `event` through the view: the same throat every other input
+/// event of the view takes, so an IME event is ordered against pointer and
+/// keyboard events exactly as they are ordered against each other.
+fn announce(view: &ContentView<'_>, event: ImeEvent) {
+    view.dispatch_input(PlatformInput::Ime(event));
+}
+
+impl ViewText for TextView {
+    fn takes_key_presses(&self) -> bool {
+        self.state.borrow().ime_allowed
+    }
+
+    fn reports_key_release(&self) -> bool {
+        self.state.borrow().reports_key_release()
+    }
+
+    /// State before announcement, as in [`Self::compose`]: once `insertText:`
+    /// returns, AppKit requires `hasMarkedText` to answer NO, and the
+    /// dispatched commit runs application code that may ask.
+    fn commit(&self, view: &ContentView<'_>, text: String) {
+        self.state.borrow_mut().clear_marked_text();
+        announce(view, ImeEvent::Commit(text));
+    }
+
+    /// `selected` is the caret's position *within* the composition, the only
+    /// range AppKit gives here that is meaningful to a view with no document:
+    /// the marked range this view reports is the whole composition.
+    fn compose(&self, view: &ContentView<'_>, text: String, selected: (usize, usize)) {
+        let cursor = utf16_range_to_byte_range(&text, selected.0, selected.1);
+        {
+            let mut state = self.state.borrow_mut();
+            state.marked_text.clone_from(&text);
+            state.marked_range = (0, utf16_len(&text));
+            state.selected_range = selected;
         }
-        let responds: Bool = msg_send![string, respondsToSelector: sel!(string)];
-        let text = if responds == Bool::YES {
-            msg_send![string, string]
+        tracing::trace!("IME composition updated ({} bytes marked)", text.len());
+        announce(view, ImeEvent::Preedit { text, cursor });
+    }
+
+    /// Announced as an empty `Preedit`, the vocabulary's own spelling of "the
+    /// composition ended" (`flui_platform::ImeEvent`: a cancelled composition
+    /// arrives as `Preedit { text: "", cursor: None }` with no following
+    /// `Commit`/`Disabled`). Announcing nothing would leave a client holding
+    /// composition state it was never told ended, suppressing
+    /// `Key::Character` insertion for the rest of the focus session. The event
+    /// is inert when nothing is composing, so no `hasMarkedText` check is
+    /// needed.
+    fn unmark(&self, view: &ContentView<'_>) {
+        self.state.borrow_mut().clear_marked_text();
+        announce(
+            view,
+            ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None,
+            },
+        );
+    }
+
+    fn marked_range(&self) -> Option<(usize, usize)> {
+        let state = self.state.borrow();
+        (!state.marked_text.is_empty()).then_some(state.marked_range)
+    }
+
+    fn selected_range(&self) -> Option<(usize, usize)> {
+        let state = self.state.borrow();
+        (!state.marked_text.is_empty()).then_some(state.selected_range)
+    }
+
+    /// The range that goes with the area, which the SDK's contract requires of
+    /// a non-null `actualRange`: the area is the composing region while one is
+    /// open and the caret otherwise — the only two things this view can place
+    /// — so it is the marked range or a zero-length range at the view's
+    /// origin, the same origin `markedRange` reports from.
+    fn candidate_area(&self) -> Option<(Bounds<f64>, (usize, usize))> {
+        let state = self.state.borrow();
+        let area = state.cursor_area?;
+        let corresponding = if state.marked_text.is_empty() {
+            (0, 0)
         } else {
-            string
+            state.marked_range
         };
-        ns_string_to_owned(text)
+        Some((area, corresponding))
     }
-}
 
-// ============================================================================
-// Event emission
-// ============================================================================
-
-/// Emit one IME event through the window's callbacks.
-///
-/// The same throat every other input event in this backend takes, so an IME
-/// event is ordered against pointer and keyboard events exactly as they are
-/// ordered against each other.
-fn emit_ime(ctx: &ViewContext, event: ImeEvent) {
-    crate::input::apple::macos::dispatch_input_event(ctx, flui_platform::PlatformInput::Ime(event));
-}
-
-/// The empty rect AppKit is answered with when no cursor area has been set.
-fn zero_rect() -> NSRect {
-    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
-}
-
-/// Write `range` through an `actualRange:` out-parameter.
-///
-/// # Safety
-///
-/// Either null — AppKit may pass a null `actualRange:` — or a valid, writable
-/// `NSRange*` for the duration of the call, as AppKit documents.
-unsafe fn write_actual_range(actual_range: *mut NSRange, range: NSRange) {
-    // SAFETY: per this function's contract.
-    unsafe {
-        if !actual_range.is_null() {
-            *actual_range = range;
+    /// Announced after the borrow is released: dispatch re-enters application
+    /// code (the widget-side text input), which is free to call back in.
+    fn set_composing(&self, view: &ContentView<'_>, allowed: bool) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.ime_allowed = allowed;
+            if !allowed {
+                // The trait's documented semantics for a disable: an
+                // in-progress composition is dropped, not committed.
+                state.clear_marked_text();
+            }
         }
+        announce(
+            view,
+            if allowed {
+                ImeEvent::Enabled
+            } else {
+                ImeEvent::Disabled
+            },
+        );
     }
-}
 
-// ============================================================================
-// NSTextInputClient callbacks
-// ============================================================================
-
-/// `insertText:replacementRange:` — the input method committed text.
-extern "C-unwind" fn insert_text(
-    this: &AnyObject,
-    _sel: Sel,
-    string: *mut AnyObject,
-    _replacement_range: NSRange,
-) {
-    // SAFETY: `this` is a live FLUIContentView — AppKit invokes a method only on
-    // an object that declares it, and `add_text_input_methods` registered this
-    // one on that class; `string` is the live argument for the duration of the
-    // call, and its bytes are copied before this function returns.
-    os_entry(
-        "insertText:replacementRange:",
-        (),
-        AfterPanic::Answer(|()| ()),
-        || unsafe {
-            let Some(ctx) = get_view_context(this) else {
-                return;
-            };
-            let Some(text) = insert_text_argument_string(string) else {
-                tracing::trace!("insertText: carried no readable string; commit dropped");
-                return;
-            };
-            // State before announcement, as in `set_marked_text`: once `insertText:`
-            // returns, AppKit requires `hasMarkedText` to answer NO, and the
-            // dispatched commit runs application code that may ask.
-            ctx.text_input.borrow_mut().clear_marked_text();
-            emit_ime(ctx, ImeEvent::Commit(text));
-        },
-    );
-}
-
-/// `setMarkedText:selectedRange:replacementRange:` — the composition changed.
-///
-/// `selectedRange` is the caret's position *within* the composition, and it is
-/// the only range AppKit gives here that is meaningful to a view with no
-/// document: the marked range this view reports is the whole composition
-/// (`NSRange::new(0, ..)`), while the selection is this narrower one.
-extern "C-unwind" fn set_marked_text(
-    this: &AnyObject,
-    _sel: Sel,
-    string: *mut AnyObject,
-    selected_range: NSRange,
-    _replacement_range: NSRange,
-) {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`); `string` is
-    // the live argument for the duration of the call, copied out immediately.
-    os_entry(
-        "setMarkedText:selectedRange:replacementRange:",
-        (),
-        AfterPanic::Answer(|()| ()),
-        || unsafe {
-            let Some(ctx) = get_view_context(this) else {
-                return;
-            };
-            let text = ns_string_to_owned(string).unwrap_or_default();
-            let cursor =
-                utf16_range_to_byte_range(&text, selected_range.location, selected_range.length);
-            {
-                let mut state = ctx.text_input.borrow_mut();
-                state.marked_text.clone_from(&text);
-                state.marked_range = (0, utf16_len(&text));
-                state.selected_range = (selected_range.location, selected_range.length);
-            }
-            tracing::trace!("IME composition updated ({} bytes marked)", text.len());
-            emit_ime(ctx, ImeEvent::Preedit { text, cursor });
-        },
-    );
-}
-
-/// `unmarkText` — the composition was abandoned; nothing is committed.
-///
-/// Announced as an empty `Preedit`, the vocabulary's own spelling of "the
-/// composition ended" (`flui_platform::ImeEvent`'s type-level doc: a cancelled
-/// composition arrives as `Preedit { text: "", cursor: None }` with no
-/// following `Commit`/`Disabled`). Emitting nothing here would be the
-/// previously-shipped bug class that doc records from the other side: a client
-/// left holding composition state it was never told ended suppresses
-/// `Key::Character` insertion for the rest of the focus session, and the
-/// cancelled slice stays in its buffer. AppKit's own header is silent on
-/// whether `unmarkText` is always preceded by an empty `setMarkedText:`, so
-/// both paths must be covered. The event is inert when nothing is composing
-/// (`flui_platform::text_store::project_ime_event` strips an empty
-/// preedit's composition only when one is active, and edits nothing when
-/// there is none), which is why this
-/// callback needs no `hasMarkedText` check of its own.
-extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry("unmarkText", (), AfterPanic::Answer(|()| ()), || unsafe {
-        if let Some(ctx) = get_view_context(this) {
-            ctx.text_input.borrow_mut().clear_marked_text();
-            emit_ime(
-                ctx,
-                ImeEvent::Preedit {
-                    text: String::new(),
-                    cursor: None,
-                },
-            );
-        }
-    });
-}
-
-/// `hasMarkedText` — is a composition in progress?
-extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry(
-        "hasMarkedText",
-        (),
-        AfterPanic::Answer(|()| Bool::NO),
-        || unsafe {
-            match get_view_context(this) {
-                Some(ctx) if !ctx.text_input.borrow().marked_text.is_empty() => Bool::YES,
-                _ => Bool::NO,
-            }
-        },
-    )
-}
-
-/// No range: `{NSNotFound, 0}`.
-fn not_found() -> NSRange {
-    NSRange::new(NSNotFound as usize, 0)
-}
-
-/// `markedRange` — the range of the composition, in UTF-16 units.
-extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry(
-        "markedRange",
-        (),
-        AfterPanic::Answer(|()| not_found()),
-        || unsafe {
-            let Some(ctx) = get_view_context(this) else {
-                return not_found();
-            };
-            let state = ctx.text_input.borrow();
-            if state.marked_text.is_empty() {
-                not_found()
-            } else {
-                NSRange::new(state.marked_range.0, state.marked_range.1)
-            }
-        },
-    )
-}
-
-/// `selectedRange` — the caret's range within the composition.
-///
-/// `{NSNotFound, 0}` outside one: a view with no document of its own cannot
-/// truthfully name a selection the application has not reported, and AppKit
-/// documents that pair as "no selection".
-extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`).
-    os_entry(
-        "selectedRange",
-        (),
-        AfterPanic::Answer(|()| not_found()),
-        || unsafe {
-            let Some(ctx) = get_view_context(this) else {
-                return not_found();
-            };
-            let state = ctx.text_input.borrow();
-            if state.marked_text.is_empty() {
-                not_found()
-            } else {
-                NSRange::new(state.selected_range.0, state.selected_range.1)
-            }
-        },
-    )
-}
-
-/// `validAttributesForMarkedText` — the attributes this view honours.
-///
-/// Empty: the composing text is rendered by the framework's own client, not by
-/// AppKit's text system, so an attributed composition has nothing to describe.
-extern "C-unwind" fn valid_attributes_for_marked_text(
-    _this: &AnyObject,
-    _sel: Sel,
-) -> *mut AnyObject {
-    // SAFETY: `+[NSArray array]` is a class constructor on a class AppKit
-    // always provides; it returns an autoreleased empty array.
-    os_entry(
-        "validAttributesForMarkedText",
-        (),
-        AfterPanic::Answer(|()| std::ptr::null_mut()),
-        || unsafe { msg_send![objc2::class!(NSArray), array] },
-    )
-}
-
-/// `attributedSubstringForProposedRange:actualRange:` — the text in a range.
-///
-/// `nil`, with `actualRange` answered `{NSNotFound, 0}`: this view holds no
-/// attributed text to slice, and the documented answer for a range that cannot
-/// be satisfied is a nil substring plus a not-found actual range.
-extern "C-unwind" fn attributed_substring_for_proposed_range(
-    _this: &AnyObject,
-    _sel: Sel,
-    _range: NSRange,
-    actual_range: *mut NSRange,
-) -> *mut AnyObject {
-    os_entry(
-        "attributedSubstringForProposedRange:actualRange:",
-        (),
-        AfterPanic::Answer(|()| std::ptr::null_mut()),
-        || {
-            // SAFETY: `actual_range` is AppKit's own out-parameter for this call —
-            // null or a valid writable `NSRange*` — which is what
-            // `write_actual_range` requires.
-            unsafe { write_actual_range(actual_range, not_found()) };
-            std::ptr::null_mut()
-        },
-    )
-}
-
-/// `firstRectForCharacterRange:actualRange:` — where to place candidates.
-///
-/// The one consumer of [`PlatformTextInput::set_ime_cursor_area`]: the setter
-/// stores the rectangle, this getter answers AppKit's query with it, converted
-/// to screen coordinates. The Y axis is flipped on the way in — the framework's
-/// window coordinates have their origin at the top-left, AppKit's at the
-/// bottom-left — see this module's doc for why that flip is load-bearing.
-extern "C-unwind" fn first_rect_for_character_range(
-    this: &AnyObject,
-    _sel: Sel,
-    _range: NSRange,
-    actual_range: *mut NSRange,
-) -> NSRect {
-    // SAFETY: `this` is a live FLUIContentView (see `insert_text`);
-    // `actual_range` is AppKit's own out-parameter; `bounds` and `window` are
-    // AppKit's own getters on that live view, and the window is nil-checked
-    // before `convertRectToScreen:` — a view with no window (mid-teardown) has
-    // no screen rectangle to answer with.
-    os_entry(
-        "firstRectForCharacterRange:actualRange:",
-        (),
-        AfterPanic::Answer(|()| zero_rect()),
-        || unsafe {
-            write_actual_range(actual_range, not_found());
-            let Some(ctx) = get_view_context(this) else {
-                return zero_rect();
-            };
-            let state = ctx.text_input.borrow();
-            let Some(area) = state.cursor_area else {
-                return zero_rect();
-            };
-            // The range that goes with the area, which the SDK's contract requires
-            // of a non-null `actualRange` ("contains the character range
-            // corresponding to the returned area"). The area is the composing
-            // region while one is open and the caret otherwise — the only two
-            // things this view can place — so it is the marked range or a
-            // zero-length range at the view's origin, the same origin
-            // `marked_range` reports from. `{NSNotFound, 0}` is written above only
-            // for the paths that return `zero_rect()`, where there is no area for a
-            // range to correspond to.
-            let corresponding = if state.marked_text.is_empty() {
-                NSRange::new(0, 0)
-            } else {
-                NSRange::new(state.marked_range.0, state.marked_range.1)
-            };
-            let view_bounds: NSRect = msg_send![this, bounds];
-            let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height);
-            let window_rect = NSRect::new(
-                NSPoint::new(area.origin.x, flipped_y),
-                NSSize::new(area.size.width, area.size.height),
-            );
-            let window: *mut AnyObject = msg_send![this, window];
-            if window.is_null() {
-                return zero_rect();
-            }
-            let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
-            write_actual_range(actual_range, corresponding);
-            screen_rect
-        },
-    )
-}
-
-/// `characterIndexForPoint:` — the character under a point.
-///
-/// `NSNotFound`: this view owns no text, so it can answer no index into one.
-extern "C-unwind" fn character_index_for_point(
-    _this: &AnyObject,
-    _sel: Sel,
-    _point: NSPoint,
-) -> NSUInteger {
-    NSNotFound as NSUInteger
-}
-
-/// `doCommandBySelector:` — a key the input method declined.
-///
-/// The escape hatch that keeps the input-context route from swallowing arrows,
-/// Escape, Return and the rest: the event the caller is currently inside
-/// `interpretKeyEvents:` with is re-dispatched through the ordinary keyboard
-/// conversion, which is exactly the path `keyDown:` itself would have taken.
-///
-/// `pending_key_event` is 0 when the input method raises a command outside an
-/// `interpretKeyEvents:` call (it also does so for menu-key equivalents, with no
-/// event of ours on the stack); there is then no key press to convert, so the
-/// command is dropped rather than invented.
-extern "C-unwind" fn do_command_by_selector(this: &AnyObject, _sel: Sel, _command: Sel) {
-    // SAFETY: `this` is a live FLUIContentView; `pending_key_event` is either 0
-    // or an `NSEvent*` AppKit owns and keeps alive across the
-    // `interpretKeyEvents:` call whose dispatch is on this stack frame, which is
-    // the only window in which this callback runs.
-    os_entry(
-        "doCommandBySelector:",
-        (),
-        AfterPanic::Answer(|()| ()),
-        || unsafe {
-            let Some(ctx) = get_view_context(this) else {
-                return;
-            };
-            let pending_key_event = ctx.text_input.borrow().pending_key_event;
-            if pending_key_event == 0 {
-                tracing::trace!(
-                    "doCommandBySelector: outside a pending key press; command dropped"
-                );
-                return;
-            }
-            crate::input::apple::macos::handle_input_event(
-                this,
-                sel!(keyDown:),
-                pending_key_event as *mut AnyObject,
-            );
-        },
-    );
-}
-
-/// Register the `NSTextInputClient` callbacks on a class being declared.
-///
-/// Called from `get_or_create_view_class`'s `Once` block, on the
-/// `FLUIContentView` declaration, before `register()`.
-///
-/// # Safety
-///
-/// `decl` must be the declaration of the class `get_context`'s ivar contract
-/// applies to, and every function pointer below must keep matching its
-/// selector's Objective-C signature — the signatures are fixed by
-/// `NSTextInputClient`'s own declaration in AppKit.
-pub(crate) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
-    // Conformance, not just the methods: AppKit's `NSTextInputContext` asks
-    // `conformsToProtocol:` before it will route a key event through the input
-    // method at all, so a class with these methods and no protocol is never
-    // called.
-    //
-    // `expect`, not a silent skip: registering the methods without conformance
-    // would leave the class with `interpretKeyEvents:` still callable from
-    // `key_down` but no client to call back into — the capability would be
-    // quietly dead. The protocol is declared since 10.5 and this backend's
-    // floor is 11.0 (checked against the SDK's `NSTextInputClient.h`), so a
-    // `None` here can only mean this module's own name or floor is wrong.
-    let protocol = Protocol::get(c"NSTextInputClient").expect(
-        "BUG: NSTextInputClient is a protocol every macOS this backend supports provides; \
-         a None here means the protocol name or the declared deployment floor is wrong",
-    );
-    decl.add_protocol(protocol);
-
-    // SAFETY: per this function's contract — each `extern "C" fn` below matches
-    // its selector's argument and return types (`v@:{_NSRange=QQ}`,
-    // `{_NSRange=QQ}@:`, `@@:`, `Q@:{CGPoint=dd}`,
-    // `@@:{_NSRange=QQ}^{_NSRange=QQ}`,
-    // `{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}`, `v@::`).
-    // The one encoding that is not the same on every target is `hasMarkedText`'s
-    // BOOL — `B@:` where BOOL is `bool` (arm64) and `c@:` where it is
-    // `signed char` (x86_64); `objc`'s own `Encode for BOOL` is what supplies
-    // whichever applies.
-    unsafe {
-        decl.add_method(
-            sel!(insertText:replacementRange:),
-            insert_text as extern "C-unwind" fn(_, _, *mut AnyObject, NSRange),
-        );
-        decl.add_method(
-            sel!(setMarkedText:selectedRange:replacementRange:),
-            set_marked_text as extern "C-unwind" fn(_, _, *mut AnyObject, NSRange, NSRange),
-        );
-        decl.add_method(sel!(unmarkText), unmark_text as extern "C-unwind" fn(_, _));
-        decl.add_method(
-            sel!(hasMarkedText),
-            has_marked_text as extern "C-unwind" fn(_, _) -> Bool,
-        );
-        decl.add_method(
-            sel!(markedRange),
-            marked_range as extern "C-unwind" fn(_, _) -> NSRange,
-        );
-        decl.add_method(
-            sel!(selectedRange),
-            selected_range as extern "C-unwind" fn(_, _) -> NSRange,
-        );
-        decl.add_method(
-            sel!(validAttributesForMarkedText),
-            valid_attributes_for_marked_text as extern "C-unwind" fn(_, _) -> *mut AnyObject,
-        );
-        decl.add_method(
-            sel!(attributedSubstringForProposedRange:actualRange:),
-            attributed_substring_for_proposed_range
-                as extern "C-unwind" fn(_, _, NSRange, *mut NSRange) -> *mut AnyObject,
-        );
-        decl.add_method(
-            sel!(firstRectForCharacterRange:actualRange:),
-            first_rect_for_character_range
-                as extern "C-unwind" fn(_, _, NSRange, *mut NSRange) -> NSRect,
-        );
-        decl.add_method(
-            sel!(characterIndexForPoint:),
-            character_index_for_point as extern "C-unwind" fn(_, _, NSPoint) -> NSUInteger,
-        );
-        decl.add_method(
-            sel!(doCommandBySelector:),
-            do_command_by_selector as extern "C-unwind" fn(_, _, _),
-        );
+    fn set_caret_area(&self, area: Bounds<f64>) {
+        self.state.borrow_mut().cursor_area = Some(area);
     }
 }
 
@@ -700,35 +289,26 @@ pub(crate) unsafe fn add_text_input_methods(decl: &mut ClassBuilder) {
 
 /// One macOS window's IME capability.
 ///
-/// The methods are the only part of this module reachable off the main thread:
-/// [`PlatformTextInput`] is a public `Send + Sync` capability, so both travel
-/// through [`exec_on_owner`] (the standing rule for every AppKit-messaging
-/// window site) even though the state they touch is main-thread-only by AppKit's
-/// delivery contract.
+/// [`PlatformTextInput`] is a public `Send + Sync` capability, so both of its
+/// methods travel through [`exec_on_owner`] (the standing rule for every
+/// AppKit-messaging window site) to the view's [`TextView`], whose state is
+/// main-thread-only by AppKit's delivery contract.
 pub struct MacOSTextInput {
-    /// The window's `FLUIContentView`, which owns the composition state.
+    /// The window's content view, with its owner lane and whether it has
+    /// closed.
     ///
-    /// Not retained: the capability borrows the window it was discovered from,
-    /// as every other per-window capability on this backend does, and the view
-    /// lives as long as that window. `closed` is what keeps a late call safe.
-    view: *mut AnyObject,
-
-    /// Set once the window has closed (see `MacOSWindow`): the same liveness
-    /// gate `HasWindowHandle::window_handle` consults, so a capability clone
-    /// retained past its window's close is a no-op rather than a message to an
-    /// NSWindow AppKit has already been told to tear down.
-    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-
-    /// The owner lane every AppKit message here travels through.
-    owner: &'static dispatch::Queue,
-
-    /// True when `owner` is the main queue, so "on the main thread" is
-    /// equivalent to "on the owner lane".
-    owner_is_main: bool,
+    /// The view is not retained: the capability borrows the window it was
+    /// made for, as every other per-window capability on this backend does,
+    /// and the view lives as long as that window. `closed`, the same liveness
+    /// gate `HasWindowHandle::window_handle` consults, is what keeps a late
+    /// call safe: a capability clone retained past its window's close is a
+    /// no-op rather than a message to an NSWindow AppKit has already been told
+    /// to tear down.
+    window: ContentViewRef,
 }
 
 // SAFETY: the same argument as `MacOSWindow`'s own `unsafe impl Send`/`Sync`:
-// `view` is a raw AppKit pointer that is only ever messaged from inside
+// the view is a raw AppKit pointer that is only ever messaged from inside
 // `exec_on_owner`, which runs the body on the window's owner lane; the
 // remaining fields are `Arc`/`&'static`/`bool`. The residual — a capability
 // clone outliving its window — is why `closed` is consulted in both bodies: the
@@ -738,46 +318,43 @@ pub struct MacOSTextInput {
 // window's own `Drop` tail owns the release).
 unsafe impl Send for MacOSTextInput {}
 // SAFETY: see `Send` above; there is no interior mutability here at all — every
-// mutation happens to the view's `RefCell` from inside the routed body.
+// mutation happens to the view's text input from inside the routed body.
 unsafe impl Sync for MacOSTextInput {}
 
-impl MacOSTextInput {
-    pub(crate) fn new(
-        view: *mut AnyObject,
-        closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        owner: &'static dispatch::Queue,
-        owner_is_main: bool,
-    ) -> Self {
-        Self {
-            view,
-            closed,
-            owner,
-            owner_is_main,
-        }
+/// A window's IME capability is made for it as it opens; the content view's
+/// `NSTextInputClient` conformance is the input method's reach, so detaching
+/// it leaves nothing behind and sizing has no native converter.
+impl crate::host::Text<ContentViewRef> for MacOSTextInput {
+    fn for_window(window: &ContentViewRef) -> std::sync::Arc<dyn crate::text::TextInput> {
+        std::sync::Arc::new(std::sync::Arc::new(Self {
+            window: window.clone(),
+        }))
     }
+}
 
+impl MacOSTextInput {
     /// Whether this capability's window has closed.
     fn is_closed(&self) -> bool {
-        self.closed.load(std::sync::atomic::Ordering::SeqCst)
+        self.window.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Run `body` against the window's `FLUIContentView`.
-    fn with_content_view<R: Send>(&self, body: impl FnOnce(&ViewContext) -> R + Send) -> Option<R> {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
+    /// Run `body` against the window's content view, on its owner lane.
+    fn with_view<R: Send>(&self, body: impl FnOnce(&ContentView<'_>) -> R + Send) -> Option<R> {
+        let owner = self.window.owner;
+        let owner_is_main = self.window.owner_is_main;
         let this = self;
         exec_on_owner(owner, owner_is_main, move || {
             if this.is_closed() {
                 tracing::trace!("text input call on a closed window; dropped");
                 return None;
             }
-            // SAFETY: `view` is alive for the lifetime of the window this
-            // capability was discovered from, and the body runs on the owner
-            // thread — inline on the OS main thread for a main-lane owner, or
-            // dispatched onto the lane under the reentrancy guard — before the
-            // view is touched. `with_view_context` checks the class before
-            // reading the context ivar.
-            unsafe { crate::input::apple::macos::with_view_context(this.view, body) }
+            // SAFETY: the view is alive for the lifetime of the window this
+            // capability was made for, which has not closed, and the body runs
+            // on the owner thread — inline on the OS main thread for a
+            // main-lane owner, or dispatched onto the lane under the reentrancy
+            // guard — before the view is touched. `with_content_view` checks
+            // the class before reading the view's context.
+            unsafe { with_content_view(this.window.view, body) }
         })
     }
 }
@@ -787,36 +364,14 @@ impl PlatformTextInput for MacOSTextInput {
         // The gate and the announcement travel in one owner-lane round trip:
         // `exec_on_owner` blocks the caller until the body returns, so a
         // second hop here would be a second blocking round trip for no gain.
-        let reached = self.with_content_view(|ctx| {
-            {
-                let mut state = ctx.text_input.borrow_mut();
-                state.ime_allowed = allowed;
-                if !allowed {
-                    // The trait's documented semantics for a disable: an
-                    // in-progress composition is dropped, not committed.
-                    state.clear_marked_text();
-                }
-            }
-            // Announced after the borrow is released — dispatch re-enters
-            // arbitrary application code (the widget-side text input), which
-            // is free to call back in. Through the same callbacks every other
-            // input event takes.
-            let event = if allowed {
-                ImeEvent::Enabled
-            } else {
-                ImeEvent::Disabled
-            };
-            emit_ime(ctx, event);
-        });
+        let reached = self.with_view(|view| view.text().set_composing(view, allowed));
         if reached.is_none() {
             tracing::trace!("IME state changed but the window has no live content view");
         }
     }
 
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
-        let stored = self.with_content_view(|ctx| {
-            ctx.text_input.borrow_mut().cursor_area = Some(area);
-        });
+        let stored = self.with_view(|view| view.text().set_caret_area(area));
         if stored.is_none() {
             tracing::trace!("IME cursor area dropped: the window has no live content view");
         }
@@ -829,6 +384,19 @@ impl crate::text::TextInput for std::sync::Arc<MacOSTextInput> {
             std::sync::Arc::clone(self) as std::sync::Arc<dyn PlatformTextInput>,
         ))
     }
+
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        // AppKit has no system text-size converter a window could capture.
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    fn detach(&self) {}
 }
 
 impl std::fmt::Debug for MacOSTextInput {
@@ -836,7 +404,7 @@ impl std::fmt::Debug for MacOSTextInput {
     // and the dispatch lane have no useful Debug form.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSTextInput")
-            .field("view", &(self.view as usize))
+            .field("view", &self.window.view.addr())
             .field("closed", &self.is_closed())
             .finish_non_exhaustive()
     }

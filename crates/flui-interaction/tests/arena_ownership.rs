@@ -533,6 +533,26 @@ impl flui_platform::PlatformWindow for RedrawCounter {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
 }
 
 /// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no

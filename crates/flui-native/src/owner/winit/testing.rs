@@ -332,9 +332,10 @@ impl Host for QuietTable {
 
 /// A platform of [`QuietTable`] over a loop whose hooks `H` makes.
 pub(crate) fn quiet_platform_over<H: WinitHost>() -> HostPlatform<QuietTable> {
-    HostPlatform::from_parts(NoWindows, |windows| {
-        WinitLoop::new::<H>(Arc::clone(windows) as _)
-    })
+    HostPlatform::from_parts(
+        |_| NoWindows,
+        |windows| WinitLoop::new::<H>(Arc::clone(windows) as _),
+    )
 }
 
 /// A platform of [`QuietTable`] over a loop of [`QuietHost`].
@@ -373,6 +374,8 @@ impl LoopWindows for NoWindows {
 
 impl host::Window<WinitLoop> for NoWindows {
     type Shared = NoWindows;
+    /// No window is opened, so none is referred to.
+    type Ref = ();
 
     fn open(
         _: &WinitLoop,

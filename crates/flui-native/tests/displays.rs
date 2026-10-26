@@ -149,6 +149,35 @@ fn window_move_names_the_new_display_and_hints_once() {
     );
 }
 
+fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
+    let platform = two_displays();
+    let window = platform
+        .open_window(WindowOptions::default())
+        .expect("window");
+    let window: Arc<dyn flui_native::HostWindow> = window;
+    let mock = window
+        .as_any()
+        .downcast_ref::<MockWindow>()
+        .expect("headless window")
+        .clone();
+    let before = window.display_id();
+    let unissued = {
+        let registry = flui_platform::DisplayRegistry::new();
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
+        let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
+        registry
+            .mint(&flui_platform::DisplayKey::Unkeyed)
+            .expect("third id")
+    };
+    assert_eq!(
+        mock.simulate_move_to(unissued)
+            .map_err(|refused| refused.display),
+        Err(unissued),
+        "the window names the display it was refused"
+    );
+    assert_eq!(window.display_id(), before, "the window stays where it was");
+}
+
 #[test]
 fn headless_displays_contract() {
     crate::run_table(
@@ -169,6 +198,10 @@ fn headless_displays_contract() {
             (
                 "window_move_names_the_new_display_and_hints_once",
                 window_move_names_the_new_display_and_hints_once as fn(),
+            ),
+            (
+                "a_move_to_a_display_the_platform_does_not_hold_is_refused",
+                a_move_to_a_display_the_platform_does_not_hold_is_refused as fn(),
             ),
         ],
     );

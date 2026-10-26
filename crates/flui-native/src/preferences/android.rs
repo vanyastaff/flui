@@ -12,7 +12,7 @@
 //! The two rule modules make no JNI call, so every host checks them.
 
 #[cfg(target_os = "android")]
-pub(crate) use configuration::{AndroidPreferences, geometry, night_mode, pixel_ratio};
+pub(crate) use configuration::AndroidPreferences;
 
 #[cfg(target_os = "android")]
 mod configuration {
@@ -95,6 +95,18 @@ mod configuration {
     impl ActivityPreferences for AndroidPreferences {
         fn retry_deadline(&self) -> Option<web_time::Instant> {
             self.admission.retry_deadline()
+        }
+
+        fn night_mode(&self) -> Result<bool, PreferenceQueryError> {
+            night_mode(&self.app)
+        }
+
+        fn pixel_ratio(&self) -> Result<DevicePixelRatio, PreferenceQueryError> {
+            pixel_ratio(&self.app)
+        }
+
+        fn gesture_geometry(&self) -> Result<GestureGeometry, PreferenceQueryError> {
+            geometry(&self.app)
         }
     }
 

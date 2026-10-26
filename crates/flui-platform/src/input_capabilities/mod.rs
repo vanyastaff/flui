@@ -9,20 +9,7 @@ mod kind_set;
 
 pub use kind_set::PointerKindSet;
 
-/// Whether a backend delivers a capability, and how.
-///
-/// Implemented is not present: `Native` with no matching device attached is a normal state;
-/// [`InputCapabilities::present`] says which devices are attached.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Availability {
-    /// Delivered by the OS input path.
-    Native,
-    /// Synthesized by the backend from other input (the web's ctrl+wheel decoded as a pinch),
-    /// and possibly ambiguous with that input.
-    Emulated,
-    /// This backend in this OS session has no path for it.
-    Unavailable,
-}
+use crate::Availability;
 
 /// The input capabilities of one surface's backend that no handle answers for: pen input,
 /// precise (phased) scrolling, trackpad pinch and rotate, input regions and outgoing drags,
@@ -41,7 +28,8 @@ pub enum Availability {
 /// outside this crate:
 ///
 /// ```compile_fail,E0451
-/// use flui_platform::input_capabilities::{Availability, InputCapabilities};
+/// use flui_platform::Availability;
+/// use flui_platform::input_capabilities::InputCapabilities;
 /// use flui_platform::input_capabilities::PointerKindSet;
 ///
 /// let forged = InputCapabilities {
@@ -57,7 +45,8 @@ pub enum Availability {
 /// The builder is the way in:
 ///
 /// ```
-/// use flui_platform::input_capabilities::{Availability, InputCapabilities};
+/// use flui_platform::Availability;
+/// use flui_platform::input_capabilities::InputCapabilities;
 /// use flui_platform::input_capabilities::PointerKindSet;
 ///
 /// let wayland = InputCapabilities::builder()
@@ -128,9 +117,9 @@ impl InputCapabilities {
     }
 
     /// Starting a drag that leaves the application for the OS. This is the one authoritative
-    /// answer; `DragError::Unavailable` (ADR-0211) is the matching error. It is the backend's
+    /// answer; `DragError::Unsupported` (ADR-0211) is the matching error. It is the backend's
     /// answer, not every contact's: where the OS session follows the mouse alone (Win32's
-    /// `DoDragDrop`), a pen or touch drag is still refused `Unavailable` at its start and stays
+    /// `DoDragDrop`), a pen or touch drag is still refused `Unsupported` at its start and stays
     /// in its window.
     #[must_use]
     pub const fn outgoing_drag(&self) -> Availability {

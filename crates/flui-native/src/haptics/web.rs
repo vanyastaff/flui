@@ -3,7 +3,8 @@
 //! `navigator.vibrate` plays on/off pulses, in Chromium only, and only once
 //! the page has had user activation; Safari and Firefox have no vibration.
 //! The degradation table turns each kind and pattern into pulses; a page
-//! that cannot vibrate reports [`HapticOutcome::Unavailable`].
+//! that cannot vibrate reports [`HapticOutcome::Unsupported`]: `NotOnThisDevice`
+//! for a browser without vibration, `Unavailable` before user activation.
 
 use js_sys::{Array, Reflect};
 use wasm_bindgen::JsValue;
@@ -12,52 +13,76 @@ use crate::haptics::degradation::{WebVibration, web_feedback, web_pattern};
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 /// The page's haptic actuator.
 #[derive(Debug, Default)]
 pub struct WebHaptics;
 
-/// Whether the page can vibrate now: `navigator.vibrate` exists and the page
-/// has had user activation (`navigator.userActivation.hasBeenActive`, the
-/// sticky activation Chromium requires). Read through `Reflect`, since a
-/// browser without either property must not throw.
-fn vibration(navigator: &JsValue) -> WebVibration {
+/// Every canvas window plays on the page's one actuator.
+impl crate::host::Haptics<crate::owner::web::CanvasRef> for WebHaptics {
+    fn for_window(_: &crate::owner::web::CanvasRef) -> std::sync::Arc<dyn PlatformHaptics> {
+        std::sync::Arc::new(Self)
+    }
+}
+
+/// Whether the page can vibrate now, or why not: its browser has no
+/// `navigator.vibrate` (Safari, Firefox), or the page has had no user
+/// activation yet (`navigator.userActivation.hasBeenActive`, the sticky
+/// activation Chromium requires), which a later request may have. Read
+/// through `Reflect`, since a browser without either property must not throw.
+fn vibration(navigator: &JsValue) -> Result<(), UnsupportedReason> {
     let has = |target: &JsValue, name: &str| {
         Reflect::get(target, &JsValue::from_str(name))
             .ok()
             .filter(|value| !value.is_undefined() && !value.is_null())
     };
-    let can_vibrate = has(navigator, "vibrate").is_some();
+    if has(navigator, "vibrate").is_none() {
+        return Err(UnsupportedReason::NotOnThisDevice);
+    }
     let activated = has(navigator, "userActivation")
         .and_then(|activation| has(&activation, "hasBeenActive"))
         .and_then(|active| active.as_bool())
         .unwrap_or(false);
-    if can_vibrate && activated {
-        WebVibration::Available
+    if activated {
+        Ok(())
     } else {
-        WebVibration::Unavailable
+        Err(UnsupportedReason::Unavailable)
     }
 }
 
 /// Play `pulses` (alternating on and off milliseconds) and report `outcome`,
-/// or [`HapticOutcome::Unavailable`] when the browser refuses them.
+/// or [`HapticOutcome::Unsupported`] when the browser refuses them.
 fn vibrate(pulses: &[u32], outcome: HapticOutcome) -> HapticOutcome {
     let Some(navigator) = web_sys::window().map(|window| window.navigator()) else {
-        return HapticOutcome::Unavailable;
+        return Unsupported::new(UnsupportedReason::NoWindow).into();
     };
     let pattern: Array = pulses.iter().map(|&millis| JsValue::from(millis)).collect();
     if navigator.vibrate_with_pattern(&pattern) {
         outcome
     } else {
-        HapticOutcome::Unavailable
+        Unsupported::new(UnsupportedReason::Unavailable).into()
     }
 }
 
-fn page_vibration() -> WebVibration {
-    web_sys::window().map_or(WebVibration::Unavailable, |window| {
+/// Whether the page can vibrate now, or why not: with no window there is no
+/// page.
+fn page_vibration() -> Result<(), UnsupportedReason> {
+    web_sys::window().map_or(Err(UnsupportedReason::NoWindow), |window| {
         vibration(&JsValue::from(window.navigator()))
     })
+}
+
+/// The page's vibration as the degradation table takes it, and what a request
+/// reports when nothing can play.
+fn page() -> (WebVibration, HapticOutcome) {
+    match page_vibration() {
+        Ok(()) => (
+            WebVibration::Available,
+            Unsupported::new(UnsupportedReason::Unavailable).into(),
+        ),
+        Err(reason) => (WebVibration::Unavailable, Unsupported::new(reason).into()),
+    }
 }
 
 impl PlatformHaptics for WebHaptics {
@@ -66,9 +91,10 @@ impl PlatformHaptics for WebHaptics {
     }
 
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
-        match web_feedback(feedback, page_vibration()) {
+        let (vibration, silent) = page();
+        match web_feedback(feedback, vibration) {
             Some((pulses, outcome)) => vibrate(&pulses, outcome),
-            None => HapticOutcome::Unavailable,
+            None => silent,
         }
     }
 
@@ -78,8 +104,9 @@ impl PlatformHaptics for WebHaptics {
         fallback: HapticFeedback,
         request: &HapticRequest,
     ) -> HapticOutcome {
-        match web_pattern(pattern, page_vibration()) {
-            None => HapticOutcome::Unavailable,
+        let (vibration, silent) = page();
+        match web_pattern(pattern, vibration) {
+            None => silent,
             Some((_, HapticOutcome::FellBack)) => match self.perform_with(fallback, request) {
                 outcome if outcome.played() => HapticOutcome::FellBack,
                 outcome => outcome,
@@ -90,10 +117,8 @@ impl PlatformHaptics for WebHaptics {
 
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         match page_vibration() {
-            WebVibration::Available => {
-                HapticCapabilities::new(true, PatternPlayback::Approximated, false, false)
-            }
-            _ => HapticCapabilities::NONE,
+            Ok(()) => HapticCapabilities::new(true, PatternPlayback::Approximated, false, false),
+            Err(_) => HapticCapabilities::NONE,
         }
     }
 

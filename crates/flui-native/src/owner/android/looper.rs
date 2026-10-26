@@ -63,7 +63,10 @@ use parking_lot::Mutex;
 
 use crate::host;
 use crate::owner::android::java_view;
-use crate::owner::android::{ActivityInput, ActivityPreferences, AndroidHost, HostDisplays};
+use crate::owner::android::{
+    ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
+    HostDisplays,
+};
 use crate::owner::handlers::CallbackWindow;
 use crate::{
     error::BootstrapError,
@@ -134,11 +137,44 @@ pub(crate) struct ActivityFlags {
     pub(crate) focused: AtomicBool,
 }
 
+/// One window of the Activity as its window-level positions are made for it
+/// (`host::Window::Ref`): the Activity it shows, `FluiView`, the device's API
+/// level, the owner thread that runs it and the signal that wakes it, and its
+/// identity. Public where it is defined, as the host's table names it, and
+/// nameable only inside the crate.
+#[derive(Clone)]
+pub struct ActivityRef {
+    /// The window's identity.
+    pub(crate) id: ActivityWindowId,
+    /// The Activity the window shows.
+    pub(crate) app: AndroidApp,
+    /// `FluiView`: the input method's editor, the drop target and the drag
+    /// source (ADR-0247).
+    pub(crate) view: Arc<java_view::JavaView>,
+    /// The device's API level.
+    pub(crate) api: AndroidApi,
+    /// The owner thread, the only one a window-level object acts on.
+    pub(crate) owner: std::thread::ThreadId,
+    /// Wakes the owner.
+    pub(crate) signal: std::sync::Weak<OwnerSignal>,
+}
+
+impl std::fmt::Debug for ActivityRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivityRef")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The Activity's window as the looper drives it: the window feature's, which
 /// the loop holds without naming it (ADR-0151 §10). The looper hands it what
 /// the Activity reports — a native window that comes or goes, a resize, a
 /// configuration change, the Java view's events — and asks it for a frame.
 pub(crate) trait ActivityWindow: CallbackWindow {
+    /// The window's identity, which what features keep of it is keyed by.
+    fn activity_id(&self) -> ActivityWindowId;
+
     /// Publishes the window's state if the Activity's changed it.
     fn publish_state(&self);
 
@@ -204,12 +240,14 @@ pub struct AndroidLoop {
     pub(crate) owner_signal: Arc<OwnerSignal>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
-    preferences: Box<dyn ActivityPreferences>,
+    pub(crate) preferences: Arc<dyn ActivityPreferences>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
+    /// The identities of the windows it opens.
+    pub(crate) window_ids: ActivityWindowIds,
 }
 
 // Opaque on purpose, matching `HeadlessLoop` and `WinitLoop`. A
@@ -285,6 +323,7 @@ impl AndroidLoop {
             preferences,
             displays: H::displays(api, library, owner),
             api,
+            window_ids: ActivityWindowIds::default(),
         }
     }
 

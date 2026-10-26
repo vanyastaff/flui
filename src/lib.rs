@@ -205,9 +205,7 @@ pub mod platform {
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input_capabilities::{
-            Availability, InputCapabilities, PointerKindSet,
-        };
+        pub use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
     }
     // Shadows the glob's module of the same name, so the unstable types are
     // unreachable through the facade without the feature.

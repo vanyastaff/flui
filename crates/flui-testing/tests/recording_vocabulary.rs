@@ -11,11 +11,12 @@ use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
+use flui_platform::Availability;
 use flui_platform::PointerFrame;
 use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
-use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };

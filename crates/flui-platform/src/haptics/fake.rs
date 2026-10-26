@@ -3,7 +3,7 @@
 use parking_lot::Mutex;
 
 use super::{HapticOutcome, HapticPattern, HapticRequest, PatternPlayback};
-use crate::{DeviceId, HapticFeedback, PlatformHaptics};
+use crate::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 use super::HapticCapabilities;
 
@@ -72,7 +72,8 @@ impl FakeHaptics {
 
     /// A fake whose actuators have `capabilities`: patterns play as
     /// [`HapticCapabilities::patterns`] says, and an actuator without
-    /// [`HapticCapabilities::feedback`] is [`HapticOutcome::Unavailable`].
+    /// [`HapticCapabilities::feedback`] is [`HapticOutcome::Unsupported`] (this
+    /// device has none, [`UnsupportedReason::NotOnThisDevice`]).
     #[must_use]
     pub fn with_capabilities(capabilities: HapticCapabilities) -> Self {
         Self {
@@ -127,7 +128,9 @@ impl FakeHaptics {
             .filter(|source| state.devices.contains(source));
         let capabilities = state.capabilities;
         let outcome = match (&play, capabilities.feedback) {
-            (_, false) => HapticOutcome::Unavailable,
+            (_, false) => {
+                HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice))
+            }
             (HapticPlay::Feedback(_), true) => HapticOutcome::Submitted,
             (HapticPlay::Pattern { .. }, true) => match capabilities.patterns {
                 PatternPlayback::Exact => HapticOutcome::Submitted,

@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_native::{HostWindow, Platform, WebPlatform};
+use flui_platform::Availability;
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
@@ -22,7 +23,6 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, ProcessNonce,
 };
-use flui_platform::input_capabilities::Availability;
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{
@@ -1107,7 +1107,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert!(started().prevented);
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "too late for this press: the session stays in its window"
     );
     press_mouse("pointerup", 40.0, 30.0);
@@ -1121,7 +1123,9 @@ fn dragstart_runs_a_waiting_session_and_refuses_otherwise() {
     assert_eq!(ended.borrow().last(), Some(&OsDragEnd::Cancelled));
     assert_eq!(
         source.start(os_drag_request(&ended)),
-        Err(DragError::Unavailable),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
         "no press"
     );
 }

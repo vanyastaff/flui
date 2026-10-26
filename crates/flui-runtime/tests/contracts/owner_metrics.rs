@@ -1883,7 +1883,9 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
     for ratio in [1.0, 2.0] {
         let window = Arc::new(GeometryWindow {
             inner: Arc::clone(crate::owner_publication::window().window()),
-            answer: Mutex::new(Err(PreferenceQueryError::Unavailable)),
+            answer: Mutex::new(Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ))),
             calls: AtomicUsize::new(0),
             query_time: Mutex::new(None),
             panic_next: AtomicBool::new(false),
@@ -2258,6 +2260,27 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         Ok(())
     }
 
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
+
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         *self.display.lock().expect("display script")
     }
@@ -2331,6 +2354,24 @@ impl flui_platform::PlatformWindow for RegionWindow {
     ) -> Result<(), flui_platform::WindowCommandError> {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
+    }
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
     fn display_id(&self) -> Option<flui_platform::DisplayId> {
         if self
@@ -2638,7 +2679,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .update_preferences(SystemPreferences::default(), &effects)
         .expect("preferences");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2692,7 +2735,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             &effects,
         )
         .expect("retained contact");
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     target
         .observe(
             WindowObservation::Metrics(crate::window_metrics(800.0, 600.0, 2.0)),
@@ -2840,7 +2885,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     );
 
     let submissions_before_retries = effects.sink.borrow().submitted;
-    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),
@@ -2982,7 +3029,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             })));
         }
         *window.answer.lock().expect("failed preparation script") =
-            Err(PreferenceQueryError::Unavailable);
+            Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ));
         owner
             .update_preferences(
                 SystemPreferences::default().with_high_contrast(!hook_present),
@@ -3106,7 +3155,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             "background progress does not enable visual frames"
         );
     }
-    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unavailable);
+    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unsupported(
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+    ));
     owner
         .update_preferences(
             SystemPreferences::default().with_high_contrast(true),

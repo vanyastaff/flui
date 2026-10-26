@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 
 use flui_foundation::InputSequenceId;
 
-use crate::DeviceId;
+use crate::{DeviceId, Unsupported};
 
 /// When a haptic request plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -121,8 +121,9 @@ pub enum HapticOutcome {
     /// switched them off, the window was hidden, or the frame it waited for
     /// was not presented in time.
     Suppressed,
-    /// No actuator can play it.
-    Unavailable,
+    /// No actuator can play it, and [why](Unsupported::reason): the platform
+    /// or the device has none, none is in range now, or its window is gone.
+    Unsupported(Unsupported),
 }
 
 impl HapticOutcome {
@@ -131,6 +132,25 @@ impl HapticOutcome {
     #[must_use]
     pub const fn played(self) -> bool {
         matches!(self, Self::Submitted | Self::Approximated | Self::FellBack)
+    }
+
+    /// What is not here, when that is why nothing played.
+    #[must_use]
+    pub const fn unsupported(self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(unsupported),
+            Self::Submitted
+            | Self::Queued(_)
+            | Self::Approximated
+            | Self::FellBack
+            | Self::Suppressed => None,
+        }
+    }
+}
+
+impl From<Unsupported> for HapticOutcome {
+    fn from(unsupported: Unsupported) -> Self {
+        Self::Unsupported(unsupported)
     }
 }
 

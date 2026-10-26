@@ -1,7 +1,7 @@
 //! Every backend's availability table (`input::availability`, ADR-0213):
 //! what each input path delivers as the code stands, without presence.
 
-use flui_platform::input_capabilities::Availability;
+use flui_platform::Availability;
 
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach

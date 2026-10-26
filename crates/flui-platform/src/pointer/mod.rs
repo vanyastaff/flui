@@ -262,6 +262,10 @@ pub enum PointerKind {
 /// The mouse, the first finger down while no other finger touches and the first pen in range
 /// are primary. A consumer that follows only one contact follows the primary one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the W3C `isPrimary`: a contact is its kind's primary one or not"
+)]
 pub enum PointerRole {
     /// The primary contact of its kind.
     Primary,
@@ -475,6 +479,10 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
 
 /// A further button changed while a contact continues: [`PointerEvent::ButtonChange`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a further button goes down or comes up"
+)]
 pub enum ButtonChange {
     /// Another button went down.
     Pressed(PointerPress),

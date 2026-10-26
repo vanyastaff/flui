@@ -512,6 +512,18 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
     }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        self.delegate.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.delegate.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.delegate.drag_source()
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        self.delegate.show()
+    }
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,

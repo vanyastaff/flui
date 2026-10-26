@@ -5,10 +5,78 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::{DeviceSize, Size};
 use flui_native::{HeadlessPlatform, Platform};
-use flui_platform::{PlatformWindow, WindowCommand, WindowMode};
+use flui_platform::{
+    CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
+    PlatformWindow, Unsupported, UnsupportedReason, WindowCommand, WindowCommandError, WindowId,
+    WindowMode, WindowState,
+};
 use flui_platform::{WindowCapabilities, WindowOptions};
 use flui_testing::window_conformance::{self, WindowFixture};
+
+/// A window that refuses what it does not take as unavailable for now, as if
+/// asking again could succeed.
+struct RefusesForNow(Arc<dyn PlatformWindow>);
+
+impl PlatformWindow for RefusesForNow {
+    fn id(&self) -> WindowId {
+        self.0.id()
+    }
+    fn physical_size(&self) -> DeviceSize {
+        self.0.physical_size()
+    }
+    fn logical_size(&self) -> Size {
+        self.0.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.0.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.0.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.0.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.0.is_visible()
+    }
+    fn state(&self) -> WindowState {
+        self.0.state()
+    }
+    fn capabilities(&self) -> WindowCapabilities {
+        self.0.capabilities()
+    }
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        self.0.apply(command).map_err(|error| match error {
+            WindowCommandError::Unsupported(_) => {
+                Unsupported::new(UnsupportedReason::Unavailable).into()
+            }
+            other => other,
+        })
+    }
+    fn close(&self) {
+        self.0.close();
+    }
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.0.set_cursor(cursor)
+    }
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        self.0.text_input()
+    }
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        self.0.haptics()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> {
+        self.0.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.0.drag_source()
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        self.0.show()
+    }
+}
 
 /// A headless window under `capabilities`, with `fault` applied to how the
 /// fixture settles or closes it.
@@ -23,14 +91,21 @@ enum Fault {
     RevertsWhileSettling,
     /// The window stays open when asked to close.
     IgnoresClose,
+    /// The window refuses what it does not take as unavailable for now.
+    RefusesForNow,
 }
 
 impl Fixture {
     fn new(capabilities: WindowCapabilities, fault: Option<Fault>) -> Self {
         let platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
-        let window = platform
+        let window: Arc<dyn PlatformWindow> = platform
             .open_window(WindowOptions::default())
             .expect("a headless window opens");
+        let window = if matches!(fault, Some(Fault::RefusesForNow)) {
+            Arc::new(RefusesForNow(window))
+        } else {
+            window
+        };
         Self { window, fault }
     }
 }
@@ -109,6 +184,17 @@ fn a_window_that_stays_open_is_caught_accepting_commands_after_close() {
     assert_eq!(checks, ["a_closed_window_refuses"]);
 }
 
+fn a_window_that_refuses_for_now_what_it_never_takes_is_caught() {
+    let checks: Vec<_> = window_conformance::check(&mut Fixture::new(
+        WindowCapabilities::NONE,
+        Some(Fault::RefusesForNow),
+    ))
+    .into_iter()
+    .map(|violation| violation.check)
+    .collect();
+    assert_eq!(checks, ["capabilities_are_honest"]);
+}
+
 #[test]
 fn window_conformance_checks() {
     crate::run_table(
@@ -125,6 +211,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_stays_open_is_caught_accepting_commands_after_close",
                 a_window_that_stays_open_is_caught_accepting_commands_after_close as fn(),
+            ),
+            (
+                "a_window_that_refuses_for_now_what_it_never_takes_is_caught",
+                a_window_that_refuses_for_now_what_it_never_takes_is_caught as fn(),
             ),
         ],
     );

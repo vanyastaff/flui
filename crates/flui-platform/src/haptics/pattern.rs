@@ -119,6 +119,10 @@ impl ParameterCurve {
 
 /// One event of a [`HapticPattern`].
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a haptic event is a tap or a sustained vibration"
+)]
 pub enum HapticEvent {
     /// A single tap `at` the given time after the pattern starts.
     Transient {

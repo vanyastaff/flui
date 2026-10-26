@@ -265,7 +265,7 @@ pub use owner::headless::{
 };
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
-pub use window::headless::{HeadlessWindowPolicy, MockWindow};
+pub use window::headless::{HeadlessWindowPolicy, MockWindow, UnknownDisplay};
 // The extensions an application reaches a native host's window by: each is
 // implemented for `dyn HostWindow`, and its one method answers `None` for a
 // window of another host or a typed view of the OS's window (ADR-0151 §8). The

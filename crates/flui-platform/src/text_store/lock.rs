@@ -83,6 +83,10 @@ type ReadBody = Box<dyn FnOnce(&dyn TextStoreRead)>;
 type EditBody = Box<dyn FnOnce(&mut dyn TextStoreEdit)>;
 
 /// A lock's body, which the store runs with the session its kind allows.
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a lock body for each of TSF's two lock kinds"
+)]
 pub enum LockGrant {
     /// Reads only.
     Read(ReadBody),
@@ -119,6 +123,10 @@ impl std::fmt::Debug for LockGrant {
 
 /// A lock's kind, TSF's `TS_LF_READ` or `TS_LF_READWRITE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "TSF's two lock kinds, `TS_LF_READ` and `TS_LF_READWRITE`"
+)]
 pub enum LockKind {
     /// Reads only.
     Read,
@@ -128,6 +136,7 @@ pub enum LockKind {
 
 /// Whether the caller needs the grant now (`TS_LF_SYNC`) or accepts it later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::exhaustive_enums, reason = "TSF's `TS_LF_SYNC` is set or not")]
 pub enum LockTiming {
     /// Now or never: refused with [`TextStoreError::SyncLockUnavailable`]
     /// when the store cannot grant it at once.
@@ -139,6 +148,10 @@ pub enum LockTiming {
 /// What happened to a lock request that was not refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a lock runs before its request returns or is queued (TSF's `TS_S_ASYNC`)"
+)]
 pub enum LockOutcome {
     /// The grant ran before the request returned.
     Granted,

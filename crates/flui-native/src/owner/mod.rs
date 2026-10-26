@@ -607,6 +607,9 @@ pub enum OpenWindowError {
         /// The backend's own error message.
         message: String,
     },
+    /// This host opens no windows: its table's window position is absent.
+    #[error("this host opens no windows: {0}")]
+    Unsupported(#[from] flui_platform::Unsupported),
     /// The event loop cannot service window creation from this call site in
     /// its current lifecycle state: called before `Platform::run` started
     /// the loop, from another thread while bootstrap (`on_ready`) is still

@@ -24,7 +24,6 @@ pub mod direct_manipulation;
 #[cfg(windows)]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -56,8 +55,8 @@ use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
 use crate::owner::windows::{
-    CreatedWindow, WindowIdentity, WindowInputs, WindowMessages, WindowRef, WindowStep,
-    WindowsLoop, dpi_scale, window_step,
+    CreatedWindow, WindowInputs, WindowMessages, WindowRef, WindowScale, WindowStep, WindowTable,
+    WindowsLoop, window_step,
 };
 #[cfg(windows)]
 use flui_platform::Modifiers;
@@ -106,7 +105,7 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
 #[cfg(windows)]
 #[derive(Default)]
 pub(crate) struct InputWindows {
-    windows: RefCell<HashMap<WindowIdentity, Rc<InputWindow>>>,
+    windows: WindowTable<Rc<InputWindow>>,
 }
 
 #[cfg(windows)]
@@ -123,20 +122,12 @@ impl InputWindows {
     /// that destroys the window drops the entry, not the input the message
     /// reaches.
     fn by_handle(&self, hwnd: HWND) -> Option<Rc<InputWindow>> {
-        self.windows
-            .borrow()
-            .values()
-            .find(|input| input.window.hwnd() == hwnd)
-            .cloned()
+        self.of(self.windows.window_of(hwnd)?)
     }
 
     /// The input of `window`, while its handle still names it.
     fn of(&self, window: WindowRef) -> Option<Rc<InputWindow>> {
-        self.windows
-            .borrow()
-            .get(&window.identity())
-            .filter(|input| input.window == window)
-            .cloned()
+        self.windows.read(window, Rc::clone)
     }
 
     /// Forget `input`'s window: it is destroyed. What the input still holds
@@ -145,7 +136,7 @@ impl InputWindows {
     fn forget(&self, input: &InputWindow) {
         input.gone.set(true);
         input.release_touchpad(input.window.hwnd());
-        let removed = self.windows.borrow_mut().remove(&input.window.identity());
+        let removed = self.windows.take(input.window.identity());
         drop(removed);
     }
 }
@@ -167,8 +158,9 @@ struct InputWindow {
     /// The system preferences, which give its double-click interval and
     /// rectangle.
     preferences: Rc<dyn OwnerPreferences>,
-    /// Its DPI: positions arrive in device pixels.
-    dpi: Cell<u32>,
+    /// Its scale, which its procedure changes: positions arrive in device
+    /// pixels.
+    scale: WindowScale,
     /// The clock its messages and readings are stamped on.
     message_clock: raw::MessageClock,
     /// Whether the mouse is over its client area.
@@ -200,14 +192,14 @@ impl InputWindow {
     /// The input of `window`, which its class just announced.
     fn new(window: &CreatedWindow) -> Self {
         let message_clock = raw::MessageClock::new();
-        let click_settings = raw::click_settings(&*window.preferences, window.dpi);
+        let click_settings = raw::click_settings(&*window.preferences, window.scale.dpi());
         Self {
             window: window.window(),
             hooks: Rc::downgrade(&window.hooks),
             callbacks: Arc::clone(&window.callbacks),
             handlers: Rc::clone(&window.handlers),
             preferences: Rc::clone(&window.preferences),
-            dpi: Cell::new(window.dpi),
+            scale: window.scale.clone(),
             registry: RefCell::new(raw::pointer_registry(
                 message_clock.native(),
                 click_settings,
@@ -224,7 +216,7 @@ impl InputWindow {
 
     /// Its scale: its DPI over 96.
     fn scale_factor(&self) -> f64 {
-        dpi_scale(self.dpi.get())
+        self.scale.scale()
     }
 
     /// Whether the window is still the one this input was made for: a
@@ -236,7 +228,7 @@ impl InputWindow {
     /// The window's DPI changed or a system setting did: read the
     /// double-click interval and rectangle again at its DPI.
     fn measure_clicks(&self) {
-        let settings = raw::click_settings(&*self.preferences, self.dpi.get());
+        let settings = raw::click_settings(&*self.preferences, self.scale.dpi());
         self.registry.borrow_mut().set_click_settings(settings);
     }
 
@@ -260,10 +252,7 @@ impl WindowMessages for InputWindows {
     /// (`input::availability::windows`).
     fn created(&self, window: &CreatedWindow) {
         let input = Rc::new(InputWindow::new(window));
-        let replaced = self
-            .windows
-            .borrow_mut()
-            .insert(window.identity, Rc::clone(&input));
+        let replaced = self.windows.put(window.window(), Rc::clone(&input));
         if let Some(replaced) = replaced {
             debug_assert!(false, "BUG: a window identity is announced once");
             tracing::error!("a window identity was announced twice; its earlier input is ended");
@@ -296,13 +285,13 @@ impl WindowMessages for InputWindows {
             WindowStep::Painting => input.pump_touchpad_for_frame(hwnd),
             WindowStep::SizeMoveStarted => input.pause_touchpad(hwnd),
             WindowStep::SizeMoveEnded => input.resume_touchpad(),
-            WindowStep::Rescaled { dpi } => {
-                input.dpi.set(dpi);
-                input.measure_clicks();
-            }
-            // Double-click time and size are settings too.
-            WindowStep::SettingChanged => input.measure_clicks(),
-            WindowStep::KeyLetThrough { .. } => {}
+            // The double-click rectangle is measured at the window's scale, and
+            // the double-click time and size are settings too.
+            WindowStep::Rescaled | WindowStep::SettingChanged => input.measure_clicks(),
+            WindowStep::KeyLetThrough { .. }
+            | WindowStep::ScaleApplied
+            | WindowStep::SessionLocked(_)
+            | WindowStep::Closed => {}
         }
     }
 

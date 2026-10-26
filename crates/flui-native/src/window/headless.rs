@@ -16,7 +16,6 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
-pub use flui_platform::haptics::FakeHaptics;
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
@@ -27,9 +26,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::accessibility::headless::FakeAccessibility;
-use crate::display::headless::{DisplayChangeError, LaidOutDisplays};
-use crate::host::{self, Host};
+use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::{Field, install};
@@ -39,7 +36,7 @@ use crate::owner::headless::{
     HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
 };
 use crate::platform::HostPlatform;
-use crate::text::headless::FakeTextInput;
+use crate::text::WindowTextInput;
 use crate::window::state::WindowStateCell;
 
 /// What the headless host imposes on its windows.
@@ -100,6 +97,8 @@ fn next_headless_window_id() -> WindowId {
 /// inside the crate.
 pub struct HeadlessWindows {
     tracked: Mutex<Tracked>,
+    /// What every window hands out of the window-level positions.
+    positions: WindowPositions<()>,
 }
 
 impl std::fmt::Debug for HeadlessWindows {
@@ -130,8 +129,9 @@ struct Tracked {
     policy: HeadlessWindowPolicy,
 }
 
-impl Default for HeadlessWindows {
-    fn default() -> Self {
+impl HeadlessWindows {
+    /// No window yet; each one opened hands out `positions`.
+    pub(crate) fn new(positions: WindowPositions<()>) -> Self {
         Self {
             tracked: Mutex::new(Tracked {
                 windows: Vec::new(),
@@ -140,11 +140,10 @@ impl Default for HeadlessWindows {
                 capabilities: WindowCapabilities::ALL,
                 policy: HeadlessWindowPolicy::default(),
             }),
+            positions,
         }
     }
-}
 
-impl HeadlessWindows {
     /// Stops tracking window `id`; another becomes active if it was.
     fn forget(&self, id: WindowId) {
         let mut tracked = self.tracked.lock();
@@ -174,7 +173,7 @@ impl TrackedWindows for HeadlessWindows {
         options: WindowOptions,
     ) -> Arc<dyn HostWindow> {
         let window_id = next_headless_window_id();
-        let display = state.displays.default_window_display();
+        let display = state.window_display();
         let (capabilities, limits) = {
             let tracked = self.tracked.lock();
             (tracked.capabilities, tracked.policy)
@@ -185,15 +184,16 @@ impl TrackedWindows for HeadlessWindows {
             platform,
             Arc::downgrade(&self),
             MockWindowHost {
+                positions: self.positions,
                 text_store_host: state.text_store_host.clone(),
                 display,
-                display_bounds: display.and_then(|id| state.displays.logical_bounds(id)),
+                display_bounds: display.and_then(|id| state.display_bounds(id)),
                 capabilities,
                 limits,
             },
         );
 
-        window.drag = crate::drag::headless::HeadlessDragSource::of(state);
+        window.drag = state.window_drag_source();
         // The initial snapshot reflects the devices already attached (ADR-0213 §3).
         window.callbacks.set_input_capabilities(
             state
@@ -286,6 +286,8 @@ impl<H: Host<Loop = HeadlessLoop, Window = MockWindow>> HostPlatform<H> {
 
 impl host::Window<HeadlessLoop> for MockWindow {
     type Shared = HeadlessWindows;
+    /// A headless window is made of nothing the positions need.
+    type Ref = ();
 
     fn open(
         owner: &HeadlessLoop,
@@ -327,6 +329,16 @@ impl host::Window<HeadlessLoop> for MockWindow {
 
 // ==================== Mock Implementations ====================
 
+/// A simulated move of a window named a display its platform does not hold
+/// ([`MockWindow::simulate_move_to`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the platform holds no display {display:?}")]
+#[non_exhaustive]
+pub struct UnknownDisplay {
+    /// The display the move named.
+    pub display: DisplayId,
+}
+
 /// The canonical test/headless window double.
 ///
 /// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `MockWindow`: a fully
@@ -356,10 +368,8 @@ pub struct MockWindow {
     capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
     callbacks: Arc<WindowCallbacks>,
-    text_input: Arc<FakeTextInput>,
-    haptics: Arc<FakeHaptics>,
-    system_chrome: Arc<FakeSystemChrome>,
-    accessibility: Arc<FakeAccessibility>,
+    /// What the window holds of the table's window-level positions.
+    facets: WindowFacets,
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
     text_store_host: Option<TextStoreHostFactory>,
@@ -415,6 +425,8 @@ struct RecordedInputRegions {
 }
 /// What the platform hands a window it opens.
 struct MockWindowHost {
+    /// What the window hands out of the window-level positions.
+    positions: WindowPositions<()>,
     text_store_host: Option<TextStoreHostFactory>,
     /// The display the window opens on; `None` when the platform has none.
     display: Option<DisplayId>,
@@ -566,6 +578,7 @@ impl MockWindow {
         host: MockWindowHost,
     ) -> Self {
         let MockWindowHost {
+            positions,
             text_store_host,
             display,
             display_bounds,
@@ -615,10 +628,7 @@ impl MockWindow {
             capabilities,
             limits,
             callbacks: Arc::new(WindowCallbacks::new()),
-            text_input: Arc::new(FakeTextInput::new()),
-            haptics: Arc::new(FakeHaptics::new()),
-            system_chrome: Arc::new(FakeSystemChrome::default()),
-            accessibility: Arc::new(FakeAccessibility::new()),
+            facets: positions.for_window(&()),
             text_store_host,
             input_regions: Arc::default(),
             platform_state,
@@ -635,8 +645,7 @@ impl MockWindow {
         self.platform_state
             .upgrade()?
             .lock()
-            .displays
-            .logical_bounds(display)
+            .display_bounds(display)
     }
 
     /// Publish what the model says now: read it into a snapshot, and raise
@@ -674,6 +683,9 @@ impl MockWindow {
             state.closed = true;
         }
         self.callbacks.dispatch_close();
+        // What the window-level positions put on the window goes with it.
+        self.facets.text.detach();
+        self.facets.accessibility.detach();
         self.notify_closed();
         // After the global `Closed`, never before: a handler that inspects the
         // window it was just told about must not find its callbacks already
@@ -842,15 +854,15 @@ impl MockWindow {
     /// changes; a closed window ignores the report.
     ///
     /// # Errors
-    /// [`DisplayChangeError::UnknownDisplay`] when the platform holds no
-    /// display with this id (or is gone); the window stays where it was.
-    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), DisplayChangeError> {
+    /// [`UnknownDisplay`] when the platform holds no display with this id (or
+    /// is gone); the window stays where it was.
+    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), UnknownDisplay> {
         let known = self
             .platform_state
             .upgrade()
-            .is_some_and(|platform| platform.lock().displays.contains(id));
+            .is_some_and(|platform| platform.lock().holds_display(id));
         if !known {
-            return Err(DisplayChangeError::UnknownDisplay);
+            return Err(UnknownDisplay { display: id });
         }
         {
             let mut state = self.state.lock();
@@ -1076,14 +1088,14 @@ impl PlatformWindow for MockWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        use crate::text::{TextInput as _, WindowTextInput};
-        self.text_input
+        self.facets
+            .text
             .window_text_input()
             .and_then(WindowTextInput::ime)
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1128,7 +1140,7 @@ impl PlatformWindow for MockWindow {
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform::PlatformSystemChrome>)
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     // ==================== Control Methods ====================
@@ -1176,15 +1188,31 @@ impl crate::host_window::CoreHostWindow for MockWindow {}
 
 impl HostWindow for MockWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility)
-            as Arc<dyn flui_semantics::platform::PlatformAccessibility>)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        self.facets.text.capture_sizing()
+    }
+
+    /// The host a test made the platform pull-model with, else what the text
+    /// position hands out.
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn TextStoreHost>> {
-        self.text_store_host.as_ref().map(|factory| factory())
+        self.text_store_host.as_ref().map_or_else(
+            || {
+                self.facets
+                    .text
+                    .window_text_input()
+                    .and_then(WindowTextInput::store_host)
+            },
+            |factory| Some(factory()),
+        )
     }
 }
 
@@ -1218,5 +1246,12 @@ impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// Each headless window records its own overlay styles.
+impl host::Chrome<()> for FakeSystemChrome {
+    fn for_window((): &()) -> Arc<dyn flui_platform::PlatformSystemChrome> {
+        Arc::new(Self::default())
     }
 }

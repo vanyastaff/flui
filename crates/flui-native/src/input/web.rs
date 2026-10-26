@@ -100,7 +100,7 @@ pub(crate) mod pinch {
     //!
     //! The DOM does not say whether a Control-held wheel event came from a
     //! pinch or from a mouse wheel with the key held, so the decision is
-    //! [`Availability::Emulated`](flui_platform::input_capabilities::Availability)
+    //! [`Availability::Emulated`](flui_platform::Availability)
     //! and is taken once per sequence, from its first event:
     //!
     //! - a pinch is a pixel-mode vertical delta that is a whole number neither

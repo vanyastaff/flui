@@ -21,6 +21,15 @@ use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
 #[derive(Debug, Default)]
 pub struct MacHaptics;
 
+/// Every AppKit window plays on the system's default performer.
+impl crate::host::Haptics<crate::owner::apple::macos::ContentViewRef> for MacHaptics {
+    fn for_window(
+        _: &crate::owner::apple::macos::ContentViewRef,
+    ) -> std::sync::Arc<dyn PlatformHaptics> {
+        std::sync::Arc::new(Self)
+    }
+}
+
 impl PlatformHaptics for MacHaptics {
     fn perform(&self, feedback: HapticFeedback) {
         let _ = self.perform_with(feedback, &HapticRequest::default());

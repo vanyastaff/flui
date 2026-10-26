@@ -11,6 +11,7 @@ use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, IDENTITY_ESSENCE,
     OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
 };
+use flui_platform::{Unsupported, UnsupportedReason};
 
 const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
@@ -223,7 +224,9 @@ fn a_backend_without_a_drag_source_refuses_what_needs_the_os() {
             false,
             false
         ),
-        Err(DragError::Unavailable)
+        Err(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotOnThisPlatform
+        )))
     );
     assert_eq!(
         plan_os_session(

@@ -32,10 +32,12 @@ use flui_platform::data_transfer::{
     TransferPayload, TransferRequest, TransferUri,
 };
 use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
-use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput};
+use flui_platform::{
+    DispatchEventResult, DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
+};
 use windows::Win32::Foundation::{
     DRAGDROP_E_ALREADYREGISTERED, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, HWND, LPARAM, POINT, POINTL,
-    S_OK, WPARAM,
+    RECT, S_OK, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::System::Com::IDataObject;
@@ -46,10 +48,10 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GUITHREADINFO, GetGUIThreadInfo, HWND_TOPMOST, MSG,
+    DispatchMessageW, GUITHREADINFO, GetGUIThreadInfo, GetWindowRect, HWND_TOPMOST, MSG,
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, SMTO_NORMAL,
-    SWP_NOMOVE, SWP_NOSIZE, SendMessageTimeoutW, SetWindowPos, TranslateMessage, WM_MOUSEMOVE,
-    WM_NULL, WindowFromPoint,
+    SWP_NOMOVE, SWP_NOSIZE, SendMessageTimeoutW, SendMessageW, SetWindowPos, TranslateMessage,
+    WM_DPICHANGED, WM_MOUSEMOVE, WM_NULL, WindowFromPoint,
 };
 use windows_core::HRESULT;
 
@@ -271,10 +273,12 @@ impl Drop for Poke {
     }
 }
 
-/// A window and what its input callback saw of drags.
+/// A window, its drop target as OLE holds it, and what its input callback saw
+/// of drags.
 struct Window {
     host: Arc<dyn HostWindow>,
     hwnd: HWND,
+    ole: IDropTarget,
     seen: Rc<RefCell<Vec<String>>>,
     offer: Rc<RefCell<Option<DataTransferOffer>>>,
 }
@@ -332,6 +336,7 @@ fn open(
     Window {
         host: window,
         hwnd,
+        ole: drop_target(hwnd),
         seen,
         offer,
     }
@@ -408,16 +413,16 @@ fn data_object(request: OsDragRequest) -> IDataObject {
     super::com::SourceData::new(&request.representations, request.provider).into()
 }
 
+/// The window `hwnd` as its class's hooks name it.
+fn window_ref(hwnd: HWND) -> crate::owner::windows::WindowRef {
+    let identity =
+        with_window_context(hwnd, "test", |context| context.identity).expect("a context");
+    crate::owner::windows::WindowRef::new(hwnd, identity)
+}
+
+/// The drop target the window `hwnd` registered as its class created it.
 fn drop_target(hwnd: HWND) -> IDropTarget {
-    with_window_context(hwnd, "test", |context| {
-        context
-            .drop_target
-            .borrow()
-            .as_ref()
-            .map(windows_core::ComObject::to_interface::<IDropTarget>)
-    })
-    .flatten()
-    .expect("the window registered its drop target")
+    super::testing::target_of(window_ref(hwnd)).expect("the window registered its drop target")
 }
 
 /// The screen point of the window's client point (50, 40) in device pixels.
@@ -432,7 +437,7 @@ fn screen_point(hwnd: HWND) -> POINTL {
 }
 
 fn scale(hwnd: HWND) -> f64 {
-    with_window_context(hwnd, "test", |context| context.scale_factor.get()).expect("a context")
+    with_window_context(hwnd, "test", |context| context.scale.scale()).expect("a context")
 }
 
 /// Resolve a ready transfer request.
@@ -521,7 +526,9 @@ fn raise(hwnd: HWND) -> POINTL {
 /// where the platform reaches it only as a `HostDrag`.
 fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     WindowsPlatform::try_from_parts(
-        crate::window::windows::WindowSet::new(WindowConfiguration::default()),
+        |positions| {
+            crate::window::windows::WindowSet::new(WindowConfiguration::default(), positions)
+        },
         |windows| {
             WindowsLoop::with_drag::<Windows>(
                 Arc::clone(windows) as _,
@@ -544,7 +551,7 @@ fn owner_window(transport: &OleTransfer) -> HWND {
 fn a_window_registers_its_drop_target() {
     let platform = WindowsPlatform::new().expect("platform");
     let target = open(&platform, "flui drop target", |_| {});
-    let again = drop_target(target.hwnd);
+    let again = target.ole.clone();
     // SAFETY: the case's own live window, on its thread.
     let registered = unsafe { RegisterDragDrop(target.hwnd, &again) };
     assert_eq!(
@@ -567,7 +574,7 @@ fn a_drag_over_a_window_is_offered_answered_and_fetched() {
     );
     let ended = Rc::new(Cell::new(None));
     let data = data_object(request(&ended));
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
     assert_eq!(enter(&ole, &data, at, BOTH), DROPEFFECT_COPY);
     assert_eq!(over(&ole, at, BOTH), DROPEFFECT_COPY);
@@ -621,6 +628,101 @@ fn a_drag_over_a_window_is_offered_answered_and_fetched() {
     );
 }
 
+/// A drag over a window whose DPI changed reaches it at the window's new
+/// scale.
+fn a_drop_target_follows_its_window_to_a_new_scale() {
+    let platform = WindowsPlatform::new().expect("platform");
+    let transfer = platform.data_transfer();
+    let target = open(
+        &platform,
+        "flui rescaled target",
+        answering(&transfer, Some(TransferActions::COPY)),
+    );
+    let dpi: usize = if scale(target.hwnd) > 1.5 { 96 } else { 192 };
+    let mut suggested = RECT::default();
+    // SAFETY: the case's own live window; `suggested` is a live local.
+    unsafe { GetWindowRect(target.hwnd, &raw mut suggested) }.expect("the window's rectangle");
+    // SAFETY: a message to the case's own window on its thread; `suggested`
+    // outlives the send.
+    unsafe {
+        SendMessageW(
+            target.hwnd,
+            WM_DPICHANGED,
+            Some(WPARAM((dpi << 16) | dpi)),
+            Some(LPARAM((&raw const suggested) as isize)),
+        )
+    };
+    let s = scale(target.hwnd);
+    assert!(
+        (s * 96.0 - dpi as f64).abs() < 1e-9,
+        "the window took the new scale"
+    );
+    let ended = Rc::new(Cell::new(None));
+    let data = data_object(request(&ended));
+    let ole = target.ole.clone();
+    let at = screen_point(target.hwnd);
+    assert_eq!(enter(&ole, &data, at, BOTH), DROPEFFECT_COPY);
+    // SAFETY: OLE's own call shape on the live target.
+    unsafe { ole.DragLeave() }.expect("DragLeave");
+    let (x, y) = (50.0 / s, 40.0 / s);
+    let both = TransferActions::COPY | TransferActions::MOVE;
+    assert_eq!(
+        target.seen.borrow().first(),
+        Some(&format!("entered {both:?} at {x:.0},{y:.0}")),
+        "the drag is reported at the window's new scale"
+    );
+}
+
+/// The drop target and the text services read a window at the window's own
+/// scale, the one value the window holds: as it opens, and at a scale other
+/// than 100% once the window moves to one.
+fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
+    let platform = WindowsPlatform::new().expect("platform");
+    let transfer = platform.data_transfer();
+    let target = open(
+        &platform,
+        "flui one scale",
+        answering(&transfer, Some(TransferActions::COPY)),
+    );
+    let window = window_ref(target.hwnd);
+    let services = crate::text::windows::testing::services_of(target.hwnd)
+        .expect("the window's text services");
+    let read = || {
+        (
+            scale(target.hwnd),
+            super::testing::scale_of(window).expect("the window's drop target"),
+            services.scale(),
+        )
+    };
+    let opened = read();
+    assert_eq!(
+        (opened.1, opened.2),
+        (opened.0, opened.0),
+        "as it opens, the window hands its scale to both"
+    );
+    let dpi: usize = if opened.0 > 1.4 { 120 } else { 144 };
+    let mut suggested = RECT::default();
+    // SAFETY: the case's own live window; `suggested` is a live local.
+    unsafe { GetWindowRect(target.hwnd, &raw mut suggested) }.expect("the window's rectangle");
+    // SAFETY: a message to the case's own window on its thread; `suggested`
+    // outlives the send.
+    unsafe {
+        SendMessageW(
+            target.hwnd,
+            WM_DPICHANGED,
+            Some(WPARAM((dpi << 16) | dpi)),
+            Some(LPARAM((&raw const suggested) as isize)),
+        )
+    };
+    let moved = read();
+    let expected = dpi as f64 / 96.0;
+    assert_eq!(
+        moved,
+        (expected, expected, expected),
+        "at its new scale, the window and both read the same value"
+    );
+}
+
 /// A window that accepts nothing is answered "none", and a release over it
 /// leaves it instead of dropping.
 fn a_refused_drag_leaves_instead_of_dropping() {
@@ -633,7 +735,7 @@ fn a_refused_drag_leaves_instead_of_dropping() {
     );
     let ended = Rc::new(Cell::new(None));
     let data = data_object(request(&ended));
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
     assert_eq!(enter(&ole, &data, at, BOTH), DROPEFFECT_NONE);
     assert_eq!(drop_on(&ole, &data, at, BOTH), DROPEFFECT_NONE);
@@ -685,7 +787,7 @@ fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
         on_end: Box::new(|_| {}),
     };
     let data = data_object(request);
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
     assert_eq!(enter(&ole, &data, at, DROPEFFECT_COPY), DROPEFFECT_COPY);
     let offer = target.offer.borrow().clone().expect("an offer");
@@ -730,7 +832,7 @@ fn a_window_closed_by_its_drag_callback_is_left() {
         }
     });
     *closing.borrow_mut() = Some(Arc::clone(&target.host));
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let ended = Rc::new(Cell::new(None));
     let data = data_object(request(&ended));
     let at = screen_point(target.hwnd);
@@ -809,8 +911,23 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     by_pen.pointer = Some(pen);
     let pen_started = drag.start(by_pen);
     hold_mouse_buttons(0);
-    assert_eq!(unheld, Err(DragError::Unavailable), "no mouse button");
-    assert_eq!(pen_started, Err(DragError::Unavailable), "a pen contact");
+    let refused = |reason| Err(DragError::from(Unsupported::new(reason)));
+    assert_eq!(
+        unheld,
+        refused(UnsupportedReason::Unavailable),
+        "no mouse button"
+    );
+    assert!(
+        unheld
+            .as_ref()
+            .is_err_and(|error| error.unsupported().is_some_and(Unsupported::is_retryable)),
+        "a press may start the next drag"
+    );
+    assert_eq!(
+        pen_started,
+        refused(UnsupportedReason::NotOnThisPlatform),
+        "a pen contact"
+    );
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert_eq!(ended.get(), None, "a refused start is not told it ended");
     assert!(!transport.is_running());
@@ -839,7 +956,13 @@ fn a_start_is_deferred_to_the_owner_turn() {
     hold_mouse_buttons(0);
     assert_eq!(started, Ok(()));
     assert_eq!(ended.get(), None, "DoDragDrop ran inside the start");
-    assert_eq!(refused, Err(DragError::Unavailable));
+    assert_eq!(
+        refused,
+        Err(DragError::from(Unsupported::new(
+            UnsupportedReason::Unavailable
+        ))),
+        "one session at a time"
+    );
     assert!(
         pump_until(|| ended.get().is_some(), Duration::from_secs(10)),
         "the session never ran"
@@ -1003,7 +1126,7 @@ fn a_provider_whose_capture_panics_on_drop_is_contained() {
     );
     let ended = Rc::new(Cell::new(None));
     let data = data_object(hostile_request(&ended));
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
     assert_eq!(enter(&ole, &data, at, BOTH), DROPEFFECT_COPY);
     assert_eq!(drop_on(&ole, &data, at, BOTH), DROPEFFECT_COPY);
@@ -1209,7 +1332,7 @@ fn a_drop_concluded_after_its_window_closed_releases_the_data_object() {
         serve(index)
     });
     let data = data_object(session);
-    let ole = drop_target(target.hwnd);
+    let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
     assert_eq!(enter(&ole, &data, at, BOTH), DROPEFFECT_COPY);
     assert_eq!(drop_on(&ole, &data, at, BOTH), DROPEFFECT_COPY);
@@ -1249,7 +1372,7 @@ fn the_drag_objects_are_bound_to_their_apartment() {
         ("data object", data.cast::<windows_core::IUnknown>()),
         ("format list", formats.cast()),
         ("drop source", source.cast()),
-        ("drop target", drop_target(target.hwnd).cast()),
+        ("drop target", target.ole.cast()),
     ];
     for (name, object) in objects {
         let object = object.expect("IUnknown");
@@ -1351,6 +1474,14 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_drag_over_a_window_is_offered_answered_and_fetched",
                 a_drag_over_a_window_is_offered_answered_and_fetched,
+            ),
+            (
+                "a_drop_target_follows_its_window_to_a_new_scale",
+                a_drop_target_follows_its_window_to_a_new_scale,
+            ),
+            (
+                "a_window_hands_its_drop_target_and_text_services_its_one_scale",
+                a_window_hands_its_drop_target_and_text_services_its_one_scale,
             ),
             (
                 "a_refused_drag_leaves_instead_of_dropping",

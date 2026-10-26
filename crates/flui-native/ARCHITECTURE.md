@@ -46,17 +46,15 @@ trait depends on `flui-platform` instead.
   directory the layout does not name cannot come back unchecked
   (`table_test`, built for tests only, needs none). A platform file names its
   model, a base and other features' models; every other edge is a
-  named, dated exception whose `reason` says what removes it: the winit host's
-  displays on Linux reading `display::linux` (until the native Linux host,
-  ADR-0151 §11), and edges between the window's file and another feature's of
-  one platform. Each of those goes one of three ways: a window that builds
-  another feature's window-level object gets it through the host table; a
-  feature that reaches into the window, or whose state of a window the window
-  keeps, keeps that state itself, keyed by the window's identity and set up
-  and dropped by its own window hooks; a window that reads a display,
-  preference or lifecycle fact with another feature's code gets the fact
-  through an owner hook. The features that share one AppKit or UIKit view
-  keep theirs until that view is an owner multiplexer they join.
+  named, dated exception whose `reason` says what removes it, and one is
+  left: the winit host's displays on Linux reading `display::linux` (until
+  the native Linux host, ADR-0151 §11). No window file names another
+  feature's: a window's text input, accessibility bridge, actuator and
+  chrome reach it through the host table; a feature keeps its own state of a
+  window, keyed by the window's identity and set up and dropped by its own
+  window hooks; a window reads a display, preference or lifecycle fact
+  through an owner hook; and the features that answer one AppKit or UIKit
+  view join it through the owner's hooks.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
@@ -65,13 +63,29 @@ trait depends on `flui-platform` instead.
   and a table that leaves a position out does not compile
   (`tests/ui/host_table_names_every_position.rs`). A position a platform does
   not have is `Absent<F>`, which answers in that position's words for "not
-  here" (no drag offered, `HapticOutcome::Unavailable`, unknown preferences);
-  no position or service method falls back to an inert default (the
-  clipboard's `write` and `read` derive from its `clipboard`). `HostPlatform<H>`
-  implements `Platform` by asking the position that holds each method; the
-  application-level positions are static functions over the host's loop
-  (`O`), which owns what the operating system hands out once per process, and
-  the window-level positions are the types each window hands out. The public
+  here" (no drag offered, `Unsupported { NotOnThisPlatform }`, unknown
+  preferences); no position or service method falls back to an inert default
+  (the clipboard's `write` and `read` derive from its `clipboard`).
+  `HostPlatform<H>` implements `Platform` by asking the position that holds
+  each method; the application-level positions are static functions over the
+  host's loop (`O`), which owns what the operating system hands out once per
+  process, and the window-level positions (text, accessibility, haptics,
+  chrome) are what each window hands out. Each makes one window's part as the
+  window opens, `for_window(&Ref)`, from what the window position says its
+  features reach a window by (`host::Window::Ref`): owner vocabulary any
+  feature may name (`owner::windows::WindowRef`,
+  `owner::apple::macos::ContentViewRef`, `owner::apple::ios::ViewRef`,
+  `owner::android::ActivityRef`, `owner::web::CanvasRef`, the winit window,
+  `()` headless). `HostPlatform` builds the table's `host::WindowPositions`, one
+  function per position, and hands it to the window position's `Shared`, so a
+  window cannot make another type than its table names. The positions make a
+  window's four parts together (`WindowPositions::for_window`, one
+  `host::WindowFacets` the window keeps as one value). The window keeps what
+  they made, hands it out through `PlatformWindow::{text_input, haptics,
+  system_chrome}` and `HostWindow::{accessibility, text_store_host,
+  capture_text_sizing}`, and tells the text input and the bridge when it goes
+  (`TextInput::detach`, `WindowAccessibility::detach`); a window whose table
+  leaves a position out hands out that position's `Absent`. The public
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
@@ -147,7 +161,17 @@ trait depends on `flui-platform` instead.
   serves several features dispatches through a hook declared beside it, which
   each feature's file implements and the host's table names: on Windows the
   table implements `owner::windows::WindowsHost`, whose `window_class` and
-  `broadcast_subscribers` list, in order, what the owner dispatches to. A
+  `broadcast_subscribers` list, in order, what the owner dispatches to. On
+  macOS every window's content view is the owner's
+  (`owner::apple::macos::content_view`, `FLUIContentView`): it hands its
+  events to the input's `ViewInput` and its `NSTextInputClient` methods to the
+  text input's `ViewText`, one of each per view, made by the table's
+  `MacosHost::view_hooks`, routes a key press between them, and enters the
+  display pass (`owner::apple::macos::display_pass`) for the frame its
+  `drawRect:` asks the window for. On iOS the window's view hands its
+  touches to the input's `ViewTouches` (`IosHost::view_touches`, one per
+  view), and its display link's cadence and its screen to the loop's
+  `HostDisplays` (`observe_link`, `move_window`, `forget_link`). A
   loop keeps a feature's state the same way: each `owner` module declares one
   host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
   `WebHost`, `WinitHost`, `HeadlessHost`) whose methods the table implements
@@ -165,7 +189,13 @@ trait depends on `flui-platform` instead.
     answers goes to `DefWindowProcW`. A created window is announced to the
     same hooks in order (`window_created`, through the owner's state,
     `OwnerShares::window_hooks`) as a `CreatedWindow` that carries its
-    `WindowIdentity` and its DPI; after each hook
+    `WindowIdentity` and its `WindowScale`: the window's one DPI, which its
+    procedure changes at `WM_DPICHANGED` and every hook reads, keeping no
+    copy (seeded once as the window opens: the DPI the system reports, else
+    that of the scale it was placed at). A hook keeps its windows in an
+    `owner::windows::WindowTable`, put at announcement, read only for the
+    window a reference names, taken at destruction or `WM_NCDESTROY` and
+    ended with the table released; after each hook
     the window must still be the one created, or no later hook hears of it and
     its open fails (`WindowGone`). Windows holds the class once per process,
     so the class registration records its host and a loop for another host is
@@ -174,22 +204,26 @@ trait depends on `flui-platform` instead.
     timers and system commands that share a message) and answers no other;
     the procedure asserts it in debug builds. A hook may hear a message it
     does not answer and pass it on. The hooks are, in order, the text services
-    (`text::windows::Tsf`: a new window's TSF connection, and the window's
-    moves, which TSF hears before the procedure answers them; it answers
-    nothing), the window's own procedure (`window::windows::proc::WindowProc`:
-    creation, close and destruction, size, position and their limits, DPI,
-    focus, paint, the cursor, the title, the modal size-move and menu loops
-    with their deadline timer, the session and setting changes, the frame and
-    fullscreen requests posted to it and the keyboard's system-menu command),
-    the input (`input::windows::InputWindows`: mouse, pointer, wheel,
-    keyboard, characters and the keyboard layout, and the precision
-    touchpad's hit test and pacing timer, with the DirectManipulation
-    viewport it gives each new window) and the drop target
-    (`drag::windows::DropTargetRegistration`, which only hears each window
-    created and registers it with the transport its context holds, the
-    loop's `HostDrag`). The reference a hook is handed a window by,
+    (`text::windows::Tsf`: a new window's TSF connection, its scale, and the
+    window's moves, which TSF hears before the procedure answers them; it
+    answers nothing), the window's own procedure
+    (`window::windows::proc::WindowProc`: creation, close and destruction,
+    size, position and their limits, DPI, focus, paint, the cursor, the
+    title, the modal size-move and menu loops with their deadline timer, the
+    setting changes, the frame and fullscreen requests posted to it and the
+    keyboard's system-menu command), the input
+    (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
+    characters and the keyboard layout, and the precision touchpad's hit
+    test and pacing timer, with the DirectManipulation viewport it gives each
+    new window), the session (`lifecycle::windows::SessionWindows`: each
+    window's session notification, and the lock and unlock it answers as the
+    window's step) and the drop target
+    (`drag::windows::DropTargetRegistration`, which registers each window
+    created with the loop's `HostDrag` the announcement carries, keeps the
+    registration it hands back and revokes it as the window is destroyed;
+    it answers nothing). The reference a hook is handed a window by,
     `owner::windows::WindowRef` (the handle and the identity of its context),
-    is the owner's; the window feature reaches the context through it
+    is the owner's; only the window feature reaches the context through it
     (`WindowRef::with_context`), and the window's own procedure borrows it for
     its own messages only.
   - A hook keeps what it needs of a window in itself, keyed by the window's
@@ -200,16 +234,21 @@ trait depends on `flui-platform` instead.
     another process may write, and a message, step or read for a window a
     hook does not hold finds nothing. The hooks hear the window's steps
     (`WindowMessages::step`, a `WindowStep`: its size, minimizing, focus
-    loss, paint, modal size-and-move loop, DPI and setting changes, and a key
-    the application let through), which the window's procedure announces in
-    hook order where it handles them. The input's state of a window (its
-    message clock, pointer registry, touchpad viewport, hover, modifiers,
-    dead keys and a pending surrogate) is its own; what the window, drag and
-    drop and haptics read of it the owner names (`WindowInputs`: the hover,
-    the modifiers, the kind of a press, a pen in range), read-only, through
-    the class on their thread (`owner::windows::window_inputs`). A keydown
+    loss, paint, modal size-and-move loop, DPI change and the rectangle it
+    asks for applied, setting changes, its close callbacks having run, the
+    session's lock and a key the application let through), which the hook
+    that handles each announces in hook order where it is complete. The
+    input's state of a window (its message clock, pointer registry, touchpad
+    viewport, hover, modifiers, dead keys and a pending surrogate) is its
+    own; what the window, drag and drop and haptics read of it the owner
+    names (`WindowInputs`: the hover, the modifiers, the kind of a press, a
+    pen in range), read-only, through the class on their thread
+    (`owner::windows::window_inputs`). The text services' state of a window
+    is theirs too; the window hands out its text-store host through the
+    class's text (`WindowTexts`, `owner::windows::window_texts`). A keydown
     the application lets through is a step, which the window answers with its
-    own keys, the fullscreen hotkey. Tests:
+    own keys, the fullscreen hotkey; the session's lock is a step the window
+    answers by hiding. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class` (two instances of the owner's
@@ -309,7 +348,12 @@ trait depends on `flui-platform` instead.
   its caret is: AppKit, winit, headless) or `Store` (the platform reads or
   mirrors the field's store: TSF, Android, web), and
   `Absent<position::Text>` answers none; each window's accessor goes through
-  it. Beside it, one file per platform with its pure half a module inside it:
+  it, as do its text sizing (`capture_sizing`, `invalidate_sizing`,
+  `fence_sizing`) and its going (`detach`). Where the text feature keeps a
+  window's state itself the handle is a key to it: Android's input method
+  keeps each window's field by `owner::android::ActivityWindowId`, and the
+  Web's text input lives in the canvas window's owner-thread slot. Beside it,
+  one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry`, the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
   `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
@@ -317,8 +361,7 @@ trait depends on `flui-platform` instead.
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
   item; each edge into another feature's platform file is a named exception
-  that goes when the feature keeps its own per-window state or the position
-  reaches the window through the table. The
+  that goes when the feature keeps its own per-window state. The
   pure halves are built for their target and for tests on every host; which
   key belongs to the input method is the input feature's
   (`input::android::keys`, `input::web::keys`), and a window's text input
@@ -358,17 +401,21 @@ trait depends on `flui-platform` instead.
   `accesskit_unix` and `zbus` unconditional Linux dependencies and that gate
   `target_os = "linux"`.
 
-  The window still makes the accessibility adapter and the actuator it hands
-  out by naming the feature's platform file, as the Android and headless
-  windows make their drag source (the Win32 and Web windows reach theirs
-  through the loop's `HostDrag`). These are edges between two features'
-  platform files, each a named exception in `[package.metadata.flui.modules]`
-  that goes when the window-level positions reach the window through the
-  table. The Win32 drag transport and actuator name a window by
-  `owner::windows::WindowRef`, the owner's vocabulary, and reach its context
-  through the window's `WindowRef::with_context`, except what they read of the
-  window's input (the kind of a press, the pen in range), which the input
-  answers read-only (`owner::windows::WindowInputs`). The Web drag answers
+  The table's positions make the accessibility adapter and the actuator a
+  window hands out (`host::Accessibility::for_window`,
+  `host::Haptics::for_window`); the Android window takes its drag source from
+  the loop's `ViewTransfer` hook (`drag_source`), and the Win32 and Web
+  windows reach theirs through the loop's `HostDrag`; the headless window
+  takes its drag source from its loop, which the table's
+  `HeadlessHost::drag_source` tells how to make it. The Win32 drop-target hook
+  keeps each window's registration, which the transport makes as the window
+  is created and the hook revokes as it is destroyed. The Win32 drag
+  transport and actuator name a window by `owner::windows::WindowRef`, the
+  owner's vocabulary, and never reach its context: the drop target keeps the
+  window's callbacks and its `WindowScale` from the announcement, and what
+  they read of the window's input (the kind of a
+  press, the pen in range) the input answers read-only
+  (`owner::windows::WindowInputs`). The Web drag answers
   its events and reads their position as the input does, through the
   owner's `owner::web::event`.
 - **The displays are a feature directory, `display/` (ADR-0151 §10).** Its
@@ -519,12 +566,14 @@ trait depends on `flui-platform` instead.
     share, `host::Window::Shared`: the Win32 handle map and configuration
     (`WindowSet`), the macOS configuration, the UIKit window factory, the
     winit frame inset and window manager's view, the headless window model,
-    `()` on Android and the Web. The host's constructor builds it with
-    `HostPlatform::from_parts(shared, |shared| Loop::new(...))` (or
-    `try_from_parts` for a loop that can fail): the platform keeps the one
-    instance and the loop gets that instance as the hook it declares, so the
-    two cannot see different windows; the platform passes it to every call
-    of the position.
+    and on every host the table's window-level positions
+    (`host::WindowPositions`, all Android and the Web share). The host's
+    constructor builds it with
+    `HostPlatform::from_parts(|positions| shared, |shared| Loop::new(...))`
+    (or `try_from_parts` for a loop that can fail): the platform keeps the
+    one instance and the loop gets that instance as the hook it declares, so
+    the two cannot see different windows; the platform passes it to every
+    call of the position.
   - **The loops' hooks.** Each loop declares what it asks of its windows, and
     the window file implements it: `owner::handlers::{CallbackWindow,
     OpenWindows}` (a window's callbacks; whether any window is open), shared
@@ -550,22 +599,19 @@ trait depends on `flui-platform` instead.
     model trait: the winit window reads it, `window::linux::x11`'s probe
     answers it, and the winit host connects them, so neither platform file
     names the other.
-  - What a window file still names of another feature, and what another
-    feature's code names of the window, are the edges
-    `[package.metadata.flui.modules] exceptions` lists: into the
-    accessibility, haptics and drag files, and between the text and
-    window files of one platform (a window builds its text input and
-    captures its text sizing; the text input reaches the window that holds
-    it). A window that builds or keeps another feature's object of a
-    window-level position (its accessibility, haptics, drag source, text
-    input) keeps the edge until those positions reach the window through the
-    host table. The others go when that feature keeps its own per-window
-    state, keyed by the window's identity, set up by its window hook's
-    `created` and dropped when the window goes, and no longer reaches the
-    window's context, as the Win32 input does. The features that add methods
-    to one AppKit or UIKit view class (the input, the text input, the window's
-    drawing) keep the edges between them until that class is the owner's,
-    joined through hooks.
+  - No window file names another feature's, and no feature's code names the
+    window's. A feature keeps its own state of a window: the Win32 text
+    services, drop target and session by the window's identity, each set up
+    by its window hook's `created` and dropped when the window goes, none
+    reaching the window's context; the Android input method its field by
+    `ActivityWindowId`; the iOS text input the text size it captured from
+    the view's traits. A window reads the facts it needs through its loop:
+    the headless windows the laid-out displays and the drag source
+    (`HeadlessState::window_display`, `display_bounds`, `window_drag_source`),
+    the UIKit window its link cadence and screen through `HostDisplays`, the
+    AppKit window its frames through the owner's `bounds_of`. The features
+    that answer one AppKit or UIKit view (the input, the text input, the
+    window's drawing) join it through the owner's hooks.
 - **The input is a feature directory, `input/` (ADR-0151 §10).** Its model
   is what the platforms share: `assembly` (the pointer registry every backend
   assembles its contacts through, the decoder of native readings, a
@@ -591,8 +637,9 @@ trait depends on `flui-platform` instead.
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
   touchpad's DirectManipulation viewport, one OS object, with its pure
-  `manipulation` decoder), `apple.rs` (the pure `keys` and `wheel`; `macos`, the AppKit
-  content view's class and its events; `ios`, the touches), `android.rs`
+  `manipulation` decoder), `apple.rs` (the pure `keys` and `wheel`; `macos`,
+  `ViewInputs`, the input of one content view, and its events; `ios`,
+  `TouchInputState`, the touches of one view), `android.rs`
   (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
   pure `keys`, `wheel` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
   and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
@@ -1197,7 +1244,7 @@ long-press trigger, typically), and then stores every representation the
 request names through `setData` and its actions as `effectAllowed`. Otherwise
 the `dragstart` is cancelled and the press continues as pointer input, which
 Chrome keeps delivering, and a session the runtime starts later in that press
-is refused as `DragError::Unavailable` so it stays in its window. A waiting
+is refused as `DragError::Unsupported` (`Unavailable`) so it stays in its window. A waiting
 session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
 `dropEffect` is the end it reports. A provider that panics at `dragstart` is
 contained and reported (`drag::web::mapping::serve_stored`), its session
@@ -1685,16 +1732,16 @@ by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 
 ### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
 
-A window's TSF connection (`text::windows::TextServices`, ADR-0135 §3) lives in its
-`WindowContext`, activated on the owner thread once the context is installed, by the text
-feature's hook on FLUI's window class (`text::windows::Tsf`, whose `created` the class's hooks
-hear first, before the drop target and the precision touchpad; TSF's calls read the context's
-scale), so the host exists
+A window's TSF connection (`text::windows::TextServices`, ADR-0135 §3) lives in the text
+feature's hook on FLUI's window class (`text::windows::Tsf`, a `WindowTable` by the window's
+identity), activated on the owner thread once the window's context is installed (the class's
+hooks hear the hook's `created` first, before the drop target and the precision touchpad; TSF's
+calls read the window's `WindowScale`), so the host exists
 before any field can focus; a lazy activation would put the first `ITfThreadMgr::Activate`
 inside a focus change, under owner code. A failed activation leaves `None` and the `WM_CHAR`
 path; a window a message of the activation destroyed fails its open
-(`a_window_destroyed_during_activation_fails_the_open`). `WM_DESTROY` deactivates it
-after the close callbacks (the presentation's close unfocuses its field through the still
+(`a_window_destroyed_during_activation_fails_the_open`). The hook deactivates it at the
+window's `Closed` step, which `WM_DESTROY` tells after the close callbacks (the presentation's close unfocuses its field through the still
 active host) and before the context retires; the shutdown is a host operation, so one that
 arrives inside a TSF call into a store waits for that call. Its application-code failures are
 logged, contained: the window procedure aborts on a panic. Test:
@@ -2110,9 +2157,9 @@ it.
 
 **Choice:** `drawRect:` stays the frame source. It is the signal AppKit actually
 delivers — the view is live and the frame carries its own dirty rect — and the
-produce contract the engine consumes is dispatched from it (`view.rs::draw_rect`
+produce contract the engine consumes is dispatched from it (`owner::apple::macos::content_view`'s `draw_rect`
 → `WindowCallbacks::dispatch_request_frame`). What changed is the re-arm.
-`display_pass` in `window/apple/macos.rs` marks the thread for the duration of the frame
+`owner::apple::macos::display_pass` marks the thread for the duration of the frame
 AppKit asked for (an RAII guard, nesting-safe, thread-local), and
 `window/apple/macos.rs::dispatch_redraw_request` — the single decision point `request_redraw`
 calls — sends the `setNeedsDisplay:` inline at any other moment, but hands it to
@@ -2304,13 +2351,17 @@ locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
 
 ### AppKit's input method is a route for a `keyDown:`, not a second producer of one
 
-**Decision.** `FLUIContentView` conforms to `NSTextInputClient` (all 11 methods plus
-`add_protocol`), and `keyDown:` becomes a gate rather than a direct conversion:
-while `TextInputState.ime_allowed` is **false** it calls `handle_input_event`
-exactly as before; while it is **true** it hands the event to
-`interpretKeyEvents:` and emits nothing itself, with `doCommandBySelector:`
-re-dispatching the events the input method declines. `PlatformTextInput` is
-implemented by `MacOSTextInput`, whose two setters route through the owner lane.
+**Decision.** `FLUIContentView` (the owner's `content_view`) conforms to
+`NSTextInputClient` (all 11 methods plus `add_protocol`), and `keyDown:` becomes
+a gate rather than a direct conversion: while the view's text input does not
+compose (`ViewText::takes_key_presses`, `TextInputState.ime_allowed` **false**)
+it hands the event to the view's input exactly as before; while it does it
+hands the event to `interpretKeyEvents:` and emits nothing itself, with
+`doCommandBySelector:` handing the events the input method declines back to
+the input. The methods turn AppKit's arguments into Rust values and call the
+view's `TextView`, which keeps the composition. `PlatformTextInput` is
+implemented by `MacOSTextInput`, whose two setters route through the owner
+lane to the same `TextView`.
 
 **Why.** AppKit's composition pipeline is entered only by `interpretKeyEvents:`,
 which calls *back* into the same view (`setMarkedText:` while composing,
@@ -2553,7 +2604,7 @@ requests focus; operating-system focus policy still decides whether focus moves.
 AppKit deminiaturizes then orders the window forward. Win32 queries
 `WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
 placement, using `SW_SHOW` for non-minimized windows. Winit 0.30.13 Wayland reveal
-is rejected as `WindowShowError::Unsupported` before mutation because unminimize
+is rejected as `WindowShowError::Unsupported` (`NotOnThisPlatform`) before mutation because unminimize
 and focus are unsupported there. Closed retained windows return `Closed`.
 
 Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
@@ -3049,7 +3100,7 @@ comparing the stored version to the rename, so two processes on one directory
 cannot both succeed from the same base. The comparison checks the stored
 length against the base's (`StoredVersion::byte_len`) before reading, so a
 value of another length is never read for it. A file system without locks
-refuses such a write with `LockUnsupported` rather than writing unguarded:
+refuses such a write as `Unsupported` (`NotOnThisDevice`) rather than writing unguarded:
 `std` maps only some of its codes to `ErrorKind::Unsupported`, so
 `ERROR_INVALID_FUNCTION` (1), `ERROR_NOT_SUPPORTED` (50) and `ENOLCK` are
 recognised by code.
@@ -3553,7 +3604,7 @@ A window's drag source starts the session the runtime asks for, but not inside
 the call. The host calls it once its outermost runtime callback ends, which is
 still inside the window's own callback drain; a modal loop there would queue the
 source window's input and frames until the drag ended. So the start records the
-request (one at a time; a second is refused with `DragError::Unavailable`) and
+request (one at a time; a second is refused with `DragError::Unsupported`, `Unavailable`) and
 posts `START_DRAG` to the owner window, whose procedure hands it to the
 transport's own `OwnerMessages` hook, which runs `DoDragDrop` on a fresh turn of
 the message loop; a request whose message never runs is told `Cancelled` when
@@ -3562,7 +3613,7 @@ alone, and a pen or touch contact the window takes as `WM_POINTER` is never
 promoted to mouse input, so it sets no mouse button in the key state the loop
 reads: a start whose contact is a pen or touch (by the window's pointer
 registry), or with no mouse button held, is refused with
-`DragError::Unavailable` and the drag stays in its window (ADR-0211 §11,
+`DragError::Unsupported` (`NotOnThisPlatform`) and the drag stays in its window (ADR-0211 §11,
 `a_drag_the_os_loop_cannot_carry_stays_in_its_window`, the pure rule
 `os_loop_buttons`). The drop source drops when the buttons held at the start
 are released and cancels on Escape or on another button.

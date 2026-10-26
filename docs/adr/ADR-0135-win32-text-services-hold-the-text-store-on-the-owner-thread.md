@@ -8,9 +8,10 @@
 - **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
   §10: TSF lives in `crates/flui-native/src/text/windows/tsf/`, §6's geometry is the pure
   `geometry` module of `text/windows/mod.rs`, and the text feature's hook on FLUI's window class
-  activates a window's connection once its context is installed and tells it the window moved;
-  the teardown stays in the window procedure, between the close callbacks and the context's
-  retirement (§3).
+  activates a window's connection once its context is installed, keeps it by the window's
+  identity, follows the window's scale and moves, and deactivates it at the window's close step,
+  which the window procedure tells between the close callbacks and the context's retirement (§2,
+  §3).
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
 - **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract),
@@ -44,7 +45,7 @@ composition must still end somewhere.
    could not), `Deferred` (the request arrived inside a platform call into a store; the host
    keeps the store, ends the composition when that call returns, and commits it in place itself
    if the platform then cannot or has shut down), `TextStoreHostError::NotFocused` for any other
-   store, or `TextStoreHostError::Unavailable` once the window's text services are gone. On
+   store, or `TextStoreHostError::Unsupported` once the window's text services are gone. On
    `Abandoned` and either error the caller commits in place:
    `text_store::commit_composition_in_place` clears the composing range under an asynchronous
    lock and keeps the text, the one function every caller uses; it returns the lock's outcome,
@@ -54,23 +55,25 @@ composition must still end somewhere.
    reads the window's host through `HostWindow::text_store_host`, whose argument, an
    `OwnerThreadToken`, only `OwnerPlatform` can build: its type is public in a private module, so
    the method cannot be called outside `flui-native`. The token proves the platform's owner
-   thread, not the window's: the Win32 window reads its host through `with_window_context`, which
-   refuses a thread other than the one that created the HWND. This is the interim home until ADR-0082
+   thread, not the window's: the Win32 window reads its host through its class's text
+   (`owner::windows::window_texts`), which exists only on the thread that created the HWND. This
+   is the interim home until ADR-0082
    §4 step 2's owner window exists, when the method moves there. `PlatformWindow` and
    `PlatformTextInput` do not change. The runner reads the host once, beside the accessibility
    bridge (`runner::presentation_window`), and `PresentationWindow` carries it, so a
    `PresentationWindow` is not `Send`.
-3. **Win32 keeps the text services in the window.** The `ITfThreadMgr`, the empty document and
-   the focused field's document (one state: nothing, a field's document, or shut down) live in
-   the window's `WindowContext`, on the owner thread, with
-   no `static` or `thread_local!`; no `windows::*` type leaves `flui-native`. They are
-   activated as the window is created, once its `WindowContext` is installed, and the window
-   offers them as its host from then on; a window whose activation failed answers `None`, and
-   its text input takes the `WM_CHAR` path. `WM_DESTROY` deactivates them after the window's
-   close callbacks (the presentation's close, which unfocused its field) and before the context
-   retires; inside a TSF call into a store the deactivation waits for that call to return. The
-   teardown's application-code failures are logged, contained, since the window procedure must
-   not unwind. A host the presentation still holds then answers `Unavailable`.
+3. **Win32 keeps the text services on the window's owner thread.** The `ITfThreadMgr`, the
+   empty document and the focused field's document (one state: nothing, a field's document, or
+   shut down) live in the text feature's hook on the window's class, keyed by the window's
+   identity, on the owner thread, with no `static` or `thread_local!`; no `windows::*` type
+   leaves `flui-native`. They are activated as the window is created, once its `WindowContext`
+   is installed, and the window offers them as its host from then on; a window whose activation
+   failed answers `None`, and its text input takes the `WM_CHAR` path. `WM_DESTROY` deactivates
+   them after the window's close callbacks (the presentation's close, which unfocused its field)
+   and before the context retires, through the close step it tells the class's hooks; inside a
+   TSF call into a store the deactivation waits for that call to return. The teardown's
+   application-code failures are logged, contained, since the window procedure must not unwind.
+   A host the presentation still holds then answers `Unsupported` (`NoWindow`).
 4. **The presentation's owner orders host calls and never nests them.**
    `TextInputOwner::new(TextInputBackend)` takes `Push(Arc<dyn PlatformTextInput>)`,
    `Pull(Rc<dyn TextStoreHost>)` or `Unsupported`, held in one `RefCell`; the presentation picks

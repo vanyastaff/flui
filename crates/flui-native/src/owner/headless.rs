@@ -13,13 +13,13 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::InMemoryClipboard;
 use flui_platform::data_transfer::{
     DropFeedback, OfferTable, RepresentationDescriptor, TransferActions,
 };
-use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart};
+use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
@@ -41,7 +41,7 @@ use crate::{
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
+use flui_platform::{DisplayId, DisplaySnapshot, WindowEvent, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
@@ -70,6 +70,10 @@ pub(crate) trait HeadlessHost: 'static {
 
     /// The simulated system's pointer devices, none attached.
     fn devices() -> Box<dyn SimulatedDevices>;
+
+    /// The drag source a window opened now in `state`'s system hands out:
+    /// none until a test lets the windows start sessions.
+    fn drag_source(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>>;
 }
 
 /// The pointer devices of the simulated system, which the input feature
@@ -235,6 +239,50 @@ pub(crate) struct HeadlessState {
     /// The failure the next `Platform::preferences` read reports instead of a
     /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
     pub(crate) preference_failure: Option<String>,
+    /// What makes the drag source of a window opened now, as the table names
+    /// it ([`HeadlessHost::drag_source`]).
+    drag_source: fn(&HeadlessState) -> Option<Arc<dyn PlatformDragSource>>,
+}
+
+/// What the simulated system tells a window that opens in it: the displays
+/// it lays out and the drag source it hands out, read from the system's state
+/// so the window names neither feature.
+impl HeadlessState {
+    /// The display a new window opens on: the primary, or the first when
+    /// none is.
+    pub(crate) fn window_display(&self) -> Option<DisplayId> {
+        self.displays
+            .primary()
+            .or_else(|| self.displays.displays().first())
+            .map(|display| display.id)
+    }
+
+    /// Whether the system holds display `id`.
+    pub(crate) fn holds_display(&self, id: DisplayId) -> bool {
+        self.displays.get(id).is_some()
+    }
+
+    /// The bounds of display `id` in the logical pixels of its own scale.
+    pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
+        let display = self.displays.get(id)?;
+        let scale = display.scale_factor;
+        let device = display.bounds;
+        Some(Bounds::new(
+            Point::new(
+                f64::from(device.origin.x) / scale,
+                f64::from(device.origin.y) / scale,
+            ),
+            Size::new(
+                f64::from(device.size.width) / scale,
+                f64::from(device.size.height) / scale,
+            ),
+        ))
+    }
+
+    /// The drag source a window opened now hands out.
+    pub(crate) fn window_drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        (self.drag_source)(self)
+    }
 }
 
 impl HeadlessLoop {
@@ -264,6 +312,7 @@ impl HeadlessLoop {
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
+            drag_source: H::drag_source,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -559,7 +608,7 @@ impl host::Services for HeadlessLoop {
 
 /// What the headless backend implements unless a test says otherwise.
 const fn default_input_availability() -> flui_platform::input_capabilities::InputCapabilities {
-    use flui_platform::input_capabilities::Availability::Native;
+    use flui_platform::Availability::Native;
     flui_platform::input_capabilities::InputCapabilities::builder()
         .pen(Native)
         .precise_scroll(Native)
@@ -851,6 +900,12 @@ mod tests {
 
         fn devices() -> Box<dyn SimulatedDevices> {
             Box::new(NoDevices)
+        }
+
+        fn drag_source(
+            _: &HeadlessState,
+        ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+            None
         }
     }
 

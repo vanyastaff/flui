@@ -84,6 +84,27 @@ impl super::TextInput for Arc<FakeTextInput> {
             Arc::clone(self) as Arc<dyn PlatformTextInput>
         ))
     }
+
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    /// The headless text size is linear: nothing is captured.
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    /// The recorder put nothing on its window.
+    fn detach(&self) {}
+}
+
+/// Each headless window gets a recorder of its own.
+impl crate::host::Text<()> for FakeTextInput {
+    fn for_window((): &()) -> Arc<dyn super::TextInput> {
+        Arc::new(Arc::new(Self::new()))
+    }
 }
 
 /// The headless platform's text-store host: the pull model a window offers

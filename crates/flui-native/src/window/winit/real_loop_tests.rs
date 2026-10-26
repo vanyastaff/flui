@@ -565,6 +565,10 @@ mod wayland_window {
     use flui_platform::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
     use winit::event_loop::EventLoop;
 
+    /// What a window answers for a command its capabilities leave out.
+    const NOT_HERE: flui_platform::Unsupported =
+        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform);
+
     fn build_wayland_event_loop() -> EventLoop<()> {
         use winit::platform::wayland::EventLoopBuilderExtWayland;
         let mut builder = EventLoop::builder();
@@ -631,7 +635,7 @@ mod wayland_window {
                 ] {
                     assert_eq!(
                         window.apply(refused.clone()),
-                        Err(WindowCommandError::Unsupported),
+                        Err(WindowCommandError::Unsupported(NOT_HERE)),
                         "{refused:?}"
                     );
                 }

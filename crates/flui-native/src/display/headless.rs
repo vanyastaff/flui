@@ -107,7 +107,7 @@ pub enum DisplayChangeError {
 
 /// The snapshot of `specs`, laid out left to right with the first primary: the
 /// displays the headless loop holds, which a test changes through
-/// [`LaidOutDisplays::apply`]. The registry that issues their ids is only
+/// [`HeadlessDisplayControls`]. The registry that issues their ids is only
 /// needed while the specs are turned into displays, so it is not kept.
 pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
     let registry = DisplayRegistry::new();
@@ -137,71 +137,32 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
         .expect("BUG: revision 0 has a successor")
 }
 
-/// What the headless doubles ask of the snapshot a test laid out, and how a
-/// test changes it.
-pub(crate) trait LaidOutDisplays {
-    /// Whether the snapshot holds display `id`.
-    fn contains(&self, id: DisplayId) -> bool;
-
-    /// The bounds of display `id` in the logical pixels of its own scale.
-    fn logical_bounds(&self, id: DisplayId) -> Option<Bounds<f64>>;
-
-    /// The display a new window opens on.
-    fn default_window_display(&self) -> Option<DisplayId>;
-
-    /// Apply `change` to display `id`, as the snapshot's successor.
-    ///
-    /// # Errors
-    /// [`DisplayChangeError::UnknownDisplay`] for an id the snapshot does not
-    /// hold; [`DisplayChangeError::RevisionExhausted`] when the revision cannot
-    /// advance.
-    fn apply(&mut self, id: DisplayId, change: DisplayChange) -> Result<(), DisplayChangeError>;
-}
-
-impl LaidOutDisplays for DisplaySnapshot {
-    fn contains(&self, id: DisplayId) -> bool {
-        self.get(id).is_some()
-    }
-
-    fn logical_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
-        let display = self.get(id)?;
-        let scale = display.scale_factor;
-        let device = display.bounds;
-        Some(Bounds::new(
-            Point::new(
-                f64::from(device.origin.x) / scale,
-                f64::from(device.origin.y) / scale,
-            ),
-            Size::new(
-                f64::from(device.size.width) / scale,
-                f64::from(device.size.height) / scale,
-            ),
-        ))
-    }
-
-    fn default_window_display(&self) -> Option<DisplayId> {
-        self.primary()
-            .or_else(|| self.displays().first())
-            .map(|display| display.id)
-    }
-
-    fn apply(&mut self, id: DisplayId, change: DisplayChange) -> Result<(), DisplayChangeError> {
-        let mut displays = self.displays().to_vec();
-        let display = displays
-            .iter_mut()
-            .find(|display| display.id == id)
-            .ok_or(DisplayChangeError::UnknownDisplay)?;
-        match change {
-            DisplayChange::RefreshPeriod(period) => {
-                display.refresh_period =
-                    period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
-            }
-            DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
-            DisplayChange::Name(name) => display.name = name,
+/// Apply `change` to display `id` of `snapshot`, as the snapshot's successor.
+///
+/// # Errors
+/// [`DisplayChangeError::UnknownDisplay`] for an id the snapshot does not
+/// hold; [`DisplayChangeError::RevisionExhausted`] when the revision cannot
+/// advance.
+fn apply(
+    snapshot: &mut DisplaySnapshot,
+    id: DisplayId,
+    change: DisplayChange,
+) -> Result<(), DisplayChangeError> {
+    let mut displays = snapshot.displays().to_vec();
+    let display = displays
+        .iter_mut()
+        .find(|display| display.id == id)
+        .ok_or(DisplayChangeError::UnknownDisplay)?;
+    match change {
+        DisplayChange::RefreshPeriod(period) => {
+            display.refresh_period =
+                period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
         }
-        *self = self.successor(displays)?;
-        Ok(())
+        DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
+        DisplayChange::Name(name) => display.name = name,
     }
+    *snapshot = snapshot.successor(displays)?;
+    Ok(())
 }
 
 /// What the headless platform offers for its displays beyond [`Platform`](crate::Platform).
@@ -272,7 +233,7 @@ impl HeadlessDisplayControls {
         let Some(state) = self.state.upgrade() else {
             return Ok(());
         };
-        state.lock().displays.apply(id, change)?;
+        apply(&mut state.lock().displays, id, change)?;
         // A failed wake leaves the signal's pending debt for the next turn.
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();

@@ -32,7 +32,13 @@ use flui_platform::data_transfer::{
     TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform::{DragDropEvent, EventTime, PlatformWindow, WindowId};
+use flui_platform::{
+    DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowId,
+};
+
+/// A drag the OS cannot take: the window has no drag source.
+const NO_OS_DRAG: DragError =
+    DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
 use parking_lot::Mutex;
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -165,6 +171,23 @@ impl PlatformWindow for DragWindow {
     ) -> Result<(), flui_platform::WindowCommandError> {
         command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 }
 
@@ -845,11 +868,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                 }
                 Expect::Refused => {
                     assert!(pending.is_empty(), "{name}");
-                    assert_eq!(
-                        outcome,
-                        MoveOutcome::Refused(DragError::Unavailable),
-                        "{name}"
-                    );
+                    assert_eq!(outcome, MoveOutcome::Refused(NO_OS_DRAG), "{name}");
                     assert_eq!(session.stage(), Ok(DragStage::InWindow), "{name}");
                     assert_eq!(
                         logged(&f.log)
@@ -888,13 +907,13 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                         UiRuntimeId::new(9),
                         key.session(),
                     );
-                    f.owner.os_drag_refused(foreign, DragError::Unavailable);
+                    f.owner.os_drag_refused(foreign, NO_OS_DRAG);
                     assert_eq!(
                         session.stage(),
                         Ok(DragStage::System),
                         "{name}: foreign refusal"
                     );
-                    f.owner.os_drag_refused(key, DragError::Unavailable);
+                    f.owner.os_drag_refused(key, NO_OS_DRAG);
                     assert_eq!(session.stage(), Ok(DragStage::InWindow), "{name}: refused");
                 }
                 Expect::IdentityOnly => {
@@ -930,7 +949,7 @@ fn a_refused_os_drag_still_drops_in_its_window() {
         let key = pending.key();
         assert_eq!(
             pending.start(None),
-            Err(DragError::Unavailable),
+            Err(NO_OS_DRAG),
             "a window with no drag source refuses"
         );
         assert_eq!(
@@ -938,16 +957,13 @@ fn a_refused_os_drag_still_drops_in_its_window() {
             Ok(DragStage::System),
             "until the host says so"
         );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         assert_eq!(
             moved(&session, 10.0),
             MoveOutcome::Tracking(Some(COPY)),
             "the receiver under the pointer is entered again"
         );
-        assert_eq!(
-            moved(&session, 150.0),
-            MoveOutcome::Refused(DragError::Unavailable)
-        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Refused(NO_OS_DRAG));
         assert!(
             !f.owner.has_pending_os_drags(),
             "the refused start is not asked for again"
@@ -2122,7 +2138,7 @@ impl PlatformDragSource for HoardingDragSource {
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
         STARTED.with(|started| started.borrow_mut().push(request));
-        Err(DragError::Unavailable)
+        Err(NO_OS_DRAG)
     }
 }
 
@@ -2191,15 +2207,15 @@ fn an_os_session_ends_however_its_end_hook_goes() {
         let pending = the_one_pending(f);
         let key = pending.key();
         assert_eq!(
-            pending.start(Some(&ForgetfulDragSource(Err(DragError::Unavailable)))),
-            Err(DragError::Unavailable)
+            pending.start(Some(&ForgetfulDragSource(Err(NO_OS_DRAG)))),
+            Err(NO_OS_DRAG)
         );
         assert_eq!(
             session.stage(),
             Ok(DragStage::System),
             "a refusal, not an end"
         );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         assert_eq!(session.stage(), Ok(DragStage::InWindow));
         assert_eq!(count(&f.log, ENDED_CANCELLED), 0);
     });
@@ -2207,11 +2223,8 @@ fn an_os_session_ends_however_its_end_hook_goes() {
         let session = escalated(f);
         let pending = the_one_pending(f);
         let key = pending.key();
-        assert_eq!(
-            pending.start(Some(&HoardingDragSource)),
-            Err(DragError::Unavailable)
-        );
-        f.owner.os_drag_refused(key, DragError::Unavailable);
+        assert_eq!(pending.start(Some(&HoardingDragSource)), Err(NO_OS_DRAG));
+        f.owner.os_drag_refused(key, NO_OS_DRAG);
         let kept = take_started().pop().expect("kept");
         (kept.on_end)(OsDragEnd::Dropped(COPY));
         assert_eq!(

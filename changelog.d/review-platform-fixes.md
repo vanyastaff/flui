@@ -11,7 +11,7 @@
   input with the default result while no registration can deliver it.
 - **Win32 pen and touch drags stay in their window** (`flui-native`): escalating a drag that no
   mouse button holds, or that a pen or touch contact makes, started a `DoDragDrop` session that
-  cancelled at once. The start now fails with `DragError::Unavailable`, so the drag stays
+  cancelled at once. The start now fails with `DragError::Unsupported`, so the drag stays
   in-window (ADR-0211 §11).
 - **A panicking drag provider no longer aborts on Win32** (`flui-native`): the session's
   provider is retired under containment when COM releases the data object.

@@ -8,7 +8,8 @@
 //! [`InputCapabilities::with_present`]. The functions are cfg-free so Linux CI
 //! runs every backend's table.
 
-use flui_platform::input_capabilities::{Availability, InputCapabilities};
+use flui_platform::Availability;
+use flui_platform::input_capabilities::InputCapabilities;
 
 use Availability::{Emulated, Native, Unavailable};
 

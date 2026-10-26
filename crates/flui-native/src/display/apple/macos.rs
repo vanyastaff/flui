@@ -34,16 +34,16 @@ use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSScreen};
 use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
-    NSRect, NSString,
+    NSString,
 };
 
-use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 use super::screen::device_bounds_of_screen;
 use super::screen::{macos_display_key, macos_display_persistent_key};
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
+use crate::owner::apple::macos::bounds_of;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
 
@@ -115,14 +115,6 @@ fn refresh_rate_of_screen(screen: &NSScreen) -> Option<f64> {
     let display_id = u32::try_from(display_id_of(screen)?).ok()?;
     let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
     Some(mode.refresh_rate())
-}
-
-/// An AppKit rectangle as the geometry type the shared rules take.
-pub(crate) fn bounds_of(rect: NSRect) -> Bounds<f64> {
-    Bounds {
-        origin: Point::new(rect.origin.x, rect.origin.y),
-        size: Size::new(rect.size.width, rect.size.height),
-    }
 }
 
 impl crate::owner::notices::StaleOnWake for MacosDisplays {

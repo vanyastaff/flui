@@ -19,6 +19,10 @@ use crate::haptics::apple::IOSHaptics;
 #[cfg(target_os = "macos")]
 use crate::haptics::apple::MacHaptics;
 use crate::host::{Absent, Host, position};
+#[cfg(target_os = "ios")]
+use crate::input::apple::ios::TouchInputState;
+#[cfg(target_os = "macos")]
+use crate::input::apple::macos::ViewInputs;
 #[cfg(target_os = "macos")]
 use crate::lifecycle::apple::macos::SystemNoticeSources;
 use crate::lifecycle::notice::SystemNotices;
@@ -27,7 +31,9 @@ use crate::owner::apple::IOSLoop;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::MacOSLoop;
 #[cfg(target_os = "ios")]
-use crate::owner::apple::ios::{IosHost, UIKitPreferences};
+use crate::owner::apple::ios::{IosHost, UIKitPreferences, ViewTouches};
+#[cfg(target_os = "macos")]
+use crate::owner::apple::macos::content_view::ViewHooks;
 #[cfg(target_os = "macos")]
 use crate::owner::apple::macos::{LoopControl, MacosHost, NoticeSources};
 use crate::owner::notices::NoticeChannel;
@@ -40,8 +46,10 @@ use crate::preferences::apple::ios::IOSPreferences;
 #[cfg(target_os = "macos")]
 use crate::preferences::apple::macos::AppKitPreferences;
 use crate::storage::UserDataDirs;
+#[cfg(target_os = "ios")]
+use crate::text::apple::ios::IosTextSizing;
 #[cfg(target_os = "macos")]
-use crate::text::apple::macos::MacOSTextInput;
+use crate::text::apple::macos::{MacOSTextInput, TextView};
 #[cfg(target_os = "ios")]
 use crate::window::apple::ios::{IOSSystemChrome, IOSWindow, IOSWindows};
 #[cfg(target_os = "macos")]
@@ -80,9 +88,9 @@ impl Host for Apple {
     type Input = IOSLoop;
 
     #[cfg(target_os = "macos")]
-    type Text = std::sync::Arc<MacOSTextInput>;
+    type Text = MacOSTextInput;
     #[cfg(target_os = "ios")]
-    type Text = Absent<position::Text>;
+    type Text = IosTextSizing;
 
     // UIKit windows hand out no accessibility yet.
     #[cfg(target_os = "macos")]
@@ -123,11 +131,12 @@ impl Host for Apple {
 /// The macOS platform: AppKit windows, the `NSPasteboard` clipboard and the
 /// `NSApplication` run loop.
 ///
-/// The windows are AppKit's (`window::apple::macos`), their input comes through
-/// the content view (`input::apple::macos`), and the IME through its
-/// `NSTextInputClient` conformance (`text::apple::macos`, ADR-0069):
-/// `keyDown:` is a gate, so one press reaches the application exactly once,
-/// either as a composition or commit or as a key event. The displays are read
+/// The windows are AppKit's (`window::apple::macos`); their input reaches each
+/// window's content view (`owner::apple::macos::content_view`), which hands
+/// its events to the input (`input::apple::macos`) and its
+/// `NSTextInputClient` methods to the text input (`text::apple::macos`,
+/// ADR-0069): `keyDown:` is a gate, so one press reaches the application
+/// exactly once, either as a composition or commit or as a key event. The displays are read
 /// from `NSScreen.screens`, each keyed by its UUID with the refresh period of
 /// its current mode, and read again after
 /// `NSApplicationDidChangeScreenParametersNotification`. AppKit has no
@@ -179,6 +188,13 @@ impl MacosHost for Apple {
     ) -> Box<dyn NoticeSources> {
         Box::new(SystemNoticeSources::new(notices, control))
     }
+
+    fn view_hooks() -> ViewHooks {
+        ViewHooks {
+            input: || Box::new(ViewInputs::default()),
+            text: || Box::new(TextView::default()),
+        }
+    }
 }
 
 #[cfg(target_os = "ios")]
@@ -199,6 +215,10 @@ impl IosHost for Apple {
     fn notices() -> Arc<dyn NoticeChannel> {
         Arc::new(SystemNotices::default())
     }
+
+    fn view_touches() -> Box<dyn ViewTouches> {
+        Box::new(TouchInputState::default())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -207,9 +227,10 @@ impl HostPlatform<Apple> {
     pub fn new() -> Result<Self, PlatformError> {
         // The loop keeps the open windows itself; what they share is the
         // configuration they open with.
-        Self::try_from_parts(MacOSWindows::new(WindowConfiguration::default()), |_| {
-            MacOSLoop::new::<Apple>()
-        })
+        Self::try_from_parts(
+            |positions| MacOSWindows::new(WindowConfiguration::default(), positions),
+            |_| MacOSLoop::new::<Apple>(),
+        )
     }
 }
 
@@ -222,7 +243,7 @@ impl HostPlatform<Apple> {
     /// Returns [`PlatformError::Init`] if called off the main thread, which is
     /// where UIKit requires every window and view operation to run.
     pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts(IOSWindows, |windows| {
+        Self::try_from_parts(IOSWindows::new, |windows| {
             IOSLoop::new::<Apple>(Arc::clone(windows) as _)
         })
     }
