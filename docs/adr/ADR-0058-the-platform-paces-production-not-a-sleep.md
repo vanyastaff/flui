@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-05
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
-- **Superseded-by:** [ADR-0256](ADR-0256-frame-timing-and-latency.md), decision 0 only: the swapchain's frame
+- **Superseded-by:** [ADR-0257](ADR-0257-frame-timing-and-latency.md), decision 0 only: the swapchain's frame
   latency is a setting whose default is 2.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 5 for Android
   only: its backgrounded pump is paced by a deadline, not a sleep.

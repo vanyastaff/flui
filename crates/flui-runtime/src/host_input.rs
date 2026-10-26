@@ -43,7 +43,7 @@ pub enum HostInput {
     Frame {
         /// When the frame's vsync happened.
         vsync: EventTime,
-        /// When the platform says the frame will be shown, if it says (ADR-0256): idle work
+        /// When the platform says the frame will be shown, if it says (ADR-0257): idle work
         /// runs only until then.
         target_present: Option<EventTime>,
     },

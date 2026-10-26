@@ -1363,7 +1363,7 @@ impl WindowCallbacks {
     }
 
     /// Dispatch a frame request that carries no platform timestamp: its vsync is the event clock's
-    /// reading now (ADR-0256).
+    /// reading now (ADR-0257).
     pub fn dispatch_request_frame(&self) {
         self.dispatch_frame(frame_request_now());
     }
@@ -1796,7 +1796,7 @@ impl std::fmt::Debug for WindowCallbacks {
 }
 
 /// A frame request for a backend whose platform reports no frame timestamp: the vsync is this
-/// reading of the event clock, and the target present time is unknown (ADR-0256).
+/// reading of the event clock, and the target present time is unknown (ADR-0257).
 #[must_use]
 pub fn frame_request_now() -> FrameRequest {
     #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64

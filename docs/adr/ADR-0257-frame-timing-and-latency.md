@@ -1,4 +1,4 @@
-# ADR-0256: A frame request carries the host's vsync and target present time, and frame latency is a typed setting
+# ADR-0257: A frame request carries the host's vsync and target present time, and frame latency is a typed setting
 
 - **Status:** Accepted (2026-10-26). Not implemented: no backend reports a platform frame timestamp
   yet. Every backend fills the vsync with its own reading of the event clock when the request is

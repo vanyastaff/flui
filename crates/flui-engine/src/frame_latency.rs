@@ -1,7 +1,7 @@
 //! How many frames the swapchain lets the application run ahead of the display.
 
 /// The most frames a window's swapchain holds between the application and the screen
-/// (ADR-0256).
+/// (ADR-0257).
 ///
 /// The present mode stays `Fifo`, which blocks the producer when the swapchain is full; this
 /// sets how full that is. A backend that does not honour the bound (wgpu on GL) keeps ignoring

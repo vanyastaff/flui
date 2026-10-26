@@ -586,7 +586,7 @@ pub trait PlatformWindow: Send + Sync {
     /// Called by the platform when a new frame should be rendered (e.g., after
     /// `request_redraw()` or when the compositor needs content), with the
     /// [`FrameRequest`](crate::FrameRequest) the platform could fill: the frame's vsync and,
-    /// where the platform names it, when the frame will be shown (ADR-0256).
+    /// where the platform names it, when the frame will be shown (ADR-0257).
     fn on_request_frame(&self, callback: Box<dyn FnMut(crate::FrameRequest) + Send>) {
         let _ = callback;
     }

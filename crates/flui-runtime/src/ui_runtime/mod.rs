@@ -209,7 +209,7 @@ pub struct UiRuntime {
     /// clears it, so a panic unwinding out of the frame does too.
     frame_time: Cell<Option<web_time::Instant>>,
     /// The time the previous frame ran at, the floor a delivered vsync is held to so the frame
-    /// clock never runs backwards (ADR-0256).
+    /// clock never runs backwards (ADR-0257).
     last_frame_time: Cell<Option<web_time::Instant>>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — a clone of `AppRuntime`'s own

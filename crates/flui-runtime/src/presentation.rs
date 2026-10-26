@@ -360,7 +360,7 @@ pub struct PresentationState {
     pub(super) closing_requested: Cell<bool>,
     /// The request of the frame being delivered, on the event timeline
     /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
-    /// the frame's time and idle deadline from it (ADR-0256).
+    /// the frame's time and idle deadline from it (ADR-0257).
     pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,

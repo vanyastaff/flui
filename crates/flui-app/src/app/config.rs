@@ -134,7 +134,7 @@ pub struct AppConfig {
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
-    /// How many frames a window's swapchain holds ahead of the display (ADR-0256).
+    /// How many frames a window's swapchain holds ahead of the display (ADR-0257).
     ///
     /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades throughput for the
     /// newest frame on screen, for drawing and games. Every window the application opens starts

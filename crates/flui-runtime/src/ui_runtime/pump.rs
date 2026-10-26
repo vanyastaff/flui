@@ -422,7 +422,7 @@ impl UiRuntime {
             .checked_add(std::time::Duration::from_nanos(time.as_nanos()))
     }
 
-    /// The time this frame runs at (ADR-0256): the delivered vsync, held between the previous
+    /// The time this frame runs at (ADR-0257): the delivered vsync, held between the previous
     /// frame's time (the clock never runs backwards) and `sampled`, the host's own reading when it
     /// pumped (a platform timestamp ahead of that is a defect, not a time). Without a vsync, or
     /// one off the clock's range, the sampled reading.
