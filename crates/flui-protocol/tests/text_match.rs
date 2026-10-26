@@ -32,7 +32,7 @@ fn a_text_match_compares_the_way_it_says() {
         ),
         (
             "prefix, at the start",
-            TextMatch::prefix("Sav"),
+            TextMatch::prefix("Sa"),
             "Save",
             true,
         ),
@@ -104,5 +104,5 @@ fn a_text_match_compares_the_way_it_says() {
 
 #[test]
 fn a_criterion_names_the_text_it_looks_for() {
-    assert_eq!(TextMatch::prefix("Sav").ignoring_case().needle(), "Sav");
+    assert_eq!(TextMatch::prefix("Sa").ignoring_case().needle(), "Sa");
 }
