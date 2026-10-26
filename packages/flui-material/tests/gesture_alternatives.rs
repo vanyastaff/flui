@@ -201,6 +201,17 @@ fn step(controller: &TabController, label: &str) -> (CompanionSpec, GestureComma
     (spec, command)
 }
 
+/// Whether assistive technology is offered `label` as a custom action.
+fn offers_custom_action(laid: &LaidOut, label: &str) -> bool {
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    tree.nodes().any(|node| {
+        node.raw()
+            .custom_actions()
+            .iter()
+            .any(|action| action.description == label)
+    })
+}
+
 /// Invoke `label` as assistive technology's custom action on the pager's row.
 fn invoke_custom_action(laid: &mut LaidOut, label: &str) {
     let tree = laid.a11y_tree().expect("semantics enabled");
@@ -228,7 +239,7 @@ fn invoke_custom_action(laid: &mut LaidOut, label: &str) {
 
 /// At the first tab "Previous tab" and at the last "Next tab" have no tab to
 /// select: the bar publishes no node for them and the intent is disabled, so
-/// invoking them leaves the selection and the pager alone, while the command
+/// assistive technology is not offered them, while the command
 /// that does step still moves both.
 pub(crate) fn the_end_tabs_have_no_step_beyond_them() {
     for (index, blocked, open) in [
@@ -253,7 +264,10 @@ pub(crate) fn the_end_tabs_have_no_step_beyond_them() {
             "tab {index}: the bar publishes the adjacent tab for {open:?}"
         );
 
-        invoke_custom_action(&mut laid, blocked);
+        assert!(
+            !offers_custom_action(&laid, blocked),
+            "tab {index}: {blocked:?} is not offered to assistive technology"
+        );
         assert_eq!(
             selection(&controller),
             at_rest,

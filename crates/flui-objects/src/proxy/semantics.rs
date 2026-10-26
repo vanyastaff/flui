@@ -4,14 +4,15 @@
 //! hit-testing are transparent single-child proxy behavior; only the
 //! semantics hooks differ.
 
-use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
-use flui_rendering::semantics::{NumericRange, SemanticsAction};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId, Single};
+use flui_rendering::semantics::{CustomActionId, NumericRange, SemanticsAction};
 use flui_rendering::{
     pipeline::LocalRenderInvalidationHandle,
     view::{ScrollPosition, ViewportOffset},
 };
 use std::rc::Rc;
+use std::sync::Arc;
 
 struct ScrollSubscription {
     position: ScrollPosition,
@@ -36,6 +37,63 @@ use flui_rendering::{
     semantics::{SemanticsActionHandler, SemanticsConfiguration},
     traits::RenderBox,
 };
+
+/// A custom action a widget offers only while its gate holds.
+///
+/// The render object evaluates the gate each time its semantics are
+/// described, so an action whose enablement changes with no rebuild appears
+/// and disappears when the sources registered with
+/// [`RenderSemanticsAnnotations::set_refresh_sources`] notify.
+#[derive(Clone)]
+pub struct GatedCustomAction {
+    label: String,
+    handler: SemanticsActionHandler,
+    enabled: Option<Rc<dyn Fn() -> bool>>,
+}
+
+impl GatedCustomAction {
+    /// An action offered while `enabled` returns `true`, or always when
+    /// there is no gate.
+    #[must_use]
+    pub fn new(
+        label: impl Into<String>,
+        handler: SemanticsActionHandler,
+        enabled: Option<Rc<dyn Fn() -> bool>>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            handler,
+            enabled,
+        }
+    }
+
+    fn is_offered(&self) -> bool {
+        self.enabled.as_ref().is_none_or(|enabled| enabled())
+    }
+}
+
+impl std::fmt::Debug for GatedCustomAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatedCustomAction")
+            .field("label", &self.label)
+            .field("gated", &self.enabled.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A listener on a [`ChangeNotifier`] that marks one node's semantics dirty,
+/// removed when dropped.
+#[derive(Debug)]
+struct RefreshSubscription {
+    notifier: ChangeNotifier,
+    id: ListenerId,
+}
+
+impl Drop for RefreshSubscription {
+    fn drop(&mut self) {
+        self.notifier.remove_listener(self.id);
+    }
+}
 
 /// Where a semantics node's owner-local action handlers live.
 ///
@@ -92,6 +150,12 @@ pub struct RenderSemanticsAnnotations {
     scroll: Option<(ScrollPosition, Axis, bool)>,
     scroll_subscription: Option<Rc<ScrollSubscription>>,
     invalidation: Option<LocalRenderInvalidationHandle>,
+    /// Custom actions added after the configuration's own, each handler
+    /// named by its place in `custom_base + index`.
+    custom_actions: Vec<GatedCustomAction>,
+    custom_base: usize,
+    refresh_sources: Vec<ChangeNotifier>,
+    refresh_subscriptions: Vec<Rc<RefreshSubscription>>,
 }
 
 impl RenderSemanticsAnnotations {
@@ -109,7 +173,66 @@ impl RenderSemanticsAnnotations {
             scroll: None,
             scroll_subscription: None,
             invalidation: None,
+            custom_actions: Vec::new(),
+            custom_base: 0,
+            refresh_sources: Vec::new(),
+            refresh_subscriptions: Vec::new(),
         }
+    }
+
+    /// Replaces the custom actions this node offers beyond its
+    /// configuration's own, named by their place after the
+    /// `custom_base` the configuration declares, and reports semantics when
+    /// the offer changed: a different list, or a gate that now answers
+    /// differently.
+    pub fn set_custom_actions(
+        &mut self,
+        custom_base: usize,
+        actions: Vec<GatedCustomAction>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let unchanged = self.custom_base == custom_base
+            && self.custom_actions.len() == actions.len()
+            && self.custom_actions.iter().zip(&actions).all(|(old, new)| {
+                old.label == new.label
+                    && std::sync::Arc::ptr_eq(&old.handler, &new.handler)
+                    && old.is_offered() == new.is_offered()
+            });
+        self.custom_base = custom_base;
+        self.custom_actions = actions;
+        if unchanged {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
+    /// Re-describes this node's semantics, with no rebuild, whenever one of
+    /// `sources` notifies: how a gate that changes while the tree stays put
+    /// reaches the platform.
+    pub fn set_refresh_sources(&mut self, sources: Vec<ChangeNotifier>) {
+        self.refresh_subscriptions.clear();
+        self.refresh_sources = sources;
+        self.subscribe_refresh();
+    }
+
+    fn subscribe_refresh(&mut self) {
+        let Some(handle) = &self.invalidation else {
+            return;
+        };
+        self.refresh_subscriptions = self
+            .refresh_sources
+            .iter()
+            .map(|notifier| {
+                let handle = handle.clone();
+                let id = notifier.add_listener(Rc::new(move || {
+                    let _ = handle.mark_needs_semantics();
+                }));
+                Rc::new(RefreshSubscription {
+                    notifier: notifier.clone(),
+                    id,
+                })
+            })
+            .collect();
     }
 
     /// Publishes the live viewport range and only the directions that can move.
@@ -348,6 +471,15 @@ impl RenderBox for RenderSemanticsAnnotations {
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         *config = self.configuration.clone();
+        for (index, action) in self.custom_actions.iter().enumerate() {
+            if action.is_offered() {
+                config.add_custom_action_as(
+                    CustomActionId::at(self.custom_base + index),
+                    action.label.as_str(),
+                    Arc::clone(&action.handler),
+                );
+            }
+        }
         config.set_semantics_boundary(self.container);
         config.set_explicit_child_nodes(self.explicit_child_nodes);
         config.set_blocks_user_actions(self.block_user_actions);
@@ -388,10 +520,12 @@ impl RenderBox for RenderSemanticsAnnotations {
         self.scroll_subscription = None;
         self.invalidation = Some(handle);
         self.subscribe_scroll();
+        self.subscribe_refresh();
     }
     fn detach(&mut self) {
         self.invalidation = None;
         self.scroll_subscription = None;
+        self.refresh_subscriptions.clear();
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

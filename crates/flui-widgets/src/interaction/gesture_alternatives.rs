@@ -23,6 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
+use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::Offset;
 use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
@@ -155,6 +156,25 @@ impl GestureCommand {
 
     fn intent_any(&self) -> &dyn Any {
         &*self.intent
+    }
+
+    /// Whether assistive technology is offered this command as a custom
+    /// action: unless the action bound to its intent in `chain` is disabled.
+    /// An intent with no action bound stays offered, so the missing binding
+    /// is reported when the command is performed rather than hidden.
+    fn is_offered_in(&self, chain: Option<&ActionChain>) -> bool {
+        let intent = self.intent_any();
+        chain
+            .and_then(|chain| chain.get(&intent.type_id()))
+            .is_none_or(|action| action.is_enabled(intent))
+    }
+
+    /// The signal that this command's offer may have changed, from the action
+    /// bound to its intent in `chain`.
+    fn offer_changes_in(&self, chain: Option<&ActionChain>) -> Option<ChangeNotifier> {
+        chain
+            .and_then(|chain| chain.get(&self.intent_any().type_id()))
+            .and_then(|action| action.enablement_changes().cloned())
     }
 
     /// Perform the intent through `chain`.
@@ -1155,10 +1175,18 @@ impl GestureAlternatives {
             for activator in command.keys(platform) {
                 shortcuts_bindings.push((activator.clone(), Rc::clone(&command.intent)));
             }
-            let (command, chain) = (command.clone(), chain.clone());
-            semantics = semantics.custom_action(command.label().to_owned(), move |cx| {
-                let _ = command.perform(cx, chain.as_ref());
-            });
+            if let Some(changes) = command.offer_changes_in(chain.as_ref()) {
+                semantics = semantics.refresh_on(changes);
+            }
+            let (gate, command, chain) = (command.clone(), command.clone(), chain.clone());
+            let gate_chain = chain.clone();
+            semantics = semantics.custom_action_when(
+                command.label().to_owned(),
+                move || gate.is_offered_in(gate_chain.as_ref()),
+                move |cx| {
+                    let _ = command.perform(cx, chain.as_ref());
+                },
+            );
         }
 
         let (row, open_menu) = match &self.alternative {
