@@ -99,7 +99,7 @@ jobs:
           components: rustfmt
 
       - name: Install CI tools (typos, taplo, zizmor)
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately.
@@ -351,7 +351,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -425,7 +425,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -464,7 +464,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -511,7 +511,7 @@ jobs:
 
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9
 
@@ -620,7 +620,7 @@ jobs:
       # the first publication every change to the contract is a break.
       - name: Install cargo-semver-checks
         if: github.event_name == 'pull_request' || github.event_name == 'push'
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-semver-checks@0.51
 
@@ -669,7 +669,7 @@ jobs:
         uses: ./.github/actions/rust-toolchain
 
       - name: Install cargo-deny and cargo-shear
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           # cargo-shear 1.13: the newest this install-action release has a
           # prebuilt binary for; a later pin falls back to compiling it.
@@ -822,7 +822,7 @@ jobs:
 
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-hack@0.6.45
 
@@ -887,7 +887,7 @@ jobs:
           echo "locked wasm-bindgen: $version"
 
       - name: Install wasm-bindgen-cli (matching the lockfile)
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
@@ -959,7 +959,7 @@ jobs:
       # the MSVC SDK/CRT for clang-cl while retaining the shipped MSVC triple.
       - name: Install cargo-xwin
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-xwin@0.23.1
 
