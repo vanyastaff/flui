@@ -42,6 +42,14 @@ pub struct PresentationCapabilities {
 }
 
 impl BuildOwner {
+    /// Join the UI runtime's [`BuildInProgress`](crate::BuildInProgress) cell, so
+    /// a write that reaches this owner's graph while another presentation of
+    /// the same runtime builds is refused (ADR-0074). Called once, at
+    /// presentation assembly, before any element builds.
+    pub fn set_build_in_progress(&mut self, shared: crate::BuildInProgress) {
+        self.reactive().share_build_in_progress(shared);
+    }
+
     /// The presentation capabilities installed on this owner.
     #[must_use]
     pub fn capabilities(&self) -> &PresentationCapabilities {
