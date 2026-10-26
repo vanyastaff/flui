@@ -30,10 +30,10 @@ parent can hand a clean boundary new constraints.
    `{ in_flight: Cell<bool>, parent: Cell<Option<RenderId>>, state: UnsafeCell<SlotState> }` with
    `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. The header
    fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live. The
-   parent link has two copies with one writer: `RenderNode` keeps its `NodeLinks` parent for the
-   35 ordinary readers, and the slot header mirrors it. `RenderTree::set_parent_link` (and
-   `insert_*_child`) write both, so they cannot disagree. Removing the node-side copy would touch
-   every caller of `RenderNode::parent` and is left for a later change.
+   parent link is, for now, written twice by one writer: `RenderNode` keeps its `NodeLinks` parent
+   for its ordinary readers, and the slot header mirrors it (`RenderTree::set_parent_link` and
+   `insert_*_child` write both, so they cannot disagree). **Planned, not an accepted deviation:**
+   the readers move to the header (`RenderTree::parent`) and the node-side copy is removed.
 
    Inserting and removing go through `&mut NodeSlab` only, never during a lease. `remove` commits
    in this order, so unwinding out of the last step leaves a consistent slab: (a) move the node
@@ -66,9 +66,10 @@ parent can hand a clean boundary new constraints.
    `from_tree` takes the lease. The test-only seed lookup reads the owner's map directly.
 
 5. **Dead code goes.** `SubtreeArena::new(ids, refs)`, its id map and the per-walk seed copy are
-   deleted. `collect_subtree_ids` and `get_subtree_mut` stay for the dry intrinsic-query walk
-   (`query.rs`), which has the same O(subtree) preparation and moves to the lease in a follow-up;
-   `remove_recursive` also uses `collect_subtree_ids`.
+   deleted. `collect_subtree_ids` stays for `remove_recursive`. **Planned, not an accepted
+   deviation:** the dry intrinsic-query walk (`query.rs`) still collects the subtree and uses
+   `get_subtree_mut`, with the same O(subtree) preparation; it moves to the lease, and
+   `get_subtree_mut` and `collect_disjoint_mut`'s subtree use are then deleted.
 
 ## Diagram
 
