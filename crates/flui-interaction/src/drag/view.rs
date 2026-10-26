@@ -55,7 +55,7 @@ pub struct DragView<'a> {
     pub(super) scope: DragScope,
     pub(super) allowed: TransferActions,
     pub(super) source: Option<&'a Arc<dyn DataTransferSource>>,
-    pub(super) in_flight: Option<&'a Arc<AtomicUsize>>,
+    pub(super) in_flight: Option<&'a Arc<InFlight>>,
     pub(super) pointer: PointerKind,
 }
 
@@ -185,19 +185,49 @@ fn within_limit(
     Ok(payload)
 }
 
+/// How the owner is woken from another thread: a request made from a drop
+/// resolves or is dropped there, and the owner's loop may be asleep.
+pub type OwnerWake = Arc<dyn Fn() + Send + Sync>;
+
+/// The requests of one offer that have not resolved, over every window that
+/// hovers it. Each hover holds a clone; a request outlives the hover that
+/// made it.
+pub(crate) struct InFlight {
+    count: AtomicUsize,
+    wake: OwnerWake,
+}
+
+impl InFlight {
+    pub(crate) fn new(wake: OwnerWake) -> Arc<Self> {
+        Arc::new(Self {
+            count: AtomicUsize::new(0),
+            wake,
+        })
+    }
+
+    /// Whether no request of the offer is outstanding.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.count.load(Ordering::Acquire) == 0
+    }
+}
+
 /// Holds a drop open at the OS while a request made from it is outstanding.
-struct FetchGuard(Arc<AtomicUsize>);
+/// The last one released wakes the owner, which concludes the drop on its next
+/// tick: the request may resolve on any thread, with the owner's loop asleep.
+struct FetchGuard(Arc<InFlight>);
 
 impl FetchGuard {
-    fn new(counter: &Arc<AtomicUsize>) -> Self {
-        counter.fetch_add(1, Ordering::AcqRel);
-        Self(Arc::clone(counter))
+    fn new(in_flight: &Arc<InFlight>) -> Self {
+        in_flight.count.fetch_add(1, Ordering::AcqRel);
+        Self(Arc::clone(in_flight))
     }
 }
 
 impl Drop for FetchGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
+        if self.0.count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            (self.0.wake)();
+        }
     }
 }
 
