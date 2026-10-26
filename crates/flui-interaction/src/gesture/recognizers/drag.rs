@@ -918,6 +918,9 @@ impl GestureRecognizer for DragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
     }
+    fn feeds_scroll_contact(&self) -> bool {
+        self.allowed_devices.contains_kind(PointerKind::Trackpad)
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if !is_primary_down(dispatch.local) {
             return;
