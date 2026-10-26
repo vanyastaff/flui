@@ -625,7 +625,10 @@ impl UiRuntime {
             );
             // A delivered frame's vsync, when the host reported one, anchors
             // motion sampling on the event timeline (ADR-0207 §2).
-            let vsync = presentation.frame_vsync.take();
+            let vsync = presentation
+                .frame_request
+                .take()
+                .map(|request| request.vsync);
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {

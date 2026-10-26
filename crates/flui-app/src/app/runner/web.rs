@@ -148,6 +148,7 @@ where
                     gpu_loss,
                     owner_wake: wake,
                     surface_color: config.surface_color,
+                    frame_latency: config.frame_latency,
                 }),
                 &owner.shared(),
             )
@@ -202,6 +203,8 @@ pub(super) struct WebFrameDriver {
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// The colour capability the window asked of its surface.
     surface_color: flui_engine::SurfaceColor,
+    /// The swapchain latency a first-built renderer is given; a rebuilt one keeps its own.
+    frame_latency: flui_engine::FrameLatency,
 }
 
 impl WebFrameDriver {
@@ -362,6 +365,7 @@ impl WebFrameDriver {
         let surface_color = self.surface_color;
         let window = Arc::clone(&self.window);
         let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
+        let frame_latency = self.frame_latency;
         wasm_bindgen_futures::spawn_local(async move {
             if !authority.is_live() {
                 return;
@@ -378,7 +382,10 @@ impl WebFrameDriver {
                 )
                 .await
                 {
-                    Ok(renderer) => (Some(renderer), Ok(())),
+                    Ok(mut renderer) => {
+                        renderer.set_frame_latency(frame_latency);
+                        (Some(renderer), Ok(()))
+                    }
                     Err(error) => (None, Err(error)),
                 },
             };

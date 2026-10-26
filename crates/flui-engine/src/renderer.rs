@@ -46,6 +46,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::error::{EngineError, EngineResult};
+use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
 use crate::surface_color::{OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
@@ -796,6 +797,8 @@ pub struct Renderer {
     /// without waiting for a frame. One cell for the renderer's lifetime:
     /// every device `recover` builds reports into it.
     device_lost_hook: Arc<DeviceLostSlot>,
+    /// The swapchain's frame-latency bound, re-applied whenever the surface is configured anew.
+    frame_latency: FrameLatency,
     /// The damage owed, the retained last frame a partial frame repaints
     /// into, and the one-frame promotion to full — the protocol the headless
     /// retained capture runs too (see [`crate::frame_protocol`]).
@@ -969,6 +972,7 @@ impl Renderer {
                     w,
                     h,
                     &device_lost_hook,
+                    FrameLatency::default(),
                     requested,
                 )
                 .await?;
@@ -992,6 +996,7 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             device_lost_hook,
+            frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
@@ -1053,14 +1058,14 @@ impl Renderer {
     /// when this derivation returns a different one — see that method's own
     /// doc for why leaving them would blank the window rather than fail
     /// loudly. Keeping the derivation in one function is also what
-    /// keeps `desired_maximum_frame_latency`'s long comment below true, since
-    /// a second construction site would be a second place for that literal to
-    /// drift.
+    /// keeps the swapchain's frame-latency bound supplied in one place, since a second
+    /// construction site would be a second place for it to drift.
     fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
         width: u32,
         height: u32,
+        latency: FrameLatency,
         requested_color: SurfaceColor,
     ) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
         let surface_caps = surface.get_capabilities(adapter);
@@ -1107,64 +1112,14 @@ impl Renderer {
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            // 2 (wgpu's own default), raised from 1 on 2026-09-22 on a
-            // measurement that settled a judgement call the other way.
-            //
-            // The literal sat at 1 for a live-resize argument: the tightest
-            // pool means the displayed frame tracks the window edge as closely
-            // as possible during a drag. The in-process half of that argument
-            // was refuted first (measured on macOS: the acquired
-            // texture never diverges from the configured size at either
-            // setting, four runs — `render_scene` acquires and presents
-            // inside one call and `resize` reconfigures before it, so no
-            // drawable is alive across a `Surface::configure`), leaving only
-            // an unmeasurable compositor-side lag of ~one display period after
-            // a resize as the reason to stay at 1. ADR-0058's AppKit
-            // subsection had already measured the cost of 1 on the tail —
-            // 3 % of frames stalling a full period in `get_current_texture()`
-            // — and judged it tolerable.
-            //
-            // It is not tolerable once the frame does real work. With two
-            // drawables (`maximum_frame_latency + 1`) the acquire for frame
-            // N+1 waits until frame N's drawable is released by scanout, so
-            // a frame whose own work is longer than what is left of the
-            // period after that release misses the next vsync EVERY time, not
-            // on a 3 % tail: a representative workload (a Scaffold with a
-            // 2,000-row ListView and a Material TextField, 900×700 logical
-            // on a 100 Hz panel) presented at a rock-steady 20.0 ms p50 —
-            // exactly two periods, 50 fps — through both its scrolling and
-            // its typing phases, while `flui-native`'s bare frame pump on
-            // the same display ran 100 fps. At 2 the same probe ran 10.0 ms
-            // p50 (p99 12.3 ms scrolling, 10.05 ms typing). Half the frame
-            // rate of every non-trivial app is a measured cost; a possible
-            // one-period edge lag during a live drag is a conjecture nothing
-            // in-process can observe. The pool is widened on that basis, and
-            // a macOS workload run is the regression gate: its scroll and
-            // type p99 budgets are stated in display periods. The
-            // measurement is AppKit/Metal on one 100 Hz panel; the literal
-            // is global to every wgpu backend, where 2 is wgpu's own default
-            // and the other backends are unmeasured either way.
-            //
-            // This field is the only in-flight bound FLUI sets: the frame clock
-            // throttles produces by interval, never by frames in flight. Two
-            // implementer notes worth having in one place: (a)
-            // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
-            // backend (live here — `Backends::GL` is selectable via the `gles`
-            // feature), so on GL nothing bounds frames in flight beyond the
-            // driver's own queue, which `get_current_texture` blocks on; the
-            // raster lane runs inline on the owner thread and holds one frame
-            // in its mailbox, so the owner cannot run further ahead than that
-            // queue lets it; (b) this field only takes effect at
-            // `Surface::configure` — every reconfigure must resupply it. `resize`
-            // and `reconfigure_surface` below both mutate and re-`configure` THIS
-            // SAME `SurfaceConfiguration` value (so it never needs resupplying —
-            // it was never removed), and `recover` and `recreate_surface`
-            // rebuild through this exact function again rather than a second
-            // constructor — the first the whole stack, the second the surface
-            // plus whatever bakes its format — so the literal is written in
-            // exactly one place in the source, not scattered across call sites
-            // that could drift out of sync.
-            desired_maximum_frame_latency: 2,
+            // The caller's `FrameLatency` (ADR-0257), `Balanced` unless the window asked for
+            // `Low`. The value only takes effect at `Surface::configure`, and `resize` and
+            // `reconfigure_surface` re-configure this same value, while `recover` and
+            // `recreate_surface` rebuild through this function with the renderer's stored
+            // setting, so it is supplied in exactly one place. It is the only in-flight bound
+            // FLUI sets: the frame clock throttles by interval, never by frames in flight, and
+            // wgpu ignores it on GL, where the driver queue is the only bound.
+            desired_maximum_frame_latency: latency.frames(),
         };
 
         Ok((config, supports_copy_src, surface_color))
@@ -1215,6 +1170,7 @@ impl Renderer {
         width: u32,
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
+        latency: FrameLatency,
         requested_color: SurfaceColor,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
@@ -1299,8 +1255,14 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src, surface_color) =
-            Self::derive_surface_config(&surface, &adapter, width, height, requested_color)?;
+        let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
+            &surface,
+            &adapter,
+            width,
+            height,
+            latency,
+            requested_color,
+        )?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -1478,6 +1440,7 @@ impl Renderer {
             width,
             height,
             &self.device_lost_hook,
+            self.frame_latency,
             self.surface_color.requested(),
         )
         .await?;
@@ -1739,6 +1702,28 @@ impl Renderer {
     /// [`crate::RasterBackend::set_pre_present_hook`].
     pub fn set_pre_present_hook(&mut self, hook: Option<crate::raster::PrePresentHook>) {
         self.pre_present_hook = hook;
+    }
+
+    /// Set how many frames this window's swapchain holds ahead of the display (ADR-0257).
+    ///
+    /// Takes effect on the surface now, or when it is next configured while the surface is
+    /// released; every later recovery or recreation keeps it.
+    pub fn set_frame_latency(&mut self, latency: FrameLatency) {
+        self.frame_latency = latency;
+        if self.config.desired_maximum_frame_latency == latency.frames() {
+            return;
+        }
+        self.config.desired_maximum_frame_latency = latency.frames();
+        if let Some(surface) = self.lease.surface() {
+            surface.configure(&self.device, &self.config);
+            self.surface_recovery.configured();
+        }
+    }
+
+    /// The frame-latency setting the swapchain is configured with.
+    #[must_use]
+    pub const fn frame_latency(&self) -> FrameLatency {
+        self.frame_latency
     }
 
     /// Resize the surface
@@ -2104,6 +2089,7 @@ impl Renderer {
             &self.adapter,
             width,
             height,
+            self.frame_latency,
             self.surface_color.requested(),
         )?;
 
@@ -3068,6 +3054,7 @@ mod tests {
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),
             device_lost_hook: Arc::default(),
+            frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
@@ -3079,6 +3066,23 @@ mod tests {
             external_frames: std::collections::HashMap::new(),
         };
         (renderer, domain, callback_flag)
+    }
+
+    /// The frame-latency setting reaches the swapchain configuration, a repeat changes nothing,
+    /// and a released surface still takes it for the configure that recreates it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_frame_latency_setting_reaches_the_configuration_and_survives_release() {
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        assert_eq!(renderer.frame_latency(), FrameLatency::Balanced);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 2);
+        renderer.set_frame_latency(FrameLatency::Low);
+        assert_eq!(renderer.frame_latency(), FrameLatency::Low);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 1);
+        renderer.set_frame_latency(FrameLatency::Low);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 1);
+        renderer.set_frame_latency(FrameLatency::Balanced);
+        assert_eq!(renderer.config.desired_maximum_frame_latency, 2);
     }
 
     /// A recreation the acquire path owes runs through the public
@@ -3650,6 +3654,8 @@ mod tests {
         quarantined_domain_reaches_the_backend_recovery_predicate();
         #[cfg(not(target_arch = "wasm32"))]
         an_owed_surface_recreation_runs_through_the_backend_render_path();
+        #[cfg(not(target_arch = "wasm32"))]
+        a_frame_latency_setting_reaches_the_configuration_and_survives_release();
         #[cfg(not(target_arch = "wasm32"))]
         a_lost_device_reaches_the_installed_hook();
         a_refused_texture_frame_keeps_the_accepted_one_for_reupload();

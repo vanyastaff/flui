@@ -306,9 +306,10 @@ impl WindowInstall {
         let dispatcher = self.dispatcher();
         install_input_wiring(dispatcher, window.as_ref());
         let binding = self.frame_driver(driver)?.binding;
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |request| {
             with_owner_callback(|_| {
-                let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding));
+                let _ =
+                    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding, request));
             });
         }));
         window.on_resize(Box::new(move |metrics| {

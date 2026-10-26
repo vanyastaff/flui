@@ -124,9 +124,10 @@ mod table_test;
 #[path = "contracts/text_frame.rs"]
 mod text_frame;
 
-/// The vsync these contracts deliver frames at. None of them resamples
-/// pointer motion, the only consumer of a frame's vsync.
-pub(crate) const VSYNC: flui_platform::EventTime = flui_platform::EventTime::from_nanos(0);
+/// The vsync these contracts deliver frames at: past the last instant the clock represents, so the
+/// pump runs each frame at its host's own reading, as when no vsync is reported. None of them
+/// resamples pointer motion. `frame_clock` pins what a representable vsync does.
+pub(crate) const VSYNC: flui_platform::EventTime = flui_platform::EventTime::from_nanos(u64::MAX);
 
 /// Window metrics from a logical size and scale, as a platform reports them.
 pub(crate) fn window_metrics(

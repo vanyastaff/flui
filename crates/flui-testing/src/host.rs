@@ -720,7 +720,8 @@ impl HeadlessHost {
         // recording sees the frame where its deadlines fire.
         let vsync = self.event_now();
         for presentation in self.presentation_ids() {
-            self.ui_runtime.note_frame_vsync(presentation, vsync);
+            self.ui_runtime
+                .note_frame_request(presentation, flui_platform::FrameRequest::new(vsync));
         }
         let mut frame_clock = self.clock.clone();
         let Self {

@@ -156,6 +156,7 @@ pub fn run_direct(
             }
         };
         renderer.resize(phys_size.width as u32, phys_size.height as u32);
+        renderer.set_frame_latency(config.frame_latency);
 
         tracing::info!(
             gpu = %renderer.capabilities().adapter_name,
@@ -170,7 +171,7 @@ pub fn run_direct(
         // 4. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         let render_fn_frame = Arc::clone(&render_fn);
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
 

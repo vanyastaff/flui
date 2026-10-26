@@ -317,7 +317,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             panic!("Windows event loop must create a Win32 window");
         };
         let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;
@@ -574,7 +574,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
             }
             Err(error) => panic!("unexpected recovery result: {error}"),
         }))?;
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;

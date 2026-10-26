@@ -341,6 +341,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("HostInput", "Window") => one(window(WindowObservation::Moved)),
         ("HostInput", "Frame") => one(host(HostInput::Frame {
             vsync: at(16_666_667),
+            target_present: Some(at(33_333_334)),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
         ("RecordedSurface", "Window") => one(row(
@@ -362,7 +363,10 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                 NonZeroU64::new(7).expect("nonzero"),
             ))),
         )),
-        ("InputOutcome", "Handled") => one(host(HostInput::Frame { vsync: at(1) })),
+        ("InputOutcome", "Handled") => one(host(HostInput::Frame {
+            vsync: at(1),
+            target_present: None,
+        })),
         ("InputOutcome", "Unhandled") => one(row(
             HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(
                 KeyState::Up,

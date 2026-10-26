@@ -202,6 +202,7 @@ where
             }
         };
         renderer.resize(phys_size.width as u32, phys_size.height as u32);
+        renderer.set_frame_latency(config.frame_latency);
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
@@ -316,13 +317,16 @@ where
             },
         ))?;
         let binding = frame.binding;
-        window.on_request_frame(Box::new(move || {
+        window.on_request_frame(Box::new(move |request| {
             // The frame is the turn a window command's wake asks for: it starts
             // with the queued commands, before the callback guard would leave
             // them waiting.
             super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
             super::owner_dispatch::with_owner_callback(|_| {
-                let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+                let _ = dispatch_platform_ui_runtime(
+                    owner_dispatch,
+                    RuntimeTask::Frame(binding, request),
+                );
             });
         }));
 

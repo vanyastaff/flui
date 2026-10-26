@@ -106,8 +106,11 @@ fn a_reentrant_rendered_install_publishes_runtime_and_driver_together() {
         .outcome()
         .expect("publication and initialization completed")
         .expect("installation succeeded");
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding))
-        .expect("new frame accepted");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(binding, flui_native::frame_request_now()),
+    )
+    .expect("new frame accepted");
     assert_eq!(
         scenes.load(Ordering::SeqCst),
         1,
@@ -129,15 +132,21 @@ fn a_registered_driver_delivers_the_product_scene() {
     let dispatcher = installation.dispatcher();
     let scenes = Arc::new(AtomicUsize::new(0));
     let frame = installed_driver(installation, counting_sink(Arc::clone(&scenes)), None);
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-        .expect("deliver frame");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("deliver frame");
     assert_eq!(
         scenes.load(Ordering::SeqCst),
         1,
         "the product scene left through the installed sink"
     );
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-        .expect("idle delivery");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("idle delivery");
     assert_eq!(
         scenes.load(Ordering::SeqCst),
         1,
@@ -165,15 +174,24 @@ fn an_old_frame_binding_never_reaches_a_new_runtime() {
         None,
     );
     assert_eq!(
-        dispatch_platform_ui_runtime(old_dispatcher, RuntimeTask::Frame(old_frame.binding)),
+        dispatch_platform_ui_runtime(
+            old_dispatcher,
+            RuntimeTask::Frame(old_frame.binding, flui_native::frame_request_now())
+        ),
         Err(DispatchError::StaleRuntime)
     );
     assert_eq!(
-        dispatch_platform_ui_runtime(new_dispatcher, RuntimeTask::Frame(old_frame.binding)),
+        dispatch_platform_ui_runtime(
+            new_dispatcher,
+            RuntimeTask::Frame(old_frame.binding, flui_native::frame_request_now())
+        ),
         Err(DispatchError::StalePresentation)
     );
-    dispatch_platform_ui_runtime(new_dispatcher, RuntimeTask::Frame(new_frame.binding))
-        .expect("current delivery");
+    dispatch_platform_ui_runtime(
+        new_dispatcher,
+        RuntimeTask::Frame(new_frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("current delivery");
     assert_eq!(
         old_scenes.load(Ordering::SeqCst),
         0,
@@ -212,8 +230,11 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
         })),
     );
     *authority.borrow_mut() = Some(frame.liveness);
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-        .expect("accepted frame completes before close");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("accepted frame completes before close");
     assert_eq!(*results.borrow(), Some((Ok(None), Err(2))));
     assert_eq!(
         *published.lock(),
@@ -268,8 +289,11 @@ fn native_terminal_callbacks_refuse_late_publication() {
                     .outcome()
                     .expect("fresh host completes inline")
                     .expect("installed");
-                dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-                    .expect("already accepted frame finishes");
+                dispatch_platform_ui_runtime(
+                    dispatcher,
+                    RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+                )
+                .expect("already accepted frame finishes");
                 let resource = parking_lot::Mutex::new(None);
                 assert_eq!(
                     frame.liveness.publish(&resource, 42),
@@ -412,23 +436,32 @@ fn a_leased_driver_is_retired_after_reentrant_teardown() {
         sink,
         Some(Box::new(teardown_platform_ui_runtime)),
     );
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-        .expect("accepted delivery finishes cleanup");
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("accepted delivery finishes cleanup");
     assert_eq!(
         retired.load(Ordering::SeqCst),
         1,
         "leased resources retire once after the callback"
     );
     assert_eq!(
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding)),
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now())
+        ),
         Err(DispatchError::RuntimeUnavailable)
     );
     let next_installation = prepared_runtime();
     let next = next_installation.dispatcher();
     let scenes = Arc::new(AtomicUsize::new(0));
     let frame = installed_driver(next_installation, counting_sink(Arc::clone(&scenes)), None);
-    dispatch_platform_ui_runtime(next, RuntimeTask::Frame(frame.binding))
-        .expect("next incarnation runs");
+    dispatch_platform_ui_runtime(
+        next,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("next incarnation runs");
     assert_eq!(scenes.load(Ordering::SeqCst), 1);
     teardown_platform_ui_runtime();
 }
@@ -462,8 +495,11 @@ fn a_driver_failure_remains_first_when_retirement_also_fails() {
         })),
     );
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-            .expect("admitted frame");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+        .expect("admitted frame");
     }))
     .expect_err("prelude failed");
     assert_eq!(
@@ -479,8 +515,11 @@ fn a_driver_failure_remains_first_when_retirement_also_fails() {
     let next = next_installation.dispatcher();
     let scenes = Arc::new(AtomicUsize::new(0));
     let frame = installed_driver(next_installation, counting_sink(Arc::clone(&scenes)), None);
-    dispatch_platform_ui_runtime(next, RuntimeTask::Frame(frame.binding))
-        .expect("host makes progress after containment");
+    dispatch_platform_ui_runtime(
+        next,
+        RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+    )
+    .expect("host makes progress after containment");
     assert_eq!(scenes.load(Ordering::SeqCst), 1);
     teardown_platform_ui_runtime();
 }
@@ -684,13 +723,19 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
             let next = next_installation.dispatcher();
             let next_frame =
                 installed_driver(next_installation, counting_sink(Arc::clone(&scenes)), None);
-            dispatch_platform_ui_runtime(next, RuntimeTask::Frame(next_frame.binding))
-                .expect("new binding runs");
+            dispatch_platform_ui_runtime(
+                next,
+                RuntimeTask::Frame(next_frame.binding, flui_native::frame_request_now()),
+            )
+            .expect("new binding runs");
         } else {
             resize().expect("resize restored after failure");
             assert_eq!(calls.get(), 2);
-            dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-                .expect("driver still produces frames");
+            dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+            )
+            .expect("driver still produces frames");
         }
         assert_eq!(scenes.load(Ordering::SeqCst), 1);
         teardown_platform_ui_runtime();
@@ -740,7 +785,12 @@ fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
     );
     drop(lease);
 
-    let frame_now = || dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding));
+    let frame_now = || {
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+    };
     let failure = catch_unwind(AssertUnwindSafe(frame_now)).expect_err("the resize panics");
     assert_eq!(
         failure.downcast_ref::<&str>(),
@@ -824,8 +874,11 @@ fn assert_native_retirement_failures(retire: fn(PresentationDispatcher)) {
         let next = next_installation.dispatcher();
         let scenes = Arc::new(AtomicUsize::new(0));
         let frame = installed_driver(next_installation, counting_sink(Arc::clone(&scenes)), None);
-        dispatch_platform_ui_runtime(next, RuntimeTask::Frame(frame.binding))
-            .expect("next runtime delivers after retirement");
+        dispatch_platform_ui_runtime(
+            next,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+        .expect("next runtime delivers after retirement");
         assert_eq!(scenes.load(Ordering::SeqCst), 1);
         teardown_platform_ui_runtime();
     }
@@ -1118,8 +1171,11 @@ fn unpublished_window_retires_native_resources_independently() {
             let dispatcher = next.dispatcher();
             let scenes = Arc::new(AtomicUsize::new(0));
             let frame = installed_driver(next, counting_sink(Arc::clone(&scenes)), None);
-            dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-                .expect("host recovers after abandoned resources");
+            dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+            )
+            .expect("host recovers after abandoned resources");
             assert_eq!(scenes.load(Ordering::SeqCst), 1);
         }
     }
@@ -1297,8 +1353,11 @@ fn agent_notification_follows_live_native_initialization() {
         let dispatcher = next.dispatcher();
         let scenes = Arc::new(AtomicUsize::new(0));
         let frame = installed_driver(next, counting_sink(Arc::clone(&scenes)), None);
-        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-            .expect("the next installation can render after recovery");
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
+        )
+        .expect("the next installation can render after recovery");
         assert_eq!(scenes.load(Ordering::SeqCst), 1, "{case:?}");
         teardown_platform_ui_runtime();
     }

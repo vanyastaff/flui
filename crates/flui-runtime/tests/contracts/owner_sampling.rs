@@ -788,7 +788,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     let (runtime, window) = manual_runtime(clock.clone());
     let wakes = Arc::new(AtomicUsize::new(0));
     let wake_count = Arc::clone(&wakes);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         wake_count.fetch_add(1, Ordering::Relaxed);
     }));
     let queries = Rc::new(Cell::new(0));
@@ -1376,7 +1376,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     let live = mounted_root_invalidation(&runtime);
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed_wakes = Arc::clone(&wakes);
-    window.on_request_frame(Box::new(move || {
+    window.on_request_frame(Box::new(move |_| {
         observed_wakes.fetch_add(1, Ordering::Relaxed);
     }));
     retired

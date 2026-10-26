@@ -392,7 +392,7 @@ pub(crate) fn input_time(input: &HostInput) -> Option<EventTime> {
             flui_interaction::PointerEventExt::time(event)
         }
         HostInput::Platform(PlatformInput::Keyboard(event)) => Some(event.time),
-        HostInput::Frame { vsync } => Some(*vsync),
+        HostInput::Frame { vsync, .. } => Some(*vsync),
         HostInput::Platform(_) | HostInput::Window(_) | HostInput::Accessibility(_) => None,
     }
 }

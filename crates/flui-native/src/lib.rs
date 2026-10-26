@@ -285,7 +285,7 @@ pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
 #[cfg(target_os = "ios")]
 pub use window::apple::ios::IOSSceneEvent;
 // The application's handler set and a window's callbacks (`owner/handlers.rs`).
-pub use owner::handlers::{InputCallback, InputWake, WindowCallbacks};
+pub use owner::handlers::{InputCallback, InputWake, WindowCallbacks, frame_request_now};
 // Re-export task types
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from

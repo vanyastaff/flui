@@ -859,7 +859,7 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     let frames = Arc::new(AtomicU64::new(0));
     let release = Arc::new(AtomicBool::new(false));
     let (counted, released) = (Arc::clone(&frames), Arc::clone(&release));
-    second.host.on_request_frame(Box::new(move || {
+    second.host.on_request_frame(Box::new(move |_| {
         if counted.fetch_add(1, Ordering::Relaxed) + 1 >= 3 {
             released.store(true, Ordering::Release);
         }

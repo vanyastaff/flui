@@ -166,18 +166,19 @@ impl FrameDispatcher {
     }
 
     /// Admit a real frame delivery, [`HostInput::Frame`](crate::HostInput::Frame)
-    /// with its `vsync` on the event timeline. Nested calls join the same owner
+    /// with the host's [`FrameRequest`](flui_platform::FrameRequest) on the event timeline. A bare
+    /// vsync is a request that knows nothing else. Nested calls join the same owner
     /// FIFO.
     ///
     /// # Errors
     /// Refuses an expired host or exact presentation, or an active publication.
     pub fn deliver(
         &self,
-        vsync: flui_platform::EventTime,
+        request: impl Into<flui_platform::FrameRequest>,
         effects: &dyn OwnerEffects,
     ) -> Result<Delivery, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        core.deliver(RuntimeWork::Frame(self.address, vsync), effects)
+        core.deliver(RuntimeWork::Frame(self.address, request.into()), effects)
     }
 }
 

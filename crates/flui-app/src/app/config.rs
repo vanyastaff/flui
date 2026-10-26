@@ -1,5 +1,6 @@
 //! Application configuration.
 
+use flui_engine::FrameLatency;
 use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
@@ -132,6 +133,13 @@ pub struct AppConfig {
     /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
+
+    /// How many frames a window's swapchain holds ahead of the display (ADR-0257).
+    ///
+    /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades throughput for the
+    /// newest frame on screen, for drawing and games. Every window the application opens starts
+    /// with it.
+    pub frame_latency: FrameLatency,
 
     /// The development reload driver, if the application installed one with
     /// [`Self::with_dev_reload`] (ADR-0094 §1).
@@ -296,6 +304,7 @@ impl Default for AppConfig {
             resizable: true,
             decorations: true,
             show_performance_overlay: false,
+            frame_latency: FrameLatency::Balanced,
             dev_reload: None,
             dev_agent: None,
             exit_policy: ExitPolicy::default(),
@@ -439,6 +448,13 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
+        self
+    }
+
+    /// Set how many frames each window's swapchain holds ahead of the display.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_frame_latency(mut self, latency: FrameLatency) -> Self {
+        self.frame_latency = latency;
         self
     }
 
