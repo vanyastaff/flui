@@ -104,6 +104,41 @@ impl TextMatch {
             },
         }
     }
+
+    /// Whether `text` satisfies this comparison.
+    ///
+    /// Case-insensitive comparison folds both sides by Unicode case first: each character is
+    /// upper-cased and the result lower-cased, so `ß` meets `SS` and a final `ς` meets `σ`, which
+    /// a plain lower-casing leaves apart. Nothing else is normalised, so `é` composed and
+    /// decomposed differ.
+    #[must_use]
+    pub fn matches(&self, text: &str) -> bool {
+        let (needle, ignore_case) = match self {
+            Self::Exact { text, ignore_case }
+            | Self::Contains { text, ignore_case }
+            | Self::Prefix { text, ignore_case } => (text.as_str(), *ignore_case),
+        };
+        let compare = |needle: &str, text: &str| match self {
+            Self::Exact { .. } => text == needle,
+            Self::Contains { .. } => text.contains(needle),
+            Self::Prefix { .. } => text.starts_with(needle),
+        };
+        if ignore_case {
+            compare(&fold_case(needle), &fold_case(text))
+        } else {
+            compare(needle, text)
+        }
+    }
+
+    /// The text this comparison looks for.
+    #[must_use]
+    pub fn needle(&self) -> &str {
+        match self {
+            Self::Exact { text, .. } | Self::Contains { text, .. } | Self::Prefix { text, .. } => {
+                text
+            }
+        }
+    }
 }
 
 /// The states a locator or an expectation requires; a state left `None` is not compared.
@@ -380,8 +415,10 @@ impl From<Locator> for Target {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct LocateParams {
-    /// What to look for. Its `pick` applies: a strict locator with several matches answers
-    /// `ambiguous`.
+    /// What to look for. A strict locator lists every match, so a caller can see what is
+    /// ambiguous; `first`, `last` and `nth` narrow the list to the one match they name.
+    /// Strictness bites where one element is needed: an action through the locator answers
+    /// `ambiguous` when a strict locator has several.
     pub locator: Locator,
     /// Matches to report at most; the rest are counted in `truncated`.
     #[cfg_attr(
@@ -453,4 +490,13 @@ impl Matches {
             truncated: 0,
         }
     }
+}
+
+/// `text` folded for a case-insensitive comparison: upper-cased, then lower-cased, per
+/// character, which is Unicode's full case folding for the scripts that have case.
+fn fold_case(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect()
 }
