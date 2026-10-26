@@ -200,7 +200,7 @@ request.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
-- Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. Wayland through winit frames the touches of one loop turn, because winit does not report `wl_touch.frame` (a turn holds whole frames but may hold several; no touchscreen run). Android (`ACTION_MOVE` carries every pointer) and iOS (a touch set) still report each contact on its own, as frames of one.
+- Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. Wayland through winit frames the touches of one loop turn, because winit does not report `wl_touch.frame` (a turn holds whole frames but may hold several; no touchscreen run). Android frames the fingers of one `ACTION_MOVE` (cross-checked in CI, no run on a device), and iOS (a touch set) still reports each contact on its own, as frames of one.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
 
 ### 16. Mobile system UI
@@ -264,7 +264,7 @@ request.
 > **Environments:** all · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
 - Nothing reports when a frame reached the screen.
-- No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, frame timelines or `requestAnimationFrame` timestamps feed the frame clock, so animations schedule blind and input-to-photon latency cannot be measured or regressed.
+- Web and Win32 feed the frame clock (the animation-frame timestamp; DWM's last and next refresh), neither run on its platform yet. No DXGI frame statistics, `addPresentedHandler`, `wp_presentation_time`, Android frame timelines (Choreographer frame time) or `CADisplayLink` `timestamp`/`targetTimestamp` feed it, so on those hosts animations schedule on the admission time and input-to-photon latency cannot be measured or regressed.
 - A Web `requestAnimationFrame` timestamp is the end of the previous frame's rendering, not a presentation time, so the Web cell cannot reach ✅ through it.
 
 ### 24. No HDR, wide gamut or colour management

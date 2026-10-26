@@ -613,6 +613,89 @@ impl Drop for LayoutCycleGuard<'_, '_> {
 }
 
 // ============================================================================
+// QueryWalk — the dry intrinsic/layout/baseline query walks' view of the tree
+// ============================================================================
+
+/// Why [`QueryWalk::enter`] handed out no node.
+pub(super) enum QueryRefusal {
+    /// The id is stale, vacant or never existed.
+    Missing,
+    /// The node is already entered up the stack: only a cyclic child link produces this.
+    InFlight,
+}
+
+/// The memoizing query walks' lease on the render tree. Like [`SubtreeArena`] it acquires a node
+/// when the walk reaches it, so a query costs the nodes it visits and not the subtree it sits on.
+pub(super) struct QueryWalk<'tree> {
+    lease: TreeLease<'tree>,
+}
+
+impl<'tree> QueryWalk<'tree> {
+    pub(super) fn new(render_tree: &'tree mut RenderTree) -> Self {
+        Self {
+            lease: render_tree.lease(),
+        }
+    }
+
+    /// Enters `id`: sets its in-flight bit and lends its node until the entry drops.
+    pub(super) fn enter(&self, id: RenderId) -> Result<QueryEntry<'_, 'tree>, QueryRefusal> {
+        // Claim the slot first: `node` projects a `&mut` to the payload, which is only sound once no
+        // other entry can hold one (a cyclic child link would re-enter an ancestor's node).
+        if !self.lease.try_enter(id) {
+            return Err(if self.lease.is_in_flight(id) {
+                QueryRefusal::InFlight
+            } else {
+                QueryRefusal::Missing
+            });
+        }
+        let Some(node) = self.lease.node(id) else {
+            self.lease.leave(id);
+            return Err(QueryRefusal::Missing);
+        };
+        Ok(QueryEntry {
+            walk: self,
+            id,
+            node,
+        })
+    }
+
+    /// A copy of `child`'s committed parent data, or `None` when it has none or is entered up the
+    /// stack (its node is then borrowed, and the query treats it as absent).
+    pub(super) fn child_parent_data(&self, child: RenderId) -> Option<Box<dyn ParentData>> {
+        if self.lease.is_in_flight(child) {
+            return None;
+        }
+        let node = self.lease.node(child)?;
+        // SAFETY: the slot is not in flight, so no `&mut` to it is live (lease invariant 3), and
+        // the walk is single-threaded; the shared reference ends with this expression.
+        unsafe { &*node }.parent_data().map(dyn_clone::clone_box)
+    }
+}
+
+/// One node entered by a query walk. Dropping it clears the in-flight bit, on unwind too.
+pub(super) struct QueryEntry<'walk, 'tree> {
+    walk: &'walk QueryWalk<'tree>,
+    id: RenderId,
+    node: *mut RenderNode,
+}
+
+impl QueryEntry<'_, '_> {
+    /// The entered node. The reference lasts as long as this borrow of the entry.
+    pub(super) fn node(&mut self) -> &mut RenderNode {
+        // SAFETY: `QueryWalk::enter` set this slot's in-flight bit and refuses a second entry
+        // until this entry drops, so this is the only `&mut` to the node (lease invariant 3); the
+        // pointer came from the lease whose tree borrow outlives `'tree`.
+        unsafe { &mut *self.node }
+    }
+}
+
+impl Drop for QueryEntry<'_, '_> {
+    fn drop(&mut self) {
+        self.walk.lease.leave(self.id);
+    }
+}
+
+// ============================================================================
 // Stack guard
 // ============================================================================
 
@@ -2175,6 +2258,60 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod query_walk {
+        use flui_foundation::{Leaf, geometry::Size};
+
+        use super::*;
+        use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+        #[derive(Debug, Default)]
+        struct LeafStub;
+        impl flui_foundation::Diagnosticable for LeafStub {}
+        impl RenderBox for LeafStub {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> crate::RenderResult<Size> {
+                Ok(Size::new(10.0, 10.0))
+            }
+            fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+        }
+
+        #[test]
+        fn query_walk_refuses_a_second_entry_and_frees_the_node_on_drop() {
+            let mut tree = RenderTree::new();
+            let root = tree.insert_box(Box::new(LeafStub));
+            let child = tree
+                .insert_box_child(root, Box::new(LeafStub))
+                .expect("BUG: the root is live");
+            let stale = tree.insert_box(Box::new(LeafStub));
+            tree.remove_shallow(stale);
+
+            let walk = QueryWalk::new(&mut tree);
+            let mut held = walk
+                .enter(root)
+                .ok()
+                .expect("BUG: first entry of a live node");
+            assert!(held.node().children().contains(&child));
+            assert!(matches!(walk.enter(root), Err(QueryRefusal::InFlight)));
+            assert!(
+                walk.child_parent_data(root).is_none(),
+                "an entered node's parent data is not read"
+            );
+            assert!(matches!(walk.enter(stale), Err(QueryRefusal::Missing)));
+            // A different node is enterable beside the held one.
+            drop(walk.enter(child).ok().expect("BUG: a distinct node"));
+
+            drop(held);
+            assert!(
+                walk.enter(root).is_ok(),
+                "dropping the entry clears the in-flight bit"
+            );
+        }
+    }
 
     // There used to be a `check_thread_panics_on_wrong_thread` test proving
     // a runtime assert fired when `SubtreeArena` was moved to another

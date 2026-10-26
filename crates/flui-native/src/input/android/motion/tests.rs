@@ -549,6 +549,57 @@ fn a_wheel_scrolls_unphased_from_the_cursor() {
     );
     assert_eq!(scroll.position.get().x, 20.0);
 }
+/// An `ACTION_MOVE` carries every finger: the contacts it reports are one
+/// frame, and a move of a lone finger stays a plain event.
+fn the_fingers_of_one_move_are_one_frame() {
+    let mut feed = Feed::new();
+    let first = pointer(0, Tool::Finger, at(10.0, 10.0));
+    let second = pointer(1, Tool::Finger, at(80.0, 80.0));
+    // The action index of `Feed::event` is the first pointer: lead with the new finger.
+    let second_first = [second, first.clone()];
+    feed.event(
+        SOURCE_TOUCHSCREEN,
+        MotionAction::Down,
+        1,
+        0,
+        std::slice::from_ref(&first),
+    );
+    feed.event(
+        SOURCE_TOUCHSCREEN,
+        MotionAction::PointerDown,
+        2,
+        0,
+        &second_first,
+    );
+
+    let spread = [
+        pointer(0, Tool::Finger, at(5.0, 10.0)),
+        pointer(1, Tool::Finger, at(90.0, 80.0)),
+    ];
+    let moved = feed.event(SOURCE_TOUCHSCREEN, MotionAction::Move, 3, 0, &spread);
+    let [PlatformInput::PointerFrame(frame)] = moved.as_slice() else {
+        panic!("one frame, got {moved:?}")
+    };
+    assert_eq!(frame.len(), 2);
+    assert!(
+        frame
+            .events()
+            .iter()
+            .all(|event| matches!(event, PointerEvent::Move(_)))
+    );
+
+    let alone = feed.event(
+        SOURCE_TOUCHSCREEN,
+        MotionAction::Move,
+        4,
+        0,
+        &[pointer(0, Tool::Finger, at(2.0, 10.0))],
+    );
+    assert!(matches!(
+        alone.as_slice(),
+        [PlatformInput::Pointer(PointerEvent::Move(_))]
+    ));
+}
 
 #[test]
 fn android_motion_translation() {
@@ -594,6 +645,10 @@ fn android_motion_translation() {
             (
                 "a_wheel_scrolls_unphased_from_the_cursor",
                 a_wheel_scrolls_unphased_from_the_cursor,
+            ),
+            (
+                "the_fingers_of_one_move_are_one_frame",
+                the_fingers_of_one_move_are_one_frame,
             ),
         ],
     );
