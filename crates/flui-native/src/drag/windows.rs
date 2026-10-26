@@ -56,6 +56,7 @@ mod crossing {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use flui_platform::UnsupportedReason;
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
         TransferImage, TransferPayload, TransferUri,
@@ -472,19 +473,27 @@ mod crossing {
 
     /// The mouse buttons (`MK_*`) whose release ends an OS session `DoDragDrop`
     /// would run for a drag of a `kind` contact, given the buttons `held` in the
-    /// thread's input state as it starts; `None` when OLE's loop cannot carry it.
+    /// thread's input state as it starts; why not when OLE's loop cannot carry
+    /// it.
     ///
     /// That loop follows the mouse alone. A pen or touch contact a window takes
     /// as `WM_POINTER` without `DefWindowProc` is never promoted to mouse input,
     /// so it sets no mouse button in the key state the loop reads; with no button
     /// held the loop could neither follow the contact nor see it lift, and the
-    /// drag stays in its window instead (ADR-0211 §11).
-    #[must_use]
-    pub(super) fn os_loop_buttons(kind: Option<PointerKind>, held: u32) -> Option<u32> {
+    /// drag stays in its window instead (ADR-0211 §11). A pen or touch contact
+    /// is never carried, on any Windows device: `NotOnThisPlatform` for that
+    /// contact, while a mouse drag is still taken. A mouse whose buttons are
+    /// already up is `Unavailable`: the next press may start one.
+    pub(super) fn os_loop_buttons(
+        kind: Option<PointerKind>,
+        held: u32,
+    ) -> Result<u32, UnsupportedReason> {
         if matches!(kind, Some(PointerKind::Touch | PointerKind::Pen { .. })) {
-            return None;
+            return Err(UnsupportedReason::NotOnThisPlatform);
         }
-        Some(held & MOUSE_BUTTONS).filter(|buttons| *buttons != 0)
+        Some(held & MOUSE_BUTTONS)
+            .filter(|buttons| *buttons != 0)
+            .ok_or(UnsupportedReason::Unavailable)
     }
 
     #[cfg(test)]
@@ -547,9 +556,7 @@ use crate::{
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
     owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow},
-    owner::windows::{
-        CreatedWindow, HostDrag, WindowIdentity, WindowMessages, WindowRef, WindowStep,
-    },
+    owner::windows::{CreatedWindow, DropTarget, HostDrag, WindowMessages, WindowRef, WindowTable},
 };
 #[cfg(windows)]
 use crossing::{
@@ -606,9 +613,6 @@ struct OwnerDrag {
     pending: RefCell<Option<PendingStart>>,
     /// Whether `DoDragDrop` is running.
     running: Cell<bool>,
-    /// The drop target of each window registered on this thread, by the
-    /// window's identity, from its creation to its destruction.
-    targets: RefCell<HashMap<WindowIdentity, ComObject<WindowDropTarget>>>,
 }
 
 #[cfg(windows)]
@@ -771,9 +775,8 @@ impl OleTransfer {
         // OLE's loop follows the mouse alone: a drag no mouse button holds
         // stays in its window rather than starting a session that cancels at
         // its first question (ADR-0211 §11).
-        let began = os_loop_buttons(kind, mouse_buttons_held()).ok_or(DragError::from(
-            Unsupported::new(UnsupportedReason::NotOnThisPlatform),
-        ))?;
+        let began = os_loop_buttons(kind, mouse_buttons_held())
+            .map_err(|reason| DragError::from(Unsupported::new(reason)))?;
         *owner.pending.borrow_mut() = Some(PendingStart { request, began });
         if self.post_start() {
             Ok(())
@@ -997,10 +1000,9 @@ impl HostDrag for OleTransfer {
         Win32DragSource::new(self, window)
     }
 
-    fn register_target(self: Arc<Self>, window: &CreatedWindow) {
-        let Some(owner) = self.owner() else {
-            return;
-        };
+    fn register_target(self: Arc<Self>, window: &CreatedWindow) -> Option<Box<dyn DropTarget>> {
+        // Drop targets live on the owner thread, in its OLE apartment.
+        self.owner()?;
         let hwnd = window.hwnd;
         let target = ComObject::new(WindowDropTarget::new(window, self));
         let interface: IDropTarget = target.to_interface();
@@ -1009,51 +1011,43 @@ impl HostDrag for OleTransfer {
         // to `interface` until `RevokeDragDrop`.
         if let Err(error) = unsafe { RegisterDragDrop(hwnd, &interface) } {
             tracing::warn!(%error, "the window takes no drags: RegisterDragDrop failed");
-            return;
+            return None;
         }
-        let replaced = owner.targets.borrow_mut().insert(window.identity, target);
-        drop(replaced);
-    }
-
-    fn rescale_target(&self, window: WindowRef, dpi: u32) {
-        if let Some(target) = self.target_of(window) {
-            target.rescale(dpi);
-        }
-    }
-
-    fn revoke_target(&self, window: WindowRef) {
-        let Some(owner) = self.owner() else {
-            return;
-        };
-        // Taken out in a statement of its own: leaving runs the window's
-        // callbacks, which must find no borrow held.
-        let target = owner.targets.borrow_mut().remove(&window.identity());
-        let Some(target) = target else {
-            return;
-        };
-        // SAFETY: `window` is live until its destruction ends, on its thread;
-        // the registration being revoked is the one `register_target` made.
-        if let Err(error) = unsafe { RevokeDragDrop(window.hwnd()) } {
-            tracing::debug!(%error, "RevokeDragDrop failed");
-        }
-        target.revoke();
-    }
-
-    #[cfg(test)]
-    fn drop_target(&self, window: WindowRef) -> Option<IDropTarget> {
-        self.target_of(window).map(|target| target.to_interface())
+        Some(Box::new(RegisteredTarget {
+            window: window.window(),
+            target,
+        }))
     }
 }
 
+/// One window's drop target as OLE holds it, until the window's class
+/// revokes it.
 #[cfg(windows)]
-impl OleTransfer {
-    /// The drop target `window` registered; `None` off the owner thread.
-    fn target_of(&self, window: WindowRef) -> Option<ComObject<WindowDropTarget>> {
-        self.owner()?
-            .targets
-            .borrow()
-            .get(&window.identity())
-            .cloned()
+struct RegisteredTarget {
+    window: WindowRef,
+    target: ComObject<WindowDropTarget>,
+}
+
+#[cfg(windows)]
+impl DropTarget for RegisteredTarget {
+    fn revoke(&self) {
+        // SAFETY: the window is live until its destruction ends, on its
+        // thread; the registration being revoked is the one
+        // `register_target` made.
+        if let Err(error) = unsafe { RevokeDragDrop(self.window.hwnd()) } {
+            tracing::debug!(%error, "RevokeDragDrop failed");
+        }
+        self.target.revoke();
+    }
+
+    #[cfg(test)]
+    fn interface(&self) -> IDropTarget {
+        self.target.to_interface()
+    }
+
+    #[cfg(test)]
+    fn scale(&self) -> f64 {
+        self.target.scale()
     }
 }
 
@@ -1168,41 +1162,32 @@ impl PlatformDragSource for Win32DragSource {
 /// The hook on FLUI's window class that makes each window it creates an OLE
 /// drop target, from then on taking drags from this process or another
 /// (ADR-0211), through the transport of the loop that opened the window. It
-/// keeps that transport by the window's identity, from the window's creation
-/// to its destruction (or `WM_NCDESTROY` for a window whose destruction was
-/// not announced), so the window's scale and its destruction reach its
-/// target. The host lists it last, so a window activates TSF and gets its
+/// keeps each window's registration from the window's creation to its
+/// destruction (or `WM_NCDESTROY` for a window whose destruction was not
+/// announced), which revokes it; the target reads the window's scale from the
+/// window. The host lists it last, so a window activates TSF and gets its
 /// touchpad viewport before it takes drags.
 #[cfg(windows)]
 #[derive(Default)]
 pub(crate) struct DropTargetRegistration {
-    windows: RefCell<HashMap<WindowIdentity, TargetWindow>>,
-}
-
-/// A window the drop-target hook registered, with the transport it
-/// registered with.
-#[cfg(windows)]
-struct TargetWindow {
-    window: WindowRef,
-    transport: Arc<dyn HostDrag>,
+    windows: WindowTable<Box<dyn DropTarget>>,
 }
 
 #[cfg(windows)]
 impl DropTargetRegistration {
-    /// The transport `window` registered with.
-    fn transport(&self, window: WindowRef) -> Option<Arc<dyn HostDrag>> {
-        self.windows
-            .borrow()
-            .get(&window.identity())
-            .map(|kept| Arc::clone(&kept.transport))
+    /// The hook of a class on an owner thread, with no window yet.
+    pub(crate) fn new() -> Rc<Self> {
+        let hook = Rc::new(Self::default());
+        #[cfg(test)]
+        testing::made(&hook);
+        hook
     }
 
-    /// `window` is destroyed: its target is revoked, with no borrow held,
+    /// Revoke a registration the table handed out, with no borrow held,
     /// since leaving runs the window's callbacks.
-    fn forget(&self, window: WindowRef) {
-        let removed = self.windows.borrow_mut().remove(&window.identity());
-        if let Some(kept) = removed {
-            kept.transport.revoke_target(kept.window);
+    fn revoke(taken: Option<(WindowRef, Box<dyn DropTarget>)>) {
+        if let Some((_, target)) = taken {
+            target.revoke();
         }
     }
 }
@@ -1210,27 +1195,13 @@ impl DropTargetRegistration {
 #[cfg(windows)]
 impl WindowMessages for DropTargetRegistration {
     fn created(&self, window: &CreatedWindow) {
-        Arc::clone(&window.drag).register_target(window);
-        let replaced = self.windows.borrow_mut().insert(
-            window.identity,
-            TargetWindow {
-                window: window.window(),
-                transport: Arc::clone(&window.drag),
-            },
-        );
-        drop(replaced);
-    }
-
-    fn step(&self, window: WindowRef, step: WindowStep) {
-        if let WindowStep::Rescaled { dpi } = step
-            && let Some(transport) = self.transport(window)
-        {
-            transport.rescale_target(window, dpi);
+        if let Some(target) = Arc::clone(&window.drag).register_target(window) {
+            self.windows.put(window.window(), target);
         }
     }
 
     fn destroyed(&self, window: WindowRef) {
-        self.forget(window);
+        Self::revoke(self.windows.take(window.identity()));
     }
 
     unsafe fn message(
@@ -1244,17 +1215,53 @@ impl WindowMessages for DropTargetRegistration {
             // The window's last message: the target of a window whose
             // destruction was not announced goes with it. Heard, not
             // answered.
-            let window = self
-                .windows
-                .borrow()
-                .values()
-                .find(|kept| kept.window.hwnd() == hwnd)
-                .map(|kept| kept.window);
-            if let Some(window) = window {
-                self.forget(window);
-            }
+            Self::revoke(self.windows.take_handle(hwnd));
         }
         None
+    }
+}
+
+/// The hooks made on this thread, for the tests that reach a window's drop
+/// target as its class keeps it.
+#[cfg(all(windows, test))]
+pub(crate) mod testing {
+    use std::cell::RefCell;
+    use std::rc::{Rc, Weak};
+
+    use windows::Win32::System::Ole::IDropTarget;
+
+    use super::DropTargetRegistration;
+    use crate::owner::windows::WindowRef;
+
+    thread_local! {
+        /// The drop-target hook of every class made on this thread.
+        static MADE: RefCell<Vec<Weak<DropTargetRegistration>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Record a class's hook, made on this thread.
+    pub(super) fn made(hook: &Rc<DropTargetRegistration>) {
+        MADE.with(|made| made.borrow_mut().push(Rc::downgrade(hook)));
+    }
+
+    /// What `read` makes of `window`'s registration, from any class made on
+    /// this thread.
+    fn read<R>(window: WindowRef, read: impl Fn(&dyn super::DropTarget) -> R) -> Option<R> {
+        MADE.with(|made| {
+            made.borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find_map(|hook| hook.windows.read(window, |target| read(&**target)))
+        })
+    }
+
+    /// The drop target `window` registered, as OLE holds it.
+    pub(crate) fn target_of(window: WindowRef) -> Option<IDropTarget> {
+        read(window, |target| target.interface())
+    }
+
+    /// The scale `window`'s drop target reports positions at.
+    pub(crate) fn scale_of(window: WindowRef) -> Option<f64> {
+        read(window, |target| target.scale())
     }
 }
 

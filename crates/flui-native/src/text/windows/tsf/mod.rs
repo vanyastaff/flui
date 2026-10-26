@@ -65,7 +65,6 @@ use windows::Win32::{
     Foundation::HWND,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
     UI::{
-        HiDpi::GetDpiForWindow,
         Input::KeyboardAndMouse::GetFocus,
         TextServices::{
             CLSID_TF_ThreadMgr, ITextStoreACP, ITfContext, ITfContextOwnerCompositionServices,
@@ -77,8 +76,8 @@ use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
 use crate::owner::windows::WindowRef;
+use crate::owner::windows::WindowScale;
 use crate::owner::windows::com_apartment::ComApartment;
-use crate::owner::windows::dpi_scale;
 
 #[cfg(test)]
 thread_local! {
@@ -153,9 +152,8 @@ pub struct TextServices {
     /// past the window.
     window: WindowRef,
     /// The window's scale, which a document answers an input method's layout
-    /// queries at: read as the services activate, then told by the window's
-    /// class hook as the window's DPI changes ([`Self::rescale`]).
-    scale: Cell<f64>,
+    /// queries at: the window's own, which its procedure changes.
+    scale: WindowScale,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
@@ -241,9 +239,10 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 
 impl TextServices {
     /// Activate TSF for `window`'s thread and associate the empty document
-    /// with the window. The thread must be the window's owner thread, inside
-    /// the single-threaded COM apartment `apartment` holds, which these
-    /// services keep entered until they are dropped.
+    /// with the window, whose scale is `scale`. The thread must be the
+    /// window's owner thread, inside the single-threaded COM apartment
+    /// `apartment` holds, which these services keep entered until they are
+    /// dropped.
     ///
     /// # Errors
     ///
@@ -251,6 +250,7 @@ impl TextServices {
     /// `WM_CHAR` path.
     pub(crate) fn activate(
         window: WindowRef,
+        scale: WindowScale,
         apartment: Rc<ComApartment>,
     ) -> windows_core::Result<Rc<Self>> {
         let hwnd = window.hwnd();
@@ -275,14 +275,10 @@ impl TextServices {
         };
         // Owned before anything runs application code: from here a failure
         // drops the services, and their drop deactivates TSF.
-        // SAFETY: a plain query of the live window this thread created; it
-        // answers 0 for a handle that is not a window.
-        let dpi = unsafe { GetDpiForWindow(hwnd) };
         let services = Rc::new_cyclic(|me| Self {
             hwnd: window.hwnd(),
             window,
-            // A window whose DPI cannot be read is taken at 100%.
-            scale: Cell::new(if dpi == 0 { 1.0 } else { dpi_scale(dpi) }),
+            scale,
             thread_manager,
             client_id,
             empty,
@@ -402,15 +398,9 @@ impl TextServices {
         }
     }
 
-    /// The window is now at `dpi`: a layout query from here on answers at
-    /// its new scale.
-    pub(crate) fn rescale(&self, dpi: u32) {
-        self.scale.set(dpi_scale(dpi));
-    }
-
     /// The window's scale, as the documents answer layout queries at it.
-    pub(super) fn scale(&self) -> f64 {
-        self.scale.get()
+    pub(crate) fn scale(&self) -> f64 {
+        self.scale.scale()
     }
 
     /// The window moved, or its DPI changed: the focused field's text sits

@@ -49,6 +49,11 @@ fn window_ref(hwnd: HWND) -> crate::owner::windows::WindowRef {
     crate::owner::windows::WindowRef::new(hwnd, identity)
 }
 
+/// The scale of services activated directly: 100%.
+fn unscaled() -> crate::owner::windows::WindowScale {
+    crate::owner::windows::WindowScale::new(96)
+}
+
 /// An entry into this thread's STA (nested in the platform's) for services
 /// activated directly.
 fn apartment() -> Rc<crate::owner::windows::com_apartment::ComApartment> {
@@ -63,7 +68,8 @@ fn erased(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
 /// answered `Deferred`; when TSF has shut down by the time the call
 /// returns, the composition is committed in place.
 fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let entered = services.enter();
@@ -80,7 +86,8 @@ fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
 /// The same when the store's document is gone by the time the call
 /// returns (it was poisoned, or reopening it failed).
 fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let entered = services.enter();
@@ -100,7 +107,8 @@ fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
 /// the shutdown waits for the call to return, and a completion asked for
 /// meanwhile still commits its store in place.
 fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let entered = services.enter();
@@ -126,7 +134,8 @@ fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
 /// A store the host does not serve, queued focus changes included, is
 /// refused; so is any store once TSF has shut down.
 fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let (a, b) = (composing_store(), composing_store());
     services.focus_store(Some(erased(&a)));
     assert_eq!(
@@ -257,7 +266,8 @@ impl tracing::Subscriber for PanicsOnTsfErrors {
 /// teardown's payload is retained rather than destroyed, and TSF is back on
 /// the empty document.
 fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let dropped = Arc::new(AtomicBool::new(false));
@@ -388,7 +398,8 @@ fn start_tsf_composition(services: &TextServices, length: i32) -> ITfComposition
 /// teardown came first, so the owner's containment reports it, not the
 /// recovery's failure.
 fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     let gate = CommitGate::new();
     store.set_commit_gate(gate.clone());
@@ -465,7 +476,8 @@ fn tsf_sees_no_hidden_text(context: &ITfContext) -> bool {
 /// `OnStatusChange` carries only dynamic ones. A protection change on the
 /// focused field reaches TSF as a new context, whose status TSF reports.
 fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = InMemoryTextStore::new("secret");
     store.set_commit_gate(CommitGate::new());
     services.focus_store(Some(erased(&store)));
@@ -486,7 +498,8 @@ fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
 /// in the document that owns it before the document is replaced, so the
 /// store keeps no composing range that no context owns, and keeps its text.
 fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let _composition = start_tsf_composition(&services, 2);
@@ -504,7 +517,8 @@ fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
 /// The same when TSF refuses to end the composition (the store refuses its
 /// synchronous lock): the composition is committed in place instead.
 fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     assert_eq!(
         project_ime_event(
@@ -566,7 +580,8 @@ impl tracing::Subscriber for PanicsOnDiagnostic {
 /// diagnostic: the retirement came first, so the host operation raises it,
 /// and TSF is still back on the empty document.
 fn a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let manager = match &*services.serving.borrow() {
@@ -624,7 +639,8 @@ fn associates_the_empty_document(services: &TextServices) -> bool {
 /// still taken away from TSF, and the host operation raises the failure
 /// once that is done.
 fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     store.fail_retirement.set(true);
@@ -652,7 +668,8 @@ fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND)
 /// panics while the poisoned document is dropped as the call returns: no
 /// panic leaves the COM entry, and the document is still released.
 fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let tsf_store = document_store(&services);
@@ -688,7 +705,8 @@ fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWN
 /// queued behind a call that will never leave. Red-check: pair `enter` and
 /// `leave` by hand again.
 fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let tsf_store = document_store(&services);
@@ -721,7 +739,8 @@ fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
 fn a_document_store_is_bound_to_its_apartment(hwnd: HWND) {
     use windows::Win32::System::Com::IAgileObject;
 
-    let services = TextServices::activate(window_ref(hwnd), apartment()).expect("TSF activates");
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     services.focus_store(Some(erased(&composing_store())));
     let agile = document_store(&services).cast::<IAgileObject>().is_ok();
     services.shutdown();

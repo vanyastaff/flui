@@ -254,19 +254,21 @@ fn the_drop_source_drops_on_release_and_cancels_otherwise() {
 }
 
 /// OLE's loop carries a drag only on the mouse buttons held as it starts:
-/// none held, or a pen or touch contact, leaves the drag in its window.
+/// none held leaves the drag in its window for now, and a pen or touch
+/// contact on every Windows device.
 fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
+    use flui_platform::UnsupportedReason::{NotOnThisPlatform, Unavailable};
     use flui_platform::pointer::{PenTool, PointerKind};
     const LEFT: u32 = 0x01;
     const SHIFT: u32 = 0x04;
     let pen = PointerKind::Pen { tool: PenTool::Tip };
     let rows = [
-        (None, LEFT, Some(LEFT)),
-        (Some(PointerKind::Mouse), LEFT | SHIFT, Some(LEFT)),
-        (Some(PointerKind::Mouse), SHIFT, None),
-        (Some(PointerKind::Mouse), 0, None),
-        (Some(pen), LEFT, None),
-        (Some(PointerKind::Touch), LEFT, None),
+        (None, LEFT, Ok(LEFT)),
+        (Some(PointerKind::Mouse), LEFT | SHIFT, Ok(LEFT)),
+        (Some(PointerKind::Mouse), SHIFT, Err(Unavailable)),
+        (Some(PointerKind::Mouse), 0, Err(Unavailable)),
+        (Some(pen), LEFT, Err(NotOnThisPlatform)),
+        (Some(PointerKind::Touch), LEFT, Err(NotOnThisPlatform)),
     ];
     for (kind, held, expected) in rows {
         assert_eq!(os_loop_buttons(kind, held), expected, "{kind:?} {held:#x}");

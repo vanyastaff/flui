@@ -28,8 +28,6 @@ mod session {
     // states its invariant.
     #![expect(unsafe_code)]
 
-    use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::rc::{Rc, Weak};
 
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -40,22 +38,19 @@ mod session {
 
     use super::messages::{HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify};
     use crate::owner::windows::{
-        CreatedWindow, WindowIdentity, WindowMessages, WindowRef, WindowStep, window_step,
+        CreatedWindow, WindowMessages, WindowRef, WindowStep, WindowTable, window_step,
     };
 
     /// The session's part of FLUI's window class: what it keeps of each
-    /// window, by the window's identity, from the window's creation to its
-    /// destruction (or `WM_NCDESTROY` for a window whose destruction was not
-    /// announced).
+    /// window, from the window's creation to its destruction (or
+    /// `WM_NCDESTROY` for a window whose destruction was not announced).
     #[derive(Default)]
     pub(crate) struct SessionWindows {
-        windows: RefCell<HashMap<WindowIdentity, SessionWindow>>,
+        windows: WindowTable<SessionWindow>,
     }
 
     /// One window as the session's hook keeps it.
-    #[derive(Clone)]
     struct SessionWindow {
-        window: WindowRef,
         /// The hooks of its class, which its lock and unlock are told to;
         /// weak, since this hook is one of them.
         hooks: Weak<[Rc<dyn WindowMessages>]>,
@@ -64,28 +59,17 @@ mod session {
         subscribed: bool,
     }
 
-    impl SessionWindows {
-        /// The window `hwnd` names, with its class's hooks.
-        fn by_handle(&self, hwnd: HWND) -> Option<SessionWindow> {
-            self.windows
-                .borrow()
-                .values()
-                .find(|kept| kept.window.hwnd() == hwnd)
-                .cloned()
+    /// Give back the subscription the hook made on `window`, which is still
+    /// being destroyed.
+    fn unsubscribe(window: WindowRef, kept: SessionWindow) {
+        if !kept.subscribed {
+            return;
         }
-
-        /// Forget the window `identity` names and give its subscription back.
-        fn forget(&self, identity: WindowIdentity) {
-            let removed = self.windows.borrow_mut().remove(&identity);
-            if let Some(kept) = removed.filter(|kept| kept.subscribed) {
-                // SAFETY: the subscription this hook made on the window, which
-                // is still being destroyed; a handle already gone only makes
-                // the call fail.
-                if let Err(error) = unsafe { WTSUnRegisterSessionNotification(kept.window.hwnd()) }
-                {
-                    tracing::debug!(%error, "the session notification was already gone");
-                }
-            }
+        // SAFETY: the subscription this hook made on the window, which is
+        // still being destroyed; a handle already gone only makes the call
+        // fail.
+        if let Err(error) = unsafe { WTSUnRegisterSessionNotification(window.hwnd()) } {
+            tracing::debug!(%error, "the session notification was already gone");
         }
     }
 
@@ -106,19 +90,19 @@ mod session {
                     false
                 }
             };
-            let replaced = self.windows.borrow_mut().insert(
-                window.identity,
+            self.windows.put(
+                window.window(),
                 SessionWindow {
-                    window: window.window(),
                     hooks: Rc::downgrade(&window.hooks),
                     subscribed,
                 },
             );
-            drop(replaced);
         }
 
         fn destroyed(&self, window: WindowRef) {
-            self.forget(window.identity());
+            if let Some((window, kept)) = self.windows.take(window.identity()) {
+                unsubscribe(window, kept);
+            }
         }
 
         fn answers(&self, msg: u32, _wparam: WPARAM) -> bool {
@@ -136,9 +120,8 @@ mod session {
             lparam: LPARAM,
         ) -> Option<LRESULT> {
             if msg == WM_NCDESTROY {
-                let identity = self.by_handle(hwnd).map(|kept| kept.window.identity());
-                if let Some(identity) = identity {
-                    self.forget(identity);
+                if let Some((window, kept)) = self.windows.take_handle(hwnd) {
+                    unsubscribe(window, kept);
                 }
                 return None;
             }
@@ -151,10 +134,13 @@ mod session {
                 _ => None,
             };
             if let Some(locked) = locked
-                && let Some(kept) = self.by_handle(hwnd)
-                && let Some(hooks) = kept.hooks.upgrade()
+                && let Some(window) = self.windows.window_of(hwnd)
+                && let Some(hooks) = self
+                    .windows
+                    .read(window, |kept| kept.hooks.upgrade())
+                    .flatten()
             {
-                window_step(&hooks, kept.window, WindowStep::SessionLocked(locked));
+                window_step(&hooks, window, WindowStep::SessionLocked(locked));
             }
             Some(LRESULT(0))
         }

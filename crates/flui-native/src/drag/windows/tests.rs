@@ -336,7 +336,7 @@ fn open(
     Window {
         host: window,
         hwnd,
-        ole: drop_target(platform, hwnd),
+        ole: drop_target(hwnd),
         seen,
         offer,
     }
@@ -413,15 +413,16 @@ fn data_object(request: OsDragRequest) -> IDataObject {
     super::com::SourceData::new(&request.representations, request.provider).into()
 }
 
-/// The drop target the window `hwnd` registered with `platform`'s transport.
-fn drop_target(platform: &WindowsPlatform, hwnd: HWND) -> IDropTarget {
+/// The window `hwnd` as its class's hooks name it.
+fn window_ref(hwnd: HWND) -> crate::owner::windows::WindowRef {
     let identity =
         with_window_context(hwnd, "test", |context| context.identity).expect("a context");
-    platform
-        .owner()
-        .drag
-        .drop_target(crate::owner::windows::WindowRef::new(hwnd, identity))
-        .expect("the window registered its drop target")
+    crate::owner::windows::WindowRef::new(hwnd, identity)
+}
+
+/// The drop target the window `hwnd` registered as its class created it.
+fn drop_target(hwnd: HWND) -> IDropTarget {
+    super::testing::target_of(window_ref(hwnd)).expect("the window registered its drop target")
 }
 
 /// The screen point of the window's client point (50, 40) in device pixels.
@@ -436,7 +437,7 @@ fn screen_point(hwnd: HWND) -> POINTL {
 }
 
 fn scale(hwnd: HWND) -> f64 {
-    with_window_context(hwnd, "test", |context| context.scale_factor.get()).expect("a context")
+    with_window_context(hwnd, "test", |context| context.scale.scale()).expect("a context")
 }
 
 /// Resolve a ready transfer request.
@@ -672,6 +673,56 @@ fn a_drop_target_follows_its_window_to_a_new_scale() {
     );
 }
 
+/// The drop target and the text services read a window at the window's own
+/// scale, the one value the window holds: as it opens, and at a scale other
+/// than 100% once the window moves to one.
+fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
+    let platform = WindowsPlatform::new().expect("platform");
+    let transfer = platform.data_transfer();
+    let target = open(
+        &platform,
+        "flui one scale",
+        answering(&transfer, Some(TransferActions::COPY)),
+    );
+    let window = window_ref(target.hwnd);
+    let services = crate::text::windows::testing::services_of(target.hwnd)
+        .expect("the window's text services");
+    let read = || {
+        (
+            scale(target.hwnd),
+            super::testing::scale_of(window).expect("the window's drop target"),
+            services.scale(),
+        )
+    };
+    let opened = read();
+    assert_eq!(
+        (opened.1, opened.2),
+        (opened.0, opened.0),
+        "as it opens, the window hands its scale to both"
+    );
+    let dpi: usize = if opened.0 > 1.4 { 120 } else { 144 };
+    let mut suggested = RECT::default();
+    // SAFETY: the case's own live window; `suggested` is a live local.
+    unsafe { GetWindowRect(target.hwnd, &raw mut suggested) }.expect("the window's rectangle");
+    // SAFETY: a message to the case's own window on its thread; `suggested`
+    // outlives the send.
+    unsafe {
+        SendMessageW(
+            target.hwnd,
+            WM_DPICHANGED,
+            Some(WPARAM((dpi << 16) | dpi)),
+            Some(LPARAM((&raw const suggested) as isize)),
+        )
+    };
+    let moved = read();
+    let expected = dpi as f64 / 96.0;
+    assert_eq!(
+        moved,
+        (expected, expected, expected),
+        "at its new scale, the window and both read the same value"
+    );
+}
+
 /// A window that accepts nothing is answered "none", and a release over it
 /// leaves it instead of dropping.
 fn a_refused_drag_leaves_instead_of_dropping() {
@@ -860,11 +911,23 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     by_pen.pointer = Some(pen);
     let pen_started = drag.start(by_pen);
     hold_mouse_buttons(0);
-    let mouse_only = Err(DragError::from(Unsupported::new(
-        UnsupportedReason::NotOnThisPlatform,
-    )));
-    assert_eq!(unheld, mouse_only, "no mouse button");
-    assert_eq!(pen_started, mouse_only, "a pen contact");
+    let refused = |reason| Err(DragError::from(Unsupported::new(reason)));
+    assert_eq!(
+        unheld,
+        refused(UnsupportedReason::Unavailable),
+        "no mouse button"
+    );
+    assert!(
+        unheld
+            .as_ref()
+            .is_err_and(|error| error.unsupported().is_some_and(Unsupported::is_retryable)),
+        "a press may start the next drag"
+    );
+    assert_eq!(
+        pen_started,
+        refused(UnsupportedReason::NotOnThisPlatform),
+        "a pen contact"
+    );
     let _ = pump_until(|| false, Duration::from_millis(50));
     assert_eq!(ended.get(), None, "a refused start is not told it ended");
     assert!(!transport.is_running());
@@ -1415,6 +1478,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_drop_target_follows_its_window_to_a_new_scale",
                 a_drop_target_follows_its_window_to_a_new_scale,
+            ),
+            (
+                "a_window_hands_its_drop_target_and_text_services_its_one_scale",
+                a_window_hands_its_drop_target_and_text_services_its_one_scale,
             ),
             (
                 "a_refused_drag_leaves_instead_of_dropping",

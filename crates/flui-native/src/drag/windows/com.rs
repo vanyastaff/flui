@@ -42,7 +42,7 @@ use super::{OleTransfer, clipboard_format, describe, global_format, write_global
 use crate::drag::windows::crossing::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
-use crate::owner::windows::{CreatedWindow, dpi_scale};
+use crate::owner::windows::CreatedWindow;
 
 pub(super) use objects::{
     DropSource, DropSource_Impl, FormatList, FormatList_Impl, SourceData, SourceData_Impl,
@@ -92,7 +92,7 @@ mod objects {
     use super::super::OleTransfer;
     use super::SourceEntry;
     use crate::owner::handlers::WindowCallbacks;
-    use crate::owner::windows::WindowRef;
+    use crate::owner::windows::{WindowRef, WindowScale};
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
     // `!Send` provider): `Agile = false` withholds `IAgileObject` and the
@@ -129,8 +129,9 @@ mod objects {
         pub(super) transfer: Arc<OleTransfer>,
         /// The window's callbacks, which its drag events are dispatched to.
         pub(super) callbacks: Arc<WindowCallbacks>,
-        /// The window's DPI: OLE reports positions in device pixels.
-        pub(super) dpi: Cell<u32>,
+        /// The window's scale, which its procedure changes: OLE reports
+        /// positions in device pixels.
+        pub(super) scale: WindowScale,
         /// Set once the window is destroyed and the target revoked: a call
         /// OLE still makes reaches nothing.
         pub(super) revoked: Cell<bool>,
@@ -411,7 +412,7 @@ impl WindowDropTarget {
             window: window.window(),
             transfer,
             callbacks: Arc::clone(&window.callbacks),
-            dpi: Cell::new(window.dpi),
+            scale: window.scale.clone(),
             revoked: Cell::new(false),
             over: Cell::new(None),
         }
@@ -440,7 +441,7 @@ impl WindowDropTarget {
             unsafe { ScreenToClient(hwnd, &raw mut point) }
                 .as_bool()
                 .then(|| {
-                    let scale = dpi_scale(self.dpi.get());
+                    let scale = self.scale.scale();
                     Point::new(f64::from(point.x) / scale, f64::from(point.y) / scale)
                 })
         });
@@ -460,9 +461,10 @@ impl WindowDropTarget {
             .map_or(DROPEFFECT_NONE, |action| DROPEFFECT(effect_bits(action)))
     }
 
-    /// The window is now at `dpi`.
-    pub(super) fn rescale(&self, dpi: u32) {
-        self.dpi.set(dpi);
+    /// The scale the target reports positions at.
+    #[cfg(test)]
+    pub(super) fn scale(&self) -> f64 {
+        self.scale.scale()
     }
 
     /// The window is destroyed and OLE no longer offers it drags: a drag

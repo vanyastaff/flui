@@ -32,6 +32,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) mod testing;
 mod wake_deadline;
+mod window_table;
 
 use std::{
     any::TypeId,
@@ -87,6 +88,7 @@ use flui_platform::{DisplayId, DisplaySnapshot};
 pub(crate) use wake_deadline::FrameCount;
 use wake_deadline::ModalDelivery;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, WakeDeadlineHook};
+pub(crate) use window_table::{WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -360,21 +362,27 @@ pub(crate) trait HostDrag: control::OwnerMessages + DataTransferSource {
     fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource>;
 
     /// Make `window`, which FLUI's class just created on this thread, a drop
-    /// target, which the transport keeps by the window's identity until
-    /// [`Self::revoke_target`]. A window whose registration fails takes no
-    /// drags.
-    fn register_target(self: Arc<Self>, window: &CreatedWindow);
+    /// target, reporting at the window's scale as it changes. The caller keeps
+    /// the registration for the window and revokes it as the window is
+    /// destroyed; `None` when registration failed (or off the owner thread),
+    /// and the window takes no drags.
+    fn register_target(self: Arc<Self>, window: &CreatedWindow) -> Option<Box<dyn DropTarget>>;
+}
 
-    /// `window` is now at `dpi`: what its drop target reports follows.
-    fn rescale_target(&self, window: WindowRef, dpi: u32);
+/// One window's registration as an OLE drop target, which the window's
+/// class keeps until the window is destroyed.
+pub(crate) trait DropTarget {
+    /// The window is destroyed, on its thread, while its callbacks still
+    /// exist: a drag over it leaves it, and OLE no longer offers it one.
+    fn revoke(&self);
 
-    /// `window` is destroyed, on its thread, while its callbacks still exist:
-    /// a drag over it leaves it, and OLE no longer offers it one.
-    fn revoke_target(&self, window: WindowRef);
-
-    /// The drop target `window` registered, as OLE holds it.
+    /// The target as OLE holds it.
     #[cfg(test)]
-    fn drop_target(&self, window: WindowRef) -> Option<windows::Win32::System::Ole::IDropTarget>;
+    fn interface(&self) -> windows::Win32::System::Ole::IDropTarget;
+
+    /// The scale the target reports positions at.
+    #[cfg(test)]
+    fn scale(&self) -> f64;
 }
 
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,
@@ -422,11 +430,13 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 /// A feature that answers a message whose handling is a step other features
 /// follow tells every hook of it ([`Self::step`]), and the window's own
 /// procedure tells them that the window is destroyed ([`Self::destroyed`]). A
-/// hook keeps what it needs of a window in itself, keyed by the window's
-/// identity: made when the window is announced, dropped when it is destroyed
-/// (and at `WM_NCDESTROY`, the window's last message, for one whose
-/// destruction was not announced), so no hook reaches another feature's state
-/// and a message for a window it does not hold finds none.
+/// hook keeps what it needs of a window in itself, in a [`WindowTable`] keyed
+/// by the window's identity: made when the window is announced, dropped when
+/// it is destroyed (and at `WM_NCDESTROY`, the window's last message, for one
+/// whose destruction was not announced), so no hook reaches another feature's
+/// state and a message for a window it does not hold finds none. What every
+/// hook reads of a window, its scale, the window holds once
+/// ([`CreatedWindow::scale`]).
 pub(crate) trait WindowMessages {
     /// `window` was created and its context installed, on its owner thread.
     fn created(&self, _window: &CreatedWindow) {}
@@ -476,8 +486,10 @@ pub(crate) struct CreatedWindow {
     pub(crate) identity: WindowIdentity,
     /// Its client size in device pixels.
     pub(crate) client_size: (i32, i32),
-    /// Its DPI; a later change is a step ([`WindowStep::Rescaled`]).
-    pub(crate) dpi: u32,
+    /// Its DPI, which its procedure changes as the window moves to another
+    /// (and then tells the step, [`WindowStep::Rescaled`]): a hook reads the
+    /// window's scale here and keeps no copy of it.
+    pub(crate) scale: WindowScale,
     /// Its callbacks, which a feature dispatches what it hears for the window
     /// to.
     pub(crate) callbacks: Arc<WindowCallbacks>,
@@ -528,11 +540,8 @@ pub(crate) enum WindowStep {
     SizeMoveStarted,
     /// That loop ended.
     SizeMoveEnded,
-    /// It is now at this DPI.
-    Rescaled {
-        /// Its DPI.
-        dpi: u32,
-    },
+    /// It is now at another DPI, which its [`WindowScale`] holds.
+    Rescaled,
     /// The rectangle its new DPI asks for is applied too: what it shows sits
     /// where the new scale puts it on the screen.
     ScaleApplied,

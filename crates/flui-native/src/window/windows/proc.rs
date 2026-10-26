@@ -56,9 +56,7 @@ use windows::Win32::{
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
 use super::mode::NativeMode;
-use super::set::{
-    USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, restore_rectangle,
-};
+use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 use crate::owner::call_point::{Field, call};
 use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
@@ -143,15 +141,17 @@ pub(crate) struct WindowContext {
     /// The system preferences: the window's gesture geometry is measured with
     /// them.
     pub(crate) preferences: Rc<dyn OwnerPreferences>,
-    /// Scale factor for coordinate conversion.
+    /// The window's DPI, for coordinate conversion: the one value the
+    /// window's class hooks read too ([`CreatedWindow::scale`]).
     ///
-    /// `Cell`, not a plain `f64`: `window_proc` only ever holds a shared
+    /// Interior-mutable: `window_proc` only ever holds a shared
     /// `&WindowContext` (see its `# Safety` section), and `WM_DPICHANGED` is
-    /// the one message that updates this field — `Cell::set` lets it do so
-    /// through that shared reference instead of forging a second, aliasing
-    /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
-    /// shared one is still live.
-    pub scale_factor: std::cell::Cell<f64>,
+    /// the one message that updates it, through that shared reference instead
+    /// of a second, aliasing `&mut WindowContext` forged from the raw
+    /// `GWLP_USERDATA` pointer while the shared one is still live.
+    ///
+    /// [`CreatedWindow::scale`]: crate::owner::windows::CreatedWindow::scale
+    pub(crate) scale: crate::owner::windows::WindowScale,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -281,7 +281,7 @@ impl WindowContext {
     /// Tell the window's resize callback its client size, `device` pixels, at
     /// its current scale.
     pub(crate) fn dispatch_resize(&self, device: Size<i32>) {
-        let scale = self.scale_factor.get();
+        let scale = self.scale.scale();
         self.last_resize.set(Some((device, scale)));
         if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(device, scale) {
             self.callbacks.dispatch_resize(metrics);
@@ -593,10 +593,9 @@ pub(crate) unsafe fn with_message_context<R>(
 pub(crate) struct WindowProc;
 
 impl WindowMessages for WindowProc {
-    /// A key the application let through reaches the window's own keys (the
-    /// fullscreen hotkey); every other step is the window's own.
-    /// The window's own keys follow a key the application let through, and a
-    /// locked session hides it.
+    /// The window's own keys (the fullscreen hotkey) follow a key the
+    /// application let through, and a locked session hides it; every other
+    /// step is the window's own.
     fn step(&self, window: WindowRef, step: WindowStep) {
         match step {
             WindowStep::KeyLetThrough {
@@ -616,7 +615,7 @@ impl WindowMessages for WindowProc {
             | WindowStep::Painting
             | WindowStep::SizeMoveStarted
             | WindowStep::SizeMoveEnded
-            | WindowStep::Rescaled { .. }
+            | WindowStep::Rescaled
             | WindowStep::ScaleApplied
             | WindowStep::SettingChanged
             | WindowStep::Closed => {}
@@ -934,8 +933,8 @@ impl WindowProc {
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
-                                    width as f64 / ctx.scale_factor.get(),
-                                    height as f64 / ctx.scale_factor.get(),
+                                    width as f64 / ctx.scale.scale(),
+                                    height as f64 / ctx.scale.scale(),
                                 );
                             });
                         }
@@ -1140,8 +1139,8 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| {
                             state.bounds.origin = Point::new(
-                                x as f64 / ctx.scale_factor.get(),
-                                y as f64 / ctx.scale_factor.get(),
+                                x as f64 / ctx.scale.scale(),
+                                y as f64 / ctx.scale.scale(),
                             );
                         });
                         ctx.publish_window_state(hwnd);
@@ -1748,17 +1747,12 @@ impl WindowContext {
     pub(crate) fn change_dpi(&self, hwnd: HWND, dpi: u16, suggested: Option<RECT>) {
         use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-        let new_scale = f64::from(dpi) / f64::from(USER_DEFAULT_SCREEN_DPI);
+        let old_scale = self.scale.rescale(u32::from(dpi));
+        let new_scale = self.scale.scale();
         tracing::info!(dpi, new_scale, "DPI changed");
-        let old_scale = self.scale_factor.replace(new_scale);
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
-        self.step(
-            hwnd,
-            WindowStep::Rescaled {
-                dpi: u32::from(dpi),
-            },
-        );
+        self.step(hwnd, WindowStep::Rescaled);
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();

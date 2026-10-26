@@ -70,7 +70,7 @@ impl WindowsHost for Windows {
             Rc::new(WindowProc),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
             Rc::new(SessionWindows::default()),
-            Rc::new(DropTargetRegistration::default()),
+            DropTargetRegistration::new(),
         ]);
         WindowClass { hooks, input, text }
     }

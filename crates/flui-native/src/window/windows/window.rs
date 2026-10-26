@@ -391,13 +391,12 @@ impl WindowsWindow {
                 scale_factor
             );
 
-            // Seed observations from the native client, not requested outer bounds.
-            let native_dpi = GetDpiForWindow(hwnd);
-            let scale_factor = if native_dpi == 0 {
-                scale_factor
-            } else {
-                native_dpi as f64 / USER_DEFAULT_SCREEN_DPI as f64
-            };
+            // Seed observations from the native client, not requested outer
+            // bounds. The window, and every hook of its class, reads its
+            // scale from this one value.
+            let scale =
+                crate::owner::windows::WindowScale::at_open(GetDpiForWindow(hwnd), scale_factor);
+            let scale_factor = scale.scale();
             let mut client = RECT::default();
             let initial_size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 Size::new(client.right - client.left, client.bottom - client.top)
@@ -468,7 +467,7 @@ impl WindowsWindow {
                 callbacks: Arc::clone(&callbacks),
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
-                scale_factor: std::cell::Cell::new(scale_factor),
+                scale: scale.clone(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
@@ -552,11 +551,7 @@ impl WindowsWindow {
                     hwnd,
                     identity,
                     client_size: size,
-                    dpi: if native_dpi == 0 {
-                        USER_DEFAULT_SCREEN_DPI
-                    } else {
-                        native_dpi
-                    },
+                    scale,
                     callbacks,
                     handlers: Rc::clone(&handlers),
                     preferences,
@@ -1334,7 +1329,7 @@ impl PlatformWindow for WindowsWindow {
         // here; any other window under the point is another application's.
         let Some((window, target_scale)) =
             super::proc::with_window_context(root, "window_at", |context| {
-                (context.window_id, context.scale_factor.get())
+                (context.window_id, context.scale.scale())
             })
         else {
             return WindowAt::Outside;

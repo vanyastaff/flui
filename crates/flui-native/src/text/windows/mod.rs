@@ -177,10 +177,6 @@ mod tsf;
 pub(crate) use tsf::TextServices;
 
 #[cfg(windows)]
-use std::cell::RefCell;
-#[cfg(windows)]
-use std::collections::HashMap;
-#[cfg(windows)]
 use std::rc::Rc;
 
 #[cfg(windows)]
@@ -192,7 +188,7 @@ use windows::Win32::UI::WindowsAndMessaging::{WM_EXITSIZEMOVE, WM_MOVE, WM_NCDES
 
 #[cfg(windows)]
 use crate::owner::windows::{
-    CreatedWindow, WindowIdentity, WindowMessages, WindowRef, WindowStep, WindowTexts,
+    CreatedWindow, WindowMessages, WindowRef, WindowStep, WindowTable, WindowTexts,
 };
 
 /// The text services' hook on FLUI's window class, and the Windows table's
@@ -205,26 +201,11 @@ use crate::owner::windows::{
 /// Public where it is defined, as the host's table names it as its text
 /// position, and nameable only inside the crate.
 #[cfg(windows)]
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Tsf {
-    windows: RefCell<HashMap<WindowIdentity, TsfWindow>>,
-}
-
-/// What the hook keeps of one window: the window, and its connection once
-/// TSF activated for it.
-#[cfg(windows)]
-struct TsfWindow {
-    window: WindowRef,
-    services: Option<Rc<TextServices>>,
-}
-
-#[cfg(windows)]
-impl std::fmt::Debug for Tsf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tsf")
-            .field("windows", &self.windows.borrow().len())
-            .finish()
-    }
+    /// Each window's connection once TSF activated for it; `None` while it
+    /// activates.
+    windows: WindowTable<Option<Rc<TextServices>>>,
 }
 
 #[cfg(windows)]
@@ -240,27 +221,18 @@ impl Tsf {
     /// The connection of `window`, while it is held; cloned, so no borrow is
     /// held while TSF and the field's store run.
     fn services(&self, window: WindowRef) -> Option<Rc<TextServices>> {
-        self.windows
-            .borrow()
-            .get(&window.identity())
-            .filter(|kept| kept.window == window)
-            .and_then(|kept| kept.services.clone())
+        self.windows.read(window, Clone::clone).flatten()
     }
 
     /// The connection of the window `hwnd` names.
     fn services_by_handle(&self, hwnd: HWND) -> Option<Rc<TextServices>> {
-        self.windows
-            .borrow()
-            .values()
-            .find(|kept| kept.window.hwnd() == hwnd)
-            .and_then(|kept| kept.services.clone())
+        self.services(self.windows.window_of(hwnd)?)
     }
 
-    /// Forget the window `identity` names and deactivate its connection,
-    /// with no borrow held: the shutdown reaches application code.
-    fn retire(&self, identity: WindowIdentity) {
-        let removed = self.windows.borrow_mut().remove(&identity);
-        if let Some(services) = removed.and_then(|kept| kept.services) {
+    /// Deactivate a connection the table handed out, with no borrow held:
+    /// the shutdown reaches application code.
+    fn retire(taken: Option<(WindowRef, Option<Rc<TextServices>>)>) {
+        if let Some((_, Some(services))) = taken {
             TextServices::retire_with_window(services);
         }
     }
@@ -294,6 +266,11 @@ impl crate::text::TextInput for TsfHandle {
     /// The window's text-store host: its TSF connection, read on the thread
     /// that created the window (any other gets `None`); `None` when TSF did
     /// not activate for it, or once it closed.
+    ///
+    /// The handle reaches the hook through the class of the thread it is read
+    /// on rather than holding it: a text input is `Send + Sync`, and the hook
+    /// is an `Rc` of the owner thread. The lookup is the thread rule itself,
+    /// since a thread that holds no class finds no connection.
     fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
         let host = crate::owner::windows::window_texts()?.store_host(self.0)?;
         Some(crate::text::WindowTextInput::Store(host))
@@ -340,25 +317,16 @@ impl WindowMessages for Tsf {
         let this = window.window();
         // Kept before TSF activates: a close the activation dispatches finds
         // the window and forgets it.
-        let replaced = self.windows.borrow_mut().insert(
-            window.identity,
-            TsfWindow {
-                window: this,
-                services: None,
-            },
-        );
-        drop(replaced);
+        self.windows.put(this, None);
         #[cfg(test)]
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
         }
-        match TextServices::activate(this, apartment) {
+        match TextServices::activate(this, window.scale.clone(), apartment) {
             Ok(services) => {
                 let kept = self
                     .windows
-                    .borrow_mut()
-                    .get_mut(&window.identity)
-                    .map(|kept| kept.services = Some(Rc::clone(&services)))
+                    .update(this, |kept| *kept = Some(Rc::clone(&services)))
                     .is_some();
                 if !kept {
                     // The window is already closed (by a message the
@@ -367,7 +335,7 @@ impl WindowMessages for Tsf {
                 }
             }
             Err(error) => {
-                let failed = self.windows.borrow_mut().remove(&window.identity);
+                let failed = self.windows.take(window.identity);
                 drop(failed);
                 tracing::warn!(
                     ?hwnd,
@@ -378,25 +346,21 @@ impl WindowMessages for Tsf {
         }
     }
 
-    /// The scale TSF answers an input method's layout queries at follows the
-    /// window's as it is set; once the rectangle it asks for is applied, the
-    /// focused field's text sits somewhere else on the screen, and TSF is
-    /// told so. The window's close callbacks having run, its connection is
-    /// deactivated while its handle is still valid.
+    /// TSF answers an input method's layout queries at the window's scale,
+    /// which it reads from the window; once the rectangle a new scale asks
+    /// for is applied, the focused field's text sits somewhere else on the
+    /// screen, and TSF is told so. The window's close callbacks having run,
+    /// its connection is deactivated while its handle is still valid.
     fn step(&self, window: WindowRef, step: WindowStep) {
         match step {
-            WindowStep::Rescaled { dpi } => {
-                if let Some(services) = self.services(window) {
-                    services.rescale(dpi);
-                }
-            }
             WindowStep::ScaleApplied => {
                 if let Some(services) = self.services(window) {
                     services.window_moved();
                 }
             }
-            WindowStep::Closed => self.retire(window.identity()),
-            WindowStep::Resized(_)
+            WindowStep::Closed => Self::retire(self.windows.take(window.identity())),
+            WindowStep::Rescaled
+            | WindowStep::Resized(_)
             | WindowStep::Minimized
             | WindowStep::FocusLost
             | WindowStep::Painting
@@ -428,17 +392,7 @@ impl WindowMessages for Tsf {
                     services.window_moved();
                 }
             }
-            WM_NCDESTROY => {
-                let identity = self
-                    .windows
-                    .borrow()
-                    .iter()
-                    .find(|(_, kept)| kept.window.hwnd() == hwnd)
-                    .map(|(identity, _)| *identity);
-                if let Some(identity) = identity {
-                    self.retire(identity);
-                }
-            }
+            WM_NCDESTROY => Self::retire(self.windows.take_handle(hwnd)),
             _ => {}
         }
         None

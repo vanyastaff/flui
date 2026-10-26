@@ -262,13 +262,10 @@ impl HostDrag for NoDrag {
         self
     }
 
-    fn register_target(self: Arc<Self>, _window: &CreatedWindow) {}
-
-    fn rescale_target(&self, _window: WindowRef, _dpi: u32) {}
-
-    fn revoke_target(&self, _window: WindowRef) {}
-
-    fn drop_target(&self, _window: WindowRef) -> Option<windows::Win32::System::Ole::IDropTarget> {
+    fn register_target(
+        self: Arc<Self>,
+        _window: &CreatedWindow,
+    ) -> Option<Box<dyn super::DropTarget>> {
         None
     }
 }
