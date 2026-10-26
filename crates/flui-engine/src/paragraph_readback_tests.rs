@@ -106,7 +106,7 @@ fn paragraph_scene(
 /// reaches the target as that grey where the glyph fully covers a pixel.
 ///
 /// The engine draws in gamma space onto a `Unorm` target (see
-/// `Renderer::select_surface_format`); a rasteriser that converted the
+/// `surface_color::select_sdr_pair`); a rasteriser that converted the
 /// text colour to linear before writing — as the previous one did — turned
 /// `#808080` into `#373737` on every mid-tone label while black and white
 /// text, being fixed points of the transfer, looked right.

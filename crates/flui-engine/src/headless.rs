@@ -732,8 +732,13 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
-        self.offscreen
-            .encode_presentation(retained, surface, view, encoder)
+        self.offscreen.encode_presentation(
+            retained,
+            surface,
+            view,
+            crate::surface_color::OutputEncoding::Identity,
+            encoder,
+        )
     }
 
     fn submit(

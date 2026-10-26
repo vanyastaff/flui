@@ -358,6 +358,7 @@ pub(crate) mod state_stack;
 // own `//!` doc for details; no outer doc here to avoid duplicating it in a
 // scope where its intra-doc links resolve differently (rustdoc quirk).
 mod glyph_atlas;
+mod surface_color;
 mod surface_lease;
 mod tessellator;
 pub(crate) mod texture_cache;
@@ -485,6 +486,7 @@ pub use headless::HeadlessRenderer;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
 pub use renderer::{GpuCapabilities, Renderer};
+pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 // What a windowed `Renderer` draws into (issue #1043); exported beside
 // `Renderer` here at `flui_engine::wgpu`.
 pub use window_target::WindowTarget;
