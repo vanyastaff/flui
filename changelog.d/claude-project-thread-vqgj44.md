@@ -40,3 +40,6 @@
   build, so a signal handed to a second window's view could be written from its `build`. The UI
   runtime now shares a `BuildInProgress` cell (`BuildOwner::set_build_in_progress`) with every
   presentation's graph and the write fails with `SignalError::WrittenDuringBuild`.
+- **Window placement write no longer polled every 250 ms** (`flui-app`): while storage had a
+  placement write in flight the owner woke four times a second to look for the answer. Storage's
+  answer now wakes the owner, and a write still out sets no deadline.

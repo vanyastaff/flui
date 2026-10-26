@@ -23,6 +23,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
@@ -36,9 +37,6 @@ use flui_platform::{
 
 /// The shortest time between two writes of a window that keeps changing.
 pub(crate) const WRITE_INTERVAL: Duration = Duration::from_secs(2);
-
-/// How often the owner looks again for storage's answer to a write in flight.
-const ANSWER_POLL: Duration = Duration::from_millis(250);
 
 /// How long a closing window or an ending session waits, in all, for the final
 /// writes to land before giving up on them.
@@ -123,6 +121,11 @@ pub(crate) fn restore_into(
 pub(crate) struct PlacementRecorder {
     storage: Arc<dyn Storage>,
     name: StorageName,
+    /// Wakes the owner when storage answers a write in flight, from whatever
+    /// thread storage answers on.
+    answer: Waker,
+    /// Set by [`Self::answer`]'s waker: storage has an answer to take.
+    answered: Arc<AtomicBool>,
     record: RefCell<WriteRecord>,
     /// The window-state subscription that feeds [`Self::observe`], held for as
     /// long as the recorder lives.
@@ -185,7 +188,13 @@ impl WriteRecord {
     }
 
     /// Hand the newest placement to storage, unless one write is already out.
-    fn start_write(&mut self, storage: &dyn Storage, name: &StorageName, now: Instant) {
+    fn start_write(
+        &mut self,
+        storage: &dyn Storage,
+        name: &StorageName,
+        now: Instant,
+        cx: &mut Context<'_>,
+    ) {
         if self.in_flight.is_some() || !self.owes_write() {
             return;
         }
@@ -195,21 +204,32 @@ impl WriteRecord {
         self.last_attempt = Some(now);
         let answer = storage.publish(name, bytes.clone(), WriteMode::Replace);
         self.in_flight = Some(InFlight { bytes, answer });
-        self.poll_in_flight(&mut Context::from_waker(Waker::noop()));
+        self.poll_in_flight(cx);
     }
 }
 
 impl PlacementRecorder {
     /// A recorder writing to `storage` under `name`, which already holds
     /// `recalled` when the window opened from it.
+    ///
+    /// `wake_owner` runs, on any thread, when storage answers a write in
+    /// flight: the owner then takes the answer at its next turn instead of
+    /// looking for it on a timer.
     pub(crate) fn new(
         storage: Arc<dyn Storage>,
         name: StorageName,
         recalled: Option<&WindowPlacement>,
+        wake_owner: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
+        let answered = Arc::new(AtomicBool::new(false));
         Self {
             storage,
             name,
+            answer: Waker::from(Arc::new(AnswerWake {
+                answered: Arc::clone(&answered),
+                wake_owner,
+            })),
+            answered,
             record: RefCell::new(WriteRecord {
                 written: recalled.map(WindowPlacement::to_bytes),
                 ..WriteRecord::default()
@@ -237,20 +257,26 @@ impl PlacementRecorder {
             return;
         };
         record.latest = Some(placement.to_bytes());
-        record.poll_in_flight(&mut Context::from_waker(Waker::noop()));
+        self.poll_answer(&mut record);
         if record.due(now) {
-            record.start_write(&*self.storage, &self.name, now);
+            record.start_write(
+                &*self.storage,
+                &self.name,
+                now,
+                &mut Context::from_waker(&self.answer),
+            );
         }
     }
 
     /// When the owner should wake to [`tick`](Self::tick) this recorder, seen
-    /// from `now`: when a held change may be written, or soon, to hear storage's
-    /// answer to a write in flight. `None` when storage holds the newest
+    /// from `now`: when a held change may be written, or now once storage has
+    /// answered a write in flight. A write still out has no deadline: storage's
+    /// answer wakes the owner itself. `None` when storage holds the newest
     /// placement.
     pub(crate) fn next_due(&self, now: Instant) -> Option<Instant> {
         let record = self.record.borrow();
         if record.in_flight.is_some() {
-            return Some(now + ANSWER_POLL);
+            return self.answered.load(Ordering::Acquire).then_some(now);
         }
         if !record.owes_write() {
             return None;
@@ -263,10 +289,23 @@ impl PlacementRecorder {
     /// [`next_due`](Self::next_due).
     pub(crate) fn tick(&self, now: Instant) {
         let mut record = self.record.borrow_mut();
-        record.poll_in_flight(&mut Context::from_waker(Waker::noop()));
+        self.poll_answer(&mut record);
         if record.due(now) {
-            record.start_write(&*self.storage, &self.name, now);
+            record.start_write(
+                &*self.storage,
+                &self.name,
+                now,
+                &mut Context::from_waker(&self.answer),
+            );
         }
+    }
+
+    /// Take storage's answer to the write in flight, registering the owner's
+    /// wake with the answer if it is not in yet.
+    fn poll_answer(&self, record: &mut WriteRecord) {
+        // Cleared first: an answer arriving after this poll sets it again.
+        self.answered.store(false, Ordering::Release);
+        record.poll_in_flight(&mut Context::from_waker(&self.answer));
     }
 
     /// Hand the newest placement to storage now, whatever the interval says.
@@ -274,8 +313,13 @@ impl PlacementRecorder {
     pub(crate) fn begin_flush(&self, now: Instant) {
         let mut record = self.record.borrow_mut();
         record.refused = false;
-        record.poll_in_flight(&mut Context::from_waker(Waker::noop()));
-        record.start_write(&*self.storage, &self.name, now);
+        self.poll_answer(&mut record);
+        record.start_write(
+            &*self.storage,
+            &self.name,
+            now,
+            &mut Context::from_waker(&self.answer),
+        );
     }
 
     /// Whether the newest placement is stored, taking storage's answers with
@@ -290,7 +334,7 @@ impl PlacementRecorder {
         let mut record = self.record.borrow_mut();
         record.poll_in_flight(cx);
         if record.in_flight.is_none() && record.owes_write() && !record.refused {
-            record.start_write(&*self.storage, &self.name, now);
+            record.start_write(&*self.storage, &self.name, now, cx);
             // Register `cx`'s waker with the answer the start did not.
             record.poll_in_flight(cx);
         }
@@ -335,6 +379,24 @@ pub(crate) fn settle(recorders: &[Rc<PlacementRecorder>], now: Instant, budget: 
             return;
         }
         thread::park_timeout(left);
+    }
+}
+
+/// The waker handed to a write in flight: notes that storage answered and
+/// wakes the owner to take the answer.
+struct AnswerWake {
+    answered: Arc<AtomicBool>,
+    wake_owner: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl Wake for AnswerWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.answered.store(true, Ordering::Release);
+        (self.wake_owner)();
     }
 }
 
