@@ -144,7 +144,10 @@ pub fn run_direct(
         // own strong ref rather than a borrow, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+        let renderer = pollster::block_on(Renderer::with_surface_color(
+            Arc::clone(&window),
+            config.surface_color,
+        ));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {

@@ -211,6 +211,10 @@ pub struct AppConfig {
     pub frame_failure_detail: FrameFailureDetail,
     /// Pointer interpolation for this window's presentation; disabled by default.
     pub pointer_resampling: PointerResampling,
+    /// The colour capability requested of this window's surface; `Srgb8` by default.
+    /// The renderer grants as much as the surface and display allow and reports
+    /// the rest through `Renderer::surface_color`.
+    pub surface_color: flui_engine::SurfaceColor,
 
     /// Optional per-window close-request veto (issue #558): asked, for
     /// each window opened with this config, whether that window may
@@ -301,6 +305,7 @@ impl Default for AppConfig {
             error_view_builder: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
+            surface_color: flui_engine::SurfaceColor::Srgb8,
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
@@ -339,6 +344,15 @@ impl AppConfig {
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
+        self
+    }
+
+    /// Ask for a wider or brighter surface than 8-bit sRGB. The request is met
+    /// as far as the surface and the display allow; read what was granted from
+    /// `Renderer::surface_color`.
+    #[must_use]
+    pub fn with_surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
+        self.surface_color = color;
         self
     }
 

@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use crate::error::{EngineError, EngineResult};
 use crate::raster::PresentDisposition;
+use crate::surface_color::{OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
 use crate::window_target::WindowTarget;
 
@@ -718,6 +719,7 @@ struct WindowedGpuStack {
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    surface_color: ResolvedSurfaceColor,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
     offscreen: crate::offscreen::OffscreenRenderer,
@@ -774,6 +776,9 @@ pub struct Renderer {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
+    /// What the current surface was given for the application's request; a
+    /// recreated surface and a recovered device resolve `requested()` again.
+    surface_color: ResolvedSurfaceColor,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
     /// The newest frame of each live external texture, re-uploaded after the
@@ -929,6 +934,23 @@ impl Renderer {
     /// this constructor is the one this crate ships; it is the advertised
     /// entry point, not a temporary beside an unwired shared value type.
     pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
+        Self::with_surface_color(target, SurfaceColor::default()).await
+    }
+
+    /// [`Self::new`] with a request for the surface's colour capability.
+    ///
+    /// The request is met as far as the surface and the adapter allow and falls
+    /// back down `Hdr` → `WideGamut` → `Srgb8`; [`Self::surface_color`] says
+    /// what was granted. A request other than [`SurfaceColor::Srgb8`] that is
+    /// granted paints in an `Rgba16Float` working target and converts it to the
+    /// surface in the presentation blit.
+    ///
+    /// # Errors
+    /// As [`Self::new`].
+    pub async fn with_surface_color(
+        target: impl WindowTarget,
+        requested: SurfaceColor,
+    ) -> EngineResult<Self> {
         // An `Arc<dyn PlatformWindow>` (the common caller shape) becomes an
         // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
         // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
@@ -947,6 +969,7 @@ impl Renderer {
                     w,
                     h,
                     &device_lost_hook,
+                    requested,
                 )
                 .await?;
                 Ok((target, stack))
@@ -961,6 +984,7 @@ impl Renderer {
             device: stack.device,
             queue: stack.queue,
             config: stack.config,
+            surface_color: stack.surface_color,
             capabilities: stack.capabilities,
             painter: stack.painter,
             external_frames: std::collections::HashMap::new(),
@@ -1037,12 +1061,34 @@ impl Renderer {
         adapter: &wgpu::Adapter,
         width: u32,
         height: u32,
-    ) -> EngineResult<(wgpu::SurfaceConfiguration, bool)> {
+        requested_color: SurfaceColor,
+    ) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
         let surface_caps = surface.get_capabilities(adapter);
-        let (surface_format, color_space) = Self::select_surface_format(&surface_caps)?;
+        let surface_color = ResolvedSurfaceColor::resolve(
+            requested_color,
+            &surface_caps,
+            &surface.display_hdr_info(adapter),
+            crate::surface_color::working_format_renderable(adapter),
+        )?;
+        if surface_color.is_downgraded() {
+            tracing::warn!(
+                target: "flui.gpu",
+                event = "surface_color_downgraded",
+                requested = ?surface_color.requested(),
+                granted = ?surface_color.granted(),
+                "the surface cannot meet the requested colour capability"
+            );
+        }
+        tracing::debug!(
+            target: "flui.gpu",
+            format = ?surface_color.format(),
+            color_space = ?surface_color.color_space(),
+            working_format = ?surface_color.working_format(),
+            "Selected surface color configuration"
+        );
 
         let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
-        if !supports_copy_src {
+        if !supports_copy_src && surface_color.output() == OutputEncoding::Identity {
             tracing::warn!(
                 "Surface does not support COPY_SRC; backdrop blur will use fallback path"
             );
@@ -1054,8 +1100,8 @@ impl Renderer {
 
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
-            format: surface_format,
-            color_space,
+            format: surface_color.format(),
+            color_space: surface_color.color_space(),
             width,
             height,
             present_mode: Self::select_present_mode(&surface_caps),
@@ -1121,7 +1167,7 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
 
-        Ok((config, supports_copy_src))
+        Ok((config, supports_copy_src, surface_color))
     }
 
     /// Build the two objects that bake a surface `format`: the painter (whose
@@ -1169,6 +1215,7 @@ impl Renderer {
         width: u32,
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
+        requested_color: SurfaceColor,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
@@ -1252,14 +1299,14 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &adapter, width, height)?;
+        let (config, supports_copy_src, surface_color) =
+            Self::derive_surface_config(&surface, &adapter, width, height, requested_color)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
             frame,
             crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue)),
-            config.format,
+            surface_color.working_format(),
             (config.width, config.height),
         );
 
@@ -1295,6 +1342,7 @@ impl Renderer {
             queue,
             surface,
             config,
+            surface_color,
             capabilities,
             painter,
             offscreen,
@@ -1353,7 +1401,7 @@ impl Renderer {
         if self.force_intermediate {
             return true;
         }
-        !self.supports_copy_src
+        !self.supports_copy_src || self.surface_color.output() != OutputEncoding::Identity
     }
 
     /// Force the intermediate-texture present path on for this renderer
@@ -1430,6 +1478,7 @@ impl Renderer {
             width,
             height,
             &self.device_lost_hook,
+            self.surface_color.requested(),
         )
         .await?;
 
@@ -1438,6 +1487,7 @@ impl Renderer {
         self.device = stack.device;
         self.queue = stack.queue;
         self.config = stack.config;
+        self.surface_color = stack.surface_color;
         self.capabilities = stack.capabilities;
         self.painter = stack.painter;
         Self::reupload_external_frames(&mut self.painter, &self.external_frames);
@@ -1651,33 +1701,6 @@ impl Renderer {
         limits
     }
 
-    /// Select a supported presentation pair for the shaders' encoded sRGB output.
-    fn select_surface_format(
-        surface_caps: &wgpu::SurfaceCapabilities,
-    ) -> EngineResult<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
-        // Color::to_rgba_f32_array and the shaders preserve encoded values. Plain
-        // UNorm stores those bytes without another transfer function; explicit
-        // Srgb tells the compositor how to interpret them. An FP16/Auto surface
-        // can instead select ExtendedSrgbLinear and brighten the same values.
-        // Keep the existing encoded-space blending contract until the entire
-        // pipeline deliberately adopts linear/HDR color management.
-        for format in [
-            wgpu::TextureFormat::Bgra8Unorm,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ] {
-            if surface_caps
-                .color_spaces(format)
-                .contains(wgpu::SurfaceColorSpaces::SRGB)
-            {
-                tracing::debug!(?format, color_space = ?wgpu::SurfaceColorSpace::Srgb, "Selected surface color configuration");
-                return Ok((format, wgpu::SurfaceColorSpace::Srgb));
-            }
-        }
-        Err(EngineError::UnsupportedSurfaceColorConfiguration {
-            supported: surface_caps.format_capabilities.clone(),
-        })
-    }
-
     /// Select present mode based on capabilities.
     ///
     /// Fifo is the default. On the Vulkan/Wayland path `render_scene`'s
@@ -1744,6 +1767,16 @@ impl Renderer {
         self.frame.surface_changed();
 
         tracing::debug!("Surface resized to {}x{}", width, height);
+    }
+
+    /// The colour configuration the surface was given for the request passed
+    /// to [`Self::with_surface_color`], and whether it fell short of it.
+    ///
+    /// It follows the surface: a recreated surface resolves the request again
+    /// (a display that left HDR mode answers `Srgb8` here afterwards).
+    #[must_use]
+    pub fn surface_color(&self) -> &ResolvedSurfaceColor {
+        &self.surface_color
     }
 
     /// Get GPU capabilities
@@ -2066,16 +2099,21 @@ impl Renderer {
             .instance
             .create_surface(Arc::clone(released.target()))
             .map_err(EngineError::surface_creation)?;
-        let (fresh_config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &self.adapter, width, height)?;
+        let (fresh_config, supports_copy_src, fresh_color) = Self::derive_surface_config(
+            &surface,
+            &self.adapter,
+            width,
+            height,
+            self.surface_color.requested(),
+        )?;
 
-        // Whether the fresh surface moved the format away from the one the
-        // pipelines and the offscreen pool were built with. Read off the
-        // painter rather than off the old `self.config`, because the painter
-        // is the consumer that bakes it: the two agree today (nothing but the
-        // two commit sites below ever writes `self.config.format`), and
-        // binding the condition to the thing that actually has to change is
-        // what keeps them agreeing.
+        // Whether the fresh surface moved the working format away from the one
+        // the pipelines and the offscreen pool were built with. Read off the
+        // painter rather than off a stored copy, because the painter is the
+        // consumer that bakes it: binding the condition to the thing that
+        // actually has to change keeps them agreeing. The swapchain format
+        // alone moving needs no rebuild: only the presentation blit targets it,
+        // and its pipelines are keyed by it.
         let pipelines_format = Some(self.painter.surface_format());
 
         // Build FIRST, commit LAST (the lease's two-step protocol): a
@@ -2083,7 +2121,7 @@ impl Renderer {
         // holding a surface this call never finished preparing.
         surface.configure(&self.device, &fresh_config);
 
-        if pipelines_format != Some(fresh_config.format) {
+        if pipelines_format != Some(fresh_color.working_format()) {
             // `format` is baked into every pipeline (`PipelineSet::new` is
             // handed it once) and into the offscreen pool's textures, while
             // the per-frame target format is read from `self.config` — so
@@ -2106,7 +2144,7 @@ impl Renderer {
             let (painter, offscreen) = Self::build_format_consumers(
                 &self.frame,
                 Arc::clone(self.painter.domain()),
-                fresh_config.format,
+                fresh_color.working_format(),
                 (width, height),
             );
             self.painter = painter;
@@ -2116,7 +2154,7 @@ impl Renderer {
                 target: "flui.gpu",
                 event = "surface_format_changed",
                 previous = ?pipelines_format,
-                current = ?fresh_config.format,
+                current = ?fresh_color.working_format(),
                 "recreated surface selected a different format; pipelines and offscreen pool rebuilt"
             );
         }
@@ -2124,6 +2162,7 @@ impl Renderer {
         lease.replace_surface(released, surface);
 
         self.config = fresh_config;
+        self.surface_color = fresh_color;
         self.supports_copy_src = supports_copy_src;
         self.surface_recovery.reset();
         self.frame.surface_changed();
@@ -2260,7 +2299,7 @@ impl Renderer {
         // configured surface size (resize transient → stretched frame).
         self.warn_on_size_mismatch(&output.texture);
 
-        let surface_format = self.config.format;
+        let surface_format = self.surface_color.working_format();
 
         // Where this frame renders is `FrameProtocol::run`'s: the swapchain
         // image for a direct frame; otherwise the retained target, whose
@@ -2278,6 +2317,7 @@ impl Renderer {
         let mut steps = SwapchainFrame {
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
+            output: self.surface_color.output(),
             scene,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: profile_frame.profiler(),
@@ -2529,6 +2569,8 @@ impl Renderer {
 struct SwapchainFrame<'a> {
     painter: &'a mut crate::painter::WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
+    /// How the retained target reaches the swapchain.
+    output: OutputEncoding,
     scene: &'a flui_layer::Scene,
     #[cfg(feature = "gpu-profiler")]
     gpu_profiler: &'a mut Option<crate::profiler::GpuFrameProfiler>,
@@ -2641,7 +2683,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
         self.offscreen
-            .encode_presentation(retained, surface, view, encoder)
+            .encode_presentation(retained, surface, view, self.output, encoder)
     }
 
     fn submit(
@@ -2766,7 +2808,7 @@ mod tests {
             vec![(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)],
             vec![(Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR)],
         ] {
-            let error = Renderer::select_surface_format(&surface_caps(&pairs))
+            let error = crate::surface_color::select_sdr_pair(&surface_caps(&pairs))
                 .expect_err("unsupported color contract");
             assert_eq!(
                 error.recoverability(),
@@ -2781,7 +2823,7 @@ mod tests {
             (Format::Rgba8Unorm, Spaces::SRGB),
         ]);
         assert_eq!(
-            Renderer::select_surface_format(&caps)
+            crate::surface_color::select_sdr_pair(&caps)
                 .expect("RGBA alternative")
                 .0,
             Format::Rgba8Unorm
@@ -2801,7 +2843,7 @@ mod tests {
                 (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
                 (alternative, Spaces::SRGB),
             ]);
-            let (format, space) = Renderer::select_surface_format(&caps).expect("SDR pair");
+            let (format, space) = crate::surface_color::select_sdr_pair(&caps).expect("SDR pair");
             assert_eq!(space, wgpu::SurfaceColorSpace::Srgb);
             let size = 64;
             let (target, view) = crate::test_support::create_target(
@@ -3006,6 +3048,20 @@ mod tests {
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
+            surface_color: ResolvedSurfaceColor::resolve(
+                SurfaceColor::Srgb8,
+                &wgpu::SurfaceCapabilities {
+                    formats: vec![format],
+                    format_capabilities: vec![wgpu::SurfaceFormatCapabilities {
+                        format,
+                        color_spaces: wgpu::SurfaceColorSpaces::SRGB,
+                    }],
+                    ..Default::default()
+                },
+                &wgpu::DisplayHdrInfo::default(),
+                false,
+            )
+            .expect("SDR pair"),
             capabilities,
             painter,
             offscreen,

@@ -270,8 +270,9 @@ request.
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
-- The platform layer has no surface colour space, headroom query or display-profile change.
-- The engine's colour spaces stop at images and gradients.
+- The engine requests a surface colour capability per window (`AppConfig::surface_color`, [ADR-0256](adr/ADR-0256-surface-colour-is-requested-and-converted-at-presentation.md)) and converts to Display P3, scRGB, extended sRGB or HDR10 at presentation; no run on an HDR or P3 display backs it yet, and no Metal space has run.
+- The platform layer has no headroom query or display-profile change; headroom comes from wgpu when the surface is configured.
+- Sources are still sRGB: images with a profile, video and HDR images enter the working space as sRGB values.
 - Android has public headroom APIs (`Display.getHdrSdrRatio`, API 34, with a listener for changes); the Web reports capability only and cannot observe headroom. HDR and SDR-white change events are a parity row of their own.
 
 ### 25. Sandbox-aware file access is absent
