@@ -394,7 +394,7 @@ fn haptic_frame_deadline_follows_the_display() {
             let before = runtime.next_wake();
             let handle = runtime
                 .widgets()
-                .with_build_owner(|owner| owner.haptics_handle().cloned())
+                .with_build_owner(|owner| owner.capabilities().haptics.clone())
                 .expect("the presentation installs its haptics");
             let queued = web_time::Instant::now();
             let outcome = handle.perform(

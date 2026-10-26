@@ -16,6 +16,7 @@ use flui_platform::pointer::{
 
 use super::{
     GestureBinding,
+    pointer_sequences::MAX_SIMULTANEOUS_POINTERS,
     scroll_sequences::{ScrollAdmission, ScrollContact, ScrollSequence},
 };
 use crate::{
@@ -52,6 +53,12 @@ impl GestureBinding {
     ) -> ContactOutcome {
         match admission {
             ScrollAdmission::Active(latch) => {
+                // A handler that saw the raw packet may have begun another
+                // sequence: this latch is gone, and a contact stored in it
+                // would never be advanced or ended.
+                if !self.scrolls.is_current(surface, event.pointer, latch) {
+                    return ContactOutcome::None;
+                }
                 if let Some(contact) = latch.contact.get() {
                     // The sequence is a contact already; whatever arrives is its.
                     if let Some(moved) = step_scroll_contact(contact, event) {
@@ -70,7 +77,9 @@ impl GestureBinding {
                 if feeds.path().is_empty() {
                     return ContactOutcome::None;
                 }
-                let Some(opened) = open_scroll_contact(surface, latch, event) else {
+                let Some(opened) = open_scroll_contact(surface, latch, event, |pointer| {
+                    self.contacts.contains(pointer)
+                }) else {
                     return ContactOutcome::None;
                 };
                 latch.contact.set(Some(opened.contact));
@@ -177,8 +186,14 @@ fn open_scroll_contact(
     surface: InputSurface,
     latch: &ScrollSequence,
     event: &flui_platform::pointer::ScrollEvent,
+    in_use: impl Fn(PointerId) -> bool,
 ) -> Option<OpenedContact> {
-    let id = PointerId::new(NonZeroU64::new(latch.id.get() | VIRTUAL_POINTER_BIT)?);
+    // The latch's own id, stepped past any live contact that already holds it.
+    let id = (0..=MAX_SIMULTANEOUS_POINTERS as u64).find_map(|step| {
+        let candidate = NonZeroU64::new(latch.id.get().wrapping_add(step) | VIRTUAL_POINTER_BIT)?;
+        let candidate = PointerId::new(candidate);
+        (!in_use(candidate)).then_some(candidate)
+    })?;
     let pointer = PointerInfo::new(id, PointerKind::Trackpad).with_role(PointerRole::Primary);
     let at = event.position.get();
     let contact = ScrollContact {

@@ -3,7 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -63,8 +63,10 @@ pub(super) struct ScrollSequences {
     latches: RefCell<HashMap<(InputSurface, SignalSource), Rc<ScrollSequence>>>,
     /// Sources whose momentum packets belong to a recognizer that took the
     /// touchpad pan: the platform keeps scrolling after the fingers lift, and
-    /// the recognizer already ended with its own velocity (ADR-0251 §5).
-    momentum_dropped: RefCell<HashSet<(InputSurface, SignalSource)>>,
+    /// the recognizer already ended with its own velocity (ADR-0251 §5). A
+    /// pan with no momentum never clears its entry, so the list is bounded like
+    /// the latches: the oldest drop yields to a newer one.
+    momentum_dropped: RefCell<Vec<(InputSurface, SignalSource)>>,
 }
 
 impl ScrollSequences {
@@ -169,9 +171,13 @@ impl ScrollSequences {
 
     /// Record that `source`'s momentum now belongs to nobody.
     pub(super) fn drop_momentum_of(&self, surface: InputSurface, pointer: PointerInfo) {
-        self.momentum_dropped
-            .borrow_mut()
-            .insert((surface, SignalSource::from(pointer)));
+        let key = (surface, SignalSource::from(pointer));
+        let mut dropped = self.momentum_dropped.borrow_mut();
+        dropped.retain(|held| *held != key);
+        if dropped.len() >= MAX_SIMULTANEOUS_POINTERS {
+            dropped.remove(0);
+        }
+        dropped.push(key);
     }
 
     /// Whether `event` is a momentum packet of a pan a recognizer took. Any
@@ -183,10 +189,10 @@ impl ScrollSequences {
             Some(ScrollPhase::MomentumBegan | ScrollPhase::MomentumChanged) => {
                 dropped.contains(&key)
             }
-            Some(ScrollPhase::MomentumEnded) => dropped.remove(&key),
-            _ => {
-                dropped.remove(&key);
-                false
+            phase => {
+                let held = dropped.len();
+                dropped.retain(|held| *held != key);
+                phase == Some(ScrollPhase::MomentumEnded) && dropped.len() != held
             }
         }
     }
@@ -195,5 +201,38 @@ impl ScrollSequences {
     pub(super) fn drain(&self) {
         drop(self.latches.take());
         self.momentum_dropped.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_platform::pointer::{PointerId, PointerKind};
+
+    use super::*;
+
+    fn source(id: u64) -> PointerInfo {
+        PointerInfo::new(
+            PointerId::try_from(id).expect("pointer"),
+            PointerKind::Mouse,
+        )
+    }
+
+    #[test]
+    fn momentum_drops_are_bounded_and_keep_the_newest() {
+        let sequences = ScrollSequences::default();
+        for id in 1..=(MAX_SIMULTANEOUS_POINTERS as u64 * 2) {
+            sequences.drop_momentum_of(InputSurface::Window, source(id));
+        }
+        assert_eq!(
+            sequences.momentum_dropped.borrow().len(),
+            MAX_SIMULTANEOUS_POINTERS
+        );
+        let newest = source(MAX_SIMULTANEOUS_POINTERS as u64 * 2);
+        assert!(
+            sequences
+                .momentum_dropped
+                .borrow()
+                .contains(&(InputSurface::Window, SignalSource::from(newest)))
+        );
     }
 }

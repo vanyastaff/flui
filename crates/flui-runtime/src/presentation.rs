@@ -793,14 +793,13 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
-            owner.set_text_input_handle(text_input.handle());
-            owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
+            let presentation = owner.capabilities_mut();
+            presentation.text_input = Some(text_input.handle());
+            presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
             ));
-            owner.set_texture_registry(textures.clone());
-            if let Some(storage) = capabilities.storage {
-                owner.set_storage(storage);
-            }
+            presentation.textures = Some(textures.clone());
+            presentation.storage = capabilities.storage;
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -884,14 +883,18 @@ impl PresentationState {
             let request_frame = Arc::clone(&request_frame);
             move || request_frame()
         });
-        widgets.with_build_owner_mut(|owner| owner.set_haptics_handle(haptics.handle()));
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().haptics = Some(haptics.handle());
+        });
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
             id,
             Arc::downgrade(&window),
             gestures.mouse_tracker(),
         );
-        widgets.with_build_owner_mut(|owner| owner.set_drag_and_drop(drag_and_drop));
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().drag_and_drop = Some(drag_and_drop);
+        });
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || request_frame());
         });
@@ -1284,7 +1287,7 @@ impl PresentationState {
 
     pub(crate) fn set_error_view_builder(&self, builder: Option<flui_view::ErrorViewBuilder>) {
         self.widgets
-            .with_build_owner_mut(|owner| owner.set_error_view_builder(builder));
+            .with_build_owner_mut(|owner| owner.capabilities_mut().error_view_builder = builder);
     }
 
     pub(crate) fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
@@ -1376,7 +1379,7 @@ impl PresentationState {
         not(any(test, feature = "testing")),
         expect(
             dead_code,
-            reason = "Self::new wires set_text_input_handle from the local \
+            reason = "Self::new installs the text input capability from the local \
                       text_input binding directly (before self exists to call \
                       this wrapper through); this accessor's one production \
                       caller moved inline when assembly moved into this \

@@ -1295,7 +1295,7 @@ mod tests {
                         observed.set(Some(
                             ui_runtime
                                 .widgets()
-                                .with_build_owner(|owner| owner.storage().is_some()),
+                                .with_build_owner(|owner| owner.capabilities().storage.is_some()),
                         ));
                     },
                 )),

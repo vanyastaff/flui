@@ -118,6 +118,7 @@ mod arena_driver;
 mod close_coordinator;
 mod move_coalescer;
 mod pan_zoom_sequences;
+mod pointer_frame;
 mod pointer_sequences;
 mod scroll_contact;
 mod scroll_sequences;
@@ -1002,7 +1003,7 @@ impl GestureBinding {
         }))
     }
 
-    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
+    fn deliver_pending_moves(&self, mode: MotionFlush) -> usize {
         if self.contacts.is_retiring_any() {
             return 0;
         }
