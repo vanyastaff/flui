@@ -1799,9 +1799,45 @@ impl std::fmt::Debug for WindowCallbacks {
 /// reading of the event clock, and the target present time is unknown (ADR-0257).
 #[must_use]
 pub fn frame_request_now() -> FrameRequest {
+    frame_request_aged(std::time::Duration::ZERO)
+}
+
+/// A frame request whose vsync the platform stamped `age` before this reading of the event clock,
+/// for a platform that reports its frame time on its own clock (the browser's animation frame
+/// timestamp): the age is the one quantity both clocks agree on, so no epoch has to be aligned.
+/// An age past the start of the timeline is the start of it.
+#[must_use]
+pub fn frame_request_aged(age: std::time::Duration) -> FrameRequest {
+    frame_request_timed(age, None)
+}
+
+/// [`frame_request_aged`] for a platform that also knows when the frame will next reach the
+/// screen, `until_present` after this reading.
+#[must_use]
+pub fn frame_request_timed(
+    age: std::time::Duration,
+    until_present: Option<std::time::Duration>,
+) -> FrameRequest {
     #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
-    let nanos = flui_foundation::event_epoch().elapsed().as_nanos() as u64;
-    FrameRequest::new(flui_platform::EventTime::from_nanos(nanos))
+    let now = flui_foundation::event_epoch().elapsed().as_nanos() as u64;
+    frame_request_at(now, age, until_present)
+}
+
+fn frame_request_at(
+    now_nanos: u64,
+    age: std::time::Duration,
+    until_present: Option<std::time::Duration>,
+) -> FrameRequest {
+    let nanos = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    let request = FrameRequest::new(flui_platform::EventTime::from_nanos(
+        now_nanos.saturating_sub(nanos(age)),
+    ));
+    match until_present {
+        Some(wait) => request.with_target_present(flui_platform::EventTime::from_nanos(
+            now_nanos.saturating_add(nanos(wait)),
+        )),
+        None => request,
+    }
 }
 
 #[cfg(test)]
@@ -1813,6 +1849,32 @@ mod tests {
     use crate::owner::signal::OwnerSignal;
 
     use super::*;
+
+    /// A platform's frame stamp, given as an age, lands that long before the reading, and an age
+    /// longer than the timeline is its start.
+    #[test]
+    fn an_aged_frame_request_is_stamped_before_the_reading() {
+        use std::time::Duration;
+
+        let at = |now, age| frame_request_at(now, age, None).vsync.as_nanos();
+        assert_eq!(at(5_000_000, Duration::from_millis(2)), 3_000_000);
+        assert_eq!(at(5_000_000, Duration::ZERO), 5_000_000);
+        assert_eq!(at(1_000, Duration::from_secs(1)), 0);
+        assert_eq!(at(1_000, Duration::MAX), 0);
+
+        let request = frame_request_at(
+            5_000_000,
+            Duration::from_millis(2),
+            Some(Duration::from_millis(3)),
+        );
+        assert_eq!(request.vsync.as_nanos(), 3_000_000);
+        assert_eq!(
+            request
+                .target_present
+                .map(flui_platform::EventTime::as_nanos),
+            Some(8_000_000)
+        );
+    }
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
         accepted_status_observations_survive_dispatch_unwind(false);
