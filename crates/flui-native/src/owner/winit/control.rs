@@ -412,6 +412,20 @@ mod tests {
         ) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
             None
         }
+
+        fn capture_text_sizing(
+            &self,
+            _owner: crate::host_window::OwnerThreadToken,
+        ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+            Ok(crate::TextSizingCaptureState::Unsupported)
+        }
+
+        fn text_store_host(
+            &self,
+            _owner: crate::host_window::OwnerThreadToken,
+        ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+            None
+        }
     }
 
     impl flui_platform::PlatformWindow for StubWindow {
