@@ -2147,35 +2147,18 @@ impl GestureBinding {
         let contact =
             self.drive_scroll_contact(surface, scroll, &sequence, &fresh_result, &mut first_panic);
         let claim = RoutePanic::capture(|| {
-            if contact == scroll_contact::ContactOutcome::Consumed || momentum_dropped {
-                return;
-            }
-            let claimed = match &sequence {
-                ScrollAdmission::Terminal(ended) => {
-                    match ended.as_ref().and_then(|s| s.route.get()) {
-                        Some(route) => route.dispatch(scroll, || {}),
-                        // A final delta may be the first meaningful packet.
-                        // It is deliverable, but cannot publish a lasting lease.
-                        None => fresh_result.dispatch_scroll(scroll),
-                    }
-                }
-                ScrollAdmission::Refused => false,
-                ScrollAdmission::Active(sequence) => {
-                    if let Some(route) = sequence.route.get() {
-                        // A gone target stays inert until the sequence ends;
-                        // it never hands this gesture to a new hit path.
-                        route.dispatch(scroll, || {})
-                    } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                        fresh_result.dispatch_scroll_with_claim(scroll, |route| {
-                            if self.scrolls.is_current(surface, scroll.pointer, sequence) {
-                                sequence.route.set(Some(route));
-                            }
-                        })
-                    } else {
-                        false
-                    }
-                }
+            let replay = match contact {
+                scroll_contact::ContactOutcome::Consumed => return,
+                scroll_contact::ContactOutcome::None if momentum_dropped => return,
+                scroll_contact::ContactOutcome::None => Vec::new(),
+                scroll_contact::ContactOutcome::Replay(earlier) => earlier,
             };
+            // The packets the contact kept back reach the scroll route first,
+            // in order, so the wait for the verdict loses no motion.
+            for earlier in &replay {
+                self.deliver_scroll(surface, earlier, &sequence, &fresh_result);
+            }
+            let claimed = self.deliver_scroll(surface, scroll, &sequence, &fresh_result);
             tracing::trace!(
                 claimed,
                 scroll_targets = fresh_result.entries_with_scroll_targets().count(),
@@ -2189,6 +2172,43 @@ impl GestureBinding {
         );
         if let Some(panic) = first_panic {
             panic.resume();
+        }
+    }
+
+    /// Offer one packet of a scroll sequence to the consumptive channel: the
+    /// route its latch holds, or the first scroll target that claims it.
+    fn deliver_scroll(
+        &self,
+        surface: InputSurface,
+        scroll: &ScrollEvent,
+        sequence: &ScrollAdmission,
+        fresh_result: &HitTestResult,
+    ) -> bool {
+        match sequence {
+            ScrollAdmission::Terminal(ended) => {
+                match ended.as_ref().and_then(|s| s.route.get()) {
+                    Some(route) => route.dispatch(scroll, || {}),
+                    // A final delta may be the first meaningful packet.
+                    // It is deliverable, but cannot publish a lasting lease.
+                    None => fresh_result.dispatch_scroll(scroll),
+                }
+            }
+            ScrollAdmission::Refused => false,
+            ScrollAdmission::Active(sequence) => {
+                if let Some(route) = sequence.route.get() {
+                    // A gone target stays inert until the sequence ends;
+                    // it never hands this gesture to a new hit path.
+                    route.dispatch(scroll, || {})
+                } else if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                    fresh_result.dispatch_scroll_with_claim(scroll, |route| {
+                        if self.scrolls.is_current(surface, scroll.pointer, sequence) {
+                            sequence.route.set(Some(route));
+                        }
+                    })
+                } else {
+                    false
+                }
+            }
         }
     }
 
