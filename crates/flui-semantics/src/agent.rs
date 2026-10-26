@@ -439,26 +439,36 @@ struct Walk<'q> {
     diagnostics: Vec<TreeDiagnostic>,
 }
 
+/// `node`'s bounds in the window's logical pixels. The published root's
+/// transform scales by the owner's ratio, so AccessKit's box is in its
+/// physical pixels; this takes it back.
+fn logical_bounds(node: &NodeRef<'_>, published_ratio: f64) -> Option<LogicalRect> {
+    let bounds = node.bounding_box()?;
+    let unscale = published_ratio.recip();
+    Some(LogicalRect::from_ltrb(
+        bounds.x0 * unscale,
+        bounds.y0 * unscale,
+        bounds.x1 * unscale,
+        bounds.y1 * unscale,
+    ))
+}
+
+/// `logical` covered by whole pixels at the placement's ratio, so the ratio
+/// is applied once.
+fn surface_rect(logical: LogicalRect, placement: Placement) -> Rect {
+    let device = device_rect_covering(logical, placement.device_pixel_ratio);
+    Rect {
+        x: device.left(),
+        y: device.top(),
+        width: device.width().max(0).unsigned_abs(),
+        height: device.height().max(0).unsigned_abs(),
+    }
+}
+
 impl Walk<'_> {
     fn rect(&self, node: &NodeRef<'_>) -> Option<Rect> {
-        // The published root's transform scales by the owner's ratio, so the
-        // box is in its physical pixels: back to logical, then covered at the
-        // placement's ratio, so the ratio is applied once.
-        let bounds = node.bounding_box()?;
-        let unscale = self.published_ratio.recip();
-        let logical = LogicalRect::from_ltrb(
-            bounds.x0 * unscale,
-            bounds.y0 * unscale,
-            bounds.x1 * unscale,
-            bounds.y1 * unscale,
-        );
-        let device = device_rect_covering(logical, self.placement.device_pixel_ratio);
-        Some(Rect {
-            x: device.left(),
-            y: device.top(),
-            width: device.width().max(0).unsigned_abs(),
-            height: device.height().max(0).unsigned_abs(),
-        })
+        let logical = logical_bounds(node, self.published_ratio)?;
+        Some(surface_rect(logical, self.placement))
     }
 
     /// `node` as a wire node, its filtered children below it within the
@@ -801,6 +811,11 @@ enum Published {
     NoTree,
     Malformed,
 }
+
+mod actionability;
+mod locate;
+
+pub use locate::WireLocateError;
 
 #[cfg(test)]
 mod tests;

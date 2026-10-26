@@ -1,8 +1,9 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796) and
-  FD31 (#1804) have merged; FD2 is in review (the semantics identifier, see its card's evidence);
-  FD3 is next. `interaction/completeness` has merged (#1733), so the IC tasks are unblocked.
+- **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
+  (#1804) and FD2 (#1809, #1814) have merged; FD3 is in review (locator resolution and
+  actionability facts) and FD5 follows. `interaction/completeness` has merged (#1733), so the IC
+  tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
   that endpoint and `flui mcp` start from them. The owner deleted `interaction_gallery`, the
   probes, `tools/device-checks` and `cargo xtask device` (#1827) to write fresh ones: FD11 and
@@ -219,6 +220,46 @@ graph LR
 - **Done when:** one locator table runs over a fixed tree, covering every criterion, `within`,
   `has`, case folding over Unicode, `ambiguous` candidates and `pick`. One actionability table
   covers covered, clipped by an ancestor, offscreen, disabled ancestor, unstable and zero-size.
+- **Evidence (2026-10-26):**
+  - `flui-semantics`'s `semantics_it`:
+    - `locate::a_locator_matches_what_it_describes_and_nothing_else`, one table over a fixed tree:
+      role, name (exact, contains, prefix, case-sensitive and folded, `ß`/`SS`, `É`/`é`), value,
+      description, identifier, every state, `within`, `has`, chained, a lifted container, a hidden
+      node and the window;
+    - `locate::pick_names_one_match_in_tree_order`, `max_matches_keeps_the_first_and_counts_the_rest`,
+      `a_match_carries_the_node_and_the_revision_it_was_read_on`,
+      `resolving_a_strict_locator_with_several_matches_is_ambiguous`,
+      `ambiguity_lists_at_most_ten_candidates`, `a_choice_made_with_pick_resolves`,
+      `a_miss_lists_the_nearest_elements`, `a_handle_is_not_rebound_when_a_slot_is_reused`;
+    - `actionability::the_first_failed_check_names_why_an_element_cannot_be_acted_on`, one table
+      of not in the tree, outside the window, no size, hidden, no earlier reading, moved, a disabled
+      ancestor, covered and nothing hit; `what_covers_the_point_is_named_by_its_outline`,
+      `the_hit_maps_to_the_nearest_node_the_tree_shows`,
+      `the_pointer_aims_at_the_centre_of_what_the_window_shows`,
+      `a_hidden_element_is_attached_and_an_absent_one_is_not`,
+      `an_element_of_another_window_is_not_attached`,
+      `the_facts_carry_the_revision_they_were_read_on`,
+      `a_handle_from_before_a_replacement_is_not_attached`;
+  - `flui-protocol`'s `protocol_it::text_match::a_text_match_compares_the_way_it_says`.
+  - Each table row fails when its rule is broken: I broke `has`, `within`, the case folding,
+    `pick last`, the ancestor rule for disabled, the stable comparison, the self-or-under rule, the
+    window intersection, the path walk and the visible centre in turn, and each broke a row.
+  - As built:
+    - `SemanticsOwner::locate_wire` lists matches and `resolve_wire_locator` answers the one element
+      or `WireLocateError::{NotFound, Ambiguous}` with outline lines; the agent turns those into the
+      protocol's errors (FD5). Strictness is applied by `resolve_wire_locator` only: a strict
+      `semantics.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
+      said otherwise and is reworded; the schema golden holds no prose).
+    - The actionability check is two pure calls, `actionability_point` and `actionability_wire`,
+      with the render hit-test in between run by the caller, so no hit-test (user code) runs under
+      a semantics borrow. There is no separate render-to-semantics index: a published node's id is
+      its render object's id, so the mapping cannot go stale.
+    - `visible` relies on the clip the semantics assembly already applies (a node entirely outside
+      its clipping ancestors is not published: `semantics_assembly`'s
+      `a_semantics_clip_drops_a_child_that_falls_entirely_outside_it`), and checks the window's
+      region here; the `Edge` row covers a node half outside the window.
+    - `SemanticsOwner::revision` counts the publications that delivered something; matches and
+      facts carry it. `TextMatch::matches` and `Actionability::new` are new in `flui-protocol`.
 
 ### FD4. Inspection
 

@@ -364,6 +364,23 @@ pub struct Actionability {
 }
 
 impl Actionability {
+    /// The facts of an element at `revision` with none of them holding yet: `attached` as given,
+    /// and no bounds, point or cover.
+    #[must_use]
+    pub const fn new(attached: bool, revision: TreeRevision) -> Self {
+        Self {
+            attached,
+            rect: None,
+            visible: false,
+            stable: false,
+            enabled: false,
+            receives: false,
+            point: None,
+            covered_by: None,
+            revision,
+        }
+    }
+
     /// The first check that fails, in the driver's order; `None` when the element is
     /// actionable.
     #[must_use]
