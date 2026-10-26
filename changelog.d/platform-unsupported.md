@@ -34,8 +34,7 @@
 - **`flui-native`**: every window hands out the text input, accessibility bridge, haptic
   actuator and system chrome its host's table made for it as it opened, and
   `HostWindow::accessibility` has no default body: a window on a host without an
-  accessibility integration, or built without `a11y`, answers a bridge that is never active
-  instead of `None`. An iOS window's haptic actuator is made with the window rather than on
+  accessibility integration answers a bridge that is never active instead of `None`. An iOS window's haptic actuator is made with the window rather than on
   first use.
 - **`flui-platform`**: `WindowAppearance` and `WindowEvent` are `#[non_exhaustive]`: a backend
   may report a new appearance or window event, so a `match` on them needs a wildcard arm.
