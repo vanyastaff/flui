@@ -82,6 +82,7 @@ use flui_foundation::{
 };
 
 mod composition;
+mod frame;
 use composition::BranchLink;
 pub(crate) use composition::CompositionNode;
 pub use composition::{
@@ -948,6 +949,8 @@ struct ArenaShared {
     sweep_model: SweepModel,
     /// Observers of this arena's decisions and their undelivered queue.
     observers: Rc<ObserverHub>,
+    /// The pointer frames open on this arena.
+    frames: frame::PointerFrames,
 }
 
 /// When a binding's wheel or trackpad latch ends, as the packet being
@@ -1605,6 +1608,7 @@ impl GestureArena {
                 observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
                 clock,
                 sweep_model,
+                frames: frame::PointerFrames::default(),
             }),
         }
     }
