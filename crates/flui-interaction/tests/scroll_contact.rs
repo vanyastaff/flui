@@ -393,7 +393,7 @@ struct Contest {
     path: HitTestResult,
 }
 
-fn contest(scroll_innermost: bool) -> Contest {
+fn contest(scroll_innermost: bool, can_scroll: bool) -> Contest {
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let binding = GestureBinding::new();
@@ -426,7 +426,7 @@ fn contest(scroll_innermost: bool) -> Contest {
             })
             .expect("scroll target");
         handle
-            .declare_scroll_target_axis(scroll, Axis::Vertical)
+            .declare_scroll_target_axis(scroll, Axis::Vertical, move || can_scroll)
             .expect("axis");
         let feed_entry = HitTestEntry::new(RenderId::new(1)).pointer_target(feed);
         let scroll_entry = HitTestEntry::new(RenderId::new(2)).scroll_target(scroll);
@@ -476,7 +476,7 @@ impl Contest {
 
 #[test]
 fn a_pan_along_the_scroll_axis_is_replayed_to_the_scroll_target() {
-    let contest = contest(false);
+    let contest = contest(false, true);
     contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
     contest.send(ScrollPhase::Changed, 0.0, 4.0, 2);
     assert!(
@@ -495,7 +495,7 @@ fn a_pan_along_the_scroll_axis_is_replayed_to_the_scroll_target() {
 
 #[test]
 fn a_pan_along_the_feed_axis_goes_to_the_feed() {
-    let contest = contest(false);
+    let contest = contest(false, true);
     contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
     contest.send(ScrollPhase::Changed, 80.0, 0.0, 2);
     contest.send(ScrollPhase::Changed, 5.0, 0.0, 3);
@@ -511,7 +511,7 @@ fn a_pan_along_the_feed_axis_goes_to_the_feed() {
 #[test]
 fn a_release_before_slop_leaves_the_pan_to_the_scroll_target() {
     for scroll_innermost in [true, false] {
-        let contest = contest(scroll_innermost);
+        let contest = contest(scroll_innermost, true);
         contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
         contest.send(ScrollPhase::Changed, 0.0, 1.0, 2);
         contest.send(ScrollPhase::Ended, 0.0, 0.0, 3);
@@ -526,10 +526,22 @@ fn a_release_before_slop_leaves_the_pan_to_the_scroll_target() {
 
 #[test]
 fn a_release_settles_a_move_that_had_no_frame_yet() {
-    let contest = contest(false);
+    let contest = contest(false, true);
     contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
     contest.send_within_frame(ScrollPhase::Changed, 80.0, 0.0, 2);
     contest.send_within_frame(ScrollPhase::Ended, 0.0, 0.0, 3);
     assert_eq!(*contest.started.borrow(), 1, "the feed crossed slop");
     assert!(contest.scrolled.borrow().is_empty());
+}
+
+#[test]
+fn a_scroll_target_with_nowhere_to_go_sits_the_contest_out() {
+    let contest = contest(true, false);
+    contest.send(ScrollPhase::Began, 0.0, 0.0, 1);
+    contest.send(ScrollPhase::Changed, 0.0, 80.0, 2);
+    contest.send(ScrollPhase::Changed, 0.0, 5.0, 3);
+    assert!(
+        contest.scrolled.borrow().is_empty(),
+        "an ineligible target neither competes nor keeps the pan"
+    );
 }

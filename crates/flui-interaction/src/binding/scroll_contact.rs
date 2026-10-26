@@ -102,7 +102,7 @@ impl GestureBinding {
                 if !opens_contact(event) {
                     return ContactOutcome::None;
                 }
-                let (feeds, arbitration) = self.scroll_contact_path(fresh);
+                let (feeds, arbitration) = self.scroll_contact_path(fresh, first);
                 if feeds.path().is_empty() {
                     return ContactOutcome::None;
                 }
@@ -271,6 +271,7 @@ impl GestureBinding {
     fn scroll_contact_path(
         &self,
         fresh: &HitTestResult,
+        first: &mut Option<RoutePanic>,
     ) -> (HitTestResult, Option<Rc<Arbitration>>) {
         let mut path = HitTestResult::new();
         let Ok(handle) = active_dispatch_handle() else {
@@ -295,9 +296,20 @@ impl GestureBinding {
             let Some(scroll) = entry.scroll_target else {
                 continue;
             };
-            let Some(axis) = handle.scroll_target_axis(scroll) else {
+            let Some((axis, can_scroll)) = handle.scroll_target_axis(scroll) else {
                 continue;
             };
+            // A scroll target with nowhere to go sits the contest out.
+            let eligible = match RoutePanic::try_run(|| can_scroll()) {
+                Ok(eligible) => eligible,
+                Err(failure) => {
+                    RoutePanic::preserve_first(first, Some(failure), "scroll target eligibility");
+                    false
+                }
+            };
+            if !eligible {
+                continue;
+            }
             let Ok(proxy) = self.register_scroll_proxy(axis, &verdict) else {
                 continue;
             };
