@@ -18,7 +18,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{Axis, Point};
 use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerId, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, ScrollEvent, ScrollPhase, ScrollPrecision,
@@ -320,10 +320,14 @@ impl GestureBinding {
     /// target on `axis`: its win is the scroll target's.
     fn register_scroll_proxy(
         &self,
-        axis: DragAxis,
+        axis: Axis,
         verdict: &Rc<Cell<Verdict>>,
     ) -> Result<PointerTarget, crate::pointer::InteractionDispatchError> {
         let handle = active_dispatch_handle()?;
+        let axis = match axis {
+            Axis::Horizontal => DragAxis::Horizontal,
+            Axis::Vertical => DragAxis::Vertical,
+        };
         let (won, lost) = (Rc::clone(verdict), Rc::clone(verdict));
         let recognizer = DragGestureRecognizer::builder(self.arena.arena().clone(), axis)
             .settings(self.default_profiles.provider())

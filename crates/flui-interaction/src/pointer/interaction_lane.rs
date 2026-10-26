@@ -954,7 +954,7 @@ struct LocalLaneInner {
     scroll_contact_feeds: RefCell<std::collections::HashSet<TargetId>>,
     /// The axis each scroll target scrolls along, for targets that take part in
     /// a scroll-fed contact as a competitor (ADR-0251 §2).
-    scroll_target_axes: RefCell<HashMap<TargetId, crate::DragAxis>>,
+    scroll_target_axes: RefCell<HashMap<TargetId, flui_foundation::geometry::Axis>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -1903,7 +1903,7 @@ impl InteractionDispatchHandle {
     pub fn declare_scroll_target_axis(
         &self,
         target: ScrollTarget,
-        axis: crate::DragAxis,
+        axis: flui_foundation::geometry::Axis,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_target(&lane, target.lane_id, target.target_id)?;
@@ -1914,7 +1914,10 @@ impl InteractionDispatchHandle {
     }
 
     /// The axis `target` declared, if it did.
-    pub(crate) fn scroll_target_axis(&self, target: ScrollTarget) -> Option<crate::DragAxis> {
+    pub(crate) fn scroll_target_axis(
+        &self,
+        target: ScrollTarget,
+    ) -> Option<flui_foundation::geometry::Axis> {
         let lane = self.active_lane().ok()?;
         self.validate_lane(target.lane_id).ok()?;
         lane.scroll_target_axes

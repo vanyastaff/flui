@@ -3,7 +3,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{Axis, Point};
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, EventPropagation, GestureBinding, GestureRecognizer,
     HitTestEntry, HitTestResult, InteractionLane, PointerTarget, RenderId, ScrollTarget,
@@ -426,7 +426,7 @@ fn contest(scroll_innermost: bool) -> Contest {
             })
             .expect("scroll target");
         handle
-            .declare_scroll_target_axis(scroll, DragAxis::Vertical)
+            .declare_scroll_target_axis(scroll, Axis::Vertical)
             .expect("axis");
         let feed_entry = HitTestEntry::new(RenderId::new(1)).pointer_target(feed);
         let scroll_entry = HitTestEntry::new(RenderId::new(2)).scroll_target(scroll);
