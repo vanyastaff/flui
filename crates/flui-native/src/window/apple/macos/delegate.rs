@@ -12,7 +12,6 @@ use objc2::{ClassType, class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use super::{BObjC, Class, MacOSWindow, NIL, NO, ObjcId, Object, YES};
-use crate::input::apple::macos as view;
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -556,9 +555,7 @@ impl MacOSWindow {
         self.callbacks.dispatch_active_status_change(true);
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
-        if let Some(bridge) = self.accessibility.get() {
-            bridge.update_view_focus_state(true);
-        }
+        self.facets.accessibility.focus_changed(true);
         tracing::debug!("Window gained focus");
     }
 
@@ -566,9 +563,7 @@ impl MacOSWindow {
     fn handle_focus_lost(&self) {
         self.publish_state();
         self.callbacks.dispatch_active_status_change(false);
-        if let Some(bridge) = self.accessibility.get() {
-            bridge.update_view_focus_state(false);
-        }
+        self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
     }
 
@@ -695,9 +690,6 @@ impl MacOSWindow {
             // resize, because a refresh period does not invalidate layout.
             let moved = self.refresh_display();
             self.publish_state();
-
-            // Update the FLUI view's scale factor
-            view::update_view_scale_factor(self.view, new_scale);
 
             if moved || changed {
                 // The snapshot carries each display's scale, and a window that

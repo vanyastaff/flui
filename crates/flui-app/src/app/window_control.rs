@@ -96,11 +96,23 @@ impl WindowQueue {
                         );
                     }
                     Err(error) => {
-                        tracing::debug!(
-                            window = ?window.id(),
-                            %error,
-                            "a queued window command was refused"
-                        );
+                        // Why the window does not take it, and whether asking
+                        // again could: a refusal for good is not worth
+                        // retrying from the application.
+                        if let Some(absent) = error.unsupported() {
+                            tracing::debug!(
+                                window = ?window.id(),
+                                reason = ?absent.reason,
+                                retryable = absent.is_retryable(),
+                                "the window does not take a queued window command"
+                            );
+                        } else {
+                            tracing::debug!(
+                                window = ?window.id(),
+                                %error,
+                                "a queued window command was refused"
+                            );
+                        }
                     }
                 },
                 Queued::Close => {

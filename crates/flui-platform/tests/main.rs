@@ -36,6 +36,9 @@ mod lock_gate;
 #[path = "window_command_validate.rs"]
 mod window_command_validate;
 
+#[path = "unsupported.rs"]
+mod unsupported;
+
 #[path = "transfer_request.rs"]
 mod transfer_request;
 

@@ -49,16 +49,44 @@ pub(crate) mod windows;
 ))]
 pub(crate) mod winit;
 
-/// The text position of a host's table (ADR-0151 §3): the handle a window
-/// holds its text input by, which it hands out through the contract's
-/// accessors (`PlatformWindow::text_input`, `HostWindow::text_store_host`).
+/// What one window holds of the text feature, made by its table's text
+/// position (ADR-0151 §3, [`host::Text`](crate::host::Text)): the window
+/// hands out what it answers through the contract's accessors
+/// (`PlatformWindow::text_input`, `HostWindow::text_store_host`,
+/// `HostWindow::capture_text_sizing`) and tells it when the window goes.
 ///
 /// A platform's text input reaches the focused field in one of two ways,
-/// [`WindowTextInput`]'s variants; [`Absent`] hands out none.
-pub trait TextInput: 'static {
+/// [`WindowTextInput`]'s variants; [`Absent`] hands out none. Where the text
+/// feature keeps a window's state itself, keyed by the window's identity, this
+/// is the window's handle to it.
+pub trait TextInput: Send + Sync + 'static {
     /// What the window hands out for text input; `None` where the platform
-    /// has none.
+    /// has none. A store host is owner-thread state: read on that thread.
     fn window_text_input(&self) -> Option<WindowTextInput>;
+
+    /// Acquire the window's native text-size converter, on its owner thread
+    /// (`HostWindow::capture_text_sizing`).
+    ///
+    /// # Errors
+    /// What [`crate::TextSizingCaptureError`] says: the wrong thread, a
+    /// withdrawn presentation, a failed native capture.
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError>;
+
+    /// What was captured of the window's text size no longer holds (its
+    /// configuration changed, its surface came or went): the next capture
+    /// reads it again.
+    fn invalidate_sizing(&self);
+
+    /// No capture is handed out until the window can present again (the
+    /// platform is quitting). Any thread.
+    fn fence_sizing(&self);
+
+    /// The window is going away, on its owner thread: what the text input
+    /// put on it (an editor, a field the input method edits) is detached. A
+    /// later call is a no-op.
+    fn detach(&self);
 }
 
 /// How a window's text input reaches the focused field.
@@ -107,4 +135,16 @@ impl TextInput for Absent<position::Text> {
     fn window_text_input(&self) -> Option<WindowTextInput> {
         None
     }
+
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    fn detach(&self) {}
 }

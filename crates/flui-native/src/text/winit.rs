@@ -38,6 +38,27 @@ impl super::TextInput for Arc<WinitTextInput> {
             Arc::clone(self) as Arc<dyn PlatformTextInput>
         ))
     }
+
+    /// winit reports no system text size beyond the scale factor.
+    fn capture_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
+    fn invalidate_sizing(&self) {}
+
+    fn fence_sizing(&self) {}
+
+    /// winit's IME state goes with its window.
+    fn detach(&self) {}
+}
+
+/// Each winit window's text input drives that window's IME.
+impl crate::host::Text<Arc<Window>> for WinitTextInput {
+    fn for_window(window: &Arc<Window>) -> Arc<dyn super::TextInput> {
+        Arc::new(Arc::new(Self::new(Arc::clone(window))))
+    }
 }
 
 impl PlatformTextInput for WinitTextInput {

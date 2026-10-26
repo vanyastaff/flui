@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 
 use flui_foundation::geometry::Point;
 use flui_platform::os_options::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
-use flui_platform::{Brightness, WindowAppearance};
+use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowAppearance};
 use windows::Win32::Foundation::{FALSE, HWND, TRUE};
 use windows::Win32::Graphics::Dwm::{
     DWM_BB_ENABLE, DWM_BLURBEHIND, DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE,
@@ -97,9 +97,11 @@ pub struct Win32Window<'a>(&'a WindowsWindow);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Win32WindowError {
-    /// The window is closed.
-    #[error("the window is closed")]
-    Closed,
+    /// Not here, in the contract's vocabulary: the window is closed
+    /// ([`UnsupportedReason::NoWindow`]), or the value is one of the contract
+    /// newer than this host ([`UnsupportedReason::NotOnThisPlatform`]).
+    #[error(transparent)]
+    Unsupported(#[from] Unsupported),
     /// The call came from another thread than the window's owner thread, the
     /// one that created it.
     #[error("the call is not on the window's owner thread")]
@@ -122,10 +124,14 @@ pub enum Win32WindowError {
         /// The value it held.
         value: i32,
     },
-    /// The value has no counterpart on this host: a value of the contract
-    /// newer than it.
-    #[error("this host has no counterpart for the value")]
-    NotOnThisHost,
+}
+
+impl Win32WindowError {
+    /// The window is closed.
+    const CLOSED: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NoWindow));
+    /// A value of the contract newer than this host.
+    const NOT_ON_THIS_HOST: Self =
+        Self::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
 }
 
 // ============================================================================
@@ -287,7 +293,7 @@ pub(super) fn apply_corners(
     hwnd: HWND,
     preference: WindowsCornerPreference,
 ) -> Result<(), Win32WindowError> {
-    let value = to_system(&CORNERS, preference).ok_or(Win32WindowError::NotOnThisHost)?;
+    let value = to_system(&CORNERS, preference).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
     set(hwnd, CORNER_PREFERENCE, value)
 }
 
@@ -299,7 +305,7 @@ fn chosen_appearance(theme: WindowsTheme) -> Result<Option<WindowAppearance>, Wi
         WindowsTheme::Light => Ok(Some(WindowAppearance::Light)),
         WindowsTheme::Dark => Ok(Some(WindowAppearance::Dark)),
         WindowsTheme::System => Ok(None),
-        _ => Err(Win32WindowError::NotOnThisHost),
+        _ => Err(Win32WindowError::NOT_ON_THIS_HOST),
     }
 }
 
@@ -379,7 +385,7 @@ impl Win32Window<'_> {
                 UserDataRefusal::WindowGone
                 | UserDataRefusal::ForeignClass
                 | UserDataRefusal::EmptySlot,
-            ) => Err(Win32WindowError::Closed),
+            ) => Err(Win32WindowError::CLOSED),
         }
     }
 
@@ -390,7 +396,7 @@ impl Win32Window<'_> {
     /// thread, or the system refused (before Windows 11 build 22621).
     pub fn set_backdrop(self, backdrop: WindowsBackdrop) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
-        let value = to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NotOnThisHost)?;
+        let value = to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
         set(hwnd, SYSTEM_BACKDROP, value)
     }
 
@@ -571,7 +577,7 @@ impl Win32Window<'_> {
         // SAFETY: takes the live handle by value; `0` means it names no
         // window, which `live` ruled out unless it closed in between.
         match unsafe { GetDpiForWindow(hwnd) } {
-            0 => Err(Win32WindowError::Closed),
+            0 => Err(Win32WindowError::CLOSED),
             dpi => Ok(dpi),
         }
     }

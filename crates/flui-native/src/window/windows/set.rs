@@ -18,6 +18,7 @@ use flui_platform::{PlatformWindow, WindowCapabilities, WindowId, WindowOptions}
 
 use super::proc::{WindowRef, to_screen, with_window_context_checked};
 use super::window::{WindowsWindow, window_capabilities};
+use crate::host::WindowPositions;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
@@ -35,14 +36,18 @@ use crate::window::config::WindowConfiguration;
 pub struct WindowSet {
     by_handle: Mutex<HashMap<isize, Arc<WindowsWindow>>>,
     pub(super) config: WindowConfiguration,
+    /// What every window hands out of the window-level positions.
+    pub(super) positions: WindowPositions<WindowRef>,
 }
 
 impl WindowSet {
-    /// No window yet; every window opens with `config`.
-    pub(crate) fn new(config: WindowConfiguration) -> Self {
+    /// No window yet; every window opens with `config` and hands out
+    /// `positions`.
+    pub(crate) fn new(config: WindowConfiguration, positions: WindowPositions<WindowRef>) -> Self {
         Self {
             by_handle: Mutex::new(HashMap::new()),
             config,
+            positions,
         }
     }
 
@@ -82,7 +87,9 @@ impl std::fmt::Debug for WindowSet {
             Some(windows) => out.field("windows", &windows.len()),
             None => out.field("windows", &format_args!("<locked>")),
         };
-        out.field("config", &self.config).finish()
+        out.field("config", &self.config)
+            .field("positions", &self.positions)
+            .finish()
     }
 }
 
@@ -164,6 +171,8 @@ impl ClassWindows for WindowSet {
 
 impl crate::host::Window<WindowsLoop> for WindowsWindow {
     type Shared = WindowSet;
+    /// A window by its handle and the identity of its context.
+    type Ref = WindowRef;
 
     fn open(
         owner: &WindowsLoop,

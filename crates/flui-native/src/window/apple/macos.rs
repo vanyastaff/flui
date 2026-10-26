@@ -1,7 +1,7 @@
 //! The macOS window: [`MacOSWindow`] over an `NSWindow` (its state as AppKit
-//! reports it, the requests its commands send, and [`display_pass`], whether
-//! the thread is inside a view's display pass, which decides how a redraw is
-//! asked for), and [`MacOSWindows`], what the windows open with.
+//! reports it, and the requests its commands send; whether the thread is
+//! inside a view's display pass, the owner's `display_pass`, decides how a
+//! redraw is asked for), and [`MacOSWindows`], what the windows open with.
 //!
 //! Three parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; [`ext`],
@@ -23,94 +23,6 @@
 pub(crate) mod backdrop;
 pub(crate) mod delegate;
 pub(crate) mod ext;
-
-pub(crate) mod display_pass {
-    //! Whether the current thread is inside an AppKit display pass of a view.
-    //!
-    //! AppKit discards a `setNeedsDisplay:` that is issued *while the view is being
-    //! displayed*: the flag is cleared when the pass unwinds, so the request that
-    //! was supposed to schedule the next frame disappears with it. Measured on
-    //! macOS 15.7 (Darwin 24.6) with an isolated probe, on a window that is fully
-    //! visible (`occlusionState` has the visible bit) in every arm:
-    //!
-    //! | re-arm issued from inside `drawRect:` | draws over 4 s |
-    //! |---|---|
-    //! | `[view setNeedsDisplay:YES]` | 1 |
-    //! | nothing at all (control) | 1 |
-    //! | `[view.layer setNeedsDisplay]` | 1 |
-    //! | `setNeedsDisplay:` deferred to the next main-queue turn | 396 |
-    //!
-    //! So a view's `drawRect:` cannot re-arm itself in place, and neither can its
-    //! layer; deferring the same call by one turn of the lane that is already
-    //! serialized is what actually re-arms it. `[view needsDisplay]` reads `NO`
-    //! immediately after the in-pass call and `[view.layer needsDisplay]` reads
-    //! `YES` while still never being serviced — the flag that survives is not the
-    //! flag AppKit acts on, so neither is a usable signal to test against.
-    //!
-    //! This module is the condition that decision is made on, kept apart from both
-    //! ends so it can be tested without a window: [`DisplayPassGuard`] is entered
-    //! by the view's `drawRect:` for the duration of the frame it dispatches, and
-    //! consulted by the window's `request_redraw` to choose between setting the
-    //! flag in place and deferring it.
-    //!
-    //! It is the AppKit realisation of ADR-0039 §4(b)/(c): the frame transaction
-    //! is a region the drain gate is closed for, and a wake arriving while it is
-    //! closed **defers** — the lane stays queued and the wake re-arms at the next
-    //! top-level anchor — so the frame transaction stays uninterruptible. The
-    //! `DrainGate` that same section specifies for the lane is this marker's
-    //! sibling: a wake delivered during a nested modal run loop must defer for the
-    //! same reason, and when the AppKit `CFRunLoopSource` relay lands it must
-    //! consult a gate that agrees with this one. Two owner-thread re-entrancy
-    //! markers that never reference each other is how they drift apart, so the
-    //! relation is written down here rather than implied.
-    //!
-    //! The marker is thread-local because "displaying" is a property of the thread
-    //! AppKit is displaying on, not of the process: every other thread is free to
-    //! request a redraw at that moment, and its request is queued behind the pass
-    //! rather than swallowed by it. The grain is therefore the *thread*, not "this
-    //! window's display pass" — a request for a different window issued on this
-    //! thread while any view here is displaying defers as well. That is
-    //! conservative in the safe direction (a deferred `setNeedsDisplay:` is always
-    //! honoured; it costs one lane turn at worst), and it is the reason
-    //! `request_redraw` does not claim to defer exactly the discarded call.
-
-    use std::cell::Cell;
-
-    thread_local! {
-        /// True while this thread is inside a `drawRect:`-driven display pass.
-        static IN_DISPLAY_PASS: Cell<bool> = const { Cell::new(false) };
-    }
-
-    /// Is the current thread inside an AppKit display pass of a view?
-    pub(super) fn in_display_pass() -> bool {
-        IN_DISPLAY_PASS.with(Cell::get)
-    }
-
-    /// Marks the current thread as inside a display pass until dropped.
-    ///
-    /// The guard restores the flag's previous value rather than clearing it, so
-    /// nesting (a display pass that somehow triggers another) unwinds correctly
-    /// instead of leaving the outer pass's marker cleared early.
-    pub(crate) struct DisplayPassGuard {
-        /// The flag's value before this guard set it.
-        previous: bool,
-    }
-
-    impl DisplayPassGuard {
-        /// Mark the current thread as inside a display pass.
-        pub(crate) fn enter() -> Self {
-            let previous = IN_DISPLAY_PASS.with(|flag| flag.replace(true));
-            Self { previous }
-        }
-    }
-
-    impl Drop for DisplayPassGuard {
-        fn drop(&mut self) {
-            let previous = self.previous;
-            IN_DISPLAY_PASS.with(|flag| flag.set(previous));
-        }
-    }
-}
 
 pub use backdrop::{
     GlassStyle, GlassTint, LiquidGlass, MacOSBackdrop, MacOSBackdropError, MacOSMaterial,
@@ -165,11 +77,14 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use crate::host;
+use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
-use crate::input::apple::macos as view;
 use crate::owner::apple::MacOSLoop;
-use crate::owner::apple::macos::{HostDisplays, WindowRegistry, debug_assert_appkit_main_thread};
+use crate::owner::apple::macos::content_view::{self, ViewHooks};
+use crate::owner::apple::macos::display_pass;
+use crate::owner::apple::macos::{
+    ContentViewRef, HostDisplays, WindowRegistry, debug_assert_appkit_main_thread,
+};
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
 use crate::{
@@ -233,12 +148,11 @@ pub struct MacOSWindow {
     /// [`crate::owner::apple::macos::exec_on_owner`].
     owner_is_main: bool,
 
-    /// This window's NSAccessibility bridge, subclassed onto the content
-    /// view. A `OnceLock` slot rather than a plain field because the window
-    /// value is constructed *before* its content view exists (the view
-    /// holds a `Weak` back-reference to the window's callbacks); the
-    /// constructor fills it immediately after installing the view.
-    accessibility: std::sync::OnceLock<Arc<crate::accessibility::apple::MacosAccessibility>>,
+    /// What the table's positions made for this window once its content view
+    /// was installed: the accessibility bridge, subclassed onto that view;
+    /// the IME capability, the `NSTextInputClient` conformance the view
+    /// carries; the actuator; and the system chrome.
+    facets: WindowFacets,
 
     /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
     ///
@@ -248,13 +162,6 @@ pub struct MacOSWindow {
     /// window constructed without a platform leaves it empty and simply never
     /// arms one.
     wake_pump: std::sync::OnceLock<crate::owner::apple::macos::WeakWakePump>,
-
-    /// This window's IME capability, built on first access by
-    /// [`PlatformWindow::text_input`]. A `OnceLock` for the same reason the
-    /// accessibility slot above is one: the capability is discovered through a
-    /// `&self` accessor and must be handed out as one shared instance per
-    /// window, not a fresh one per call.
-    text_input: std::sync::OnceLock<Arc<crate::text::apple::macos::MacOSTextInput>>,
 
     /// The platform's display registry, by which this window turns its
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
@@ -427,7 +334,8 @@ impl MacOSWindow {
     pub(crate) fn new(
         options: WindowOptions,
         windows_map: WindowRegistry,
-        config: WindowConfiguration,
+        windows: &MacOSWindows,
+        view_hooks: ViewHooks,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Production windows route every thread-affine AppKit message through
         // the AppKit main queue — the one lane all other process AppKit
@@ -435,7 +343,8 @@ impl MacOSWindow {
         Self::new_inner(
             options,
             windows_map,
-            config,
+            windows,
+            view_hooks,
             crate::owner::apple::macos::owner_queue(),
             true,
         )
@@ -509,7 +418,8 @@ impl MacOSWindow {
     fn new_inner(
         options: WindowOptions,
         windows_map: WindowRegistry,
-        config: WindowConfiguration,
+        windows: &MacOSWindows,
+        view_hooks: ViewHooks,
         owner: &'static dispatch::Queue,
         owner_is_main: bool,
     ) -> Result<Arc<Self>, OpenWindowError> {
@@ -632,7 +542,7 @@ impl MacOSWindow {
                     }
                     // Without a position the top-left corner stays where it is.
                     _ => cocoa_frame_keeping_top(
-                        crate::display::apple::macos::bounds_of(current),
+                        crate::owner::apple::macos::bounds_of(current),
                         size,
                     ),
                 };
@@ -688,7 +598,22 @@ impl MacOSWindow {
 
             // Create content view for input events. `frame` is
             // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view = view::create_content_view(frame, scale, Arc::downgrade(&callbacks));
+            let content_view = content_view::create(frame, Arc::downgrade(&callbacks), view_hooks);
+
+            // What the features beside the window make their part of it from.
+            let closed = Arc::new(AtomicBool::new(false));
+            let this = ContentViewRef {
+                view: content_view,
+                closed: Arc::clone(&closed),
+                owner,
+                owner_is_main,
+            };
+            let _: () = msg_send![ns_window, setContentView: content_view];
+
+            // Made once the content view is installed: the bridge subclasses
+            // it for VoiceOver, on the main thread, and the window's teardown
+            // detaches it before releasing the window and with it the view.
+            let facets = windows.positions.for_window(&this);
 
             let window = Arc::new(Self {
                 ns_window,
@@ -708,14 +633,13 @@ impl MacOSWindow {
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
-                closed: Arc::new(AtomicBool::new(false)),
+                closed,
                 loop_control: std::sync::OnceLock::new(),
-                config,
+                config: windows.config.clone(),
                 owner,
                 owner_is_main,
-                accessibility: std::sync::OnceLock::new(),
+                facets,
                 wake_pump: std::sync::OnceLock::new(),
-                text_input: std::sync::OnceLock::new(),
                 displays: std::sync::OnceLock::new(),
                 snapshot: Arc::new(WindowStateCell::new(
                     WindowState::new(WindowGeometry::new(None, options.size), options.size)
@@ -726,24 +650,8 @@ impl MacOSWindow {
                 )),
             });
 
-            let _: () = msg_send![ns_window, setContentView: content_view];
-
-            // Subclass the freshly installed content view for VoiceOver.
-            // SAFETY: `content_view` is the live NSView this window just
-            // created and installed; the window owns the capability, so the
-            // adapter cannot outlive the view; and window construction runs
-            // on the main thread (AppKit affinity, asserted by this whole
-            // `unsafe` block's contract).
-            let bridge = crate::accessibility::apple::MacosAccessibility::new(
-                content_view.cast::<std::ffi::c_void>(),
-            );
-            window
-                .accessibility
-                .set(Arc::new(bridge))
-                .expect("BUG: the accessibility slot was created empty in this constructor and nothing else can fill it");
-
             // Enable mouse tracking for mouse moved events
-            view::enable_mouse_tracking(content_view);
+            content_view::enable_mouse_tracking(content_view);
 
             // Make content view first responder to receive keyboard events
             let _: Bool = msg_send![ns_window, makeFirstResponder: content_view];
@@ -1092,14 +1000,29 @@ const MAX_DEFER_HOPS: u8 = 4;
 impl crate::host_window::CoreHostWindow for MacOSWindow {}
 
 impl crate::host_window::HostWindow for MacOSWindow {
-    /// The window's own NSAccessibility bridge — the capability the
-    /// composition root's accessibility wire discovers. Without this
-    /// override the trait default (`None`) leaves every real macOS window
-    /// silently invisible to VoiceOver.
+    /// The window's NSAccessibility bridge — the capability the composition
+    /// root's accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        self.accessibility
-            .get()
-            .map(|bridge| Arc::clone(bridge) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
+    }
+
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        self.facets.text.capture_sizing()
+    }
+
+    /// None: AppKit's input method is pushed to through the content view
+    /// (`text_input`), and reads no field's store.
+    fn text_store_host(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(crate::text::WindowTextInput::store_host)
     }
 }
 
@@ -1110,17 +1033,23 @@ impl CallbackWindow for MacOSWindow {
 }
 
 /// What the macOS windows open with: the window configuration the platform
-/// was built with. The loop keeps the open windows themselves
-/// (`WindowRegistry`), because its wake pump and its stop reach them.
-#[derive(Debug, Default)]
+/// was built with, and the table's window-level positions. The loop keeps the
+/// open windows themselves (`WindowRegistry`), because its wake pump and its
+/// stop reach them.
+#[derive(Debug)]
 pub struct MacOSWindows {
     config: WindowConfiguration,
+    positions: WindowPositions<ContentViewRef>,
 }
 
 impl MacOSWindows {
-    /// The windows of a platform built with `config`.
-    pub(crate) fn new(config: WindowConfiguration) -> Self {
-        Self { config }
+    /// The windows of a platform built with `config`, whose table's
+    /// window-level positions are `positions`.
+    pub(crate) fn new(
+        config: WindowConfiguration,
+        positions: WindowPositions<ContentViewRef>,
+    ) -> Self {
+        Self { config, positions }
     }
 }
 
@@ -1146,6 +1075,7 @@ fn measure_placement_globally(displays: &dyn HostDisplays, options: &mut WindowO
 
 impl host::Window<MacOSLoop> for MacOSWindow {
     type Shared = MacOSWindows;
+    type Ref = ContentViewRef;
 
     fn open(
         owner: &MacOSLoop,
@@ -1162,7 +1092,12 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        let window = MacOSWindow::new(options, Arc::clone(&owner.windows), windows.config.clone())?;
+        let window = MacOSWindow::new(
+            options,
+            Arc::clone(&owner.windows),
+            windows,
+            owner.view_hooks,
+        )?;
         owner.notices.mark_stale_on_wake(window.state_cell());
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
@@ -1322,33 +1257,27 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::new(crate::haptics::apple::MacHaptics))
+        Some(Arc::clone(&self.facets.haptics))
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.facets.chrome))
+    }
+
+    /// AppKit starts no OS drag session from this window yet; its input
+    /// capabilities say so.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the
-    /// content view carries (see `text::apple::macos`). Without this override
-    /// the trait default (`None`) leaves the native backend with no IME at all
-    /// while the optional winit fallback has one.
-    ///
-    /// Built once and cached, like the accessibility bridge above, but lazily
-    /// rather than in the constructor: the capability needs nothing the
-    /// constructor has not already produced by the time the window value
-    /// exists, and a window that never attaches a text input never builds one.
-    /// `closed` is shared rather than copied so the capability observes the
-    /// window's own close.
+    /// content view carries (see `text::apple::macos`). It shares the
+    /// window's `closed` flag, so it observes the window's own close.
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        let text_input = self.text_input.get_or_init(|| {
-            Arc::new(crate::text::apple::macos::MacOSTextInput::new(
-                self.view,
-                Arc::clone(&self.closed),
-                self.owner,
-                self.owner_is_main,
-            ))
-        });
-        use crate::text::{TextInput as _, WindowTextInput};
-        text_input
+        self.facets
+            .text
             .window_text_input()
-            .and_then(WindowTextInput::ime)
+            .and_then(crate::text::WindowTextInput::ime)
     }
 
     fn physical_size(&self) -> Size<i32> {
@@ -1446,7 +1375,7 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread before it is messaged.
             let window = unsafe { &*self.ns_window };
             // The window's appearance, not NSApp's: a window may override it.
-            view::effective_appearance(
+            content_view::effective_appearance(
                 window
                     .downcast_ref::<objc2_app_kit::NSWindow>()
                     .expect("BUG: MacOSWindow wraps an NSWindow"),
@@ -1499,13 +1428,21 @@ impl PlatformWindow for MacOSWindow {
                 flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
-                _ => WindowCommandError::Unsupported,
+                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
+                other => WindowCommandError::Backend {
+                    message: other.to_string(),
+                },
             })?,
             WindowCommand::Hide => self.hide()?,
             WindowCommand::Activate => self.activate(),
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
-            _ => return Err(WindowCommandError::Unsupported),
+            _ => {
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NotOnThisPlatform,
+                )
+                .into());
+            }
         }
         self.publish_state();
         Ok(())
@@ -1757,17 +1694,14 @@ impl Clone for MacOSWindow {
             owner: self.owner,
             owner_is_main: self.owner_is_main,
             // The clone shares the same window, so it shares the same
-            // NSAccessibility bridge — one subclass per content view,
-            // never two (`OnceLock<Arc<_>>` clones the shared handle).
-            accessibility: self.accessibility.clone(),
+            // NSAccessibility bridge (one subclass per content view, never
+            // two) and the same text input, actuator and chrome.
+            facets: self.facets.clone(),
             // A clone shares the window, so it arms the same platform pump —
             // a redraw asked for through any handle must schedule the wake
             // deadline's landing place, or a clone would be a way to redraw
             // without the loop being able to come back.
             wake_pump: self.wake_pump.clone(),
-            // A clone shares the window, so it is the same capability — one
-            // `NSTextInputClient` view behind both handles, never two.
-            text_input: self.text_input.clone(),
             // A clone shares the window, so it names the same display.
             displays: self.displays.clone(),
             snapshot: Arc::clone(&self.snapshot),
@@ -1842,19 +1776,19 @@ impl Drop for MacOSWindow {
         // retained native tail, never release AppKit objects on a worker.
         let owner = self.owner;
         let ns_window = OwnerLaneId(self.ns_window);
-        let a11y = self.accessibility.get().cloned(); // Option<Arc<...>>, Send
+        let a11y = Arc::clone(&self.facets.accessibility);
+        let text = Arc::clone(&self.facets.text);
         let teardown = move || unsafe {
             // SAFETY: the tail runs on the owner thread, directly or under its
             // queue guard, so
             // the a11y unhook and the Window release both execute
-            // owner-affine. `shutdown()` runs before the release in the same
+            // owner-affine. `detach()` runs before the release in the same
             // block, preserving accesskit's documented precondition (unhook
             // the dynamic subclass while the content view is still alive).
-            if let Some(a11y) = a11y {
-                // A bridge failure must not skip the native window's balancing
-                // release. Keep it inside its own cleanup boundary.
-                crate::owner::apple::macos::run_cleanup_guarded(|| a11y.shutdown());
-            }
+            // A bridge failure must not skip the native window's balancing
+            // release. Keep it inside its own cleanup boundary.
+            crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
+            crate::owner::apple::macos::run_cleanup_guarded(|| text.detach());
             // SAFETY: `send_release` consumes the whole `OwnerLaneId` (the
             // closure's capture is then that `Send` newtype, never its raw
             // field), and its own contract — live still-retained window, send
@@ -1932,7 +1866,7 @@ impl MacOSWindow {
                 let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
                 let mode = mode_of(flags.mode_flags());
                 let position = primary_screen_height().and_then(|height| {
-                    top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                    top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                 });
                 WindowState::new(
                     WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
@@ -1986,7 +1920,7 @@ impl MacOSWindow {
                 let frame: NSRect = msg_send![self.ns_window, frame];
                 WindowGeometry::new(
                     primary_screen_height().and_then(|height| {
-                        top_left_of_frame(crate::display::apple::macos::bounds_of(frame), height)
+                        top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                     }),
                     Size::new(frame.size.width, frame.size.height),
                 )

@@ -13,6 +13,7 @@ use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_native::{HeadlessPlatform, Platform as _};
 use flui_platform::WindowId;
 use flui_platform::{CursorError, CursorIcon};
+use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
 
@@ -126,7 +127,9 @@ fn a_refused_command_is_never_queued() {
     let rig_none = rig(&none, 2);
     assert_eq!(
         rig_none.handle.set_title("x"),
-        Err(WindowCommandError::Unsupported)
+        Err(WindowCommandError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotOnThisPlatform
+        )))
     );
     let all = headless_window(WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
@@ -261,6 +264,24 @@ impl PlatformWindow for RecordingWindow {
             during();
         }
         Ok(())
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
     }
 }
 

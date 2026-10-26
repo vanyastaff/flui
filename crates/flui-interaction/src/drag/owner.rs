@@ -21,7 +21,9 @@ use flui_platform::drag::{
     validate_session,
 };
 use flui_platform::pointer::PointerInfo;
-use flui_platform::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
+use flui_platform::{
+    DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowAt, WindowId,
+};
 
 use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
@@ -1794,7 +1796,8 @@ impl PendingOsDrag {
     ///
     /// # Errors
     ///
-    /// The backend's refusal, or [`DragError::Unavailable`] with no source.
+    /// The backend's refusal, or [`DragError::Unsupported`] with no source
+    /// ([`UnsupportedReason::NotOnThisPlatform`]).
     /// The host then sends the session back to its window with
     /// [`DragOwner::os_drag_refused`], as it does when the start panics.
     pub fn start(self, source: Option<&dyn PlatformDragSource>) -> Result<(), DragError> {
@@ -1806,7 +1809,7 @@ impl PendingOsDrag {
             source.start(request)
         } else {
             drop(request);
-            Err(DragError::Unavailable)
+            Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
         };
         let end_dropped = running.leave();
         if started.is_ok() && end_dropped {

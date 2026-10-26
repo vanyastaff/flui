@@ -15,6 +15,8 @@
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
 #![expect(deprecated)]
 
+pub(crate) mod content_view;
+pub(crate) mod display_pass;
 mod loop_control;
 pub(crate) mod observation;
 mod owner_lane;
@@ -51,6 +53,18 @@ pub(crate) trait MacosHost: 'static {
         notices: &Arc<dyn NoticeChannel>,
         control: &Arc<LoopControl>,
     ) -> Box<dyn NoticeSources>;
+
+    /// What each window's content view dispatches to: its input and its text
+    /// input, made with the view.
+    fn view_hooks() -> content_view::ViewHooks;
+}
+
+/// An AppKit rectangle as the geometry type the shared rules take.
+pub(crate) fn bounds_of(rect: objc2_foundation::NSRect) -> flui_foundation::geometry::Bounds<f64> {
+    flui_foundation::geometry::Bounds {
+        origin: flui_foundation::geometry::Point::new(rect.origin.x, rect.origin.y),
+        size: flui_foundation::geometry::Size::new(rect.size.width, rect.size.height),
+    }
 }
 
 /// The sources of the macOS host's system notices, which the loop starts once
@@ -120,6 +134,36 @@ use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreference
 /// application stops.
 pub(crate) type WindowRegistry = Arc<Mutex<HashMap<u64, Arc<dyn CallbackWindow>>>>;
 
+/// A macOS window as the features beside it reach it (ADR-0151 §3): its
+/// content view, whether it has closed, and the owner lane every AppKit
+/// message to it travels through. The table's text, accessibility and haptics
+/// positions make the window's part of them from this, as the window opens.
+///
+/// Public where it is defined, so the host table can name it as the window's
+/// reference; the module is private, so it is nameable only inside the crate.
+#[derive(Clone)]
+pub struct ContentViewRef {
+    /// The window's content view. Not retained: it lives as long as its
+    /// window, and `closed` says when a late message to it would be one to a
+    /// window AppKit has been told to tear down.
+    pub(crate) view: *mut objc2::runtime::AnyObject,
+    /// Set once the window has closed; shared with the window.
+    pub(crate) closed: Arc<std::sync::atomic::AtomicBool>,
+    /// The lane every AppKit message to the view travels through.
+    pub(crate) owner: &'static dispatch::Queue,
+    /// Whether `owner` is the main queue, so the main thread is the lane.
+    pub(crate) owner_is_main: bool,
+}
+
+impl std::fmt::Debug for ContentViewRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContentViewRef")
+            .field("view", &self.view.addr())
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The macOS host's loop: the state every position of its table reads.
 ///
 /// [`MacOSPlatform`](crate::MacOSPlatform) is its platform.
@@ -163,6 +207,9 @@ pub struct MacOSLoop {
     /// Where sleep, wake, lock and memory notices go, and what a wake marks
     /// stale before the host hears of it.
     pub(crate) notices: Arc<dyn NoticeChannel>,
+
+    /// What each window's content view dispatches to, as the table made it.
+    pub(crate) view_hooks: content_view::ViewHooks,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -308,6 +355,7 @@ impl MacOSLoop {
                 displays,
                 _screen_observer: screen_observer,
                 notices,
+                view_hooks: H::view_hooks(),
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so

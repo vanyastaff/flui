@@ -42,7 +42,7 @@ use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, Plat
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
-    PlatformWindow, WindowId,
+    PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
@@ -257,8 +257,18 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
+    }
+
+    /// The host's window is always shown: there is no window manager to
+    /// raise it.
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
     }
 
     /// The display the window was [moved to](HeadlessHost::move_to_display).
@@ -344,7 +354,9 @@ impl PlatformDragSource for HeadlessOsDrags {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let end = (*self.end.lock()).ok_or(DragError::Unavailable)?;
+        let end = (*self.end.lock()).ok_or(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotRegistered,
+        )))?;
         let OsDragRequest {
             representations,
             allowed,

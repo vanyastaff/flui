@@ -6,13 +6,14 @@
 //! FLUI's view keeps carrying input, the input method, frame requests and the
 //! surface, and stays the first responder. `NSGlassEffectView` exists from
 //! macOS 26; it is looked up by name when asked for, so an earlier system
-//! answers [`MacOSBackdropError::NotOnThisSystem`] and needs no version gate.
+//! answers `Unsupported` with `NotOnThisDevice` and needs no version gate.
 //! Only what AppKit applies is an input: a material (with the blend behind the
 //! window and the active state a window backdrop needs), and the glass's
 //! style, tint and corner radius.
 
 use std::sync::atomic::Ordering;
 
+use flui_platform::{Unsupported, UnsupportedReason};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{MainThreadMarker, class, msg_send};
@@ -162,16 +163,16 @@ impl GlassTint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MacOSBackdropError {
-    /// The window is closed.
-    #[error("the window is closed")]
-    Closed,
+    /// Not here, in the contract's vocabulary: the window is closed
+    /// ([`UnsupportedReason::NoWindow`]), or this macOS has no
+    /// `NSGlassEffectView`, so no Liquid Glass before macOS 26
+    /// ([`UnsupportedReason::NotOnThisDevice`]).
+    #[error(transparent)]
+    Unsupported(#[from] Unsupported),
     /// The window is not on the AppKit main thread's owner lane, where its
     /// views live.
     #[error("the window is not on the AppKit main thread's owner lane")]
     NotOnTheMainLane,
-    /// This macOS has no `NSGlassEffectView`: Liquid Glass needs macOS 26.
-    #[error("Liquid Glass needs macOS 26")]
-    NotOnThisSystem,
     /// AppKit did not create the view that draws the backdrop.
     #[error("AppKit did not create the backdrop's view")]
     NoBackdropView,
@@ -182,6 +183,13 @@ pub enum MacOSBackdropError {
     /// The glass's corner radius is not finite or is negative.
     #[error("the corner radius is not finite or is negative")]
     InvalidCornerRadius,
+}
+
+impl MacOSBackdropError {
+    /// The window is closed.
+    const CLOSED: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NoWindow));
+    /// This macOS has no Liquid Glass.
+    const NO_GLASS: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
 }
 
 /// A subview that tracks its superview's size.
@@ -230,7 +238,7 @@ impl AppKitWindow<'_> {
             let main = MainThreadMarker::new()
                 .expect("BUG: a main-lane owner runs its routed work on the main thread");
             if window.closed.load(Ordering::Acquire) {
-                return Err(MacOSBackdropError::Closed);
+                return Err(MacOSBackdropError::CLOSED);
             }
             install(window, main, backdrop)
         })
@@ -251,7 +259,7 @@ impl AppKitWindow<'_> {
             let main = MainThreadMarker::new()
                 .expect("BUG: a main-lane owner runs its routed work on the main thread");
             if window.closed.load(Ordering::Acquire) {
-                return Err(MacOSBackdropError::Closed);
+                return Err(MacOSBackdropError::CLOSED);
             }
             let content = content_of(window, main)?;
             take_away(window, main, content);
@@ -342,8 +350,7 @@ fn install(
             Ok(())
         }
         MacOSBackdrop::Glass(glass) => {
-            let class =
-                class_named(c"NSGlassEffectView").ok_or(MacOSBackdropError::NotOnThisSystem)?;
+            let class = class_named(c"NSGlassEffectView").ok_or(MacOSBackdropError::NO_GLASS)?;
             let created = new_view(class, main).ok_or(MacOSBackdropError::NoBackdropView)?;
             let glass_view = Retained::as_ptr(&created).cast_mut();
             configure_glass(glass_view, glass, main);

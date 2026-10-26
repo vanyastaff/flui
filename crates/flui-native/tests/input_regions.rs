@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
+use flui_platform::Availability;
 use flui_platform::WindowOptions;
-use flui_platform::input_capabilities::Availability;
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 use flui_platform::{DispatchEventResult, PlatformInput};
 use parking_lot::Mutex;

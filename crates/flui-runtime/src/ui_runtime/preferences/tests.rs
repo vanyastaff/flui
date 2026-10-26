@@ -80,6 +80,26 @@ impl PlatformWindow for Window {
         Ok(())
     }
 
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
         let panic = self.panic_query.swap(false, Ordering::Relaxed);
@@ -194,7 +214,9 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             QUERY.with(|slot| *slot.borrow_mut() = Some(callback));
             window.panic_query.store(panics, Ordering::Relaxed);
         } else {
-            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unavailable);
+            *window.answer.lock().expect("old query") = Err(PreferenceQueryError::Unsupported(
+                flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
+            ));
             DIAGNOSTIC.with(|slot| *slot.borrow_mut() = Some(callback));
         }
         let old = SystemPreferences::default()
@@ -346,6 +368,18 @@ impl PlatformWindow for HapticWindow {
     }
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())
+    }
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        self.inner.text_input()
+    }
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        self.inner.system_chrome()
+    }
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.inner.drag_source()
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        self.inner.show()
     }
 }
 

@@ -9,7 +9,7 @@
 use flui_foundation::geometry::{Point, Size};
 
 use crate::os_options::OsWindowOptions;
-use crate::{WindowGeometry, WindowMode};
+use crate::{Unsupported, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -293,8 +293,8 @@ pub enum WindowExecutionState {
 #[non_exhaustive]
 pub enum WindowShowError {
     /// This backend cannot show and request focus for an existing window.
-    #[error("showing an existing window is unsupported")]
-    Unsupported,
+    #[error("the window cannot be shown: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The native window has closed.
     #[error("the window is closed")]
     Closed,
@@ -306,10 +306,22 @@ pub enum WindowShowError {
     },
 }
 
+impl WindowShowError {
+    /// What is not here, when that is why the window was not shown.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::Closed | Self::Native { .. } => None,
+        }
+    }
+}
+
 // ==================== Value Types ====================
 
 /// Window appearance (light/dark theme)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WindowAppearance {
     /// Light appearance (default)
     #[default]
@@ -334,6 +346,10 @@ impl From<WindowAppearance> for crate::Brightness {
 
 /// Window background appearance (backdrop material)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "every backend maps every material, and the window trait is sealed: a new material is a change each backend makes"
+)]
 pub enum WindowBackgroundAppearance {
     /// Opaque background (default)
     #[default]
@@ -350,19 +366,32 @@ pub enum WindowBackgroundAppearance {
 
 /// Failure to apply a cursor to one exact platform window.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CursorError {
     /// The backend has no pointer-cursor facility for this window.
-    #[error("this platform window does not support pointer cursors")]
-    Unsupported,
+    #[error("the window shows no pointer cursor: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The backend rejected a concrete cursor update.
     #[error("platform cursor update failed: {0}")]
     Backend(String),
+}
+
+impl CursorError {
+    /// What is not here, when that is why the cursor was not applied.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::Backend(_) => None,
+        }
+    }
 }
 
 // ==================== Events ====================
 
 /// Window events that can be observed via `flui_native::Platform::on_window_event`
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum WindowEvent {
     /// Window was created
     Created(WindowId),

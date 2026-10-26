@@ -21,7 +21,7 @@
   corner radius behind FLUI's view; `MacOSBackdrop::Material(..)` puts an `NSVisualEffectView`
   material there; `clear_backdrop` takes either away. Each
   answers `MacOSBackdropError`: a closed window, a window off the AppKit main lane, a system
-  without Liquid Glass (`NotOnThisSystem`), a content view something else put there, a view
+  without Liquid Glass (`Unsupported` with `NotOnThisDevice`), a content view something else put there, a view
   AppKit did not create, a corner radius that is not finite or is negative.
 
 ### Changed
@@ -29,7 +29,7 @@
 - **`flui-native`**: the OS extensions moved from the crate root to `flui_native::os::windows` and
   `flui_native::os::macos`, the modules the facade publishes.
 - **`flui-native`**: every `Win32Window` command and query returns `Result<_, Win32WindowError>`:
-  `Closed`, `NotOnTheOwnerThread`, `Refused` (the system refused, with its `HRESULT`; a corner
+  `Unsupported` (`NoWindow` for a closed window, `NotOnThisPlatform` for a contract value newer than the host), `NotOnTheOwnerThread`, `Refused` (the system refused, with its `HRESULT`; a corner
   preference on Windows 10), `Unrecognized` (a value the system reported that has no FLUI value).
   None reaches a handle the window no longer owns. Renamed with it: `enable_snap_layouts` and
   `disable_snap_layouts` are `set_snap_layouts(bool)`, `is_snap_layouts_enabled` is

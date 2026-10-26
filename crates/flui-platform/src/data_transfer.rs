@@ -80,6 +80,10 @@ impl std::fmt::Display for Mime {
 
 /// The typed format of one representation a source offers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the transport names the formats it decodes; any other media type is `Custom`"
+)]
 pub enum TransferFormat {
     /// Plain UTF-8 text (`text/plain`).
     Text,
@@ -239,6 +243,10 @@ impl DataTransferOffer {
 
 /// One entry of a `text/uri-list` payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a `text/uri-list` entry is a local path or another URI"
+)]
 pub enum TransferUri {
     /// A local filesystem path (`file://` URIs and platform-native drops).
     Path(PathBuf),
@@ -263,6 +271,10 @@ pub struct TransferImage {
 
 /// Stage-5 artifact: a decoded, typed payload.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a payload has the formats a representation can have; any other media type is `Custom`"
+)]
 pub enum TransferPayload {
     /// Plain UTF-8 text.
     Text(String),

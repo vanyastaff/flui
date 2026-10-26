@@ -55,7 +55,7 @@ impl Host for Winit {
     type Window = WinitWindow;
     type Displays = WinitLoop;
     type Input = WinitLoop;
-    type Text = std::sync::Arc<WinitTextInput>;
+    type Text = WinitTextInput;
     // The AT-SPI bridge on Linux; winit windows on Windows and macOS hand out
     // none.
     #[cfg(target_os = "linux")]
@@ -146,10 +146,13 @@ impl HostPlatform<Winit> {
     /// Create a new winit platform
     pub fn new() -> Self {
         // On Linux the X11 probe reads what winit does not report of a window.
-        let windows = WinitWindows::new(
-            #[cfg(target_os = "linux")]
-            connect_window_manager,
-        );
+        let windows = |positions| {
+            WinitWindows::new(
+                positions,
+                #[cfg(target_os = "linux")]
+                connect_window_manager,
+            )
+        };
         Self::from_parts(windows, |windows| {
             WinitLoop::new::<Winit>(Arc::clone(windows) as _)
         })

@@ -57,6 +57,23 @@ this one path (ADR-0151 §9).
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
   the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
+- **"Not here" has one vocabulary.** Every error and outcome that can mean
+  absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
+  never written as a literal, whose `UnsupportedReason` says why
+  (`NotOnThisPlatform`, `NotOnThisDevice`, `NotDeclared { what }`,
+  `Unavailable`, `NotRegistered`, `NoWindow`); each answers
+  `unsupported() -> Option<Unsupported>`, and only `Unavailable` is worth
+  asking again (`is_retryable`). No reason names an operating-system version
+  (ADR-0244). The table test `every_error_carries_its_reason` holds every
+  carrier to it.
+- **A closed enum is a decision.** `#![deny(clippy::exhaustive_enums)]`: a
+  public enum is `#[non_exhaustive]` where a backend may report something new
+  to an application (`WindowAppearance`, `WindowEvent`, the errors), and
+  closed with an `allow` that says why where its set is fixed by what it
+  names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
+  where `Custom` is its open end (`TransferFormat`), or where every consumer
+  must handle a new variant (`PlatformInput`; `WindowBackgroundAppearance`,
+  which every backend of the sealed window trait maps).
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
   puts them next to the trait; `flui-native` repeats them for

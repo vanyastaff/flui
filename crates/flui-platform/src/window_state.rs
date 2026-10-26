@@ -23,7 +23,7 @@
 
 use flui_foundation::geometry::{Point, Size};
 
-use crate::DisplayId;
+use crate::{DisplayId, Unsupported, UnsupportedReason};
 
 /// The monotone version of a [`WindowState`]. Never wraps.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -431,13 +431,14 @@ impl WindowCommand {
     /// # Errors
     /// What [`validate`](Self::validate) refuses, or
     /// [`WindowCommandError::Unsupported`] when `capabilities` do not permit
-    /// the command.
+    /// the command: the window's platform does not take it
+    /// ([`UnsupportedReason::NotOnThisPlatform`]).
     pub fn admit(&self, capabilities: &WindowCapabilities) -> Result<(), WindowCommandError> {
         self.validate()?;
         if capabilities.permits(self) {
             Ok(())
         } else {
-            Err(WindowCommandError::Unsupported)
+            Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
         }
     }
 }
@@ -451,8 +452,8 @@ fn positive_size(size: Size<f64>) -> bool {
 #[non_exhaustive]
 pub enum WindowCommandError {
     /// This window does not honour the command; its capability is `false`.
-    #[error("the window does not support this command")]
-    Unsupported,
+    #[error("the window does not take this command: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The command's numbers cannot describe a window.
     #[error(
         "the command's geometry is not finite and positive, or its minimum exceeds its maximum"
@@ -467,6 +468,17 @@ pub enum WindowCommandError {
         /// What the window system reported.
         message: String,
     },
+}
+
+impl WindowCommandError {
+    /// What is not here, when that is why the command was refused.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::InvalidGeometry | Self::Closed | Self::Backend { .. } => None,
+        }
+    }
 }
 
 /// The control surface the framework gives app code over one window

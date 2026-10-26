@@ -3,6 +3,7 @@
 use flui_foundation::geometry::{DevicePixelRatio, DeviceSize, Size};
 
 use super::InvalidPreference;
+use crate::Unsupported;
 
 /// A finite, nonnegative distance in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -356,9 +357,11 @@ impl GestureGeometry {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PreferenceQueryError {
-    /// The native window or its owner no longer exists.
-    #[error("the preference query owner is unavailable")]
-    Unavailable,
+    /// Nothing can answer now: the native window or its owner no longer exists
+    /// ([`NoWindow`](crate::UnsupportedReason::NoWindow)), or the observation
+    /// cannot be read yet ([`Unavailable`](crate::UnsupportedReason::Unavailable)).
+    #[error("the preference query has no answer: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The query was attempted outside the platform owner thread.
     #[error("the preference query requires the platform owner thread")]
     WrongThread,
@@ -371,4 +374,15 @@ pub enum PreferenceQueryError {
         /// Description from the failing native operation.
         message: String,
     },
+}
+
+impl PreferenceQueryError {
+    /// What is not here, when that is why the query has no answer.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::WrongThread | Self::Invalid(_) | Self::Native { .. } => None,
+        }
+    }
 }

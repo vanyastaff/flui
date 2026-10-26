@@ -6,7 +6,9 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flui_platform::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
+use flui_platform::{
+    StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+};
 
 use super::DataDirs;
 use super::os_error::{lock_error, replace_error, storage_error};
@@ -144,8 +146,9 @@ impl FileStore {
     /// [`StorageError::Conflict`] when the stored version is not the base;
     /// [`StorageError::Busy`] while another writer holds the lock or another
     /// process holds the file without letting it be replaced (trying again
-    /// later may succeed); [`StorageError::LockUnsupported`] for a based write
-    /// on a file system without locks; [`StorageError::Full`];
+    /// later may succeed); [`StorageError::Unsupported`] (`NotOnThisDevice`)
+    /// for a based write on a file system without locks;
+    /// [`StorageError::Full`];
     /// [`StorageError::Inaccessible`] for a target or root that refuses the
     /// write for good (no permission, a read-only file, a directory in its
     /// place), never retried.
@@ -172,7 +175,7 @@ impl FileStore {
             }
             // A mode this store does not know how to honour is refused
             // rather than guessed at.
-            _ => return Err(StorageError::Unavailable),
+            _ => return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into()),
         };
         if self.reach(Step::VersionChecked).is_break() {
             return Err(StorageError::Cancelled);

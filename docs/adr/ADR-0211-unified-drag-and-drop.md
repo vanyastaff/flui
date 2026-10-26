@@ -15,6 +15,10 @@
   `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app
   permits a copy; `OnReceiveContentListener` receives only pasted and keyboard text.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §4: a start that cannot reach the OS fails with `DragError::Unsupported`, which says why
+  (`NotOnThisPlatform` with no drag source or for a contact the OS loop cannot carry,
+  `Unavailable` while another session runs or after the press the browser offered).
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §5, for decision
   12's type only: `TransferActions` is the contract's own flag set, not a `bitflags` type,
   because a Stable signature names no upstream type outside ADR-0089 §2; `COPY`, `MOVE`, `LINK`
@@ -160,7 +164,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     that never escalates mid-drag; UIKit keeps other touches flowing during it. On X11
     `InputCapabilities::outgoing_drag()` reports `Unavailable`
     ([ADR-0213](ADR-0213-input-capabilities.md)), the one authoritative availability path; an
-    escalation that needs the OS fails with `DragError::Unavailable` (winit's `NotSupported` maps
+    escalation that needs the OS fails with `DragError::Unsupported` (winit's `NotSupported` maps
     to it) and the session stays in-window; incoming drags work. The drop action is read at the
     drop, never assumed from hover, so X11's late action fits.
 12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform` with the
@@ -227,7 +231,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   callback, and paces frames from a thread, since `DoDragDrop`'s loop dispatches no timer or paint
   while the pointer rests. AppKit, UIKit, Android, Wayland and Web sessions run only on native
   hosts or the browser through [`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs); CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
-  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
+  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unsupported`), for the iOS
   session that starts at lift and never escalates, and, on Web and iOS,
   `start_decision_includes_sibling_presentation_with_identity_only_offer`.
 

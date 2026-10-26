@@ -687,15 +687,16 @@ impl PresentationState {
                 };
                 if let Err(error) = window.set_cursor(cursor) {
                     match error {
-                        CursorError::Unsupported => {
+                        CursorError::Unsupported(unsupported) => {
                             tracing::trace!(
                                 ?id,
                                 ?device_id,
                                 ?cursor,
+                                reason = %unsupported.reason,
                                 "window backend has no pointer-cursor facility"
                             );
                         }
-                        CursorError::Backend(_) => {
+                        _ => {
                             tracing::warn!(
                                 ?id,
                                 ?device_id,

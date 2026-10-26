@@ -16,6 +16,10 @@ use flui_platform::{
     WindowOptions, WindowState,
 };
 
+/// What a window answers for a command its capabilities leave out.
+const NOT_HERE: flui_platform::Unsupported =
+    flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform);
+
 fn open(platform: &HeadlessPlatform) -> Arc<dyn HostWindow> {
     let window: Arc<dyn HostWindow> = platform
         .open_window(WindowOptions::default())
@@ -228,7 +232,7 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
         let before = window.state();
         assert_eq!(
             window.apply(command),
-            Err(WindowCommandError::Unsupported),
+            Err(WindowCommandError::Unsupported(NOT_HERE)),
             "{name}"
         );
         assert_eq!(window.state(), before, "{name}: no change");
@@ -248,7 +252,7 @@ fn a_true_capability_is_honoured() {
     assert_eq!(window.state().title.as_deref(), Some("Allowed"));
     assert_eq!(
         window.apply(WindowCommand::SetMode(WindowMode::Maximized)),
-        Err(WindowCommandError::Unsupported)
+        Err(WindowCommandError::Unsupported(NOT_HERE))
     );
 }
 

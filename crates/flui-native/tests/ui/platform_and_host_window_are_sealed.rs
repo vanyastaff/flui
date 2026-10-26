@@ -1,6 +1,8 @@
 //! `Platform` and `HostWindow` are sealed: an implementation outside
-//! `flui-native` that writes every item still does not compile, and the only
-//! error is the seal. `PlatformWindow` stays open, so the window below is one.
+//! `flui-native` does not compile, and the seal says why. `Platform`'s writes
+//! every item, so the seal is its only error; `HostWindow`'s cannot write the
+//! items that take the owner thread's token, which it cannot name, so those
+//! are missing too. `PlatformWindow` stays open, so the window below is one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -181,7 +183,27 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
-        Err(CursorError::Unsupported)
+        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 }
 

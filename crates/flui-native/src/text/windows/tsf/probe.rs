@@ -452,11 +452,7 @@ fn text_services_probe() {
             .text_store_host(OwnerThreadToken::new())
             .expect("(1) the window offers its text-store host")
     };
-    let services: Rc<TextServices> =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |context| {
-            context.text_services.borrow().clone()
-        })
-        .flatten()
+    let services: Rc<TextServices> = crate::text::windows::testing::services_of(hwnd)
         .expect("(1) the window holds its text services");
     println!(
         "PROBE (1) the window's host is its TSF connection: {}; TfClientId = {:#x}",
@@ -778,7 +774,7 @@ fn activate_profile(
 /// The window's scale and client origin.
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
     let scale =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale_factor.get())
+        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale.scale())
             .and_then(DevicePixelRatio::new)
             .unwrap_or_default();
     let mut origin = POINT::default();

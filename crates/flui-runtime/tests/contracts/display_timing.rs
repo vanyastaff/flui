@@ -133,6 +133,26 @@ impl PlatformWindow for CountingWindow {
         Ok(())
     }
 
+    fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
+        None
+    }
+
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+        None
+    }
+
+    fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
+        None
+    }
+    fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        None
+    }
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        Err(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                .into(),
+        )
+    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

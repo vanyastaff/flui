@@ -23,7 +23,7 @@ use std::time::Duration;
 use flui_platform::haptics::{
     HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern, PatternPlayback,
 };
-use flui_platform::{DeviceId, HapticFeedback};
+use flui_platform::{DeviceId, HapticFeedback, Unsupported, UnsupportedReason};
 
 /// The pulse a backend that can only switch its actuator on and off plays
 /// for a transient: one `EFFECT_TICK`-length tap.
@@ -964,7 +964,7 @@ pub fn windows_capabilities(controller: Option<&PenController>) -> HapticCapabil
 /// Windows tier 1: the pen's nearest waveform. `None` without a pen
 /// controller, since the window's own actuator (`InputHapticsManager`) is
 /// in no published `windows` crate (ADR-0210 §8): the request is
-/// [`HapticOutcome::Unavailable`]. A controller lacking the waveform plays
+/// [`HapticOutcome::Unsupported`]. A controller lacking the waveform plays
 /// `Click` approximated, or nothing without one. The backend plays the
 /// waveform as [`pen_feedback_step`].
 #[must_use]
@@ -1009,7 +1009,7 @@ pub struct PenStep {
 /// Windows tier 2: transients as `Click`, continuous events as
 /// `BuzzContinuous` for their length at their lowest intensity, intensity
 /// only where the controller supports it, sharpness dropped: approximated.
-/// `None` without a pen controller ([`HapticOutcome::Unavailable`]); a
+/// `None` without a pen controller ([`HapticOutcome::Unsupported`]); a
 /// controller lacking a waveform falls back.
 #[must_use]
 pub fn windows_pattern(
@@ -1243,5 +1243,5 @@ pub fn web_pattern(
 
 /// Linux, both tiers: no backend has a haptic actuator.
 pub const fn linux() -> HapticOutcome {
-    HapticOutcome::Unavailable
+    HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
 }

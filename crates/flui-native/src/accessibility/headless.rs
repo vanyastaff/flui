@@ -101,3 +101,17 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
         drop(listener);
     }
 }
+
+/// The recorder put nothing on its window and records no focus.
+impl crate::host::WindowAccessibility for FakeAccessibility {
+    fn detach(&self) {}
+
+    fn focus_changed(&self, _: bool) {}
+}
+
+/// Each headless window gets a recorder of its own.
+impl crate::host::Accessibility<()> for FakeAccessibility {
+    fn for_window((): &()) -> std::sync::Arc<dyn crate::host::WindowAccessibility> {
+        std::sync::Arc::new(Self::new())
+    }
+}

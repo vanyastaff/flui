@@ -28,7 +28,7 @@ use flui_platform::data_transfer::{
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
 };
-use flui_platform::{DragDropEvent, PlatformInput, WindowId};
+use flui_platform::{DragDropEvent, PlatformInput, Unsupported, UnsupportedReason, WindowId};
 use parking_lot::Mutex;
 
 use crate::host::{self, Host};
@@ -176,13 +176,13 @@ impl PlatformDragSource for HeadlessDragSource {
         let slot = Arc::new(OwnerSlot::new());
         let on_end_slot = OwnerSlot::new();
         if slot.replace(provider).is_err() || on_end_slot.replace(on_end).is_err() {
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         let mut inner = self.drags.lock();
         if inner.session.is_some() {
             // One OS session at a time, as on a desktop.
             drop(inner);
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         inner.session = Some(OsDragSession {
             representations: Arc::from(representations),
@@ -210,7 +210,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             state.input_availability = state
                 .input_availability
                 .to_builder()
-                .outgoing_drag(flui_platform::input_capabilities::Availability::Native)
+                .outgoing_drag(flui_platform::Availability::Native)
                 .build();
         });
         self
@@ -310,7 +310,7 @@ impl HeadlessDragAndDrop {
     ///
     /// # Errors
     ///
-    /// [`DragError::Unavailable`] while another session runs: the OS runs one
+    /// [`DragError::Unsupported`] (`Unavailable`) while another session runs: the OS runs one
     /// at a time.
     pub fn start_foreign(
         &self,
@@ -335,11 +335,11 @@ impl HeadlessDragAndDrop {
         });
         if slot.replace(served).is_err() {
             // The slot was made on this thread: only exhausted slot keys refuse it.
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         let mut inner = self.drags.lock();
         if inner.session.is_some() {
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         inner.session = Some(OsDragSession {
             representations: Arc::from(representations),

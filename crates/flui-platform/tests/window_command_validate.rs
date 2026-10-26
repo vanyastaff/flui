@@ -3,8 +3,9 @@
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
-    WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
+    WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -140,12 +141,16 @@ fn admit_refuses_exactly_when_the_capability_is_false() {
         *capability(&mut all) = false;
         assert_eq!(
             command.admit(&all),
-            Err(WindowCommandError::Unsupported),
+            Err(WindowCommandError::Unsupported(Unsupported::new(
+                UnsupportedReason::NotOnThisPlatform
+            ))),
             "{command:?} without its capability"
         );
         assert_eq!(
             command.admit(&WindowCapabilities::NONE),
-            Err(WindowCommandError::Unsupported),
+            Err(WindowCommandError::Unsupported(Unsupported::new(
+                UnsupportedReason::NotOnThisPlatform
+            ))),
             "{command:?} on a window that honours nothing"
         );
     }

@@ -20,7 +20,8 @@
 //! drag threshold, which then stores its representations eagerly. Otherwise
 //! `dragstart` is cancelled, the press goes on as ordinary pointer input, and
 //! a session the runtime starts later in that press is refused as
-//! `DragError::Unavailable`, so it stays in its window.
+//! `DragError::Unsupported` (`Unavailable`: not in this press), so it stays in
+//! its window.
 //!
 //! How `DataTransfer` types and effect names map to transfer formats and
 //! actions is decided in [`mapping`] with no DOM call, so every host compiles
@@ -287,7 +288,7 @@ use std::{
 use flui_foundation::{DataTransferId, geometry::Point};
 #[cfg(target_arch = "wasm32")]
 use flui_platform::{
-    DragDropEvent, PlatformInput,
+    DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
     data_transfer::{
         DataTransferOffer, DataTransferSource, DropFeedback, Mime, OfferRecord, OfferTable,
         RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError,
@@ -712,7 +713,7 @@ impl PlatformDragSource for WebDragSource {
             } = request;
             contain_owner_callback(|| drop(provider));
             drop(on_end);
-            return Err(DragError::Unavailable);
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
         }
         *self.outgoing.borrow_mut() = Outgoing::Waiting(request);
         Ok(())

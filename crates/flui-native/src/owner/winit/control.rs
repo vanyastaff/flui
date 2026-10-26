@@ -406,7 +406,27 @@ mod tests {
     struct StubWindow;
 
     impl crate::host_window::CoreHostWindow for StubWindow {}
-    impl crate::host_window::HostWindow for StubWindow {}
+    impl crate::host_window::HostWindow for StubWindow {
+        fn accessibility(
+            &self,
+        ) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+            None
+        }
+
+        fn capture_text_sizing(
+            &self,
+            _owner: crate::host_window::OwnerThreadToken,
+        ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+            Ok(crate::TextSizingCaptureState::Unsupported)
+        }
+
+        fn text_store_host(
+            &self,
+            _owner: crate::host_window::OwnerThreadToken,
+        ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+            None
+        }
+    }
 
     impl flui_platform::PlatformWindow for StubWindow {
         fn id(&self) -> flui_platform::WindowId {
@@ -450,6 +470,29 @@ mod tests {
         ) -> Result<(), flui_platform::WindowCommandError> {
             command.admit(&flui_platform::WindowCapabilities::NONE)?;
             Ok(())
+        }
+
+        fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
+            None
+        }
+
+        fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+            None
+        }
+
+        fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+            None
+        }
+
+        fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+            None
+        }
+
+        fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+            Err(flui_platform::Unsupported::new(
+                flui_platform::UnsupportedReason::NotOnThisPlatform,
+            )
+            .into())
         }
     }
 

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
+use flui_platform::Availability;
 use flui_platform::PlatformInput;
-use flui_platform::input_capabilities::Availability;
 use flui_platform::pointer::{
     CancelReason, PanZoomPhase, PenTool, PointerEvent, PointerKind, PointerRole, ScrollPhase,
     ScrollPrecision,

@@ -70,7 +70,7 @@ pub(super) fn semantic_feedback_reports_a_tier_one_outcome<B: BackendUnderTest>(
         let outcome = haptics.perform_with(kind, &HapticRequest::default());
         if !matches!(
             outcome,
-            HapticOutcome::Submitted | HapticOutcome::Approximated | HapticOutcome::Unavailable
+            HapticOutcome::Submitted | HapticOutcome::Approximated | HapticOutcome::Unsupported(_)
         ) {
             return Err(format!("{kind:?} reported {outcome:?}"));
         }
@@ -126,7 +126,7 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
     let capabilities = haptics.capabilities(None);
     let request = HapticRequest::default();
     let feedback = haptics.perform_with(HapticFeedback::SelectionClick, &request);
-    if capabilities.feedback == (feedback == HapticOutcome::Unavailable) {
+    if capabilities.feedback == feedback.unsupported().is_some() {
         return Err(format!(
             "claims feedback {} but a selection click reported {feedback:?}",
             capabilities.feedback
@@ -134,7 +134,8 @@ pub(super) fn capabilities_match_what_plays<B: BackendUnderTest>(backend: &mut B
     }
     let pattern = haptics.play(&taps(), HapticFeedback::SelectionClick, &request);
     let expected = match (capabilities.feedback, capabilities.patterns) {
-        (false, _) => HapticOutcome::Unavailable,
+        // Refused, and for the reason the click was.
+        (false, _) => feedback,
         (true, PatternPlayback::Exact) => HapticOutcome::Submitted,
         (true, PatternPlayback::Approximated) => HapticOutcome::Approximated,
         (true, _) => HapticOutcome::FellBack,

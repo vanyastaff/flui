@@ -66,7 +66,7 @@ impl Host for X11Windows {
 /// A platform of [`X11Windows`] whose windows attach the X11 probe.
 fn platform() -> Arc<HostPlatform<X11Windows>> {
     Arc::new(HostPlatform::from_parts(
-        WinitWindows::new(connect_window_manager),
+        |positions| WinitWindows::new(positions, connect_window_manager),
         |windows| WinitLoop::new::<QuietHost>(Arc::clone(windows) as _),
     ))
 }

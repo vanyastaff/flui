@@ -79,9 +79,10 @@ mod input {
 
     use super::ime::input_mode;
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::owner::web::{Accepting, CanvasKeys};
+    use crate::owner::slot::OwnerSlot;
+    use crate::owner::web::listener::CanvasListener;
+    use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
     use crate::text::ime::{diff, document_text, scalar_spans};
-    use crate::window::web::{EditorSlot, FocusSync, Listener, is_focus_handoff};
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -163,7 +164,7 @@ mod input {
     struct Attached {
         store: Rc<dyn TextStore>,
         surface: Rc<Surface>,
-        _listeners: Vec<Listener>,
+        _listeners: Vec<CanvasListener>,
     }
 
     /// A host request made while the host was already inside a call into a
@@ -173,13 +174,16 @@ mod input {
         Complete(Rc<dyn TextStore>),
     }
 
-    /// The window's text input (see the module doc).
+    /// The window's text input (see the module doc). Public where it is
+    /// defined, as the host's table names it as its text position, and
+    /// nameable only inside the crate.
     pub struct WebTextInput {
         canvas: web_sys::HtmlCanvasElement,
-        editor: EditorSlot,
+        /// The canvas's focus area, which the editor joins and the window
+        /// follows.
+        editor: Rc<dyn CanvasEditor>,
         accepting: Accepting,
         keys: Rc<dyn CanvasKeys>,
-        focus: Rc<FocusSync>,
         /// Whether this browser has `EditContext`, decided when the window
         /// opens.
         edit_context: bool,
@@ -243,19 +247,12 @@ mod input {
     }
 
     impl WebTextInput {
-        pub(crate) fn new(
-            canvas: &web_sys::HtmlCanvasElement,
-            editor: EditorSlot,
-            accepting: Accepting,
-            keys: Rc<dyn CanvasKeys>,
-            focus: Rc<FocusSync>,
-        ) -> Rc<Self> {
+        fn new(window: &CanvasRef) -> Rc<Self> {
             Rc::new_cyclic(|this| Self {
-                canvas: canvas.clone(),
-                editor,
-                accepting,
-                keys,
-                focus,
+                canvas: window.canvas.clone(),
+                editor: Rc::clone(&window.editor),
+                accepting: window.accepting.clone(),
+                keys: Rc::clone(&window.keys),
                 edit_context: has_edit_context(),
                 attached: RefCell::new(None),
                 entry: Cell::new(0),
@@ -267,7 +264,7 @@ mod input {
         }
 
         /// The window closed: detach the focused field, if any, for good.
-        pub(crate) fn retire(&self) {
+        fn retire(&self) {
             self.retired.set(true);
             self.pending.borrow_mut().clear();
             self.detach();
@@ -481,7 +478,7 @@ mod input {
             let target: &web_sys::EventTarget = context.as_ref();
             let mut listeners = Vec::new();
             let listen = |kind: &'static str, body: Box<dyn Fn(web_sys::Event)>| {
-                Listener::install(target, kind, &self.accepting, body)
+                CanvasListener::install(target, kind, &self.accepting, body)
                     .map_err(|error| JsValue::from_str(&error.to_string()))
             };
             {
@@ -641,7 +638,7 @@ mod input {
             let listen = |target: &web_sys::EventTarget,
                           kind: &'static str,
                           body: Box<dyn Fn(web_sys::Event)>| {
-                Listener::install(target, kind, &self.accepting, body)
+                CanvasListener::install(target, kind, &self.accepting, body)
                     .map_err(|error| JsValue::from_str(&error.to_string()))
             };
             for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
@@ -682,12 +679,12 @@ mod input {
                 )?);
             }
             for kind in ["focus", "blur"] {
-                let (focus, canvas) = (Rc::clone(&self.focus), self.canvas.clone());
+                let focus = Rc::clone(&self.editor);
                 listeners.push(listen(
                     target,
                     kind,
                     Box::new(move |event| {
-                        if !is_focus_handoff(&canvas, &event) {
+                        if !focus.is_handoff(&event) {
                             focus.sync();
                         }
                     }),
@@ -711,7 +708,7 @@ mod input {
                 .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
             parent.insert_before(&element, self.canvas.next_sibling().as_ref())?;
             self.editor.set(Some(element.unchecked_ref()));
-            let canvas_focused = crate::window::web::effective_focus(&self.canvas);
+            let canvas_focused = self.editor.has_focus();
             if canvas_focused {
                 let _ = element.focus();
             }
@@ -850,7 +847,7 @@ mod input {
         /// pans under a pinch zoom, which move the canvas without the store's
         /// layout changing. `scroll` does not bubble, so it is caught on the
         /// window in the capture phase.
-        fn viewport_listeners(&self) -> Result<Vec<Listener>, JsValue> {
+        fn viewport_listeners(&self) -> Result<Vec<CanvasListener>, JsValue> {
             let window =
                 web_sys::window().ok_or_else(|| JsValue::from_str("there is no window"))?;
             let mut targets: Vec<(web_sys::EventTarget, bool)> =
@@ -867,7 +864,7 @@ mod input {
                 for kind in ["scroll", "resize"] {
                     let this = self.this.clone();
                     listeners.push(
-                        Listener::install_in_phase(
+                        CanvasListener::install_in_phase(
                             target,
                             kind,
                             &self.accepting,
@@ -1052,11 +1049,56 @@ mod input {
         }
     }
 
-    impl crate::text::TextInput for Rc<WebTextInput> {
+    /// Each canvas window gets an input over its canvas: an `EditContext` or
+    /// a hidden textarea, which joins the canvas's focus area.
+    impl crate::host::Text<CanvasRef> for WebTextInput {
+        fn for_window(window: &CanvasRef) -> std::sync::Arc<dyn crate::text::TextInput> {
+            let input = OwnerSlot::new();
+            if input.replace(WebTextInput::new(window)).is_err() {
+                tracing::warn!("a canvas's text input was made off the page's thread");
+            }
+            std::sync::Arc::new(CanvasText(input))
+        }
+    }
+
+    /// What one canvas window holds of the text feature: its input, on the
+    /// page's thread.
+    struct CanvasText(OwnerSlot<Rc<WebTextInput>>);
+
+    impl CanvasText {
+        /// The input, held for no borrow: its calls run the field's store.
+        fn input(&self) -> Option<Rc<WebTextInput>> {
+            let input = self.0.take()?;
+            let shared = Rc::clone(&input);
+            let _ = self.0.restore(input);
+            Some(shared)
+        }
+    }
+
+    impl crate::text::TextInput for CanvasText {
+        /// The canvas's `EditContext` or hidden textarea, serving the focused
+        /// field's store; `None` once the window closed.
         fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
-            Some(crate::text::WindowTextInput::Store(
-                Rc::clone(self) as Rc<dyn TextStoreHost>
-            ))
+            self.input()
+                .map(|input| crate::text::WindowTextInput::Store(input as Rc<dyn TextStoreHost>))
+        }
+
+        /// The browser's text size is linear: nothing is captured.
+        fn capture_sizing(
+            &self,
+        ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+            Ok(crate::TextSizingCaptureState::Unsupported)
+        }
+
+        fn invalidate_sizing(&self) {}
+
+        fn fence_sizing(&self) {}
+
+        /// The window closed: the focused field, if any, is detached for good.
+        fn detach(&self) {
+            if let Some(input) = self.0.take() {
+                input.retire();
+            }
         }
     }
 
@@ -1075,7 +1117,10 @@ mod input {
             store: &Rc<dyn TextStore>,
         ) -> Result<CompositionEnd, TextStoreHostError> {
             if self.retired.get() {
-                return Err(TextStoreHostError::Unavailable);
+                return Err(flui_platform::Unsupported::new(
+                    flui_platform::UnsupportedReason::NoWindow,
+                )
+                .into());
             }
             // The focus a queued request will give is the one asked about.
             let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
