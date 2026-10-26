@@ -446,7 +446,7 @@ size zero and paints nothing regardless, so a single-frame version passes with t
 require the object to BE a repaint boundary and require ref-counting plus
 explicit disposal to manage that layer's lifetime.
 
-FLUI does neither. `RetainedSubtree` is a flat `Vec<RetainedNode>`, so a node's
+FLUI does neither. `RetainedSubtree` is a flat stream of entries (layers and slots for nested boundaries), so a node's
 own effect layers are addressable by index inside the ENCLOSING boundary's
 capture (`effect_slots`). An alpha change rebuilds those entries through the
 same `own_effect_layers` constructor the paint walk uses, patches them into the
@@ -489,15 +489,15 @@ never whether the frame is correct.
    pushed because `PaintEffects` has no field for either effect yet. Re-run
    the command before trusting this sentence; "Deferred producers" below
    records why each is out for now.
-2. **A boundary declines to graft while any boundary nested inside it has
-   pending work of any kind, including a layer update.** Serving a nested
-   boundary's update from an enclosing capture is possible — the layers are
-   flattened into it — but it patches only that capture and clears the flag,
-   leaving the nested boundary's own capture at the old value for the next
-   frame that grafts it to replay. Declining costs the outer boundary's reuse
-   on those frames and keeps both captures consistent, because the outer
-   re-captures the patched result on its way back out.
-   **Unasserted:** no test pins this.
+2. **A nested boundary's update is served from its own capture
+   ([ADR-0253](../../docs/adr/ADR-0253-retained-paint-captures-hold-slots-for-nested-boundaries.md)).**
+   An enclosing capture holds a slot where the nested boundary sits, not a
+   copy of its layers, so a layer update patches the one capture that owns the
+   node and the enclosing boundary is replayed whatever is nested in it. There
+   is no second copy that could stay at the old value.
+   **Asserted by:** `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
+   (`tests/nested_boundary_capture.rs`), which updates alphas under nested
+   boundaries between frames.
 3. **The root boundary is never retained, so an effect whose only enclosing
    boundary is the root gets no fast path.** `run_paint` enters through
    `paint_subtree(root)` directly rather than the boundary-child arm that
@@ -931,12 +931,13 @@ commit with the frame; an errored frame drops them, and the retry, still
 queued, mints again. Nested boundaries keep their stamp (token included)
 through an enclosing boundary's graft.
 
-**Why not pointer identity of the pictures:** `run_paint` always descends from
-the root, and an outer boundary refuses reuse while anything nested in it is
-dirty, re-recording its inline pictures. Their `Arc`s change on every such
-frame although the content did not, so `Arc::ptr_eq` would report the root
-changed on every real frame (`an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token`
-pins the re-recording as well as the kept token).
+**Why not pointer identity of the pictures:** a boundary re-records its inline
+pictures whenever it repaints, and it can repaint without its content changing
+(its capture was evicted or refused, so the frame descends into it again). Their
+`Arc`s change on such a frame, so `Arc::ptr_eq` would report the boundary
+changed. A boundary replayed because only something nested in it repainted
+keeps both its token and its own pictures
+(`an_outer_boundary_keeps_its_token_and_pictures_when_a_nested_one_repaints`).
 
 **Accepted trade-off:** a clean node that paints differently breaks this rule
 exactly as it already breaks grafting. A boundary whose capture was refused

@@ -143,6 +143,35 @@ fn bench_single_dirty_boundary(c: &mut Criterion) {
     group.finish();
 }
 
+/// A blinking caret: one boundary nested in a list item's boundary is dirty.
+///
+/// The work should follow the dirty boundary's own subtree, not the item it sits
+/// in; compare with `paint/one_dirty_boundary`, where the dirty boundary is a
+/// direct child of the root. Retained captures hold a slot for the nested
+/// boundary, so the item is replayed instead of re-recorded.
+fn bench_nested_caret(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paint/nested_caret");
+    for &n in &[10_usize, 100, 1_000] {
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter_batched(
+                || {
+                    let (mut owner, caret) = helpers::build_nested_boundary_tree_painted_once(n);
+                    owner.mark_needs_paint(caret);
+                    owner
+                },
+                |mut owner| {
+                    owner
+                        .run_paint()
+                        .expect("run_paint must succeed with one dirty nested boundary");
+                    black_box(owner)
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 /// The control for `one_dirty_boundary`: the SAME tree, eight dirty
 /// boundaries instead of one.
 ///
@@ -541,6 +570,7 @@ criterion_group!(
     bench_deep_run_paint,
     bench_single_dirty_boundary,
     bench_eight_dirty_boundaries,
+    bench_nested_caret,
     bench_opacity_alpha_change,
     bench_transform_matrix_change,
     bench_rotated_box_turn_change,

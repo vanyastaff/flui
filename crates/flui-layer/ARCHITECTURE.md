@@ -151,8 +151,8 @@ twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and other
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
 retains nothing and does not walk.
 
-Why a token rather than `Arc::ptr_eq` on pictures: an outer boundary re-records its inline
-pictures whenever a nested boundary is dirty, so pointer identity reports it changed on frames
+Why a token rather than `Arc::ptr_eq` on pictures: a boundary that repaints for any reason re-records its inline
+pictures, so pointer identity reports it changed on frames
 whose content did not. Why an `Arc<()>` rather than a counter: a counter restarts with each
 `PipelineOwner`, and the differ, holding the previous frame's clones, makes an allocation
 address impossible to reuse while compared. The differ pairs by the boundary `RenderId` and decides "unchanged" by the token, and

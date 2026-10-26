@@ -38,7 +38,7 @@ the repeated copies of the same layers (memory is O(depth x layers)).
    }
    enum Entry { Layer(RetainedNode), Slot(NestedSlot) }
    NestedSlot { boundary: RenderId, parent: Option<usize>, origin: Offset,
-                offset_override: Option<Offset> }
+                offset_override: Option<Offset>, anchor: Option<AnchorFrame> }
    ```
 
    A slot is an ordered hole in the entry stream, at the position the painting walk reached the
@@ -61,7 +61,10 @@ the repeated copies of the same layers (memory is O(depth x layers)).
    no capture, runs `paint_subtree` for it and records a fresh capture. The replay carries the
    parent's `AnchorFrame` down and rebases it at each slot (`frame.rebased(origin + position)`, with the
    position defined above), exactly as the painting walk does, so a nested painter that reads `paint_anchor`
-   sees the position after an ancestor moved the boundary. A missing capture is a per-slot repaint, not an eviction of its ancestors.
+   sees the position after an ancestor moved the boundary. A paint anchor that is a node of the
+   capturing region itself is part of that region's own paint, so the slot stores the frame in force
+   at its parent (`anchor`, set only then); an anchor from outside the region is taken from where the
+   region is placed now. A missing capture is a per-slot repaint, not an eviction of its ancestors.
 
 3. **A clean boundary is replayed whatever is nested.** The graft-time `nested_boundaries` check,
    `note_boundary` and `capture_scopes`, the two ancestor-evicting `retain` loops and the "re-note on
