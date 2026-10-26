@@ -5,6 +5,8 @@
 //! window has no view of any operating system's, and on Windows a Win32
 //! window opened with its own options narrows to the view that reads them
 //! back. The macOS cases build wherever the macOS target is type-checked.
+//! Which paths exist without the feature or off their system is pinned by the
+//! compile-fail fixtures under `tests/ui/native/` (`thread_boundary_ui`).
 
 /// Every item through its facade path: removing or moving one fails to build
 /// this test.
@@ -13,19 +15,32 @@
     reason = "each import only has to resolve; nothing here is used"
 )]
 mod items {
-    use flui::native::HostWindow as _;
     #[cfg(target_os = "macos")]
     use flui::native::macos::{
-        AppKitWindow as _, MacOSBackdrop as _, MacOSBackdropError as _,
-        MacOSCollectionBehavior as _, MacOSWindowExt as _, MacOSWindowLevel as _,
-        TabJoinError as _,
+        AppKitWindow as _, GlassStyle as _, GlassTint as _, LiquidGlass as _, MacOSBackdrop as _,
+        MacOSBackdropError as _, MacOSCollectionBehavior as _, MacOSMaterial as _,
+        MacOSWindowExt as _, MacOSWindowLevel as _, TabJoinError as _,
     };
     #[cfg(windows)]
-    use flui::native::windows::{Win32Window as _, WindowsBackdrop as _, WindowsWindowExt as _};
-    use flui::platform::{
+    use flui::native::windows::{
+        Win32Window as _, Win32WindowError as _, WindowsBackdrop as _, WindowsWindowExt as _,
+    };
+    use flui::native::{HostWindow as _, with_window as _};
+    use flui::platform::os_options::{
         OsWindowOptions as _, Win32WindowOptions as _, WindowsCornerPreference as _,
         WindowsTheme as _,
     };
+}
+
+/// Nothing is presented at an address no runtime issued, so `with_window`
+/// answers `None` and does not run the closure.
+#[test]
+fn with_window_answers_none_where_nothing_is_presented() {
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+        presentation_id: flui_foundation::PresentationId::new(1),
+    };
+    assert_eq!(flui::native::with_window(address, |_| ()), None);
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -69,35 +84,45 @@ mod narrowing {
     #[test]
     fn a_win32_window_narrows_through_the_facade() {
         use flui::native::windows::{WindowsBackdrop, WindowsWindowExt};
-        use flui::platform::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
+        use flui::platform::os_options::{
+            OsWindowOptions, Win32WindowOptions, WindowsCornerPreference, WindowsTheme,
+        };
 
         let platform = flui_native::WindowsPlatform::new().expect("the Win32 platform");
         let window = flui_native::Platform::open_window(
             &platform,
-            hidden().with_os(
-                Win32WindowOptions::default()
-                    .with_corner_preference(WindowsCornerPreference::DoNotRound)
-                    .with_theme(WindowsTheme::Dark),
+            hidden().with_os_options(
+                OsWindowOptions::default().with_windows(
+                    Win32WindowOptions::default()
+                        .with_corner_preference(WindowsCornerPreference::DoNotRound)
+                        .with_theme(WindowsTheme::Dark),
+                ),
             ),
         )
         .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window narrows to its view");
-        assert!(win32.dpi() > 0, "a live Win32 window has a DPI");
+        assert!(
+            win32.dpi().is_ok_and(|dpi| dpi > 0),
+            "a live Win32 window has a DPI"
+        );
         assert_eq!(
             win32.corner_preference(),
-            WindowsCornerPreference::DoNotRound
+            Ok(WindowsCornerPreference::DoNotRound)
         );
-        assert_eq!(win32.theme(), WindowsTheme::Dark);
+        assert_eq!(win32.theme(), Ok(WindowsTheme::Dark));
 
-        win32.set_corner_preference(WindowsCornerPreference::RoundSmall);
-        win32.set_theme(WindowsTheme::Light);
-        win32.set_backdrop(WindowsBackdrop::MicaAlt);
+        assert_eq!(
+            win32.set_corner_preference(WindowsCornerPreference::RoundSmall),
+            Ok(())
+        );
+        assert_eq!(win32.set_theme(WindowsTheme::Light), Ok(()));
+        assert_eq!(win32.set_backdrop(WindowsBackdrop::MicaAlt), Ok(()));
         assert_eq!(
             win32.corner_preference(),
-            WindowsCornerPreference::RoundSmall
+            Ok(WindowsCornerPreference::RoundSmall)
         );
-        assert_eq!(win32.theme(), WindowsTheme::Light);
-        assert_eq!(win32.backdrop(), WindowsBackdrop::MicaAlt);
+        assert_eq!(win32.theme(), Ok(WindowsTheme::Light));
+        assert_eq!(win32.backdrop(), Ok(WindowsBackdrop::MicaAlt));
         window.close();
     }
 }

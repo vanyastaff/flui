@@ -1360,7 +1360,8 @@ impl WindowProc {
                         let appearance = super::backdrop::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
                             if ctx.chrome_follows_system.get() {
-                                super::backdrop::apply_chrome(hwnd, appearance);
+                                // A build that refuses the attribute keeps its chrome.
+                                let _ = super::backdrop::apply_chrome(hwnd, appearance);
                             }
                             ctx.callbacks.dispatch_appearance_changed();
                         }

@@ -394,7 +394,7 @@ pub use owner::{
 ///     use flui_native::os::windows::{WindowsBackdrop, WindowsWindowExt};
 ///     // A Win32 window's view; `None` under `FLUI_HEADLESS`.
 ///     if let Some(win32) = window.win32() {
-///         win32.set_backdrop(WindowsBackdrop::Mica);
+///         win32.set_backdrop(WindowsBackdrop::Mica)?;
 ///     }
 /// }
 /// ```

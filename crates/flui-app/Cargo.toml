@@ -58,6 +58,12 @@ web = []
 debug-overlay = []
 performance-overlay = []
 
+# The escape hatch (ADR-0254 §8): `flui_app::native`, the core host's
+# per-system window extensions and `native::with_window`, which the facade
+# publishes as `flui::native` behind its own `native` feature. Off, the module
+# is absent and the runner keeps no list of host windows.
+native = []
+
 [dependencies]
 flui-platform = { workspace = true }
 # Core FLUI crates

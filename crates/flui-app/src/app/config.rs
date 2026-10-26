@@ -111,10 +111,10 @@ pub struct AppConfig {
     /// Whether to show the window decorations.
     pub decorations: bool,
 
-    /// What the window is created with on one operating system, which only
-    /// that system's host takes (ADR-0254 §8); see
-    /// [`OsWindowOptions`](flui_platform::OsWindowOptions).
-    pub os_window_options: flui_platform::OsWindowOptions,
+    /// What the window is created with on each operating system that has
+    /// options of its own, each read only by that system's host (ADR-0254
+    /// §8); see [`OsWindowOptions`](flui_platform::os_options::OsWindowOptions).
+    pub os_options: flui_platform::os_options::OsWindowOptions,
 
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
@@ -308,7 +308,7 @@ impl Default for AppConfig {
             mode: WindowMode::Normal,
             resizable: true,
             decorations: true,
-            os_window_options: flui_platform::OsWindowOptions::None,
+            os_options: flui_platform::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
             frame_latency: FrameLatency::Balanced,
             dev_reload: None,
@@ -463,13 +463,15 @@ impl AppConfig {
         self.frame_latency = latency;
         self
     }
-    /// Set what the window is created with on one operating system.
+
+    /// Set what the window is created with on each operating system that has
+    /// options of its own.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_os_window_options(
+    pub fn with_os_options(
         mut self,
-        options: impl Into<flui_platform::OsWindowOptions>,
+        os_options: flui_platform::os_options::OsWindowOptions,
     ) -> Self {
-        self.os_window_options = options.into();
+        self.os_options = os_options;
         self
     }
 
@@ -673,7 +675,7 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .with_max_size(config.max_size)
             .with_position(config.position)
             .with_mode(config.mode)
-            .with_os(config.os_window_options.clone())
+            .with_os_options(config.os_options.clone())
     }
 }
 

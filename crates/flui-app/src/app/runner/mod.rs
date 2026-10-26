@@ -104,6 +104,8 @@ use web::run_web;
 pub(crate) fn presentation_window(
     host: std::sync::Arc<dyn flui_native::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
+    #[cfg(feature = "native")]
+    keep_native_window(&host);
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
@@ -113,6 +115,42 @@ pub(crate) fn presentation_window(
         .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
             flui_platform::TargetPlatform::current(),
         ))
+}
+
+/// Keep a weak reference to a window the runner is about to present, so the
+/// escape hatch finds the host's window behind a presentation's command queue.
+/// Windows already dropped leave the list here.
+#[cfg(feature = "native")]
+fn keep_native_window(host: &std::sync::Arc<dyn flui_native::HostWindow>) {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        let mut windows = state.native_windows.borrow_mut();
+        windows.retain(|window| window.strong_count() > 0);
+        windows.push(std::sync::Arc::downgrade(host));
+    });
+}
+
+/// The host's window presented at `address`, on the thread that runs the
+/// application: `None` on any other thread, when nothing is presented at
+/// `address` and once its window has closed. The window is found by the
+/// allocation the presentation's command queue holds, not by an id.
+#[cfg(feature = "native")]
+pub(crate) fn native_window(
+    address: flui_foundation::PresentationAddress,
+) -> Option<std::sync::Arc<dyn flui_native::HostWindow>> {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        if state.owner_thread != Some(std::thread::current().id()) {
+            return None;
+        }
+        let presented = state.window_commands.window_for(address)?;
+        let presented = std::sync::Arc::as_ptr(&presented).cast::<()>();
+        state.native_windows.borrow().iter().find_map(|window| {
+            (std::sync::Weak::as_ptr(window).cast::<()>() == presented)
+                .then(|| window.upgrade())
+                .flatten()
+        })
+    })
 }
 
 fn text_store_host_of(

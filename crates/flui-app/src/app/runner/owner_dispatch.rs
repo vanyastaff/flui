@@ -977,6 +977,15 @@ pub(super) fn teardown_platform_ui_runtime() {
     not(target_arch = "wasm32")
 ))]
 mod display_tests;
+#[path = "owner_dispatch/native_window_tests.rs"]
+#[cfg(all(
+    test,
+    feature = "native",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod native_window_tests;
 #[path = "owner_dispatch/notice_tests.rs"]
 #[cfg(all(
     test,

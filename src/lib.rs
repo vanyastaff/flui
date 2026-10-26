@@ -199,25 +199,29 @@ pub use flui_material as material;
 /// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
 /// (ADR-0089 §5).
 ///
-/// Each system's module has an extension trait implemented for
-/// `dyn HostWindow`, the window as the core host hands it out. Its one method
-/// narrows the window to that system's view of it (`win32()`, `appkit()`) and
-/// answers `None` for a window of any other host (headless, winit, another
-/// system), so nothing is asked of a window that cannot take it and nothing
-/// panics. The views take and return FLUI types; a raw window or display
-/// handle leaves only through `raw-window-handle`'s `HasWindowHandle` and
-/// `HasDisplayHandle`, which every window implements.
+/// [`with_window`](native::with_window) runs a closure on the window a
+/// presentation is drawn in, by the address a window request resolves to or a
+/// close request names; a widget that holds only its `WindowHandle` has no
+/// address to give it yet (that path comes with the window handler passed at
+/// open, ADR-0254 §4). Each system's module has an extension trait
+/// implemented for `dyn HostWindow`, the window as the core host hands it out.
+/// Its one method narrows the window to that system's view of it (`win32()`,
+/// `appkit()`) and answers `None` for a window of any other host (headless,
+/// winit, another system), so nothing is asked of a window that cannot take it
+/// and nothing panics. The views take and return FLUI types; a raw window or
+/// display handle leaves only through `raw-window-handle`'s `HasWindowHandle`
+/// and `HasDisplayHandle`, which every window implements.
 ///
 /// What a window is created with on one system is a value of that system's
-/// type in [`platform::OsWindowOptions`], given to
-/// [`AppConfig::with_os_window_options`].
+/// type in [`platform::os_options::OsWindowOptions`], given to
+/// [`AppConfig::with_os_options`].
 #[cfg(feature = "native")]
 pub mod native {
-    pub use flui_app::native::HostWindow;
     #[cfg(target_os = "macos")]
     pub use flui_app::native::macos;
     #[cfg(windows)]
     pub use flui_app::native::windows;
+    pub use flui_app::native::{HostWindow, with_window};
 }
 /// The platform contracts and input vocabulary (`flui-platform`).
 ///

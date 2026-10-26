@@ -35,11 +35,13 @@ use windows::{
 };
 
 use flui_platform::{
-    CursorError, DispatchEventResult, OsWindowOptions, PlatformInput, PlatformWindow,
-    SizeConstraints, Win32WindowOptions, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowExecutionState, WindowId,
-    WindowMode, WindowOptions, WindowReveal, WindowState, WindowsCornerPreference,
+    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
+    WindowState,
 };
+
+use flui_platform::os_options::WindowsCornerPreference;
 
 use super::mode::NativeMode;
 use super::proc::{
@@ -368,16 +370,15 @@ impl WindowsWindow {
 
             // What the window opens with on Windows: its own options, or
             // what a window gets without them.
-            let os = match &options.os {
-                OsWindowOptions::Windows(os) => os.clone(),
-                _ => Win32WindowOptions::default(),
-            };
+            let os = options.os_options.windows.clone().unwrap_or_default();
             Self::apply_windows_features(hwnd, os.corner_preference);
             // One sample seeds both the chrome and the change filter, so the
             // first theme change after creation is never swallowed.
             let appearance = super::backdrop::system_appearance();
             let (chrome, chrome_follows_system) = super::backdrop::opening_chrome(&os, appearance);
-            super::backdrop::apply_chrome(hwnd, chrome);
+            // A build before Windows 10 20H1 refuses the attribute and draws
+            // its own chrome; the window opens either way.
+            let _ = super::backdrop::apply_chrome(hwnd, chrome);
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} - scale: {}",
