@@ -47,6 +47,10 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
+/// - `flui/native`: the escape hatch, off by default because it is Evolving;
+///   on here so the facade's `surface` test and the `native` fixtures of its
+///   compile-fail suite run in the same jobs (ADR-0254 §8). The doctests run
+///   the facade without it, which pins that `flui::native` is absent then.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
@@ -67,7 +71,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/native,flui-devtools/agent";
 
 /// The build that links the examples and benches: `--all-targets` over the
 /// packages and features of the test run on `host` ([`scoped_nextest`]), so
@@ -1046,7 +1050,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(
