@@ -30,10 +30,9 @@ parent can hand a clean boundary new constraints.
    `{ in_flight: Cell<bool>, parent: Cell<Option<RenderId>>, state: UnsafeCell<SlotState> }` with
    `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. The header
    fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live. The
-   parent link is, for now, written twice by one writer: `RenderNode` keeps its `NodeLinks` parent
-   for its ordinary readers, and the slot header mirrors it (`RenderTree::set_parent_link` and
-   `insert_*_child` write both, so they cannot disagree). **Planned, not an accepted deviation:**
-   the readers move to the header (`RenderTree::parent`) and the node-side copy is removed.
+   parent link lives only in the header: `RenderTree::parent` reads it, `set_parent_link` and
+   `insert_*_child` write it, and neither `RenderNode` nor `NodeLinks` keeps a copy, so the two
+   cannot disagree. Code that holds only a node (the layout walk) asks the lease.
 
    Inserting and removing go through `&mut NodeSlab` only, never during a lease. `remove` commits
    in this order, so unwinding out of the last step leaves a consistent slab: (a) move the node

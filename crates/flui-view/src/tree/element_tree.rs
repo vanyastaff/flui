@@ -40,7 +40,7 @@ fn append_sparse_sliver_children(
         .filter(|child| !desired_membership.contains(child))
         .filter_map(|child| {
             let child_node = render_tree.get(child)?;
-            if child_node.parent() != Some(parent_render) {
+            if render_tree.parent(child) != Some(parent_render) {
                 return None;
             }
             let index = child_node
@@ -1493,11 +1493,11 @@ impl ElementTree {
 
                 #[cfg(debug_assertions)]
                 for &(render_id, desired) in &desired_parent {
-                    let Some(node) = render_tree.get(render_id) else {
+                    if !render_tree.contains(render_id) {
                         continue;
-                    };
+                    }
                     debug_assert_eq!(
-                        node.parent(),
+                        render_tree.parent(render_id),
                         desired,
                         "reorder pass: render node {render_id:?}'s parent link disagrees with the \
                          desired parent the DFS computed for it"

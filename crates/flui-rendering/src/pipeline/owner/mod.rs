@@ -1280,6 +1280,7 @@ mod tests {
             entry.layout_leaf_only(
                 crate::constraints::BoxConstraints::tight(Size::ZERO),
                 text.source(),
+                false,
             )
         };
 

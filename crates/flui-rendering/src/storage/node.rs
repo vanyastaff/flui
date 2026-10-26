@@ -40,7 +40,7 @@ macro_rules! with_entry {
 /// let node: &RenderNode = tree.get(id)?;
 ///
 /// // Common operations work on any variant
-/// let parent = node.parent();
+/// let parent = tree.parent(id);
 /// let needs_layout = node.needs_layout();
 ///
 /// // Protocol-specific access
@@ -67,13 +67,9 @@ impl RenderNode {
         Self::Box(RenderEntry::new(render_object))
     }
 
-    /// Creates a new Box protocol node with a parent.
-    pub fn new_box_with_parent(
-        render_object: Box<dyn RenderObject<BoxProtocol>>,
-        parent: RenderId,
-        depth: u16,
-    ) -> Self {
-        Self::Box(RenderEntry::with_parent(render_object, parent, depth))
+    /// Creates a new Box protocol node at `depth`.
+    pub fn new_box_at_depth(render_object: Box<dyn RenderObject<BoxProtocol>>, depth: u16) -> Self {
+        Self::Box(RenderEntry::with_depth(render_object, depth))
     }
 
     /// Creates a new Sliver protocol node.
@@ -81,13 +77,12 @@ impl RenderNode {
         Self::Sliver(RenderEntry::new(render_object))
     }
 
-    /// Creates a new Sliver protocol node with a parent.
-    pub fn new_sliver_with_parent(
+    /// Creates a new Sliver protocol node at `depth`.
+    pub fn new_sliver_at_depth(
         render_object: Box<dyn RenderObject<SliverProtocol>>,
-        parent: RenderId,
         depth: u16,
     ) -> Self {
-        Self::Sliver(RenderEntry::with_parent(render_object, parent, depth))
+        Self::Sliver(RenderEntry::with_depth(render_object, depth))
     }
 }
 
@@ -297,18 +292,6 @@ impl RenderNode {
 
     // Convenience methods
 
-    /// Returns the parent ID.
-    #[inline]
-    pub fn parent(&self) -> Option<RenderId> {
-        self.links().parent()
-    }
-
-    /// Sets the parent ID.
-    #[inline]
-    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
-        self.links_mut().set_parent(parent);
-    }
-
     /// Returns the children IDs.
     #[inline]
     pub fn children(&self) -> &[RenderId] {
@@ -337,12 +320,6 @@ impl RenderNode {
     #[inline]
     pub(crate) fn remove_child(&mut self, child: RenderId) -> bool {
         self.links_mut().remove_child(child)
-    }
-
-    /// Returns true if this is a root node.
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        self.links().is_root()
     }
 
     /// Returns true if this is a leaf node.
@@ -519,14 +496,15 @@ impl RenderNode {
         &mut self,
         constraints: crate::storage::ErasedConstraints,
         text: crate::pipeline::TextSource<'_>,
+        has_parent: bool,
     ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
         use crate::storage::ErasedConstraints;
         match (self, constraints) {
             (Self::Box(entry), ErasedConstraints::Box(c)) => {
-                entry.layout_leaf_only(c, text).map(Into::into)
+                entry.layout_leaf_only(c, text, has_parent).map(Into::into)
             }
             (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => {
-                entry.layout_leaf_only(c, text).map(Into::into)
+                entry.layout_leaf_only(c, text, has_parent).map(Into::into)
             }
             (Self::Box(_), ErasedConstraints::Sliver(_)) => {
                 Err(crate::error::RenderError::ProtocolMismatch {

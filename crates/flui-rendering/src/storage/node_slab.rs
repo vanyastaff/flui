@@ -42,8 +42,9 @@ enum SlotState {
 struct Slot {
     /// Set while a layout walk holds the slot's `&mut RenderNode`.
     in_flight: Cell<bool>,
-    /// The occupant's parent, mirrored from its `NodeLinks` by [`NodeSlab::set_parent`] alone, so
-    /// the walk can check a parent-to-child edge without reading a node that is borrowed.
+    /// The occupant's parent, written by [`NodeSlab::set_parent`] alone. It lives here and not in
+    /// the node, so the walk can check a parent-to-child edge without reading a node that is
+    /// borrowed.
     parent: Cell<Option<RenderId>>,
     state: UnsafeCell<SlotState>,
 }
@@ -188,7 +189,12 @@ impl NodeSlab {
             })
     }
 
-    /// Records the occupant's parent in the slot header. The one writer of that mirror.
+    /// The occupant's parent as the slot header holds it.
+    pub(super) fn parent(&self, index: usize) -> Option<RenderId> {
+        self.slots.get(index)?.parent.get()
+    }
+
+    /// Records the occupant's parent in the slot header, where the link lives.
     pub(super) fn set_parent(&mut self, index: usize, parent: Option<RenderId>) {
         if let Some(slot) = self.slots.get(index) {
             slot.parent.set(parent);

@@ -137,9 +137,17 @@ impl TreeLease<'_> {
     /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so it is
     /// sound while `parent`'s node is borrowed by the walk.
     pub(crate) fn is_child_of(&self, child: RenderId, parent: RenderId) -> bool {
-        // A stale child has no header worth trusting, so the generation check comes first.
-        self.generations.get(child.index() as usize).copied() == Some(child.generation())
-            && self.slab.parent(child.index() as usize) == Some(parent)
+        self.parent(child) == Some(parent)
+    }
+
+    /// The parent of a current id, from its header. Reads no node, so it is sound while the node
+    /// (or any other) is borrowed by the walk. A stale id has no header worth trusting, so the
+    /// generation check comes first.
+    pub(crate) fn parent(&self, id: RenderId) -> Option<RenderId> {
+        if self.generations.get(id.index() as usize).copied() != Some(id.generation()) {
+            return None;
+        }
+        self.slab.parent(id.index() as usize)
     }
 
     pub(crate) fn is_in_flight(&self, id: RenderId) -> bool {
@@ -234,16 +242,12 @@ impl RenderTree {
         RenderId::new_gen(index, self.generations[slab_index])
     }
 
-    /// Writes `child_id`'s parent link: the node's own copy and the slot header the layout lease
-    /// reads. The one writer of both, so they cannot disagree.
+    /// Writes `child_id`'s parent link into its slot header, the only place the link lives, so
+    /// the layout lease and every other reader see one value.
     fn set_parent_link(&mut self, child_id: RenderId, parent: Option<RenderId>) {
-        let Some(index) = self.resolve(child_id) else {
-            return;
-        };
-        if let Some(child) = self.nodes.get_mut(index) {
-            child.set_parent(parent);
+        if let Some(index) = self.resolve(child_id) {
+            self.nodes.set_parent(index, parent);
         }
-        self.nodes.set_parent(index, parent);
     }
 
     /// Takes the exclusive borrow of the tree for a layout walk, which then acquires nodes one at
@@ -490,7 +494,7 @@ impl RenderTree {
         // wrapped in SliverToBoxAdapter at the widget layer — the render
         // tree accepts it directly because the sliver layout bridge
         // handles the cross-protocol dispatch.
-        let child_node = RenderNode::new_box_with_parent(render_object, parent_id, child_depth);
+        let child_node = RenderNode::new_box_at_depth(render_object, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
         self.nodes.set_parent(child_slab_index, Some(parent_id));
@@ -513,7 +517,7 @@ impl RenderTree {
     ) -> Option<RenderId> {
         let child_depth = child_depth(self.get(parent_id)?.depth());
 
-        let child_node = RenderNode::new_sliver_with_parent(render_object, parent_id, child_depth);
+        let child_node = RenderNode::new_sliver_at_depth(render_object, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
         self.nodes.set_parent(child_slab_index, Some(parent_id));
@@ -579,7 +583,7 @@ impl RenderTree {
              descendant's parent, so this degenerate self-cycle would slip past it"
         );
         debug_assert!(
-            self.get(child_id).and_then(RenderNode::parent).is_none(),
+            self.parent(child_id).is_none(),
             "adopt_child: {child_id:?} already has a parent — re-parenting through this \
              primitive would leave the OLD parent's children list with a stale entry; drop it \
              from its old parent first (see `drop_child`)"
@@ -636,7 +640,7 @@ impl RenderTree {
         }
 
         debug_assert_eq!(
-            self.get(child_id).and_then(RenderNode::parent),
+            self.parent(child_id),
             Some(parent_id),
             "drop_child: {child_id:?}'s current parent does not match {parent_id:?} — the \
              caller's belief about the tree shape is wrong"
@@ -687,10 +691,7 @@ impl RenderTree {
             if listed.contains(&child_id) {
                 continue;
             }
-            let Some(child) = self.get_mut(child_id) else {
-                continue;
-            };
-            if child.parent() == Some(parent_id) {
+            if self.parent(child_id) == Some(parent_id) {
                 self.set_parent_link(child_id, None);
                 self.redepth_subtree(child_id, 0);
                 update.membership_changed = true;
@@ -699,11 +700,11 @@ impl RenderTree {
 
         let mut list = Vec::with_capacity(children.len());
         for &child_id in children {
-            let Some(child) = self.get(child_id) else {
+            if !self.contains(child_id) {
                 continue;
-            };
+            }
             list.push(child_id);
-            let donor = child.parent();
+            let donor = self.parent(child_id);
             if donor == Some(parent_id) {
                 continue;
             }
@@ -788,7 +789,7 @@ impl RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
+        if let Some(parent_id) = self.parent(id)
             && let Some(parent) = self.get_mut(parent_id)
         {
             parent.remove_child(id);
@@ -850,7 +851,13 @@ impl RenderTree {
     /// Returns the parent ID of a node.
     #[inline]
     pub fn parent(&self, id: RenderId) -> Option<RenderId> {
-        self.get(id)?.parent()
+        self.nodes.parent(self.resolve(id)?)
+    }
+
+    /// `true` when `id` is a current node with no parent.
+    #[inline]
+    pub fn is_root(&self, id: RenderId) -> bool {
+        self.resolve(id).is_some() && self.parent(id).is_none()
     }
 
     /// Returns the children IDs of a node.
