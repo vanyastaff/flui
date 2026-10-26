@@ -119,6 +119,7 @@ fn containment_and_isolation_matrix() {
             ("runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release", runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release as fn()),
             ("runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement", runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement as fn()),
             ("runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity", runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity as fn()),
+            ("runtime_input_lifecycle::pointer_frame_settles_a_pinch_once_for_both_contacts", runtime_input_lifecycle::pointer_frame_settles_a_pinch_once_for_both_contacts as fn()),
             ("runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change", runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change as fn()),
             ("runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion", runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion as fn()),
             ("runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures", runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures as fn()),

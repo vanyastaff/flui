@@ -200,6 +200,7 @@ request.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
+- Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. Android (`ACTION_MOVE` carries every pointer), Wayland (`wl_touch.frame`) and iOS (a touch set) still report each contact on its own, as frames of one.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
 
 ### 16. Mobile system UI
@@ -458,5 +459,6 @@ request.
 | 2026-10-22 | minor | Entry 2: the desktop accessibility adapters are always on (no `a11y` feature; AT-SPI comes with the Linux host), still unrun with a screen reader |
 | 2026-10-22 | minor | Entry 30 closes: `cargo xtask panic-boundary` holds every OS entry into the core host (169: extern fns, Objective-C and COM methods, AccessKit handlers, blocks, delegates and GCD work items) to a constant or one call of `owner::panic_boundary::os_entry`; the AppKit, UIKit, Win32 and Android entries it found unguarded go through it now, and the Apple ones, type-checked only, join entry 4's runs still owed ([#1840](https://github.com/vanyastaff/flui/issues/1840)); entries 31–40 become 30–39 |
 | 2026-10-26 | minor | Entry 15: the interaction layer has the pointer frame (`dispatch_pointer_frame_on`, `pointer_frame_end`); no backend reports frames yet. Follow-ups: Win32 `GetPointerFrameInfoHistory`, Android `ACTION_MOVE` with all pointers, Wayland `wl_touch.frame`, iOS touch sets |
+| 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
 
 </details>

@@ -353,6 +353,8 @@ impl TryFrom<HostInputDto> for HostInput {
 enum PlatformInputDto {
     #[serde(rename = "pointer")]
     Pointer(PointerEventDto),
+    #[serde(rename = "pointer_frame")]
+    PointerFrame(Vec<PointerEventDto>),
     #[serde(rename = "keyboard")]
     Keyboard(KeyEventDto),
     #[serde(rename = "ime")]
@@ -368,7 +370,10 @@ impl PlatformInputDto {
         match self {
             Self::Keyboard(event) => event.key.redact(),
             Self::Ime(event) => event.redact(),
-            Self::Pointer(_) | Self::DragDrop(_) | Self::Capabilities(_) => false,
+            Self::Pointer(_)
+            | Self::PointerFrame(_)
+            | Self::DragDrop(_)
+            | Self::Capabilities(_) => false,
         }
     }
 }
@@ -379,6 +384,13 @@ impl TryFrom<&PlatformInput> for PlatformInputDto {
     fn try_from(input: &PlatformInput) -> Result<Self> {
         Ok(match input {
             PlatformInput::Pointer(event) => Self::Pointer(event.try_into()?),
+            PlatformInput::PointerFrame(frame) => Self::PointerFrame(
+                frame
+                    .events()
+                    .iter()
+                    .map(PointerEventDto::try_from)
+                    .collect::<Result<_>>()?,
+            ),
             PlatformInput::Keyboard(event) => Self::Keyboard(event.try_into()?),
             PlatformInput::Ime(event) => Self::Ime(event.try_into()?),
             PlatformInput::DragDrop(event) => Self::DragDrop(event.into()),
@@ -393,6 +405,15 @@ impl TryFrom<PlatformInputDto> for PlatformInput {
     fn try_from(input: PlatformInputDto) -> Result<Self> {
         Ok(match input {
             PlatformInputDto::Pointer(event) => Self::Pointer(event.try_into()?),
+            PlatformInputDto::PointerFrame(events) => Self::PointerFrame(
+                flui_platform::PointerFrame::new(
+                    events
+                        .into_iter()
+                        .map(PointerEvent::try_from)
+                        .collect::<Result<_>>()?,
+                )
+                .map_err(|_| invalid("empty pointer frame"))?,
+            ),
             PlatformInputDto::Keyboard(event) => Self::Keyboard(event.try_into()?),
             PlatformInputDto::Ime(event) => Self::Ime(event.into()),
             PlatformInputDto::DragDrop(event) => Self::DragDrop(event.try_into()?),

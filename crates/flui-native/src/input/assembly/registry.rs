@@ -549,6 +549,12 @@ impl ContactRegistry {
     /// contact are always delivered.
     #[must_use]
     pub fn delivers(&self, input: &PlatformInput) -> bool {
+        if let PlatformInput::PointerFrame(frame) = input {
+            return frame
+                .events()
+                .iter()
+                .any(|event| self.delivers(&PlatformInput::Pointer(event.clone())));
+        }
         let info = match input {
             PlatformInput::Pointer(
                 PointerEvent::Down(press)

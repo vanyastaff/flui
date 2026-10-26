@@ -61,10 +61,35 @@ pub use scroll::{ContactScroll, ScrollPhases, ScrollReading};
 pub use touchpad::{ContentTransform, TouchpadFrame, ViewportReading, ViewportStatus};
 pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};
 
-use flui_platform::PlatformInput;
+use flui_platform::{PlatformInput, PointerFrame};
 
 /// The events one reading assembles into; two fit without allocating.
 pub type Assembled = SmallVec<[PlatformInput; 2]>;
+
+/// The inputs of the contacts a platform reported as one frame, as the frame
+/// they are: when every input is a pointer event and there are at least two,
+/// one [`PlatformInput::PointerFrame`]; otherwise the inputs in order.
+#[must_use]
+pub fn framed(contacts: impl IntoIterator<Item = Assembled>) -> Assembled {
+    let inputs: Assembled = contacts.into_iter().flatten().collect();
+    if inputs.len() < 2
+        || !inputs
+            .iter()
+            .all(|input| matches!(input, PlatformInput::Pointer(_)))
+    {
+        return inputs;
+    }
+    let events = inputs
+        .into_iter()
+        .filter_map(|input| match input {
+            PlatformInput::Pointer(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+    PointerFrame::new(events)
+        .map(|frame| smallvec::smallvec![PlatformInput::PointerFrame(frame)])
+        .unwrap_or_default()
+}
 
 /// The input surface a contact belongs to: a backend's window, or `0` for a
 /// backend whose registry serves one window.
