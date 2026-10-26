@@ -1,21 +1,13 @@
 //! The self-test's crates: source files in memory and their entries, with
 //! one planted violation per rule and one silent case per exemption.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use super::scan::{Source, Target};
+use super::scan::Target;
 use super::{HOST, Krate, PLATFORM};
-
-/// In-memory files, repository-relative.
-pub(super) struct Memory(pub(super) BTreeMap<String, String>);
-
-impl Source for Memory {
-    fn read(&self, rel: &str) -> Option<String> {
-        self.0.get(rel).cloned()
-    }
-}
+pub(super) use crate::source_tree::Memory;
 
 /// The ADRs the fixture entries may name.
 pub(super) fn adrs() -> BTreeSet<String> {
@@ -115,21 +107,21 @@ static IN_TESTS: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
 ";
 
 const PLATFORM_LIB: &str = r"
-mod platforms;
-mod shared;
+mod owner;
+mod display;
 ";
 
-const PLATFORM_BACKEND: &str = r"
+const PLATFORM_LOOP: &str = r"
 thread_local! {
-    // listed: this backend's trampoline
+    // listed: this platform's trampoline, in its loop's module
     static ACTIVE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 ";
 
-const PLATFORM_SHARED: &str = r"
+const PLATFORM_FEATURE: &str = r"
 thread_local! {
-    // planted: a trampoline outside a backend directory
-    static SHARED_CELL: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    // planted: a trampoline outside the loops' modules
+    static FEATURE_CELL: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 ";
 
@@ -168,7 +160,7 @@ pub(super) const EXPECTED: [(&str, &str, &str); 15] = [
     (HOST, "runner::SECOND_HOST", super::SECOND_TRAMPOLINE),
     (HOST, "runner::GONE", super::STALE),
     (HOST, "NEXT_ID", super::STALE),
-    (PLATFORM, "shared::SHARED_CELL", super::PLACEMENT),
+    (PLATFORM, "display::FEATURE_CELL", super::PLACEMENT),
     ("flui-widgets", "CLAIMED", super::PLACEMENT),
 ];
 
@@ -178,13 +170,10 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
         ("crates/flui-app/src/lib.rs", HOST_LIB),
         ("crates/flui-app/src/runner.rs", HOST_RUNNER),
         ("crates/flui-app/src/t.rs", HOST_TEST_MODULE),
-        ("crates/flui-platform/src/lib.rs", PLATFORM_LIB),
-        ("crates/flui-platform/src/platforms/mod.rs", "mod winit;"),
-        (
-            "crates/flui-platform/src/platforms/winit/mod.rs",
-            PLATFORM_BACKEND,
-        ),
-        ("crates/flui-platform/src/shared.rs", PLATFORM_SHARED),
+        ("crates/flui-native/src/lib.rs", PLATFORM_LIB),
+        ("crates/flui-native/src/owner/mod.rs", "mod winit;"),
+        ("crates/flui-native/src/owner/winit.rs", PLATFORM_LOOP),
+        ("crates/flui-native/src/display/mod.rs", PLATFORM_FEATURE),
         ("crates/flui-widgets/src/lib.rs", THIRD_LIB),
         ("packages/flui-package/src/lib.rs", PACKAGE_LIB),
         ("examples/example/src/lib.rs", EXAMPLE_LIB),
@@ -222,12 +211,16 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
                 { "item": "NEXT_ID", "exit": "ADR-0097", "reason": "self-test" },
             ]),
         ),
-        krate(
+        member(
+            "crates",
             PLATFORM,
-            json!([
-                trampoline("platforms::winit::ACTIVE"),
-                trampoline("shared::SHARED_CELL"),
-            ]),
+            json!({
+                "globals": [
+                    trampoline("owner::winit::ACTIVE"),
+                    trampoline("display::FEATURE_CELL"),
+                ],
+                "modules": { "features": ["display"], "platforms": ["winit"], "hosts": "hosts" },
+            }),
         ),
         krate("flui-widgets", json!([trampoline("CLAIMED")])),
     ]

@@ -13,7 +13,7 @@ use flui_painting::text_boundaries::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
-use flui_platform_api::text_store::{EditGeneration, RetainOnFailure, committed_text};
+use flui_platform::text_store::{EditGeneration, RetainOnFailure, committed_text};
 
 // ============================================================================
 // ControllerInner
@@ -192,7 +192,7 @@ pub(super) struct ComposingState {
 /// only a mounted [`EditableText`](super::EditableText)'s text store edits
 /// it: the platform's input method reads and edits the field through that
 /// store (ADR-0090), and a push-model `ImeEvent` is projected onto the same
-/// store (`flui_platform_api::text_store::project_ime_event`), so there is
+/// store (`flui_platform::text_store::project_ime_event`), so there is
 /// one editing path. The controller exposes what the rest of the widget
 /// reads: [`Self::composing_range`], [`Self::is_composing`] and the **hidden
 /// caret** case (`cursor: None` on a preedit event, winit's own semantics for
@@ -938,7 +938,7 @@ impl TextEditingController {
     ///
     /// [`EditableText`](super::EditableText)'s key handler consults this to
     /// implement the suppression contract
-    /// ([`flui_platform_api::ImeEvent`]'s doc): suppress `Key::Character` insertion
+    /// ([`flui_platform::ImeEvent`]'s doc): suppress `Key::Character` insertion
     /// **only** while this is `true` — a field must not swallow plain
     /// typing for the rest of a focus session just because IME composition
     /// happened once.
@@ -1266,7 +1266,7 @@ mod tests {
     // The composing region, as the field's text store leaves it
     //
     // Only the text store edits the composition (the IME rules themselves
-    // are pinned by `flui_platform_api::text_store`'s projection tests);
+    // are pinned by `flui_platform::text_store`'s projection tests);
     // these pin what the controller does with one while it is there.
     // ------------------------------------------------------------------
 

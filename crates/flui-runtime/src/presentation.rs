@@ -19,9 +19,9 @@ use flui_interaction::{
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
-use flui_platform_api::PlatformTextInput;
-use flui_platform_api::TextStoreHost;
-use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
+use flui_platform::PlatformTextInput;
+use flui_platform::TextStoreHost;
+use flui_platform::{Clipboard, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
@@ -89,7 +89,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
     pub(crate) clipboard: Arc<dyn Clipboard>,
     /// The UI runtime's byte storage, if it has one, handed to widgets through
     /// `LifecycleContext::storage`.
-    pub(crate) storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
     /// Where the UI runtime reads time: this presentation's gesture arena and
     /// [`FrameClock`] read the same source as the UI runtime's frame clock.
     pub(crate) clock: &'a ClockSource,
@@ -106,7 +106,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
 #[cfg(any(test, feature = "testing"))]
 #[must_use]
 pub fn test_clipboard() -> Arc<dyn Clipboard> {
-    Arc::new(flui_platform_api::InMemoryClipboard::new())
+    Arc::new(flui_platform::InMemoryClipboard::new())
 }
 
 /// Pointer interpolation policy owned by one presentation.
@@ -181,7 +181,7 @@ impl PresentationWindow {
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
             gesture_profiles: flui_interaction::GestureProfiles::preset(
-                flui_platform_api::TargetPlatform::Unknown,
+                flui_platform::TargetPlatform::Unknown,
             ),
         }
     }
@@ -300,19 +300,19 @@ pub(crate) enum PresentationLifecycle {
 }
 
 /// Where a window's content sits on the desktop, as a published
-/// [`WindowState`](flui_platform_api::WindowState) reports it: the outer
+/// [`WindowState`](flui_platform::WindowState) reports it: the outer
 /// top-left corner, the display, and whether a frame offsets the content
 /// from that corner. A change re-reads the window's gesture geometry for new
 /// contacts (ADR-0212 §2) and hands it its input regions again (ADR-0217 §5).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ContentPlacement {
     position: Option<flui_foundation::geometry::Point<f64>>,
-    display: Option<flui_platform_api::DisplayId>,
+    display: Option<flui_platform::DisplayId>,
     decorated: bool,
 }
 
 impl ContentPlacement {
-    pub(crate) fn of(state: &flui_platform_api::WindowState) -> Self {
+    pub(crate) fn of(state: &flui_platform::WindowState) -> Self {
         Self {
             position: state.outer.position,
             display: state.display,
@@ -355,12 +355,12 @@ pub struct PresentationState {
     /// The display this presentation's window is on, as the host last derived it
     /// from the platform's snapshot (ADR-0236). `None` is an unknown display.
     /// Shared with the haptics host, whose frame deadline reads its period.
-    pub(super) window_display: Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
-    pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
+    pub(super) window_display: Rc<Cell<Option<flui_platform::WindowDisplay>>>,
+    pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     /// The vsync of the frame being delivered, on the event timeline
     /// (`HostInput::Frame`): the interaction layer samples motion there.
-    pub(super) frame_vsync: Cell<Option<flui_platform_api::EventTime>>,
+    pub(super) frame_vsync: Cell<Option<flui_platform::EventTime>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -384,7 +384,7 @@ pub struct PresentationState {
     window: Weak<dyn PlatformWindow>,
     /// The window's identity, read once at assembly: recordings address input
     /// by it even after the window itself is gone (ADR-0215 §1).
-    window_id: flui_platform_api::WindowId,
+    window_id: flui_platform::WindowId,
     /// The window's accessibility bridge, if its backend has one. `Weak`
     /// like [`Self::window`]: the backend window owns the bridge, and this
     /// presentation must not keep it alive past the window.
@@ -401,10 +401,10 @@ pub struct PresentationState {
     held_pointer_input: RefCell<HeldPointerQueue>,
     /// The input regions collected when this frames scene was built, handed to the
     /// window once the sink accepts the scene (ADR-0217 §5).
-    staged_input_regions: RefCell<Rc<[flui_platform_api::input_regions::InputRegion]>>,
+    staged_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
     /// The input regions of the last committed frame, handed to the window again when
     /// it moves, so its backend can re-project them for a new display.
-    published_input_regions: RefCell<Rc<[flui_platform_api::input_regions::InputRegion]>>,
+    published_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -713,7 +713,7 @@ impl PresentationState {
     /// window (ADR-0210 §4, ADR-0236 §6).
     fn build_haptics(
         window: &Arc<dyn PlatformWindow>,
-        display: &Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
+        display: &Rc<Cell<Option<flui_platform::WindowDisplay>>>,
         gestures: &GestureBinding,
         request_frame: impl Fn() + 'static,
     ) -> flui_interaction::HapticsHost {
@@ -728,13 +728,13 @@ impl PresentationState {
                 .upgrade()
                 .and_then(|display| display.get())
                 .and_then(|display| display.refresh_period)
-                .map(flui_platform_api::RefreshPeriod::get)
+                .map(flui_platform::RefreshPeriod::get)
         })
         .deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor())
         .build();
         haptics.set_visible(
             window.is_visible()
-                && window.execution_state() == flui_platform_api::WindowExecutionState::Running,
+                && window.execution_state() == flui_platform::WindowExecutionState::Running,
         );
         haptics
     }
@@ -944,7 +944,7 @@ impl PresentationState {
             gestures,
             haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
-                flui_platform_api::WheelPreferences::default(),
+                flui_platform::WheelPreferences::default(),
             ),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
@@ -1065,7 +1065,7 @@ impl PresentationState {
             gestures,
             haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
-                flui_platform_api::WheelPreferences::default(),
+                flui_platform::WheelPreferences::default(),
             ),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
@@ -1288,7 +1288,7 @@ impl PresentationState {
         self.motion_clock.borrow_mut().set_override(preference);
     }
 
-    pub(crate) fn set_system_motion(&self, system: flui_platform_api::MotionPreference) {
+    pub(crate) fn set_system_motion(&self, system: flui_platform::MotionPreference) {
         self.motion_clock.borrow_mut().set_system_motion(system);
     }
 
@@ -1405,7 +1405,7 @@ impl PresentationState {
     // ========================================================================
 
     /// The identity of the window this presentation was built for.
-    pub(crate) fn window_id(&self) -> flui_platform_api::WindowId {
+    pub(crate) fn window_id(&self) -> flui_platform::WindowId {
         self.window_id
     }
 
@@ -1460,7 +1460,7 @@ impl PresentationState {
     pub(crate) fn sync_haptics_visibility(&self) {
         self.haptics.set_visible(
             !self.clock.is_hidden()
-                && self.window_execution.get() == flui_platform_api::WindowExecutionState::Running,
+                && self.window_execution.get() == flui_platform::WindowExecutionState::Running,
         );
     }
 

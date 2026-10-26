@@ -10,13 +10,13 @@
   расширения), `flui-testing` (запись, скрипты, проверки соответствия), `flui-runtime` (`InputTap`, установка — через `flui-app`),
   существующие `packages/flui-material`, `packages/flui-cupertino`, `packages/flui-devtools`, `tools/xtask`.
   **Новых крейтов нет.**
-- **Исследования:** [best-practices](../../../../research/2026-10-12-interaction-input-best-practices.md),
-  [followups](../../../../research/2026-10-12-interaction-input-followups.md)
-- **Предыдущая волна:** [../matrix.md](../matrix.md), [../scope-closure.md](../scope-closure.md), [../tasks.md](../tasks.md);
-  спеки [../recognizer-api/](../recognizer-api/requirements.md), [../pointer-vocabulary/](../pointer-vocabulary/requirements.md)
+- **Исследования:** [best-practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md),
+  [followups](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md)
+- **Предыдущая волна:** [../matrix.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/matrix.md), [../scope-closure.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/scope-closure.md), [../tasks.md](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-interaction/tasks.md);
+  спеки [../recognizer-api/](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-interaction/recognizer-api/requirements.md), [../pointer-vocabulary/](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-interaction/pointer-vocabulary/requirements.md)
 - **Смежные спеки (зависимости, не охват):** [focus-keyboard](../../focus-keyboard/tasks.md),
   [semantics-model](../../semantics-model/tasks.md), [text-ime](../../text-ime/requirements.md),
-  [web-canvas-input-ownership](../../web-canvas-input-ownership/requirements.md), [naming](../../naming/renames.md)
+  [web-canvas-input-ownership](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/web-canvas-input-ownership/requirements.md), [naming](../../naming/tasks.md)
 
 ## Зачем
 
@@ -265,7 +265,7 @@ ID действуют только внутри этой подспеки. Ка�
 
 ### L. Библиотеки
 
-Источник — [dependency-selection](../../../../research/2026-10-13-interaction-dependency-selection.md)
+Источник — [dependency-selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md)
 (версии и статус на 2026-10-13). Общие зависимости — через `[workspace.dependencies]`; `cargo xtask deps`
 зелёный.
 
@@ -324,7 +324,7 @@ ID действуют только внутри этой подспеки. Ка�
 
 ### Z. Модель потоков
 
-Источник — [threading-model](../../../../research/2026-10-13-interaction-threading-model.md).
+Источник — [threading-model](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md).
 
 - **Z1.** Распознаватели, арена, канал прокрутки, фокус, IME-хост, DnD-сессии и haptics виджетов — в
   потоке владельца своего `UiRuntime`; типы `!Send`, закреплено статическими проверками в `tests/`

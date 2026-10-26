@@ -45,7 +45,7 @@
 //! consumer-side backstop for the case where something upstream of that
 //! guard didn't hold up its end.
 //!
-//! This primitive is deliberately generic and carries no `flui-platform`
+//! This primitive is deliberately generic and carries no `flui-native`
 //! vocabulary (no `WindowId`, no `OpenWindowError`) — the ADR places its
 //! tests in the winit lane, which CI does not execute; landing the tested
 //! core here means the state-machine behavior is CI-verified even though
@@ -457,12 +457,12 @@ impl<T> ClaimHandle<T> {
     /// following a successful `try_take` with a `wait` on the same
     /// still-alive handle; that is a caller-sequencing fact (there is
     /// nothing left to wait for), not a slot-invariant violation. Callers
-    /// that hand this outcome to a typed error (e.g. `flui-platform`'s
+    /// that hand this outcome to a typed error (e.g. `flui-native`'s
     /// `PendingWindow::wait`) map each `ClaimOutcome` variant onto their own
     /// `#[non_exhaustive]` error enum.
     ///
     /// This primitive does not itself refuse the owner thread — callers
-    /// that must not block their own owner (e.g. `flui-platform`'s
+    /// that must not block their own owner (e.g. `flui-native`'s
     /// `PendingWindow::wait`, which drains the very lane this would block
     /// on) are responsible for checking thread identity *before* calling
     /// `wait` and taking the non-blocking `try_take` path (or the `Future`
@@ -471,7 +471,7 @@ impl<T> ClaimHandle<T> {
     /// # Owner obligation
     /// The owner must still guarantee it always eventually calls `deliver`,
     /// typically via a panic-safe guard that calls it unconditionally on
-    /// drop if not already called explicitly (`flui-platform`'s
+    /// drop if not already called explicitly (`flui-native`'s
     /// `OpenWindowReplyGuard` is exactly this guard for the winit lane).
     /// `ClaimSlot`'s `Drop` is the backstop for when that discipline is
     /// broken upstream of the guard (the owner died or unwound before

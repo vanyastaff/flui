@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform-api`**: FLUI's own input vocabulary, `pointer` (pointer, scroll and trackpad
+- **`flui-platform`**: FLUI's own input vocabulary, `pointer` (pointer, scroll and trackpad
   pan/zoom events with pen tools, sensors that read `None` when a device has none, cancel
   reasons and device changes), `keyboard` (`KeyEvent`, `Key`, `NamedKey`, `Code`, `Location`,
   `Modifiers`) and `EventTime`. Constructors refuse or neutralize non-finite input. The

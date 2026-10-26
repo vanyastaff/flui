@@ -67,7 +67,7 @@ that with a binding every test app gets.
 - Any debug example is drivable by `flui drive launch` and by `flui-driver` tests with no code
   change. Optimized-profile CI and device runs enable `driver`.
 - `flui-app` gains `interprocess` as a dependency on desktop, Android and iOS, and a web export.
-- The bespoke probes (`android_input_probe`, `web_input_probe`) and their command channels are
+- The bespoke probes ([`android_input_probe`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/crates/flui-native/examples/android_input_probe.rs), [`web_input_probe`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/crates/flui-native/examples/web_input_probe.rs)) and their command channels are
   deleted; their checks run through the agent.
 - `AppConfig::with_dev_agent` remains for third-party development hooks. The devtools `agent`
   feature and `AgentServer` are removed.

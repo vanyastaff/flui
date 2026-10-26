@@ -169,7 +169,7 @@ pub(in crate::app) enum RuntimeEvent {
     /// The window's system light/dark appearance changed
     /// (`PlatformWindow::on_appearance_changed`). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
-    AppearanceChanged(flui_platform_api::Brightness),
+    AppearanceChanged(flui_platform::Brightness),
     /// The host derived a new display for this window from the platform's
     /// snapshot (`display_host`): which display it is on and that display's
     /// refresh period, possibly "unknown". Delivered after every sample and
@@ -259,7 +259,7 @@ impl RuntimeEvent {
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> PresentationDispatcher {
     let prepared = prepare_replacement_ui_runtime(ui_runtime, std::sync::Arc::clone(window));
     let dispatcher = prepared.dispatcher();
@@ -274,7 +274,7 @@ pub(super) fn install_platform_ui_runtime(
 #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
 pub(super) fn prepare_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -292,7 +292,7 @@ pub(super) fn prepare_platform_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn prepare_replacement_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = super::InstalledHost::new();
     let prepared = host.logical().prepare_runtime(ui_runtime);
@@ -314,7 +314,7 @@ pub(super) fn prepare_replacement_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> Result<PresentationDispatcher, super::installed_host::InstallError> {
     let prepared = prepare_ui_runtime_alongside(ui_runtime, std::sync::Arc::clone(window));
     let dispatcher = prepared.dispatcher();
@@ -327,7 +327,7 @@ pub(super) fn install_ui_runtime_alongside(
 
 pub(super) fn prepare_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -503,7 +503,7 @@ pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
 /// each runner installs.
 pub(super) fn install_input_wiring(
     dispatcher: PresentationDispatcher,
-    window: &(impl flui_platform::traits::PlatformWindow + ?Sized),
+    window: &(impl flui_platform::PlatformWindow + ?Sized),
 ) {
     window.on_input(Box::new(move |input| {
         dispatch_platform_input(dispatcher, input)
@@ -521,7 +521,7 @@ pub(super) fn install_input_wiring(
 /// doing so.
 fn dispatch_platform_input(
     dispatcher: PresentationDispatcher,
-    input: flui_platform::traits::PlatformInput,
+    input: flui_platform::PlatformInput,
 ) -> flui_platform::DispatchEventResult {
     let outcome = current_host(dispatcher.owner_thread).and_then(|host| {
         let _callback = host
@@ -543,8 +543,8 @@ fn dispatch_platform_input(
 /// A delivered frame's vsync on the event timeline: the host's reading of the
 /// process event epoch when the frame is admitted. No backend reports the
 /// display's own vsync timestamp yet.
-pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
-    flui_platform_api::EventTime::from_nanos(flui_platform::shared::events::event_timestamp_ns())
+pub(super) fn frame_vsync() -> flui_platform::EventTime {
+    flui_platform::EventTime::from_nanos(flui_native::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(

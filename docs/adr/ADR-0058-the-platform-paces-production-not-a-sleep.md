@@ -54,7 +54,7 @@ owns the *when* (only for a frame that will present, never on a skip path — a 
 callback requested with no commit behind it withholds every later redraw); the app layer owns
 the *what*, wiring the window's notify into the backend at bootstrap
 (`install_pre_present_hook`). The hook is a backend capability rather than a direct call
-because `flui-engine` does not depend on `flui-platform`: the raster side takes an owned scene
+because `flui-engine` does not depend on `flui-native`: the raster side takes an owned scene
 and a closure, never a window.
 
 **2. No sleep. What replaces it is a deadline.** `FallbackWake` defers the next ticker-only
@@ -116,7 +116,7 @@ frozen. That belongs to a wall-clock timer service, not to pacing.
   timer.
 - The pacing path is traced: `flui.gpu`'s `surface_acquired` (with the acquire duration),
   `pre_present_notified`, and `flui.pace`'s `fallback_armed` / `fallback_abandoned` /
-  `segment_poll`. The live-smoke harness asserts one `pre_present_notified` per
+  `segment_poll`. The [live-smoke harness](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) asserts one `pre_present_notified` per
   `present_submitted`.
 
 ## Alternatives rejected

@@ -6,7 +6,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use flui_platform::traits::{DispatchEventResult, PlatformInput};
+use flui_platform::{DispatchEventResult, PlatformInput};
 
 /// Entry point invoked by the generated JS glue on module load: brings up the
 /// web platform, logs every input event it dispatches, and requests frames.
@@ -18,7 +18,7 @@ pub fn start() {
     // Log to browser console
     web_sys::console::log_1(&"FLUI Web Demo starting...".into());
 
-    let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
+    let platform = flui_native::current_platform().expect("Failed to initialize web platform");
 
     web_sys::console::log_1(&format!("Platform: {}", platform.name()).into());
 
@@ -45,7 +45,7 @@ pub fn start() {
     window.on_input(Box::new(|input: PlatformInput| {
         match &input {
             PlatformInput::Pointer(pe) => {
-                use flui_platform_api::pointer::PointerEvent;
+                use flui_platform::pointer::PointerEvent;
                 match pe {
                     PointerEvent::Down(e) => {
                         web_sys::console::log_1(
@@ -114,9 +114,15 @@ pub fn start() {
     web_sys::console::log_1(&"FLUI Web Demo ready! Try clicking and typing on the canvas.".into());
 
     platform
-        .run(Box::new(move |_owner| {
-            // Keep window alive via closure capture
-            let _window = window;
+        .run(Box::new(move |owner| {
+            // On the web `run` returns as soon as this callback has, while the
+            // page keeps running. The platform keeps its quit handler until it
+            // quits, so the handler owns the window: dropping the window
+            // retires the canvas and silences every callback above.
+            let mut window = Some(window);
+            owner
+                .shared()
+                .on_quit(Box::new(move || drop(window.take())));
             Ok(())
         }))
         .expect("platform event loop exited with an error");

@@ -147,7 +147,7 @@ impl PipelineOwner<Layout> {
                     //      it once per launch and a scrolling
                     //      ListView::builder once per frame, so it is
                     //      a debug line, not a warning (measured
-                    //      2026-09-22, docs/BETA.md's lifecycle run).
+                    //      2026-09-22 in the macOS lifecycle run).
                     // Case 1 stays at warn: the root having no
                     // constraints is a binding bug, and a launch that
                     // draws nothing is what it looks like.

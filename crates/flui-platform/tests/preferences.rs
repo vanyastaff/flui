@@ -1,135 +1,321 @@
-//! Preference-source contracts; no test changes the user's OS settings.
+use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_platform::{InvalidPreference, MotionPreference, SystemPreferences};
 
-fn unavailable_observations_do_not_claim_system_defaults() {
-    let platform = flui_platform::headless_platform();
-    let observed = platform.preferences().expect("headless observation");
-    assert!(observed.text_scale().is_none());
-    assert!(observed.motion().is_none());
-    assert!(observed.high_contrast().is_none());
-    assert!(observed.locales().is_none());
-    assert!(observed.gestures().double_click_interval().is_none());
-    assert!(observed.wheel().vertical().is_none());
-    assert!(observed.wheel().horizontal_characters().is_none());
+fn native_mouse_geometry_preserves_full_area_and_half_extents() {
+    use flui_platform::{GestureGeometry, NativeMouseGeometry};
+
+    let ratio = DevicePixelRatio::new(2.0).expect("valid scale");
+    let observed = NativeMouseGeometry::new(Size::new(12, 8), Size::new(6, 2), ratio)
+        .expect("native geometry");
+    let projected = GestureGeometry::from_native_mouse(&observed).expect("projection");
+    assert_eq!(
+        projected.mouse_double_click_area(),
+        Some(Size::new(6.0, 4.0))
+    );
+    assert_eq!(projected.mouse_drag_tolerance(), Some(Size::new(3.0, 1.0)));
+    assert_eq!(projected.pixel_ratio(), ratio);
+
+    let zero = NativeMouseGeometry::new(Size::new(0, 8), Size::new(6, 0), ratio)
+        .expect("zero axes are observations");
+    let projected = GestureGeometry::from_native_mouse(&zero).expect("zero projection");
+    assert_eq!(
+        projected.mouse_double_click_area(),
+        Some(Size::new(0.0, 4.0))
+    );
+    assert_eq!(projected.mouse_drag_tolerance(), Some(Size::new(3.0, 0.0)));
+    assert!(NativeMouseGeometry::new(Size::new(-1, 8), Size::new(6, 2), ratio).is_err());
+
+    let tiny = DevicePixelRatio::new(f64::from_bits(1)).expect("positive finite ratio");
+    let extreme = NativeMouseGeometry::new(Size::new(1, 1), Size::new(1, 1), tiny)
+        .expect("finite native observation");
+    assert_eq!(
+        GestureGeometry::from_native_mouse(&extreme),
+        Err(InvalidPreference::GestureArea)
+    );
 }
 
-#[cfg(target_os = "windows")]
-#[allow(
-    unsafe_code,
-    reason = "compare the live presentation query with independent Win32 metrics"
-)]
-fn windows_reads_preferences_before_a_user_window_exists() {
-    use flui_platform::Platform;
-    use windows::UI::ViewManagement::UISettings;
+fn native_gesture_timings_remain_independent() {
+    use flui_platform::GesturePreferences;
+    use std::time::Duration;
 
-    // A later host must not reuse an activation factory from a retired apartment.
-    {
-        let previous = flui_platform::WindowsPlatform::new().expect("previous native platform");
-        previous.preferences().expect("previous native observation");
-    }
-    let platform = flui_platform::WindowsPlatform::new().expect("native platform");
-    let refused = std::thread::scope(|scope| {
-        scope
-            .spawn(|| platform.preferences())
-            .join()
-            .expect("foreign reader returned without panic")
-    });
-    assert!(
-        matches!(
-            refused,
-            Err(flui_platform::PlatformError::Preferences { .. })
-        ),
-        "a foreign thread must not create an independent native observation set"
+    let observed = GesturePreferences::default()
+        .with_double_click_interval(Duration::from_millis(900))
+        .with_double_tap_interval(Duration::from_millis(300));
+    assert_eq!(
+        observed.double_click_interval(),
+        Some(Duration::from_millis(900))
     );
-    let native_ui = UISettings::new().expect("independent native preference reader");
-    for _ in 0..3 {
-        let observed = platform
-            .preferences()
-            .expect("native preference observation");
-        assert!(
-            observed
-                .text_scale()
-                .is_some_and(|scale| scale.is_finite() && scale > 0.0)
+    assert_eq!(
+        observed.double_tap_interval(),
+        Some(Duration::from_millis(300))
+    );
+    assert!(
+        GesturePreferences::default()
+            .double_tap_interval()
+            .is_none()
+    );
+}
+
+fn native_touch_geometry_projects_each_context_and_refuses_overflow() {
+    use flui_platform::{GestureGeometry, NativeTouchGeometry};
+    for density in [1.0, 2.0, 3.0] {
+        let native = NativeTouchGeometry::new(
+            12,
+            30,
+            60,
+            9000,
+            DevicePixelRatio::new(density).expect("density"),
+        )
+        .expect("native touch geometry");
+        let projected = GestureGeometry::from_native_touch(&native).expect("projection");
+        assert_eq!(
+            projected.touch_slop().expect("touch slop").get(),
+            12.0 / density
         );
         assert_eq!(
-            observed
-                .motion()
-                .map(|motion| motion == flui_platform::MotionPreference::NoPreference),
-            Some(
-                native_ui
-                    .AnimationsEnabled()
-                    .expect("native animation preference")
-            ),
-            "the public observation must match Windows, not just contain a value"
+            projected
+                .touch_double_tap_slop()
+                .expect("double tap slop")
+                .get(),
+            30.0 / density
         );
-        assert!(observed.high_contrast().is_some());
-        assert!(
-            observed
-                .locales()
-                .is_some_and(|languages| !languages.is_empty()),
-            "Windows must observe its ordered UI languages before a user window exists"
+        let speeds = projected.fling_speeds().expect("fling speeds");
+        assert_eq!(
+            (speeds.min(), speeds.max()),
+            (60.0 / density, 9000.0 / density)
         );
-        assert!(observed.gestures().double_click_interval().is_some());
-        assert!(observed.gestures().double_tap_interval().is_none());
-        assert!(observed.gestures().native_mouse_geometry().is_some());
-        assert!(observed.wheel().vertical().is_some());
-        assert!(observed.wheel().horizontal_characters().is_some());
+        assert!(projected.mouse_double_click_area().is_none());
     }
-    // Repeated sampling must preserve the platform's outer COM lifetime so
-    // a subsequent real native window can still initialize its text services.
-    let window = platform
-        .open_window(flui_platform::WindowOptions::default().with_visible(false))
-        .expect("native window after preference reads");
-    let projected = window
-        .gesture_geometry()
-        .expect("native geometry query")
-        .expect("Windows observes mouse geometry");
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::{
-        Foundation::HWND,
-        UI::{
-            HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
-            WindowsAndMessaging::{SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG},
-        },
-    };
-    let RawWindowHandle::Win32(handle) = window.window_handle().expect("live handle").as_raw()
-    else {
-        panic!("native Win32 handle")
-    };
-    let hwnd = HWND(handle.hwnd.get() as *mut _);
-    // SAFETY: the owning window remains live on this thread for these reads.
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let ratio = f64::from(dpi) / 96.0;
-    // SAFETY: each index is a documented mouse metric, at the live window DPI.
-    let (area, drag) = unsafe {
-        (
-            flui_foundation::geometry::Size::new(
-                f64::from(GetSystemMetricsForDpi(SM_CXDOUBLECLK, dpi)) / ratio,
-                f64::from(GetSystemMetricsForDpi(SM_CYDOUBLECLK, dpi)) / ratio,
-            ),
-            flui_foundation::geometry::Size::new(
-                f64::from(GetSystemMetricsForDpi(SM_CXDRAG, dpi)).abs() / ratio,
-                f64::from(GetSystemMetricsForDpi(SM_CYDRAG, dpi)).abs() / ratio,
-            ),
-        )
-    };
-    assert_eq!(projected.pixel_ratio().get(), ratio);
-    assert_eq!(projected.mouse_double_click_area(), Some(area));
-    assert_eq!(projected.mouse_drag_tolerance(), Some(drag));
-    assert!(projected.touch_slop().is_none());
-    let refused = std::thread::scope(|scope| {
-        scope
-            .spawn(|| window.gesture_geometry())
-            .join()
-            .expect("foreign query returned")
-    });
+    let tiny = DevicePixelRatio::new(f64::from_bits(1)).expect("finite positive ratio");
+    let native = NativeTouchGeometry::new(1, 1, 1, 2, tiny).expect("native observation");
     assert_eq!(
-        refused,
-        Err(flui_platform::PreferenceQueryError::WrongThread)
+        GestureGeometry::from_native_touch(&native),
+        Err(InvalidPreference::Distance)
     );
-    window.close();
+    assert!(NativeTouchGeometry::new(-1, 0, 1, 2, DevicePixelRatio::ONE).is_err());
+    assert!(NativeTouchGeometry::new(0, 0, 2, 1, DevicePixelRatio::ONE).is_err());
+}
+
+fn gesture_geometry_refuses_invalid_distances_and_speeds() {
+    use flui_platform::{Distance, FlingSpeeds, GestureGeometry};
+
+    for value in [f64::NAN, f64::INFINITY, -1.0] {
+        assert_eq!(Distance::new(value), Err(InvalidPreference::Distance));
+        assert_eq!(FlingSpeeds::new(value, 10.0), Err(InvalidPreference::Speed));
+        assert_eq!(FlingSpeeds::new(1.0, value), Err(InvalidPreference::Speed));
+        assert!(
+            GestureGeometry::new(DevicePixelRatio::ONE)
+                .with_mouse_double_click_area(Size::new(value, 1.0))
+                .is_err()
+        );
+        assert!(
+            GestureGeometry::new(DevicePixelRatio::ONE)
+                .with_mouse_drag_tolerance(Size::new(1.0, value))
+                .is_err()
+        );
+    }
+    assert!(Distance::new(0.0).is_ok());
+    assert_eq!(FlingSpeeds::new(0.0, 1.0), Err(InvalidPreference::Speed));
     assert_eq!(
-        window.gesture_geometry(),
-        Err(flui_platform::PreferenceQueryError::Unavailable)
+        FlingSpeeds::new(10.0, 1.0),
+        Err(InvalidPreference::FlingRange)
+    );
+    let speeds = FlingSpeeds::new(50.0, 8000.0).expect("valid speeds");
+    assert_eq!((speeds.min(), speeds.max()), (50.0, 8000.0));
+}
+
+fn preferred_language_identity_preserves_variants_and_extensions() {
+    use flui_platform::Locale;
+    for (tag, language, region) in [
+        ("ca-ES-valencia", "ca", Some("ES")),
+        ("en-US-u-hc-h12", "en", Some("US")),
+        ("sl-rozaj-biske", "sl", None),
+    ] {
+        let locale = Locale::from_language_tag(tag).expect("well-formed preferred language");
+        assert_eq!(locale.language(), language, "{tag}");
+        assert_eq!(
+            locale.country(),
+            region,
+            "a variant must not become the region: {tag}"
+        );
+        assert_eq!(
+            locale.to_language_tag(),
+            tag,
+            "preference identity must not truncate subtags"
+        );
+        assert_ne!(
+            locale,
+            Locale::new(language, region).expect("valid base locale"),
+            "variant/extension identity must survive resource matching"
+        );
+    }
+}
+
+fn malformed_preferred_language_tags_are_refused() {
+    for tag in [
+        "",
+        "en--US",
+        "en-",
+        "-US",
+        "en-US-!",
+        "english?",
+        "en-1234-1234",
+        "en-u-ca-gregory-u-hc-h12",
+        "x-private-",
+        "x-toolongpart",
+    ] {
+        assert!(
+            flui_platform::Locale::from_language_tag(tag).is_none(),
+            "invalid tag accepted: {tag}"
+        );
+    }
+}
+
+fn deprecated_subtags_canonicalize_everywhere_a_locale_is_built() {
+    use flui_platform::Locale;
+    for (old, current) in [("in", "id"), ("iw", "he"), ("ji", "yi")] {
+        let authored = Locale::new(old, None::<&str>).expect("legacy language");
+        let parsed: Locale = old.parse().expect("legacy language tag");
+        let preferred = Locale::new(current, None::<&str>).expect("preferred language");
+        let mut identities = std::collections::HashSet::new();
+        identities.insert(authored);
+        assert!(identities.contains(&preferred));
+        assert_eq!(parsed, preferred);
+        #[cfg(feature = "serde")]
+        {
+            let decoded: Locale = serde_json::from_value(serde_json::Value::String(old.to_owned()))
+                .expect("legacy serialized tag");
+            assert_eq!(decoded, preferred);
+        }
+    }
+    for (old, current) in [
+        ("BU", "MM"),
+        ("DD", "DE"),
+        ("FX", "FR"),
+        ("TP", "TL"),
+        ("YD", "YE"),
+        ("ZR", "CD"),
+    ] {
+        assert_eq!(
+            Locale::new("en", Some(old)),
+            Locale::new("en", Some(current))
+        );
+    }
+    for (language, country, script) in [
+        ("en-US", None, None),
+        ("en", Some("Latn"), None),
+        ("en", None, Some("US")),
+        ("", None, None),
+    ] {
+        assert!(Locale::with_script(language, country, script).is_err());
+    }
+    let full: Locale = "iw-Hebr-BU-u-ca-hebrew".parse().expect("full legacy tag");
+    assert_eq!(full.to_language_tag(), "he-Hebr-MM-u-ca-hebrew");
+    for (input, expected) in [
+        ("EN_latn_us", "en-Latn-US"),
+        ("x-PRIVATE", "x-private"),
+        ("i-klingon", "i-klingon"),
+    ] {
+        assert_eq!(
+            input.parse::<Locale>().expect("valid tag").to_string(),
+            expected
+        );
+    }
+    #[cfg(feature = "serde")]
+    {
+        let encoded = serde_json::to_string(&full).expect("serialize language identity");
+        assert_eq!(encoded, "\"he-Hebr-MM-u-ca-hebrew\"");
+        assert_eq!(
+            serde_json::from_str::<Locale>(&encoded).expect("deserialize complete identity"),
+            full
+        );
+        assert!(serde_json::from_str::<Locale>("\"en--US\"").is_err());
+    }
+}
+
+fn motion_duration_observations_preserve_their_meaning() {
+    for zero in [0.0, -0.0] {
+        assert_eq!(
+            MotionPreference::from_duration_scale(zero),
+            Ok(MotionPreference::Reduce)
+        );
+    }
+    assert_eq!(
+        MotionPreference::from_duration_scale(1.0),
+        Ok(MotionPreference::NoPreference)
+    );
+    for scaled in [f64::from_bits(1), 0.5, 2.0, f64::MAX] {
+        assert!(matches!(
+            MotionPreference::from_duration_scale(scaled),
+            Ok(MotionPreference::Scaled(_))
+        ));
+    }
+    for invalid in [-1.0, f64::NEG_INFINITY, f64::INFINITY, f64::NAN] {
+        assert_eq!(
+            MotionPreference::from_duration_scale(invalid),
+            Err(InvalidPreference::DurationScale)
+        );
+    }
+}
+
+fn invalid_text_observations_cannot_enter_a_snapshot() {
+    for invalid in [
+        0.0,
+        -0.0,
+        -1.0,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NAN,
+        f64::from_bits(1),
+        (1.0_f64 / 64.0).next_down(),
+        64.0_f64.next_up(),
+        f64::MAX,
+    ] {
+        assert_eq!(
+            SystemPreferences::default().with_text_scale(invalid),
+            Err(InvalidPreference::TextScale)
+        );
+    }
+    for valid in [1.0 / 64.0, 0.5, 1.0, 2.0, 64.0] {
+        assert!(SystemPreferences::default().with_text_scale(valid).is_ok());
+    }
+}
+
+fn wheel_observations_keep_lines_pages_and_characters_apart() {
+    use flui_platform::{WheelPreferences, WheelStep};
+
+    let unknown = WheelPreferences::default();
+    assert_eq!(unknown.vertical(), None, "an unread axis stays unknown");
+    assert_eq!(unknown.horizontal_characters(), None);
+    let disabled = WheelPreferences::default()
+        .with_vertical(WheelStep::Lines(0))
+        .with_horizontal_characters(0);
+    assert_eq!(
+        disabled.vertical(),
+        Some(WheelStep::Lines(0)),
+        "zero lines is the system disabling the axis, not an unknown value"
+    );
+    assert_eq!(disabled.horizontal_characters(), Some(0));
+    let paged = WheelPreferences::default()
+        .with_vertical(WheelStep::Page)
+        .with_horizontal_characters(3);
+    assert_eq!(paged.vertical(), Some(WheelStep::Page));
+    assert_eq!(
+        paged.horizontal_characters(),
+        Some(3),
+        "a page setting on one axis leaves the other axis's characters"
+    );
+    assert_ne!(
+        WheelPreferences::default().with_vertical(WheelStep::Lines(3)),
+        WheelPreferences::default().with_horizontal_characters(3),
+        "three lines and three characters are different observations"
+    );
+    assert_eq!(
+        SystemPreferences::default()
+            .with_wheel(paged.clone())
+            .wheel(),
+        &paged,
+        "a snapshot carries the wheel observation unchanged"
     );
 }
 
@@ -139,121 +325,45 @@ fn preferences_contract() {
         "preferences_contract",
         &[
             (
-                "unavailable_observations_do_not_claim_system_defaults",
-                unavailable_observations_do_not_claim_system_defaults as fn(),
+                "deprecated_subtags_canonicalize_everywhere_a_locale_is_built",
+                deprecated_subtags_canonicalize_everywhere_a_locale_is_built as fn(),
             ),
-            #[cfg(target_os = "windows")]
             (
-                "windows_reads_preferences_before_a_user_window_exists",
-                windows_reads_preferences_before_a_user_window_exists as fn(),
+                "preferred_language_identity_preserves_variants_and_extensions",
+                preferred_language_identity_preserves_variants_and_extensions as fn(),
             ),
-            #[cfg(target_os = "windows")]
             (
-                "setting_messages_wake_the_owner_without_a_user_window",
-                setting_messages_wake_the_owner_without_a_user_window as fn(),
+                "malformed_preferred_language_tags_are_refused",
+                malformed_preferred_language_tags_are_refused as fn(),
+            ),
+            (
+                "native_mouse_geometry_preserves_full_area_and_half_extents",
+                native_mouse_geometry_preserves_full_area_and_half_extents as fn(),
+            ),
+            (
+                "native_gesture_timings_remain_independent",
+                native_gesture_timings_remain_independent as fn(),
+            ),
+            (
+                "native_touch_geometry_projects_each_context_and_refuses_overflow",
+                native_touch_geometry_projects_each_context_and_refuses_overflow as fn(),
+            ),
+            (
+                "gesture_geometry_refuses_invalid_distances_and_speeds",
+                gesture_geometry_refuses_invalid_distances_and_speeds as fn(),
+            ),
+            (
+                "motion_duration_observations_preserve_their_meaning",
+                motion_duration_observations_preserve_their_meaning as fn(),
+            ),
+            (
+                "invalid_text_observations_cannot_enter_a_snapshot",
+                invalid_text_observations_cannot_enter_a_snapshot as fn(),
+            ),
+            (
+                "wheel_observations_keep_lines_pages_and_characters_apart",
+                wheel_observations_keep_lines_pages_and_characters_apart as fn(),
             ),
         ],
-    );
-}
-
-#[cfg(target_os = "windows")]
-#[allow(
-    unsafe_code,
-    reason = "exercise native notification routing through only this platform's HWNDs"
-)]
-fn setting_messages_wake_the_owner_without_a_user_window() {
-    use flui_platform::Platform;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    };
-    use windows::Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
-        System::Threading::GetCurrentThreadId,
-        UI::WindowsAndMessaging::{EnumThreadWindows, SendMessageW, WM_SETTINGCHANGE},
-    };
-
-    fn top_levels() -> Vec<isize> {
-        unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> windows::core::BOOL {
-            // SAFETY: EnumThreadWindows receives this live vector exclusively
-            // for the duration of its synchronous enumeration on this thread.
-            unsafe { &mut *(parameter.0 as *mut Vec<isize>) }.push(hwnd.0 as isize);
-            windows::core::BOOL(1)
-        }
-        let mut result = Vec::new();
-        // SAFETY: collect only appends to the live local passed here.
-        unsafe {
-            EnumThreadWindows(
-                GetCurrentThreadId(),
-                Some(collect),
-                LPARAM((&raw mut result) as isize),
-            )
-            .ok()
-            .expect("enumerate owned thread windows");
-        }
-        result
-    }
-
-    let before = top_levels();
-    let platform = flui_platform::WindowsPlatform::new().expect("native platform");
-    let receivers: Vec<_> = top_levels()
-        .into_iter()
-        .filter(|hwnd| !before.contains(hwnd))
-        .collect();
-    let woke = Arc::new(AtomicBool::new(false));
-    let observed = Arc::clone(&woke);
-    let (finished, wait) = mpsc::channel();
-    let (watchdog, watchdog_result) = mpsc::channel();
-    Box::new(platform)
-        .run(Box::new(move |owner| {
-            owner.preferences().expect("initial native observation");
-            let quit = owner.proxy();
-            owner
-                .on_wake(Box::new(move || {
-                    observed.store(true, Ordering::Release);
-                    quit.request_quit().expect("quit after preference wake");
-                }))
-                .expect("register owner wake");
-            let timeout = owner.proxy();
-            watchdog
-                .send(std::thread::spawn(move || {
-                    if wait
-                        .recv_timeout(std::time::Duration::from_secs(3))
-                        .is_err()
-                    {
-                        let _ = timeout.request_quit();
-                    }
-                }))
-                .expect("retain watchdog");
-            for raw in receivers {
-                // SAFETY: only same-thread top-level HWNDs created by this platform
-                // are targeted. No global broadcast or OS setting is changed.
-                unsafe {
-                    SendMessageW(
-                        HWND(raw as *mut _),
-                        WM_SETTINGCHANGE,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(0)),
-                    )
-                };
-            }
-            Ok(())
-        }))
-        .expect("native owner loop");
-    let _ = finished.send(());
-    watchdog_result
-        .recv()
-        .expect("watchdog handle")
-        .join()
-        .expect("watchdog finished");
-    assert!(
-        woke.load(Ordering::Acquire),
-        "setting notification did not reach the owner"
-    );
-    assert_eq!(
-        top_levels(),
-        before,
-        "host teardown retained a native receiver"
     );
 }

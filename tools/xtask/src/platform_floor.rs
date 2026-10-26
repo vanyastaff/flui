@@ -1,6 +1,6 @@
 //! The OS version floors, declared once in `platform-support.toml` (ADR-0244).
 //!
-//! `flui-platform` and `flui-cli` are published crates whose package archives cannot read a
+//! `flui-native` and `flui-cli` are published crates whose package archives cannot read a
 //! repository-root file, so this command generates a committed Rust source in each holding the
 //! floors that crate compiles in, and the version map under `docs/`. Without arguments it checks
 //! that every generated file is what the root file generates and that every template stating a
@@ -19,8 +19,8 @@ use crate::util::{read, repo_root};
 /// The hand-written source, relative to the repository root.
 pub(crate) const SOURCE: &str = "platform-support.toml";
 
-/// The Rust source holding the floors `flui-platform` compiles in.
-const PLATFORM_OUTPUT: &str = "crates/flui-platform/src/shared/platform_floor.rs";
+/// The Rust source holding the floors `flui-native` compiles in.
+const PLATFORM_OUTPUT: &str = "crates/flui-native/src/version/floor.rs";
 /// The Rust source holding the floors `flui-cli` packages with.
 const CLI_OUTPUT: &str = "crates/flui-cli/src/build/platform_floor.rs";
 /// The version map.
@@ -201,11 +201,11 @@ fn platform_source(floors: &Floors) -> String {
     let (major, minor, patch) = dotted(&floors.ios.version);
     format!(
         "{GENERATED_HEADER}\n\
-         //! The floors this crate compiles in (ADR-0244); `shared::os_version` refuses a gate at or\n\
-         //! below them.\n\
+         //! The floors this crate compiles in (ADR-0244); `version::gate` refuses a gate at or below\n\
+         //! them.\n\
          \n\
          /// The lowest Windows build FLUI supports, as `RtlGetVersion` reports it.\n\
-         #[cfg(windows)]\n\
+         #[cfg(any(windows, test))]\n\
          pub(crate) const WINDOWS_BUILD: u32 = {};\n\
          \n\
          /// The lowest iOS version FLUI supports, as (major, minor, patch).\n\

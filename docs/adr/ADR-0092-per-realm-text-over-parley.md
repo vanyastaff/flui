@@ -60,7 +60,7 @@
   layout), [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) (the raster
   thread and the `GpuContext` atlas), [ADR-0097](ADR-0097-no-process-global-state-gate.md)
   (`FONT_SYSTEM` left the allowlist at §10 step 6a)
-- **Refs:** decision D12 in the [decision index](../../design/decisions.md); roadmap exit B1
+- **Refs:** decision D12 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); roadmap exit B1
   (per-UI runtime fonts)
 
 ## Context
@@ -896,7 +896,7 @@ that wires what it adds.
   §10 step 6a and are now available through the immutable links in this record's metadata.
   Their live authorities are §1's shaping choice, §2's registration/face agreement,
   §7's family resolution and §8's carried acceptance gates. The independent historical
-  spike methods/results remain in [the text-stack research](../research/text-stack-2026.md).
+  spike methods/results remain in [the text-stack research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/text-stack-2026.md).
   ADR-0065, ADR-0066 and ADR-0067 retain their scoped `Amended by` links to this record.
 
 ## Verification
@@ -1042,7 +1042,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `crates/flui-painting/src/text_layout/context.rs`, `a_host_copy_of_a_bundled_family_is_not_fed`
   and `a_missing_path_is_skipped_and_the_feed_completes`, which fail if the feed adds a host copy
   of a held family or rebinds a bound generic; `swash_matches_the_recorded_reference`; the demo
-  layer snapshots (`cargo xtask demo-snapshots`) and the perf counts, unchanged with the font
+  layer snapshots ([`cargo xtask demo-snapshots`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/tasks.rs)) and the perf counts, unchanged with the font
   pin removed.
 - Startup cost and retained memory (gate 6): `crates/flui-painting/benches/text_startup.rs`, run
   with `cargo bench -p flui-painting --bench text_startup`; its figures are in Context.

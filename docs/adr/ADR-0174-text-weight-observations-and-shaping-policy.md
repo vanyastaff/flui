@@ -109,7 +109,7 @@ use zero to retain authored weight behavior. Repository literal migration is
 audited with `rg -n 'ParagraphSpec|MediaQueryData|bold_text|with_bold_text' --glob '*.rs'`
 over the workspace, including examples and tooling. A default-feature SemVer comparison with an explicit patch
 release type reports these intended breaks: removed inherent methods in
-flui-platform-api and added constructible fields in flui-painting and flui-widgets.
+flui-platform and added constructible fields in flui-painting and flui-widgets.
 This is an intentional pre-1.0 API migration, not a compatible patch. Optional
 feature and platform verification remain required before publication.
 

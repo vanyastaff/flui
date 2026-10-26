@@ -31,7 +31,7 @@ contact generation, so an ended contact or closed presentation makes it inert.
 This is logical routing capture; it does not request explicit OS release.
 See [ADR-0164](../../docs/adr/ADR-0164-down-route-logical-pointer-capture.md).
 
-The public wire uses `flui-platform-api`'s owned `PointerEvent` and `KeyEvent`
+The public wire uses `flui-platform`'s owned `PointerEvent` and `KeyEvent`
 contracts. `PointerId` names a contact, `DeviceId` names hardware, and
 `PointerInfo` carries the reported `PointerKind` and primary role. Samples use
 checked logical positions and monotonic `EventTime`. Missing sensors stay
@@ -48,7 +48,7 @@ UI state.
 ```rust
 use std::{cell::Cell, rc::Rc};
 use flui_foundation::geometry::Point;
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use flui_interaction::{
     GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
     PointerButtons, PointerEvent,
@@ -145,8 +145,7 @@ In widgets, `Listener::recognizer` and `recognizer_when` use this mechanism.
 `GestureDetector` mounts its typed slots (`on_tap`, `drag(DragSlot)`,
 `transform(TransformSlot)` and the rest) through `RawGestureDetector`. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
 Dropping the last owner releases membership silently, without invoking gesture
-callbacks. See [GESTURES.md](docs/GESTURES.md) and the
-[custom recognizer example](examples/custom_recognizer.rs).
+callbacks. See [GESTURES.md](docs/GESTURES.md).
 
 ## Focus
 
@@ -227,8 +226,7 @@ selects smoothing. `OneEuroTuning::new` validates parameters with a typed
 error; filtering rejects invalid samples the same way. Invalid input leaves
 accepted history unchanged; the 2D filter commits both axes together, and a
 duplicate or regressed timestamp holds its accepted result and clock anchor.
-See [the pointer filtering example](examples/pointer_filtering.rs) for tuning
-and sample admission. Interpolating a position keeps the preceding measured
+Interpolating a position keeps the preceding measured
 sensor reading, including missing pressure; it does not measure a new pressure.
 Recognizers use event timing anchored to their arena
 clock; replayed sample spacing determines the gesture's velocity.

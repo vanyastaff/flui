@@ -5,6 +5,8 @@
   vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
   counterpart, and role-bearing flags are roles. The rule that stable signatures carry no
   upstream type stands.
+- **Amended:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
+  contract's two `bitflags` sets into the contract's own type (ADR-0151 §5).
 - **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
 - **Date:** 2026-09-25
 - **Related:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1 (`ImeEvent` mirrors
@@ -19,15 +21,15 @@
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (`flui-sdk` and the facade),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) (`flui-protocol`)
-- **Refs:** decision D8 and owner decision 3 in the [decision index](../../design/decisions.md);
+- **Refs:** decision D8 and owner decision 3 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   panel record in
-  [`report-decisions.ru.md`](../research/2026-09-25-architecture-review/report-decisions.ru.md) §3
+  [`report-decisions.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md) §3
 
 ## Context
 
 [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) and
 [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) name three Stable crates — `flui`,
-`flui-platform-api` and `flui-protocol` — whose public surface is frozen at H3. A Stable crate can
+`flui-platform` and `flui-protocol` — whose public surface is frozen at H3. A Stable crate can
 only keep a semver promise that its signatures do not delegate to someone else's release cadence:
 if a public function returns `accesskit::Role`, every breaking accesskit release is a breaking
 FLUI release.
@@ -38,8 +40,8 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `src/interaction.rs:14-16` (`PointerEvent`, `PointerButtons`, `PointerType`, `CursorIcon`) and
   `src/interaction.rs:42-45` (`Code`, `Key`, `KeyState`, `KeyboardEvent`, `Location`, `Modifiers`,
   `NamedKey`). Their source is `crates/flui-interaction/src/events.rs:93-105` and `:131-142`
-  (`pub use ui_events::…`), and on the platform side `crates/flui-platform/src/traits/input.rs:60-66`
-  and `crates/flui-platform/src/traits/mod.rs:60` (`pub use keyboard_types::…`). ui-events 0.3
+  (`pub use ui_events::…`), and on the platform side `crates/flui-native/src/traits/input.rs:60-66`
+  and `crates/flui-native/src/traits/mod.rs:60` (`pub use keyboard_types::…`). ui-events 0.3
   itself re-exports keyboard-types by glob (`ui-events-0.3.0/src/keyboard/mod.rs:21`,
   `pub use keyboard_types::*;`), so the closure of those paths is keyboard-types' whole surface.
 - **Accessibility.** `flui-testing` re-exports `accesskit::{Action, ActionData, ActionRequest,
@@ -47,7 +49,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   facade re-exports that module as `flui::testing::a11y` behind its `testing` feature
   (`src/lib.rs:123-124`, `src/testing.rs:9`).
   `PlatformAccessibility::publish` takes an `accesskit::TreeUpdate`
-  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-platform` by ADR-0082 §2). FLUI's own vocabulary already exists:
+  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-native` by ADR-0082 §2). FLUI's own vocabulary already exists:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),
   `SemanticsAction` 24 (`crates/flui-semantics/src/action.rs:23`), and neither is
   `#[non_exhaustive]`.
@@ -55,7 +57,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `pub use android_activity` (`crates/flui-app/src/lib.rs:116`, re-exported again by the facade at
   `src/lib.rs:157`).
 - **Raw handles.** `PlatformWindow` already exposes only the borrowed
-  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform-api/src/platform_window.rs`),
+  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform/src/platform_window.rs`),
   which [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) moved the renderer to. The
   legacy `Window` trait (since removed by ADR-0237) still has
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`), returning a crate-local
@@ -82,9 +84,9 @@ reports it. Evolving and internal crates are not bound by this rule; they are bo
 facts of [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) instead.
 
 The promise follows the item, not its crate. A Stable signature already names types from
-internal crates (`flui-platform-api`'s window contract takes `Size` and `EdgeInsets`
+internal crates (`flui-platform`'s window contract takes `Size` and `EdgeInsets`
 from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_insets` in
-`crates/flui-platform-api/src/platform_window.rs`), and the
+`crates/flui-platform/src/platform_window.rs`), and the
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that
@@ -94,7 +96,7 @@ closure. The closure gate of §6 is what lists them.
 
 | Class | Crates | Condition | Cost, recorded here |
 |---|---|---|---|
-| **Named exception** | `raw-window-handle` 0.6 | Only the traits `HasWindowHandle` and `HasDisplayHandle`, the borrowed `WindowHandle<'_>`/`DisplayHandle<'_>` their methods return, and the error type `HandleError`. No `RawWindowHandle`/`RawDisplayHandle` value in any Stable signature. | A raw-window-handle 0.7 is a major release of `flui-platform-api` and of `flui`. |
+| **Named exception** | `raw-window-handle` 0.6 | Only the traits `HasWindowHandle` and `HasDisplayHandle`, the borrowed `WindowHandle<'_>`/`DisplayHandle<'_>` their methods return, and the error type `HandleError`. No `RawWindowHandle`/`RawDisplayHandle` value in any Stable signature. | A raw-window-handle 0.7 is a major release of `flui-platform` and of `flui`. |
 | **Allowed 1.x** | `serde`, `schemars`, `cursor-icon` | serde and schemars only through derive impls behind a feature of the same name (`flui-protocol`, [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)); cursor-icon as `CursorIcon`. | An upstream major is our major; neither has had one in the window measured. |
 | **Never** | accesskit, ui-events, keyboard-types, dpi, wgpu, kurbo, peniko, parley, fontique, cosmic-text, android-activity, and every OS binding crate ([ADR-0082](ADR-0082-platform-api-contract-crate.md)) | — | — |
 
@@ -108,8 +110,8 @@ allowlist, and an upstream crate not on either list fails closed.
 - Naming rule: use the AccessKit or ARIA name when the concept exists there. This is guidance for
   naming, not a 1:1 contract; FLUI does not add the ~150 roles nothing in the catalog produces.
 - The mapping to accesskit stays internal (`flui-semantics`, and `PlatformAccessibility` lives in
-  `flui_semantics::platform`, internal and tier S, re-exported at `flui_platform::traits`; never
-  in `flui-platform-api`; ADR-0082 §2, amended).
+  `flui_semantics::platform`, internal and tier S, re-exported at `flui_native::traits`; never
+  in `flui-platform`; ADR-0082 §2, amended).
 - Outbound pin (FLUI → accesskit): a generated `const ALL: &[SemanticsRole]` and the same for
   actions. A test asserts that every role except `None` maps to `Some(accesskit::Role)`, and that
   every action has an inbound source or is marked FLUI-only. A test over `ALL`, not an exhaustive
@@ -127,7 +129,7 @@ allowlist, and an upstream crate not on either list fails closed.
 
 ### 4. Input vocabulary is our own
 
-`flui-platform-api` defines `PointerEvent`, `KeyEvent`, `Key`, `NamedKey`, `Code`, `Modifiers`,
+`flui-platform` defines `PointerEvent`, `KeyEvent`, `Key`, `NamedKey`, `Code`, `Modifiers`,
 `ScrollDelta` and `PointerId`. `NamedKey` and `Code` are generated by a `cargo xtask` command from
 the keyboard-types source, with a round-trip test over every variant and a diff check when
 keyboard-types is bumped. A W3C key that keyboard-types adds before FLUI adopts it arrives as
@@ -154,7 +156,7 @@ and never in a Stable crate:
 ### 6. The gate
 
 A `cargo xtask api-closure` command (working name) walks rustdoc JSON for `flui`,
-`flui-platform-api` and `flui-protocol`, applies the denylist and the allowlist of §2, and fails
+`flui-platform` and `flui-protocol`, applies the denylist and the allowlist of §2, and fails
 on any other upstream path. Before it joins `cargo xtask checks`, it is proven able to fail: a
 scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self-test`, as
 [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §5 asks of every gate).
@@ -172,7 +174,7 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
   consumer.
 - **Ship the escape modules up front.** Not chosen by default: it publishes Evolving surface no
   code uses. Whether to ship them early is an open owner question
-  ([open questions](../../design/open-questions.md)); the default is on demand, with
+  ([open questions](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md)); the default is on demand, with
   `flui_sdk::gpu` the only one now.
 - **Pin the outbound mapping with an exhaustive match.** Rejected: `#[non_exhaustive]` forces a
   `_` arm in any other crate, and the pin evaporates.
@@ -192,7 +194,7 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
   if true, one nightly pin serves this gate, the `flui-sdk` surface measurement and the H3
   semver checks together.
 - Migration order: the `#[non_exhaustive]` + `ALL` test and the exhaustive inbound matches first;
-  the generated input types when `flui-platform-api` is extracted
+  the generated input types when `flui-platform` is extracted
   ([ADR-0082](ADR-0082-platform-api-contract-crate.md)); moving `pub use ::wgpu` and
   `android_activity` with the `flui-sdk` work; `api-closure` in `checks` before H3.
 
@@ -202,10 +204,14 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
 ([ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §4). The owned input and
 semantics vocabularies also expose their outbound `ALL` sets, and the AccessKit
 translation has exhaustive inbound matches and its outbound role-family test.
-The remaining API-closure and Stable-signature migration checks below are still pending.
+§6's gate exists and passes on every Stable package (`flui`, `flui-platform`, `flui-protocol`).
 
-- `api-closure` with its self-test probe (§6), in `cargo xtask checks`.
+- `cargo xtask api-closure` and its `--self-test` (§6), in CI's `doc` job: the self-test plants a
+  `ui-events` type, a `RawWindowHandle` (§2), an allowed `CursorIcon` and `HandleError`, an
+  unused exception and, under an allow list, an OS type and an OS crate no list names, a left-out
+  type inside an admitted workspace trait's implementation, another workspace trait's and outside
+  both, an admission and an entry in use beside ones no longer needed into the contract's real
+  rustdoc output, and the rule reports exactly the violations. The same gate checks the core
+  host's allow list on every target it builds a host for (ADR-0151 §8).
 - The implemented outbound `ALL` role test and exhaustive inbound matches in `flui-semantics` (§3).
 - The generated-key round-trip test and the keyboard-types diff check (§4).
-- A `compile_fail` or closure-gate case showing `RawWindowHandle` cannot appear in a Stable
-  signature (§2).

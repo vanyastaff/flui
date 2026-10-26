@@ -949,6 +949,9 @@ struct LocalLaneInner {
     path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
     shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
     payload_targets: RefCell<HashMap<TargetId, Rc<dyn Any>>>,
+    /// Pointer targets that declared they feed a drag-family recognizer
+    /// (ADR-0251 §2).
+    scroll_contact_feeds: RefCell<std::collections::HashSet<TargetId>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -1009,6 +1012,7 @@ impl InteractionLane {
             path_clip_targets: RefCell::new(HashMap::new()),
             shader_mask_targets: RefCell::new(HashMap::new()),
             payload_targets: RefCell::new(HashMap::new()),
+            scroll_contact_feeds: RefCell::new(std::collections::HashSet::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -1655,6 +1659,34 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
+    /// Declare that `target` feeds a drag-family recognizer, so a touchpad pan
+    /// that opens an arena contact (ADR-0251) delivers its samples to it.
+    ///
+    /// A raw pointer handler never declares: it keeps receiving the scroll
+    /// packets and no synthetic sample.
+    pub fn declare_scroll_contact_feed(
+        &self,
+        target: PointerTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        lane.scroll_contact_feeds
+            .borrow_mut()
+            .insert(target.target_id);
+        Ok(())
+    }
+
+    /// Whether `target` declared itself a scroll-contact feed.
+    pub(crate) fn feeds_scroll_contacts(&self, target: PointerTarget) -> bool {
+        self.active_lane().is_ok_and(|lane| {
+            self.validate_lane(target.lane_id).is_ok()
+                && lane
+                    .scroll_contact_feeds
+                    .borrow()
+                    .contains(&target.target_id)
+        })
+    }
+
     /// Remove a target from future route resolution. A route already resolved
     /// over it delivers it only the Up or Cancel that ends its contact.
     pub fn unregister_pointer(
@@ -1670,6 +1702,9 @@ impl InteractionDispatchHandle {
             .ok_or(InteractionDispatchError::TargetGone)?;
         removed.retired.set(true);
         lane.target_owners.borrow_mut().remove(&target.target_id);
+        lane.scroll_contact_feeds
+            .borrow_mut()
+            .remove(&target.target_id);
         drop(removed);
         Ok(())
     }

@@ -8,7 +8,7 @@ use flui_interaction::{
     events::{CursorIcon, PointerEvent},
     pointer::{HitTestEntry, HitTestResult, MouseTracker, PointerMotionKind},
 };
-use flui_platform_api::{
+use flui_platform::{
     EventTime,
     pointer::{
         DeviceId, PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove,

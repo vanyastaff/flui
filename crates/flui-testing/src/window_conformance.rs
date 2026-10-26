@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Point, Size};
-use flui_platform_api::{
+use flui_platform::{
     PlatformWindow, SizeConstraints, WindowCommand, WindowCommandError, WindowMode, WindowState,
 };
 

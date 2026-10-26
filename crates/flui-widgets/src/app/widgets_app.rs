@@ -79,7 +79,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_painting::typography::TextStyle;
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 

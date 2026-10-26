@@ -933,7 +933,7 @@ impl Renderer {
         // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
         // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
         // `PlatformWindow: WindowTarget`, which would invert the
-        // flui-platform → flui-engine layer edge (`cargo xtask workspace`).
+        // flui-native → flui-engine layer edge (`cargo xtask workspace`).
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
@@ -1067,7 +1067,7 @@ impl Renderer {
             // The literal sat at 1 for a live-resize argument: the tightest
             // pool means the displayed frame tracks the window edge as closely
             // as possible during a drag. The in-process half of that argument
-            // was refuted first (`cargo xtask device macos-resize-jitter`: the acquired
+            // was refuted first (measured on macOS: the acquired
             // texture never diverges from the configured size at either
             // setting, four runs — `render_scene` acquires and presents
             // inside one call and `resize` reconfigures before it, so no
@@ -1083,17 +1083,17 @@ impl Renderer {
             // N+1 waits until frame N's drawable is released by scanout, so
             // a frame whose own work is longer than what is left of the
             // period after that release misses the next vsync EVERY time, not
-            // on a 3 % tail: `examples/workload_probe.rs` (a Scaffold with a
+            // on a 3 % tail: a representative workload (a Scaffold with a
             // 2,000-row ListView and a Material TextField, 900×700 logical
             // on a 100 Hz panel) presented at a rock-steady 20.0 ms p50 —
             // exactly two periods, 50 fps — through both its scrolling and
-            // its typing phases, while `flui-platform`'s bare frame pump on
+            // its typing phases, while `flui-native`'s bare frame pump on
             // the same display ran 100 fps. At 2 the same probe ran 10.0 ms
             // p50 (p99 12.3 ms scrolling, 10.05 ms typing). Half the frame
             // rate of every non-trivial app is a measured cost; a possible
             // one-period edge lag during a live drag is a conjecture nothing
             // in-process can observe. The pool is widened on that basis, and
-            // `cargo xtask device macos-workload` is the regression gate: its scroll and
+            // a macOS workload run is the regression gate: its scroll and
             // type p99 budgets are stated in display periods. The
             // measurement is AppKit/Metal on one 100 Hz panel; the literal
             // is global to every wgpu backend, where 2 is wgpu's own default
@@ -2295,7 +2295,7 @@ impl Renderer {
 
         // The platform's frame-pacing signal, armed strictly before the
         // present that follows (see `RasterBackend::set_pre_present_hook`).
-        // The trace event is the live-smoke harness's ordering oracle: every
+        // The trace event is an ordering oracle: every
         // `present_submitted` must be preceded by one of these.
         if let Some(hook) = self.pre_present_hook.as_mut() {
             hook();
@@ -2314,7 +2314,7 @@ impl Renderer {
         // reached only after the frame's encoders were submitted to the
         // queue and the swapchain texture presented — the live oracle for
         // hidden-surface gating ("an occluded window issues zero GPU
-        // submissions"), which `tools/live-smoke`'s occlusion check counts.
+        // submissions").
         // The `event` field is the machine-oriented marker that check
         // matches on — keep it stable; the message text is for humans and
         // may be reworded freely.
@@ -2402,8 +2402,8 @@ impl Renderer {
                 // handful of times even on a pathological resize storm, so it is
                 // easy to miss in a log — but it is the one signal that says the
                 // swapchain handed back a stale-size backbuffer. On its own
-                // target it can be counted directly (see
-                // `examples/resize_jitter_probe.rs`, which fails the run on a
+                // target it can be counted directly (a harness
+                // can fail the run on a
                 // non-zero count), while `RUST_LOG=flui.gpu` still selects it by
                 // prefix and plain `warn` still selects it outright.
                 tracing::warn!(

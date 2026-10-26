@@ -205,7 +205,8 @@ fn start_agent_session(
     }
     let start = std::env::current_dir().context("could not read current directory")?;
     let workspace = find_workspace_root(&start);
-    let session = Session::create(&start, workspace.as_deref())?;
+    let target_dir = agent::target_dir_override();
+    let session = Session::create(&start, workspace.as_deref(), target_dir.as_deref())?;
     ui::success(format!(
         "Agent session: {} (connect with `flui mcp`)",
         style(session.file().display()).cyan()
@@ -295,10 +296,19 @@ fn is_host_device(device: &str) -> bool {
 /// Resolve `--device` against the same discovery `flui devices` performs.
 ///
 /// Exact id, then exact name (case-insensitive), then a unique prefix of
-/// either. A device that exists but cannot be driven by `flui run` yet
-/// (Android, a browser) is an `Unsupported` error naming the alternative —
-/// never a silent fallback to another platform.
+/// either. A device that exists but cannot be driven by `flui run` yet (a
+/// browser) is an `Unsupported` error naming the alternative — never a
+/// silent fallback to another platform.
+///
+/// An Android device named by its serial is found before the other
+/// platforms are probed: a browser's id is `browser:<name>`, so no browser
+/// can take an exact serial, and probing the browsers starts each installed
+/// one to read its version, up to a probe's timeout apiece. Otherwise the
+/// list is the one `flui devices` prints, each platform probed once.
 fn resolve_target(device: Option<&str>) -> CliResult<Target> {
+    use super::devices::discover;
+    use crate::DevicePlatform;
+
     let Some(query) = device.map(str::trim).filter(|q| !q.is_empty()) else {
         return Ok(Target::Host);
     };
@@ -306,9 +316,15 @@ fn resolve_target(device: Option<&str>) -> CliResult<Target> {
         return Ok(Target::Host);
     }
 
-    let discovery = super::devices::discover(None, false);
-    let matched = select_device(&discovery.devices, query)?;
-    match_target(matched)
+    let android = discover(Some(DevicePlatform::Android), false).devices;
+    if let Some(device) = android.iter().find(|device| device.id == query) {
+        return match_target(device);
+    }
+    let mut devices = discover(Some(DevicePlatform::Desktop), false).devices;
+    devices.extend(android);
+    devices.extend(discover(Some(DevicePlatform::Ios), false).devices);
+    devices.extend(discover(Some(DevicePlatform::Web), false).devices);
+    match_target(select_device(&devices, query)?)
 }
 
 /// Pick one device for `query` out of `devices` (see [`resolve_target`]).

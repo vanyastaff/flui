@@ -4,15 +4,15 @@
   размещение — §0.2
 - **Дата:** 2026-10-13, база `main` @ `4da87df0b`
 - **Требования:** [requirements.md](requirements.md); задачи — [tasks.md](tasks.md)
-- **Исследования:** [best-practices](../../../../research/2026-10-12-interaction-input-best-practices.md)
-  («BP»), [followups](../../../../research/2026-10-12-interaction-input-followups.md) («FU»)
+- **Исследования:** [best-practices](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md)
+  («BP»), [followups](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md) («FU»)
 - Пути — от корня репозитория.
 
 ## 0. Имена
 
 Правило (N2): устоявшийся термин экосистемы в конвенциях Rust; колонка «Где принят» обязательна.
 Существующие семейства (`TapGestureRecognizer` и т.п.) переименовывает общий проход
-[naming](../../naming/renames.md); имена semantics — из ADR-0203.
+[naming](../../naming/tasks.md); имена semantics — из ADR-0203.
 
 ### 0.1 Публичные имена
 

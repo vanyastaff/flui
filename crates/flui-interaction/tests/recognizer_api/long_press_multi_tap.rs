@@ -26,7 +26,7 @@ fn pointer(raw: u64) -> PointerId {
 
 fn pen_kind() -> PointerKind {
     PointerKind::Pen {
-        tool: flui_platform_api::PenTool::Tip,
+        tool: flui_platform::PenTool::Tip,
     }
 }
 
@@ -44,10 +44,10 @@ fn press_event(raw: u64, position: Offset<f64>, nanos: u64, up: bool) -> Pointer
     };
     match &mut event {
         PointerEvent::Down(press) => {
-            press.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            press.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(release) => {
-            release.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            release.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         _ => unreachable!("fixture creates button edges"),
     }
@@ -57,7 +57,7 @@ fn press_event(raw: u64, position: Offset<f64>, nanos: u64, up: bool) -> Pointer
 fn press_move(raw: u64, readings: &[(u64, f64)], predictions: &[(u64, f64)]) -> PointerEvent {
     let sample = |(nanos, x): &(u64, f64)| {
         PointerSample::new(
-            flui_platform_api::EventTime::from_nanos(*nanos),
+            flui_platform::EventTime::from_nanos(*nanos),
             PointerPosition::try_new(flui_foundation::geometry::Point::new(*x, 0.0))
                 .expect("finite reading"),
         )

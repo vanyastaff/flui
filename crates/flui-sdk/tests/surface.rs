@@ -108,9 +108,12 @@ mod measured {
         TranslationFraction as _,
     };
     use flui_sdk::platform::{
-        Brightness as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _, Locale as _,
-        MemoryPressureLevel as _, SessionEndBlock as _, SessionEndRequest as _,
-        SystemPreferences as _, TargetPlatform as _, WindowCommandError as _, WindowMode as _,
+        Brightness as _, DurationScale as _, GesturePreferences as _, HapticFeedback as _,
+        HostNotice as _, InvalidLocale as _, InvalidPreference as _, Locale as _,
+        MemoryPressureLevel as _, MotionPreference as _, NativeMouseGeometry as _,
+        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _,
+        SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
+        WheelPreferences as _, WheelStep as _, WindowCommandError as _, WindowMode as _,
         WindowState as _,
     };
     use flui_sdk::rendering::{
@@ -215,6 +218,7 @@ mod measured {
         MenuRequest as _, MenuSpec as _, PanIntent as _, ShowContextMenuIntent as _,
         SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
     };
+    use flui_sdk::widgets::{CellPosition as _, SetSize as _, SortDirection as _, TableShape as _};
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
         HeaderExtentsError as _, HeaderOrder as _,
@@ -319,6 +323,18 @@ fn the_re_exports_are_the_facades_types() {
     ) -> Box<dyn flui_sdk::interaction::GestureRecognizer> = |x| x;
     let _: fn(flui::widgets::RecognizerContext) -> flui_sdk::widgets::RecognizerContext = |x| x;
     let _: fn(flui::platform::SystemPreferences) -> flui_sdk::platform::SystemPreferences = |x| x;
+    let _: fn(flui::platform::MotionPreference) -> flui_sdk::platform::MotionPreference = |x| x;
+    let _: fn(flui::platform::DurationScale) -> flui_sdk::platform::DurationScale = |x| x;
+    let _: fn(flui::platform::TextWeightPreference) -> flui_sdk::platform::TextWeightPreference =
+        |x| x;
+    let _: fn(flui::platform::GesturePreferences) -> flui_sdk::platform::GesturePreferences = |x| x;
+    let _: fn(flui::platform::NativeMouseGeometry) -> flui_sdk::platform::NativeMouseGeometry =
+        |x| x;
+    let _: fn(flui::platform::NativeTouchGeometry) -> flui_sdk::platform::NativeTouchGeometry =
+        |x| x;
+    let _: fn(flui::platform::WheelPreferences) -> flui_sdk::platform::WheelPreferences = |x| x;
+    let _: fn(flui::platform::WheelStep) -> flui_sdk::platform::WheelStep = |x| x;
+    let _: fn(flui::platform::InvalidPreference) -> flui_sdk::platform::InvalidPreference = |x| x;
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
@@ -365,23 +381,20 @@ mod measured_unstable {
 #[test]
 fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     let _: fn(
-        flui_platform_api::input_capabilities::InputCapabilities,
+        flui_platform::input_capabilities::InputCapabilities,
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
     let _: fn(
-        flui_platform_api::input_capabilities::Availability,
+        flui_platform::input_capabilities::Availability,
     ) -> flui_sdk::platform::input_capabilities::Availability = |x| x;
     let _: fn(
-        flui_platform_api::input_capabilities::PointerKindSet,
+        flui_platform::input_capabilities::PointerKindSet,
     ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticPattern,
-    ) -> flui_sdk::platform::haptics::HapticPattern = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticRequest,
-    ) -> flui_sdk::platform::haptics::HapticRequest = |x| x;
-    let _: fn(
-        flui_platform_api::haptics::HapticOutcome,
-    ) -> flui_sdk::platform::haptics::HapticOutcome = |x| x;
+    let _: fn(flui_platform::haptics::HapticPattern) -> flui_sdk::platform::haptics::HapticPattern =
+        |x| x;
+    let _: fn(flui_platform::haptics::HapticRequest) -> flui_sdk::platform::haptics::HapticRequest =
+        |x| x;
+    let _: fn(flui_platform::haptics::HapticOutcome) -> flui_sdk::platform::haptics::HapticOutcome =
+        |x| x;
     let _: fn(flui_interaction::HapticsHandle) -> flui_sdk::interaction::HapticsHandle = |x| x;
     let _: fn(flui_interaction::HapticObserver) -> flui_sdk::interaction::HapticObserver = |x| x;
 }
@@ -511,40 +524,49 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
-        "pub use flui_platform_api::Brightness;",
-        "pub use flui_platform_api::EventTime;",
-        "pub use flui_platform_api::HapticFeedback;",
-        "pub use flui_platform_api::HostNotice;",
-        "pub use flui_platform_api::InvalidLocale;",
-        "pub use flui_platform_api::Locale;",
-        "pub use flui_platform_api::MemoryPressureLevel;",
-        "pub use flui_platform_api::SessionEndBlock;",
-        "pub use flui_platform_api::SessionEndRequest;",
-        "pub use flui_platform_api::SystemPreferences;",
-        "pub use flui_platform_api::TargetPlatform;",
-        "pub use flui_platform_api::WindowCommandError;",
-        "pub use flui_platform_api::WindowMode;",
-        "pub use flui_platform_api::WindowState;",
-        "pub use flui_platform_api::data_transfer::TransferActions;",
-        "pub use flui_platform_api::haptics::ControlPoint;",
-        "pub use flui_platform_api::haptics::HapticCapabilities;",
-        "pub use flui_platform_api::haptics::HapticEvent;",
-        "pub use flui_platform_api::haptics::HapticOutcome;",
-        "pub use flui_platform_api::haptics::HapticPattern;",
-        "pub use flui_platform_api::haptics::HapticPatternBuilder;",
-        "pub use flui_platform_api::haptics::HapticPatternError;",
-        "pub use flui_platform_api::haptics::HapticRequest;",
-        "pub use flui_platform_api::haptics::HapticTicket;",
-        "pub use flui_platform_api::haptics::HapticTiming;",
-        "pub use flui_platform_api::haptics::Intensity;",
-        "pub use flui_platform_api::haptics::ParameterCurve;",
-        "pub use flui_platform_api::haptics::PatternPlayback;",
-        "pub use flui_platform_api::haptics::Sharpness;",
-        "pub use flui_platform_api::haptics::UnitRangeError;",
-        "pub use flui_platform_api::input_capabilities::Availability;",
-        "pub use flui_platform_api::input_capabilities::InputCapabilities;",
-        "pub use flui_platform_api::input_capabilities::PointerKindSet;",
-        "pub use flui_platform_api::text_store::TextInputPurpose;",
+        "pub use flui_platform::Brightness;",
+        "pub use flui_platform::DurationScale;",
+        "pub use flui_platform::EventTime;",
+        "pub use flui_platform::GesturePreferences;",
+        "pub use flui_platform::HapticFeedback;",
+        "pub use flui_platform::HostNotice;",
+        "pub use flui_platform::InvalidLocale;",
+        "pub use flui_platform::InvalidPreference;",
+        "pub use flui_platform::Locale;",
+        "pub use flui_platform::MemoryPressureLevel;",
+        "pub use flui_platform::MotionPreference;",
+        "pub use flui_platform::NativeMouseGeometry;",
+        "pub use flui_platform::NativeTouchGeometry;",
+        "pub use flui_platform::SessionEndBlock;",
+        "pub use flui_platform::SessionEndRequest;",
+        "pub use flui_platform::SystemPreferences;",
+        "pub use flui_platform::TargetPlatform;",
+        "pub use flui_platform::TextWeightPreference;",
+        "pub use flui_platform::WheelPreferences;",
+        "pub use flui_platform::WheelStep;",
+        "pub use flui_platform::WindowCommandError;",
+        "pub use flui_platform::WindowMode;",
+        "pub use flui_platform::WindowState;",
+        "pub use flui_platform::data_transfer::TransferActions;",
+        "pub use flui_platform::haptics::ControlPoint;",
+        "pub use flui_platform::haptics::HapticCapabilities;",
+        "pub use flui_platform::haptics::HapticEvent;",
+        "pub use flui_platform::haptics::HapticOutcome;",
+        "pub use flui_platform::haptics::HapticPattern;",
+        "pub use flui_platform::haptics::HapticPatternBuilder;",
+        "pub use flui_platform::haptics::HapticPatternError;",
+        "pub use flui_platform::haptics::HapticRequest;",
+        "pub use flui_platform::haptics::HapticTicket;",
+        "pub use flui_platform::haptics::HapticTiming;",
+        "pub use flui_platform::haptics::Intensity;",
+        "pub use flui_platform::haptics::ParameterCurve;",
+        "pub use flui_platform::haptics::PatternPlayback;",
+        "pub use flui_platform::haptics::Sharpness;",
+        "pub use flui_platform::haptics::UnitRangeError;",
+        "pub use flui_platform::input_capabilities::Availability;",
+        "pub use flui_platform::input_capabilities::InputCapabilities;",
+        "pub use flui_platform::input_capabilities::PointerKindSet;",
+        "pub use flui_platform::text_store::TextInputPurpose;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

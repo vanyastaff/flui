@@ -5,7 +5,7 @@
 - **Требования:** [requirements.md](requirements.md); уровень 0 —
   [release/requirements.md](../release/requirements.md) R8, R16; смежные —
   [text-ime](../text-ime/requirements.md) (R11, Escape; preedit коммитится при unmount),
-  [render-proof](../render-proof/requirements.md) (R1, R3), [teardown](../teardown/design.md)
+  [render-proof](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/render-proof/requirements.md) (R1, R3), [teardown](../teardown/design.md)
   (пользовательский код — только в realm, стоящем в своём слоте), `send-flip` (работы 5 и 8 после него)
 - **Открытые вопросы закрыты:** Back на Apple — Cmd+[; пустой список — остановка Tab с меткой
   «нет заметок», и pop при пустом списке возвращает фокус на него (правка R8, «Риски» 3).

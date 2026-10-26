@@ -41,7 +41,6 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     "LICENSE*",
     "NOTICE*",
     "docs/**",
-    "design/**",
     "book/**",
     ".github/**/*.md",
     ".github/ISSUE_TEMPLATE/**",
@@ -70,10 +69,9 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     ".github/actions/**", // the local actions those workflows run
     // Shaders: clippy only embeds them as strings and no build script parses
     // them (`checks`' `wgsl` step is a syntactic uniformity check, in every
-    // lane). The wide lane's live-smoke compiles the pipelines its demo draws
-    // with on lavapipe. The local gpu-test command compiles every shader
-    // module; a shader the demo does not draw needs that local check. A shader
-    // outside every crate would otherwise take the tooling lane.
+    // lane). The local gpu-test command compiles every shader module, so a
+    // shader change needs that local check. A shader outside every crate would
+    // otherwise take the tooling lane.
     "**/*.wgsl",
     // The `deps` job's advisories step blocks only from the wide lane up, and an
     // edited advisory ignore is exactly what that step judges.
@@ -96,13 +94,11 @@ pub(super) const FULL_TRIGGERS: &[&str] = &[
 ];
 
 /// Repository files no package compiles: configuration the `checks` job reads
-/// itself, and the macOS/iOS device-check drivers, which only run by hand on a
-/// Mac. `tools/xtask/` is not here: it is the `xtask` workspace package, so a
+/// itself. `tools/xtask/` is not here: it is the `xtask` workspace package, so a
 /// change to it scopes that package (its clippy and unit tests) like any other
 /// crate, and [`heavy_job_inputs`] adds the wide lane when a wide-lane job
 /// runs the command it touches.
 pub(super) const TOOLING: &[&str] = &[
-    "tools/device-checks/**",
     "typos.toml",
     ".taplo.toml",
     "rustfmt.toml",
@@ -720,7 +716,7 @@ pub(super) mod tests {
             "LICENSE-APACHE",
             "NOTICE",
             "docs/testing.md",
-            "design/architecture.md",
+            "docs/architecture.md",
             "book/src/intro.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
             "crates/flui-view/ARCHITECTURE.md",
@@ -810,14 +806,14 @@ pub(super) mod tests {
         let ci = format!(
             "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
              \x20 doc:\n    if: {WIDE_CONDITION}\n    steps:\n\
-             \x20     # see cargo xtask device ios-sim\n\
+             \x20     # see cargo xtask wasm-link\n\
              \x20     - run: cargo xtask doc-strict --all\n      - run: cargo xtask not-a-command\n\
-             \x20 platform:\n    if: {}\n    steps:\n      - run: cargo xtask device windows-a11y\n",
+             \x20 platform:\n    if: {}\n    steps:\n      - run: cargo xtask deps\n",
             super::super::aggregator::FULL_CONDITION
         );
         let main = "match c {\n    Command::Checks(args) => tasks::checks(&args),\n    \
                     Command::DocStrict(args) => doc_strict::doc_strict(&args),\n    \
-                    Command::Device(args) => device::device(&args),\n}\n";
+                    Command::Deps(args) => deps::deps(&args),\n}\n";
         let inputs = heavy_job_inputs(&ci, Some(main));
         let expected = [
             "tools/xtask/**",
@@ -839,7 +835,7 @@ pub(super) mod tests {
         // `full` runs) contributes nothing, nor does a command a comment
         // merely mentions
         assert!(!inputs.contains("tools/xtask/src/tasks.rs"));
-        assert!(!inputs.contains("tools/xtask/src/device.rs"));
+        assert!(!inputs.contains("tools/xtask/src/deps.rs"));
         assert_eq!(kebab_case("WasmTestCrates"), "wasm-test-crates");
     }
 
@@ -889,12 +885,7 @@ pub(super) mod tests {
 
     fn checks_only_tooling_compiles_nothing() {
         assert_eq!(
-            scope(&[
-                "tools/device-checks/check-macos-a11y.py",
-                "typos.toml",
-                "gamma.toml",
-            ])
-            .mode,
+            scope(&["llms.txt", "typos.toml", "gamma.toml",]).mode,
             Mode::None
         );
     }
@@ -966,13 +957,13 @@ pub(super) mod tests {
     }
 
     fn root_package_owns_its_targets_directories() {
-        let s = scope(&["examples/material_demo/tree.rs"]); // an [[example]] whose main.rs is in a subdirectory
+        let s = scope(&["tests/ui/thread_boundary/spawn.rs"]); // a directory under the root package's tests/
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned()));
-        let s = scope(&["examples/web_counter/src/lib.rs"]); // a separate package under examples/
+        let s = scope(&["examples/web_demo/src/lib.rs"]); // a separate package under examples/
         assert_eq!(
             (s.mode, s.packages),
-            (Mode::Packages, vec!["flui-web-counter".to_owned()])
+            (Mode::Packages, vec!["flui-web-demo".to_owned()])
         );
     }
 

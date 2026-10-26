@@ -1,6 +1,6 @@
 ### Added
 
-- **Input methods in Windows windows** (`flui-platform`): every Win32 window now activates the
+- **Input methods in Windows windows** (`flui-native`): every Win32 window now activates the
   text services (TSF) as it is created and offers them as its text-store host, so an input
   method such as Microsoft IME composes directly into the focused field's text store instead of
   the window offering no input-method support. A window whose activation fails falls back to

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Repository automation for FLUI: CI gates, change scoping, device checks and benchmark collection (`cargo xtask`)"
+description = "Repository automation for FLUI: CI gates, change scoping and benchmark collection (`cargo xtask`)"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -26,37 +26,6 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 wasmparser = { workspace = true }
-# `cargo xtask device web-input`: the ChromeDriver archive (ureq, zip), the
-# WebDriver BiDi session (tungstenite) and the probe page's server (tiny_http).
-tiny_http = { workspace = true }
-tungstenite = { workspace = true }
-ureq = { workspace = true, features = ["json"] }
-zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
-# `cargo xtask device web-gallery`: the page captures, base64 PNG over BiDi;
-# `image` also saves the Windows checks' screen captures as PNG.
-base64 = { workspace = true }
-image = { workspace = true }
-
-# `cargo xtask device windows-a11y`, `windows-input` and `windows-gallery`: a
-# UI Automation client, real input through `SendInput` and synthetic touch
-# (`Win32_UI_Controls`, `Win32_UI_Input_Pointer`), and screen captures
-# (`Win32_Graphics_Gdi`).
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_System_Com",
-    "Win32_System_Ole",
-    "Win32_System_StationsAndDesktops",
-    "Win32_System_Threading",
-    "Win32_System_Variant",
-    "Win32_UI_Accessibility",
-    "Win32_UI_Controls",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Input_Pointer",
-    "Win32_UI_WindowsAndMessaging",
-] }
 
 [dev-dependencies]
 # Authoritative source for the generated owned key vocabulary.

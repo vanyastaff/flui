@@ -1,0 +1,7 @@
+error[E0432]: unresolved import `flui_native::OwnerThreadToken`
+ --> tests/ui/owner_thread_token_is_private.rs:1:5
+  |
+1 | use flui_native::OwnerThreadToken;
+  |     ^^^^^^^^^^^^^----------------
+  |                  |
+  |                  no `OwnerThreadToken` in the root

@@ -1,6 +1,6 @@
 //! Owner code at every point a text store, its arbiter and its presentation
 //! run code they do not control, all contained by
-//! `flui_platform_api::text_store::OwnerCalls` (ADR-0142 item 8; its module
+//! `flui_platform::text_store::OwnerCalls` (ADR-0142 item 8; its module
 //! doc lists the points).
 //!
 //! One row per point and failure shape: a panic in the owner code, a
@@ -20,12 +20,12 @@ use std::sync::Arc;
 use flui_foundation::geometry::Bounds;
 use flui_interaction::focus::FocusNode;
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange,
     TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
     TextStoreStatus, project_ime_event,
 };
-use flui_platform_api::{ImeEvent, PlatformTextInput};
+use flui_platform::{ImeEvent, PlatformTextInput};
 use flui_widgets::{EditableText, TextEditingController};
 
 use crate::common::child_process;
@@ -1925,9 +1925,9 @@ fn store_refusing_a_grant_when_its_flush_fails() {
     store.set_observer(Some(Rc::new(FailsOnText)));
     gate.set_open(false);
     store.app_replace(
-        flui_platform_api::text_store::Utf16Range::new(
-            flui_platform_api::text_store::Utf16Offset::new(0),
-            flui_platform_api::text_store::Utf16Offset::new(1),
+        flui_platform::text_store::Utf16Range::new(
+            flui_platform::text_store::Utf16Offset::new(0),
+            flui_platform::text_store::Utf16Offset::new(1),
         )
         .expect("ordered"),
         "x",
@@ -2822,7 +2822,7 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
     let store = InMemoryTextStore::new("");
     store.set_commit_gate(gate.clone());
     gate.set_open(false);
-    for _ in 0..flui_platform_api::text_store::DEFERRED_LOCK_CAPACITY {
+    for _ in 0..flui_platform::text_store::DEFERRED_LOCK_CAPACITY {
         assert_eq!(
             store.request_lock(LockGrant::read(|_| {}), LockTiming::Async),
             Ok(LockOutcome::Deferred)
@@ -2855,7 +2855,7 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
     gate.set_open(true);
     assert_eq!(
         store.run_deferred_grants(),
-        flui_platform_api::text_store::DEFERRED_LOCK_CAPACITY
+        flui_platform::text_store::DEFERRED_LOCK_CAPACITY
     );
     assert_eq!(
         edit(&*store, "b"),
@@ -3314,9 +3314,9 @@ fn in_memory_grant_reading_and_editing_its_store() {
                 if let Some(store) = reentered.upgrade() {
                     *sink.borrow_mut() = store.text();
                     store.app_replace(
-                        flui_platform_api::text_store::Utf16Range::new(
-                            flui_platform_api::text_store::Utf16Offset::new(0),
-                            flui_platform_api::text_store::Utf16Offset::new(0),
+                        flui_platform::text_store::Utf16Range::new(
+                            flui_platform::text_store::Utf16Offset::new(0),
+                            flui_platform::text_store::Utf16Offset::new(0),
                         )
                         .expect("ordered"),
                         "app ",
@@ -3406,9 +3406,9 @@ fn app_edit_held_back(store: &Weak<InMemoryTextStore>, gate: &CommitGate) {
     if let Some(store) = store.upgrade() {
         gate.set_open(false);
         store.app_replace(
-            flui_platform_api::text_store::Utf16Range::new(
-                flui_platform_api::text_store::Utf16Offset::new(0),
-                flui_platform_api::text_store::Utf16Offset::new(0),
+            flui_platform::text_store::Utf16Range::new(
+                flui_platform::text_store::Utf16Offset::new(0),
+                flui_platform::text_store::Utf16Offset::new(0),
             )
             .expect("ordered"),
             "app ",

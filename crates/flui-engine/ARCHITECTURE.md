@@ -118,9 +118,6 @@ charged through completion. Native admission first polls nonblockingly so reject
 frames cannot starve completion callbacks; browser progress uses its event loop.
 Recoverable failure publishes reliable retry debt to the application and UI runtime
 (ADR-0101), while an impossible frame footprint remains a terminal error.
-`examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
-GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
-device; its `--capture` mode asserts fixed-angle pixels after two frames.
 
 ## One frame
 
@@ -452,7 +449,7 @@ and recovery after a failed lookup.
 Bindings reuse the actual pipeline layout within a frame and retain their quota
 charge through cache ownership and submitted work. Imported GPU allocation bytes
 are excluded from prepared-resource quotas; a managed producer factory and the
-whole-engine ledger remain follow-ups in the resource migration plan.
+whole-engine ledger remain follow-ups.
 
 ### Decoded image source filters
 
@@ -1030,7 +1027,7 @@ translucent full-surface layers, 128 px damage, one desktop adapter): full
 direct 343 µs / 1.07 ms / 3.39 ms at 4 / 16 / 64 layers against partial plus
 blit 340 µs / 262 µs / 301 µs; the blit alone 144 µs. The blit's bandwidth on
 tile-based mobile GPUs is not measured. Those figures exclude candidate allocation
-and copy; see the [measurement record](../../docs/research/engine-foundation-measurements.ru.md)
+and copy; see the [measurement record](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/engine-foundation-measurements.ru.md)
 for the current comparison and its limits. Locked by `damage_readback_tests.rs`
 (through the crate-private `RetainedCapture`, which runs the renderer's own
 `FrameProtocol` and `record_frame_content`; only the clear, the content
@@ -1217,7 +1214,7 @@ Reference check: Skia's `getInputBounds` and `getOutputBounds` deliberately answ
 different questions; Impeller's entity pass reads its current pass texture before
 rendering backdrop-filter children. These support separate footprints and ordered
 execution, without adopting their APIs or scene models. Sources and limits are in
-[the effect research](../../docs/research/engine-effect-footprints-research.ru.md).
+[the effect research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/engine-effect-footprints-research.ru.md).
 `layer_effects_capture_as_specified` reads back nested masks and backdrop groups,
 shader source/child destination order, followers, fractional DPR, affine linear/
 radial/sweep gradients, both blur axes, attachment-edge decal and whole-target

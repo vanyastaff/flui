@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui_platform::storage::FileStore`**: the file store behind application
+- **`flui_native::storage::FileStore`**: the file store behind application
   persistence. One file per `StorageName` under the user's roaming data directory, or the
   `.machine-local` directory of the local one (`storage::data_dirs`), each write staged in a
   uniquely named file and moved over the target with one rename, so a crash leaves the old or the

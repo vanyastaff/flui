@@ -8,6 +8,6 @@
 
 ### Changed
 
-- `flui_platform::shared::pointer_assembly`: `ReadingAction::Cancel`, `ContactRegistry::cancel_surface`
+- `flui_native::shared::pointer_assembly`: `ReadingAction::Cancel`, `ContactRegistry::cancel_surface`
   and `ContactRegistry::cancel_contact` take a `NativeCancel`, which has every `CancelReason` but
   `Claimed`, so a backend cannot report the arena's hand-off as its own cancel (ADR-0208).

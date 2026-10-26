@@ -28,7 +28,7 @@ static TEST_RESULT: LazyLock<Regex> =
 /// hot-reload feature. `no_wasm` are the packages that cannot target wasm32.
 /// The clippy pass is lib/bin targets only (test targets pull native-only
 /// dev-dependencies such as tokio), and it is the only lint pass over
-/// flui-platform's wasm32-only web backend.
+/// flui-native's wasm32-only web backend.
 fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
     let excludes: Vec<String> = no_wasm
         .iter()

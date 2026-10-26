@@ -33,7 +33,7 @@ use flui_semantics::{ActionDecodeError, SemanticsActionError, semantics_action_r
 // the platform sends.
 pub use accesskit::{
     Action, ActionData, ActionRequest, Live, NodeId, Point as A11yPoint, Rect as A11yRect, Role,
-    ScrollUnit, Toggled, TreeId,
+    ScrollUnit, SortDirection as A11ySortDirection, Toggled, TreeId,
 };
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics
@@ -77,6 +77,8 @@ pub struct A11yTree {
     update: TreeUpdate,
     /// Indices into `update.nodes`, pre-order from the root.
     order: Vec<usize>,
+    /// Each reachable node's parent.
+    parents: HashMap<NodeId, NodeId>,
 }
 
 impl A11yTree {
@@ -92,6 +94,7 @@ impl A11yTree {
 
         let mut order = Vec::with_capacity(update.nodes.len());
         let mut seen: HashSet<NodeId> = HashSet::with_capacity(update.nodes.len());
+        let mut parents = HashMap::with_capacity(update.nodes.len());
 
         if let Some(tree) = update.tree.as_ref() {
             let mut stack = vec![tree.root];
@@ -105,11 +108,18 @@ impl A11yTree {
                 }
                 order.push(i);
                 // Reversed, so popping yields children left-to-right.
-                stack.extend(update.nodes[i].1.children().iter().rev().copied());
+                for &child in update.nodes[i].1.children().iter().rev() {
+                    parents.entry(child).or_insert(id);
+                    stack.push(child);
+                }
             }
         }
 
-        Self { update, order }
+        Self {
+            update,
+            order,
+            parents,
+        }
     }
 
     /// The number of queryable (root-reachable) nodes.
@@ -137,7 +147,11 @@ impl A11yTree {
     pub fn nodes(&self) -> impl Iterator<Item = A11yNode<'_>> + '_ {
         self.order.iter().map(|&i| {
             let (id, node) = &self.update.nodes[i];
-            A11yNode { id: *id, node }
+            A11yNode {
+                id: *id,
+                node,
+                tree: self,
+            }
         })
     }
 
@@ -285,6 +299,7 @@ impl A11yTree {
 pub struct A11yNode<'a> {
     id: NodeId,
     node: &'a Node,
+    tree: &'a A11yTree,
 }
 
 impl<'a> A11yNode<'a> {
@@ -353,11 +368,38 @@ impl<'a> A11yNode<'a> {
         self.node.position_in_set()
     }
 
-    /// The total number of items in this node's set, if it declares one — the
-    /// "100" in "item 12 of 100".
+    /// The total number of items in the set this node *contains*, if it
+    /// declares one — a container's "100".
+    ///
+    /// A member of the set reads it from its container instead:
+    /// [`size_of_containing_set`](Self::size_of_containing_set).
     #[must_use]
     pub fn size_of_set(&self) -> Option<usize> {
         self.node.size_of_set()
+    }
+
+    /// The total number of items in the set this node is a member of — the
+    /// "100" in "item 12 of 100" — read as an assistive technology reads it:
+    /// from the nearest ancestor that declares a size, skipping the generic
+    /// containers and text runs it does not keep.
+    #[must_use]
+    pub fn size_of_containing_set(&self) -> Option<usize> {
+        let mut current = self.id;
+        while let Some(&parent) = self.tree.parents.get(&current) {
+            let (_, node) = self
+                .tree
+                .update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == parent)?;
+            if !matches!(node.role(), Role::GenericContainer | Role::TextRun)
+                && let Some(size) = node.size_of_set()
+            {
+                return Some(size);
+            }
+            current = parent;
+        }
+        None
     }
 
     /// How the node's changes are announced, when it is a live region.
@@ -375,6 +417,62 @@ impl<'a> A11yNode<'a> {
             .then(|| self.node.level())
             .flatten()
             .map(|level| level + 1)
+    }
+
+    /// The one-based depth of a tree item, list item or row, the "2" in
+    /// "level 2": the same property as a heading's, which AccessKit stores
+    /// zero-based.
+    #[must_use]
+    pub fn outline_level(&self) -> Option<usize> {
+        self.node.level().map(|level| level + 1)
+    }
+
+    /// The number of rows of the table, grid or tree grid this node is.
+    #[must_use]
+    pub fn row_count(&self) -> Option<usize> {
+        self.node.row_count()
+    }
+
+    /// The number of columns of the table, grid or tree grid this node is.
+    #[must_use]
+    pub fn column_count(&self) -> Option<usize> {
+        self.node.column_count()
+    }
+
+    /// The zero-based row of this cell, row or header, as AccessKit holds it.
+    #[must_use]
+    pub fn row_index(&self) -> Option<usize> {
+        self.node.row_index()
+    }
+
+    /// The zero-based column of this cell or header, as AccessKit holds it.
+    #[must_use]
+    pub fn column_index(&self) -> Option<usize> {
+        self.node.column_index()
+    }
+
+    /// How many rows this cell covers, when it covers more than one.
+    #[must_use]
+    pub fn row_span(&self) -> Option<usize> {
+        self.node.row_span()
+    }
+
+    /// How many columns this cell covers, when it covers more than one.
+    #[must_use]
+    pub fn column_span(&self) -> Option<usize> {
+        self.node.column_span()
+    }
+
+    /// The order the column or row this header heads is sorted in.
+    #[must_use]
+    pub fn sort_direction(&self) -> Option<A11ySortDirection> {
+        self.node.sort_direction()
+    }
+
+    /// Whether this container allows more than one selected member.
+    #[must_use]
+    pub fn is_multiselectable(&self) -> bool {
+        self.node.is_multiselectable()
     }
 
     /// The node's children, in tree order.

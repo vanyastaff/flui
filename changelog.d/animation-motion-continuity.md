@@ -15,8 +15,6 @@
   GNOME enable-animations fallback and legacy portal support. Failed reads
   preserve the accepted motion preference and retry without another notification.
 
-- Add the interactive `motion_lab` example with Full/Reduce/FollowSystem modes,
-  property interruption, independent deadlines, swipe and drawer transitions.
 - Headless hosts and laid-out widget harnesses can set the application motion
   preference through the runtime's existing override path.
 

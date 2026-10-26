@@ -277,7 +277,7 @@ fn mask_references(text: &mut String) {
 
 /// `text` with each of `ranges` (on character boundaries) replaced by spaces
 /// of the same byte length, so every other offset stays where it was.
-pub(super) fn blank(text: &str, ranges: &[Range<usize>]) -> String {
+fn blank(text: &str, ranges: &[Range<usize>]) -> String {
     let mut bytes = text.as_bytes().to_vec();
     for range in ranges {
         bytes[range.clone()].fill(b' ');

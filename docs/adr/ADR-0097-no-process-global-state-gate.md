@@ -14,6 +14,13 @@
 - **Amended:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
 - **Amended:** 2026-10-19 — the decoded-image cache moved into the asset registry.
 - **Amended:** 2026-10-21 — the error view builder moved into UI runtime configuration.
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §10, which moves each platform's loop into `crates/flui-native/src/owner/`: a platform's one
+  trampoline may sit in its loop's module there as well as in its backend module (§2, "OS-callback
+  trampolines"), still one per platform, and none in a group's own module (`owner/apple.rs`); the
+  context's cited files name their current places.
+- **Amended:** 2026-10-22 — `flui-native`'s backend modules (its `platforms` module) are gone
+  (ADR-0151 §10): a platform's one trampoline sits in its loop's module under `owner/` only.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),
@@ -28,8 +35,8 @@
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md)
-- **Refs:** principle P3 and its gate in the [decision index](../../design/decisions.md); the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
+- **Refs:** principle P3 and its gate in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 The gate is `tools/xtask/src/globals.rs`; the entries live in the crate manifests. The gate
 itself removes no global; each removal lands with its own change. The Context table below is the
@@ -57,9 +64,9 @@ Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/sr
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,
 `crates/flui-app/src/app/runtime.rs:190`, and others), warn-once flags
 (`crates/flui-engine/src/batches/gradients.rs:64,77`), and platform cells that OS callbacks read
-to find their owner (`DELEGATE_STATE`, `crates/flui-platform/src/platforms/ios/platform.rs:275`;
-`ACTIVE_EVENT_LOOP`, `crates/flui-platform/src/platforms/winit/platform.rs:772`;
-`ON_OWNER_QUEUE`, `crates/flui-platform/src/platforms/macos/owner_lane.rs:61`). This list is
+to find their owner (`DELEGATE_STATE`, `crates/flui-native/src/owner/apple/ios.rs`;
+`ACTIVE_EVENT_LOOP`, `crates/flui-native/src/owner/winit.rs`;
+`ON_OWNER_QUEUE`, `crates/flui-native/src/owner/apple/macos/owner_lane.rs`). This list is
 **not** the inventory: a regex count over `crates/` and `src/` (lines matching an upper-case
 `static` item, and `thread_local!` blocks, outside `*_tests.rs` and `tests/`, crate examples included) finds about 91 and
 29, and it cannot tell a counter from configuration or leave out inline test modules. The inventory
@@ -124,10 +131,11 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
 - **OS-callback trampolines** are the one named exception class: a thread-local that a function
   invoked by the OS without a user-data pointer (a Win32 window procedure, an AppKit or UIKit
   delegate method, a JNI entry point, winit's event-loop borrow) reads to find its owner. The
-  host has **exactly one**: `APP_RUNTIME`. Each backend module under
-  `crates/flui-platform/src/platforms/` may hold at most one of its own. The entry is declared
+  host has **exactly one**: `APP_RUNTIME`. Each platform may hold at most one of its own, in its
+  loop's module under `crates/flui-native/src/owner/` (ADR-0151 §10; a group's own module,
+  `owner/apple.rs`, is no platform's). The entry is declared
   with class `trampoline`, and the gate fails if a crate other than `flui-app` and
-  `flui-platform`, or a second cell in the host or in one backend module, claims it. The secondary-window queues
+  `flui-native`, or a second cell in the host or in one platform, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
 - **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
   change removes it (`FONT_SYSTEM` → ADR-0092; `NAVIGATOR_COMMAND_TARGETS` → ADR-0093;
@@ -188,9 +196,9 @@ runs on the pinned stable toolchain, which dylint does not.
 
 **Limits the gate does not claim to cover:**
 
-- Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-platform/src/lib.rs`),
+- Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-native/src/lib.rs`),
   `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE`
-  (`crates/flui-platform/src/platforms/winit/platform.rs`), `FLUI_DX12_NO_DCOMP`
+  (`crates/flui-native/src/owner/winit.rs`), `FLUI_DX12_NO_DCOMP`
   (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
   `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not
@@ -203,7 +211,7 @@ runs on the pinned stable toolchain, which dylint does not.
 - `const` items, which are not places; clippy's `declare_interior_mutable_const` covers the
   interior-mutable ones.
 - Determinism: an exempt counter is isolated from configuration, but an ID that reaches a
-  snapshot is still process-ordered (`design/architecture.md`, "Process-global state").
+  snapshot is still process-ordered ([`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md), "Process-global state").
 
 ## Alternatives considered
 

@@ -9,10 +9,10 @@ Rust. Cross-crate decisions are recorded as ADRs. See
 full policy.
 
 This book teaches the current development version of FLUI. Start with a checkout and the
-[installation guide](getting-started/installation.md); the framework's release and platform
-acceptance evidence lives in the repository's
-[beta criteria](https://github.com/vanyastaff/flui/blob/main/docs/BETA.md).
-API and feature choices can change before the beta release.
+[installation guide](getting-started/installation.md); what each platform has been run on is
+recorded in the repository's
+[platform status](https://github.com/vanyastaff/flui/blob/main/docs/platform-parity.md).
+API and feature choices can change between releases.
 
 The book is incomplete. Chapters link to the working examples and reference material where
 more detail is needed. A code sample is either copied from an example or CLI template, or
@@ -22,10 +22,8 @@ source for the exact API and required features.
 ## Where to start
 
 - New to FLUI and want to build an application: [Getting Started](getting-started/installation.md).
-- Ready to change a working example: [Counter → Todo](getting-started/tutorial-todo.md), then
-  the [Cookbook](cookbook/overview.md) for forms, async work, themes, animation, and testing.
-- Ready for an application with several screens: the [Notes showcase](getting-started/showcase.md)
-  runs with `cargo run --example two_screens --features material` and has a headless flow test.
+- Ready to change a working example: the [Cookbook](cookbook/overview.md) for forms, async work,
+  themes, animation, and testing.
 - Choosing a state model or learning how a view becomes a frame:
   [Concepts](concepts/overview.md) and [State](concepts/state.md).
 - Coming from Flutter and want the vocabulary mapping first:
@@ -43,7 +41,8 @@ source for the exact API and required features.
 | Widget discovery | [Widget catalog](widgets/catalog.md) |
 | Testing an application without a native window | [Testing recipe](cookbook/testing.md) |
 | Design decisions and crate boundaries | [Architecture](architecture.md) |
-| Current release priorities and verification requirements | [Roadmap](https://github.com/vanyastaff/flui/blob/main/docs/ROADMAP.md) and [beta criteria](https://github.com/vanyastaff/flui/blob/main/docs/BETA.md) |
+| Current release requirements | [Release requirements](https://github.com/vanyastaff/flui/blob/main/docs/plans/specs/release/requirements.md) |
+| Which platforms have been run, and where FLUI falls short | [Platform status](https://github.com/vanyastaff/flui/blob/main/docs/platform-parity.md) and [gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md) |
 
 The [repository](https://github.com/vanyastaff/flui) contains this book's source. Use the edit
 button on a chapter to propose a documentation correction.

@@ -305,22 +305,6 @@ cancellation on the desktop thread, process bookkeeping and cleanup on server EO
 spawns the binary and speaks MCP over stdio: every tool is listed with its schemas, title
 and annotations, and refusals come back as tool errors with a code.
 
-`tests/live_windows.rs` is an ignored test for an interactive Windows desktop. It launches the
-repository's `a11y_probe` counter, waits for its window, lists and captures it, reads the
-tree, finds and invokes the Increment button, clicks it by element and by screenshot pixel,
-and checks each press changed the count; then it presses Tab and `ctrl+plus`, types, scrolls
-and drags, checks that refused input is refused with the right code, kills the probe and
-waits for its window to be gone. Real input is the point, so when Windows will not give the
-probe the foreground it fails as inconclusive instead of passing without it:
-
-```bash
-cargo build --release --example a11y_probe --features material,a11y
-cargo nextest run -p flui-desktop-mcp --test live_windows --run-ignored only --no-capture
-```
-
-It moves the real pointer and sends real input to the probe window only, each step only after
-the probe is confirmed in front.
-
 `tests/native_windows.rs` adds a native Win32 fixture with writable and read-only edits,
 a checkbox, and wheel/drag observations. Its ignored `native_controls_through_mcp` test
 asserts actual text, focus, toggle, wheel direction and drag displacement through MCP; it
@@ -332,10 +316,5 @@ cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only n
 
 ## Relation to the other live checks
 
-- `cargo xtask device windows-a11y` and `windows-input` are fixed pass/fail gates over the
-  same `a11y_probe` (UI Automation, and `SendInput`); `cargo xtask device macos-*` are the
-  Mac ones. A gate proves one scripted path; this server is for everything else, and
-  `tests/live_windows.rs` exercises the server itself.
-- `cargo xtask live-smoke` (`tools/live-smoke`) is the CI gate for real X11/Wayland input.
-- This server is the interactive tool: an agent uses it to explore and test any app by hand,
-  on the desktop in front of it.
+This server is the interactive tool: an agent uses it to explore and test any app by hand,
+on the desktop in front of it.

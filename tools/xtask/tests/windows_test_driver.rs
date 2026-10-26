@@ -68,11 +68,11 @@ fn platform_compiler_checks_follow_the_selected_test_stage() {
             .collect();
         let compiler = commands
             .iter()
-            .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+            .filter(|line| line.contains("-p flui-native --test compiler_guards"))
             .count();
         assert_eq!(compiler, compiler_runs, "{stage:?}: {stdout}");
         for native in commands.iter().filter(|line| {
-            line.contains("-p flui-platform") && !line.contains("--test compiler_guards")
+            line.contains("-p flui-native") && !line.contains("--test compiler_guards")
         }) {
             assert!(
                 native.contains("-E 'not (group(trybuild))'"),

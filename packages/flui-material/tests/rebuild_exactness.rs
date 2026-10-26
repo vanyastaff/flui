@@ -1,4 +1,4 @@
-//! Rebuild-exactness — roadmap Catalog.1 exit criterion for `Theme`.
+//! Rebuild-exactness for `Theme`.
 //!
 //! Mounts a tree of 1,003 widgets (`Theme` → a rebuild-inert wrapper →
 //! `Column` → 1,000 leaves), where exactly [`DEPENDENT_COUNT`] leaves call

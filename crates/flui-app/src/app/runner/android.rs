@@ -75,12 +75,13 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
+    use flui_native::Platform;
+    use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;
 
-    tracing::info!("Starting Android platform via flui-platform");
+    tracing::info!("Starting Android platform via flui-native");
 
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
@@ -92,12 +93,12 @@ where
         .as_ref()
         .and_then(crate::app::dev_agent::DevAgent::attach);
 
-    let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
+    let platform: Box<dyn Platform> = flui_native::android_platform(app);
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
-    /// first `Resume` (module doc, `platforms/android/mod.rs`'s
+    /// first `Resume` (module doc, `owner/android/looper.rs`'s
     /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
@@ -122,7 +123,7 @@ where
     where
         V: View + StatelessView + Clone + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
                 .expect("BUG: bootstrap_android runs only after install_owner_platform")
         }
@@ -173,7 +174,7 @@ where
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
         let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
         {
             Ok(window) => window,
             Err(error) => {
@@ -379,11 +380,11 @@ where
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
-        // rebuild for the window that replaces it. `flui-platform` reports
+        // rebuild for the window that replaces it. `flui-native` reports
         // both as one bool out of its own event loop — `false` on
         // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
-        // the mapping and its reason in `flui-platform`'s
-        // `platforms/android/mod.rs`, "# Surface Lifecycle".
+        // the mapping and its reason in `flui-native`'s
+        // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
         // The lock below is BLOCKING, unlike the frame closure's `try_lock`
         // above, and the difference is the failure mode: a skipped frame
@@ -408,7 +409,7 @@ where
         // Blocking here is only safe while ONE invariant holds: **nothing
         // off-thread ever holds this lane**. Today that follows from this
         // backend's shape — the lane is taken inside `dispatch_request_frame`,
-        // which `AndroidPlatform::run`'s loop calls after `poll_events`
+        // which the Android platform's `run` loop calls after `poll_events`
         // returns, on this same thread, and no event arm drives a frame. A
         // second lane consumer on another thread (a worker service, a
         // pipelined presentation) would make this lock a real deadlock, which
@@ -429,8 +430,8 @@ where
         // Two more invariants this registration rests on, stated where it is
         // made rather than assumed:
         //
-        // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
-        //   exit path (`flui-platform`'s `platforms/android/mod.rs`, after the
+        // * The slots are cleared exactly once, on the Android platform's `run`
+        //   exit path (`flui-native`'s `owner/android/looper.rs`, after the
         //   loop and before the quit hook), on the loop's three returning
         //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
         //   plus one named exception, a panic that unwinds out of `run` and
@@ -613,8 +614,8 @@ impl AndroidFrameDriver {
             let has_pending = ui_runtime.has_pending_work();
             // See the desktop closure's matching comment: a wake-
             // deadline source (here, `set_wake_deadline_hook` forces
-            // a dispatch once due — `flui-platform`'s
-            // `platforms/android/mod.rs`'s own `run` loop) that is
+            // a dispatch once due — `flui-native`'s
+            // `owner/android/looper.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and
             // returns before this closure ever calls
             // `pump_with_device_recovery`, no matter how faithfully the
@@ -713,7 +714,7 @@ impl AndroidFrameDriver {
         // closure: both retries pace their ATTEMPT via a
         // non-blocking deadline check (see `RetryBackoff`'s
         // doc), never by blocking this thread.
-        // `AndroidPlatform::run`'s poll loop calls
+        // The Android platform's `run` poll loop calls
         // `process_input_events`/`dispatch_request_frame`
         // inline on this SAME thread, so a sleep here — even
         // one bounded to the backoff's own growing interval —
@@ -722,10 +723,10 @@ impl AndroidFrameDriver {
         // territory at the backoff's one-second cap. The
         // deadline is carried by the wake hook wired at step 0c
         // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so `AndroidPlatform::run`'s poll blocks no longer than
+        // so the Android platform's `run` poll blocks no longer than
         // the hook's deadline and forces a
-        // dispatch once the deadline is due (`flui-platform`'s
-        // `platforms/android/mod.rs`).
+        // dispatch once the deadline is due (`flui-native`'s
+        // `owner/android/looper.rs`).
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {
             tracing::error!("frame skipped: raster lane busy at frame admission");

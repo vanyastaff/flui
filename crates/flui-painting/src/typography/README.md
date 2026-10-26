@@ -10,7 +10,7 @@ font faces in [`fonts`](../fonts.rs).
 | Module | Types |
 |--------|-------|
 | `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle`, `FontFeature`, `FontVariation`, `TextShadow` |
-| `text_spans` | `InlineSpan`, `TextSpan`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment`, `MouseCursor` |
+| `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
 | `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextDirection`, `TextAffinity` |
 | `text_decoration` | `TextDecoration`, `TextDecorationStyle`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
 | `text_metrics` | `TextPosition`, `TextRange`, `TextSelection`, `TextBox`, `GlyphInfo`, `LineMetrics` |

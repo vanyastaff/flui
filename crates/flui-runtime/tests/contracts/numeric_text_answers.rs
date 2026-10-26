@@ -36,7 +36,7 @@ impl GestureArenaMember for FailingQuery {
 
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.0.set(self.0.get() + 1);
         std::panic::panic_any("captured attempt deadline query");
     }
@@ -50,7 +50,7 @@ fn abandoned_numeric_answers_are_released(reject_sampling: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

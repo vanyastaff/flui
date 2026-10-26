@@ -3,7 +3,7 @@
 // ============================================================================
 //
 // The sync surface-lifecycle seam a runner needs when the native window
-// behind its presentation dies and is later replaced. `flui-platform` owns
+// behind its presentation dies and is later replaced. `flui-native` owns
 // the event loop that observes this and reports it as a bare `bool` through
 // `PlatformWindow::on_surface_status_change`; this module is where a runner
 // turns that bool into an act on its renderer.

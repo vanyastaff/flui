@@ -480,7 +480,7 @@ ja-JP (новый) и, если есть, «previous version», 100 % и 150 %:
 | W8 | Notes-строки R1, R3, R4, R6, R8 + consumer (R23); teardown R21 | W4, W5 | B | 0,75 |
 | W9 | `cargo xtask device windows-ime` + шаг R22 в `windows-notes` | W1 (классы окон) | C (или B после 11-20) | 1,5 |
 | W10 | После go/no-go: R13, R14 (Win32), R19, R20, F4 | W6 | A | 0,7 |
-| W11 | Нативный прогон R24 на SHA, `docs/BETA.md` | все | A | 0,5 |
+| W11 | Нативный прогон R24 на SHA, `docs/platform-parity.md` | все | A | 0,5 |
 
 Итого ≈ 11,85 нед (≈12).
 

@@ -2,7 +2,7 @@
 
 The fifth tree: the accessibility tree assembled from the render tree and
 exported to the platform through AccessKit. Layer rules and the crate's place in
-the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md) and
+the workspace DAG live in [`docs/architecture.md`](../../docs/architecture.md) and
 this crate's `[package.metadata.flui] layer`; this file
 records the per-decision rules that would otherwise read as drift.
 
@@ -235,7 +235,7 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   reproduces everything a mark could influence. Anything the graft preconditions cannot prove
   falls back to the whole-tree rebuild, which is the correctness baseline.
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
-  `AccessibilityNodeId`s; `flui-platform` hosts the AccessKit adapters per backend.
+  `AccessibilityNodeId`s; `flui-native` hosts the AccessKit adapters per backend.
 - `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the
   UI runtime holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
   what crosses it is already translated.
@@ -305,8 +305,7 @@ AccessKit's `Label` has one text slot on UIA and AT-SPI, so the label and the va
 joined with a newline, the same separator used when merged labels are concatenated.
 
 **Test.** `advertised_actions_follow_the_uia_patterns` in `src/agent/tests.rs` reads a static
-text's name through `accesskit_consumer` the way the adapters do; `cargo xtask device
-windows-a11y` is the live check that found the defect. For the joined label and value:
+text's name through `accesskit_consumer` the way the adapters do. For the joined label and value:
 **Unasserted:** no test pins this.
 
 ### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `expand`/`collapse` are discrete, with a click fallback
@@ -449,7 +448,7 @@ role, VoiceOver's `AXHeading` and AT-SPI's `Heading`. The level is an enum rathe
 integer because the six levels are the ones every platform names and a zero or out-of-range
 level is not a state to validate at run time.
 
-**Limit.** Measured through `cargo xtask device windows-a11y` on an `H2`: `accesskit_windows`
+**Limit.** Measured through UI Automation on an `H2`: `accesskit_windows`
 0.35 reports `AriaRole` `heading` and UIA `Level` 2, but `AriaProperties` `level=1` (AccessKit's
 zero-based value written raw) and `HeadingLevel` `HeadingLevel_None`. FLUI publishes AccessKit's
 documented zero-based level rather than compensating for one adapter; a client reading
@@ -457,8 +456,58 @@ documented zero-based level rather than compensating for one adapter; a client r
 
 **Test.** `a_header_publishes_a_heading_at_its_level` in `accesskit_translation.rs`;
 `the_title_announces_as_a_level_one_heading` in `packages/flui-material/tests/app_bar.rs` for
-the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold;
-the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
+the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold.
+
+### Where a node sits in a set, a tree and a table
+
+**Rule.** A node's place in a set (its position, and the size of the set it contains), in a tree
+(its level), in a table (the table's shape, a cell's row, column and spans, a header's sort) and
+a container's selection rule are one group, `Collection` (`src/collection.rs`). It merges per
+field: two nodes that each declare the same one cannot be one node, and agreeing does not help.
+Two lists of three rows are two sets whose positions each restart at zero, which one container
+could not say, so equal sizes are not an identity; slivers a caller composes into one set keep
+their own containers, each with the whole set's size and the positions it continues from. A
+member still merges with its container.
+
+**Position on the item, size on the container.** AccessKit reads `size_of_set` from the nearest
+ancestor the consumer keeps (`size_of_set_from_container`), never from the item; a node can carry
+both, a tree item holding a nested list. The consumer drops a `GenericContainer`, so a size on a
+node with no declared role would be read by nobody: such a node publishes as a `List`, and is
+held to what ARIA gives a list, so a table shape or a selection rule declared beside its size is
+dropped as it would be on a declared one. A set whose
+size is `SetSize::Unknown` publishes no size at all, and so does one too large for the adapters to
+convert (past `i32::MAX`), which every reader therefore sees as unknown from the moment it is
+stored, since AccessKit has no way to say "unknown"
+and a number would claim the set ends where the built members do.
+
+**A position counts from zero; a level, a row and a column from one.** A position is
+zero-based as AccessKit's is (the adapters add one). A level, a row and a column are the numbers
+ARIA's authors write, `1` for the first, and are `NonZero` types so that a zero-based first row
+cannot be passed by mistake; the translation subtracts the one AccessKit does not have. Spans of
+one are not published.
+
+**Checked by role.** A level, a table's shape, a cell's position, a row's index, a sort and a
+selection rule are authored, so the ARIA roles that support them are listed in
+`applicability.rs`; a row takes an index of its own, not a cell's column and spans. Position and
+size are not checked by role: the framework derives them, whatever role the node declares. The
+assembly checks them against each other once the tree is built (see flui-rendering's
+architecture): a position past its own known set's size is not published, and the totals of the
+known sets above an unknown set, or above a member numbered for another set, are withheld
+(ADR-0227), since the consumer would read "item 8 of 3" or "item 12 of 5". A lazy host's
+`SemanticsCollection` and a `size_of_set` a caller declares are both sets to that check.
+Anything past what the adapters convert to an `i32` (a position, a level, a count, a row, a
+column, a span) is not published either.
+
+**Reach.** `accesskit_windows` 0.35.1 reads the position and size, a level and a sort into UI
+Automation (`PositionInSet`, `SizeOfSet`, `Level`, `AriaProperties`), and not a table's counts,
+a cell's indexes and spans or a selection rule (upstream marks tables TODO). Those are published
+and pinned through `accesskit_consumer`; a UI Automation fixture for them waits for the adapter.
+
+**Test.** The collection rows of `every_published_attribute_reads_through_the_consumer` and
+`an_inapplicable_attribute_is_not_published`, `a_member_reads_its_size_from_its_container`
+in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_one_by_one` in
+`src/configuration.rs`; the lists, tables and trees of `collection_semantics` in
+`crates/flui-widgets/tests`.
 
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
 
@@ -527,10 +576,9 @@ and a button, link, check box, radio or menu item with neither from its descenda
 1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
 the last; `a_labelled_by_target_names_its_source_through_the_consumer` the second.
 
-**Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
-adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
-container, while the framework sets the count on each item: the matrix pins the item's own
-value, and adapters do not read the count until it moves to the container.
+**Set position.** The position is the item's and the size is its container's; the matrix pins
+each, and `a_member_reads_its_size_from_its_container` reads the pair the way an adapter does
+(see "Where a node sits in a set, a tree and a table").
 
 **Test.** `every_published_attribute_reads_through_the_consumer`,
 `every_role_is_kept_and_named_through_the_consumer`,

@@ -89,7 +89,7 @@ pub fn close_gestures(owner: &crate::GestureBinding, mode: CloseMode) {
 /// Install the owning presentation's weak redraw capability for logical capture release.
 pub fn set_pointer_capture_wake(
     owner: &crate::GestureBinding,
-    window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+    window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
 ) {
     owner.set_pointer_capture_wake(window);
 }
@@ -114,9 +114,7 @@ pub fn refresh_deadlines_with_recovery(
 
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
-pub fn next_deadline_snapshot(
-    owner: &crate::GestureBinding,
-) -> Option<flui_platform_api::EventTime> {
+pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<flui_platform::EventTime> {
     owner.arena().next_deadline_snapshot()
 }
 
@@ -126,7 +124,7 @@ pub fn next_deadline_snapshot(
 #[must_use]
 pub fn wake_instant(
     owner: &crate::GestureBinding,
-    deadline: flui_platform_api::EventTime,
+    deadline: flui_platform::EventTime,
 ) -> Option<web_time::Instant> {
     owner.instant_at(deadline)
 }

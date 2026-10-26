@@ -175,13 +175,13 @@ host.
   `presentation_assembly_reentry_revalidates_its_authorizer` pins that reentry
   cannot publish through a presentation that closed during assembly.
 - **No host, platform or GPU edge.** The crate's normal dependency closure
-  names none of `flui-platform`, `winit`, `android-activity`, `ndk`,
+  names none of `flui-native`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or
   `flui-app`: tier K's forbid set in the root
   `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over
   every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
-  crate defines or one from `flui-platform-api`; a window's accessibility
+  crate defines or one from `flui-platform`; a window's accessibility
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
   amended), and the development reload tier is this crate's own
   `reload::ReloadTier`, which the host translates from its hot-reload driver.
@@ -481,7 +481,7 @@ text owners, a window observation to metrics and lifecycle, a frame's vsync to t
 next render's motion sampling, and an AT request — decoded on the owner thread,
 after the adapter's thread only transported it — to the semantics owner with an
 assistive sequence id the binding minted. The window payload is the runtime's
-normalized `WindowObservation`, not `flui_platform_api::WindowEvent`, which keys
+normalized `WindowObservation`, not `flui_platform::WindowEvent`, which keys
 raw window events by native id. `owner_input_contract`'s
 `accessibility_input_reaches_the_semantics_owner` pins the AT path.
 

@@ -56,32 +56,41 @@ pub mod view {
 }
 
 /// Platform values: brightness, locale, haptic feedback kinds, the host's
-/// system preferences (its haptics setting among them), the target platform
-/// (the one a gesture preset models), the window's state and mode, and the
-/// system notices the host delivers.
+/// system preferences (its haptics setting among them) and every type its
+/// accessors return, the target platform (the one a gesture preset models),
+/// the window's state and mode, and the system notices the host delivers.
 pub mod platform {
-    pub use flui_platform_api::Brightness;
-    pub use flui_platform_api::HapticFeedback;
-    pub use flui_platform_api::HostNotice;
-    pub use flui_platform_api::InvalidLocale;
-    pub use flui_platform_api::Locale;
-    pub use flui_platform_api::MemoryPressureLevel;
-    pub use flui_platform_api::SessionEndBlock;
-    pub use flui_platform_api::SessionEndRequest;
-    pub use flui_platform_api::SystemPreferences;
-    pub use flui_platform_api::TargetPlatform;
-    pub use flui_platform_api::WindowCommandError;
-    pub use flui_platform_api::WindowMode;
-    pub use flui_platform_api::WindowState;
-    pub use flui_platform_api::text_store::TextInputPurpose;
+    pub use flui_platform::Brightness;
+    pub use flui_platform::DurationScale;
+    pub use flui_platform::GesturePreferences;
+    pub use flui_platform::HapticFeedback;
+    pub use flui_platform::HostNotice;
+    pub use flui_platform::InvalidLocale;
+    pub use flui_platform::InvalidPreference;
+    pub use flui_platform::Locale;
+    pub use flui_platform::MemoryPressureLevel;
+    pub use flui_platform::MotionPreference;
+    pub use flui_platform::NativeMouseGeometry;
+    pub use flui_platform::NativeTouchGeometry;
+    pub use flui_platform::SessionEndBlock;
+    pub use flui_platform::SessionEndRequest;
+    pub use flui_platform::SystemPreferences;
+    pub use flui_platform::TargetPlatform;
+    pub use flui_platform::TextWeightPreference;
+    pub use flui_platform::WheelPreferences;
+    pub use flui_platform::WheelStep;
+    pub use flui_platform::WindowCommandError;
+    pub use flui_platform::WindowMode;
+    pub use flui_platform::WindowState;
+    pub use flui_platform::text_store::TextInputPurpose;
 
     /// Handle-less input capabilities (ADR-0213). Unstable: present only
     /// under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform_api::input_capabilities::Availability;
-        pub use flui_platform_api::input_capabilities::InputCapabilities;
-        pub use flui_platform_api::input_capabilities::PointerKindSet;
+        pub use flui_platform::input_capabilities::Availability;
+        pub use flui_platform::input_capabilities::InputCapabilities;
+        pub use flui_platform::input_capabilities::PointerKindSet;
     }
 
     /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle
@@ -89,21 +98,21 @@ pub mod platform {
     /// Unstable: present only under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
-        pub use flui_platform_api::haptics::ControlPoint;
-        pub use flui_platform_api::haptics::HapticCapabilities;
-        pub use flui_platform_api::haptics::HapticEvent;
-        pub use flui_platform_api::haptics::HapticOutcome;
-        pub use flui_platform_api::haptics::HapticPattern;
-        pub use flui_platform_api::haptics::HapticPatternBuilder;
-        pub use flui_platform_api::haptics::HapticPatternError;
-        pub use flui_platform_api::haptics::HapticRequest;
-        pub use flui_platform_api::haptics::HapticTicket;
-        pub use flui_platform_api::haptics::HapticTiming;
-        pub use flui_platform_api::haptics::Intensity;
-        pub use flui_platform_api::haptics::ParameterCurve;
-        pub use flui_platform_api::haptics::PatternPlayback;
-        pub use flui_platform_api::haptics::Sharpness;
-        pub use flui_platform_api::haptics::UnitRangeError;
+        pub use flui_platform::haptics::ControlPoint;
+        pub use flui_platform::haptics::HapticCapabilities;
+        pub use flui_platform::haptics::HapticEvent;
+        pub use flui_platform::haptics::HapticOutcome;
+        pub use flui_platform::haptics::HapticPattern;
+        pub use flui_platform::haptics::HapticPatternBuilder;
+        pub use flui_platform::haptics::HapticPatternError;
+        pub use flui_platform::haptics::HapticRequest;
+        pub use flui_platform::haptics::HapticTicket;
+        pub use flui_platform::haptics::HapticTiming;
+        pub use flui_platform::haptics::Intensity;
+        pub use flui_platform::haptics::ParameterCurve;
+        pub use flui_platform::haptics::PatternPlayback;
+        pub use flui_platform::haptics::Sharpness;
+        pub use flui_platform::haptics::UnitRangeError;
     }
 }
 
@@ -174,7 +183,7 @@ pub mod interaction {
     pub use flui_interaction::gesture::PanClaim;
     pub use flui_interaction::gesture::RejectionReason;
     pub use flui_interaction::gesture::SequencedBranch;
-    pub use flui_platform_api::EventTime;
+    pub use flui_platform::EventTime;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
     /// presentation's `DragAndDrop` and what a receiver answers, the surface
@@ -198,7 +207,7 @@ pub mod interaction {
         pub use flui_interaction::drag::DropReceiverSlot;
         pub use flui_interaction::drag::MoveOutcome;
         pub use flui_interaction::drag::SpringLoading;
-        pub use flui_platform_api::data_transfer::TransferActions;
+        pub use flui_platform::data_transfer::TransferActions;
     }
 }
 

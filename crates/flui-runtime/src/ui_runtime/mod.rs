@@ -53,7 +53,7 @@ use flui_foundation::geometry::Size;
 use flui_interaction::InteractionLane;
 use flui_layer::Scene;
 #[cfg(test)]
-use flui_platform_api::{PlatformInput, PlatformWindow};
+use flui_platform::{PlatformInput, PlatformWindow};
 #[cfg(test)]
 use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]
@@ -233,11 +233,11 @@ pub struct UiRuntime {
     /// The platform clipboard this UI runtime's presentations hand their widgets:
     /// the initial one at construction, every later one through
     /// [`Self::assemble_presentation`].
-    clipboard: Arc<dyn flui_platform_api::Clipboard>,
+    clipboard: Arc<dyn flui_platform::Clipboard>,
     /// The byte storage this UI runtime's presentations hand their widgets
     /// (`LifecycleContext::storage`), if the host gave it one; installed
     /// like [`Self::clipboard`].
-    storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    storage: Option<Arc<dyn flui_platform::Storage>>,
     /// The UI runtime's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in
     /// [`RuntimeServices::construct`](crate::runtime_services::RuntimeServices::construct).

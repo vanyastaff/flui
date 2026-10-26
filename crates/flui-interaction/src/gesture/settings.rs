@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use flui_interaction::gesture::GestureSettings;
-//! use flui_platform_api::{TargetPlatform, pointer::PointerKind};
+//! use flui_platform::{TargetPlatform, pointer::PointerKind};
 //!
 //! // AOSP `ViewConfiguration.TOUCH_SLOP`.
 //! let touch = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch);
@@ -22,8 +22,8 @@
 use std::{cell::RefCell, num::NonZeroU32, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::{Offset, Size};
-use flui_platform_api::pointer::PointerKind;
-use flui_platform_api::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
+use flui_platform::pointer::PointerKind;
+use flui_platform::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
 
 use crate::gesture::{OneEuroTuning, VelocityEstimator};
 
@@ -36,7 +36,7 @@ use crate::gesture::{OneEuroTuning, VelocityEstimator};
 ///
 /// ```rust
 /// use flui_interaction::gesture::{GestureProfiles, GestureSettings};
-/// use flui_platform_api::{TargetPlatform, pointer::PointerKind};
+/// use flui_platform::{TargetPlatform, pointer::PointerKind};
 ///
 /// let profiles = GestureProfiles::preset(TargetPlatform::Android);
 /// assert_eq!(
@@ -60,7 +60,7 @@ pub(crate) const SLOT_KINDS: [PointerKind; KIND_SLOTS] = [
     PointerKind::Mouse,
     PointerKind::Touch,
     PointerKind::Pen {
-        tool: flui_platform_api::pointer::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     },
     PointerKind::Trackpad,
     PointerKind::Virtual,

@@ -319,8 +319,8 @@ fn resampling_siblings_competing_failures() {
 
 fn resampling_sibling_case(fail: bool, compete: bool) {
     use crate::presentation::PointerResampling;
-    use flui_platform_api::pointer::*;
-    use flui_platform_api::{EventTime, PlatformInput};
+    use flui_platform::pointer::*;
+    use flui_platform::{EventTime, PlatformInput};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     let mut clock = ManualClock::new();

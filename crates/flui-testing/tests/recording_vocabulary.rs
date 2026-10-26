@@ -11,14 +11,14 @@ use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
-use flui_platform_api::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
-use flui_platform_api::keyboard::{
+use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
@@ -26,7 +26,7 @@ use flui_platform_api::pointer::{
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
-use flui_platform_api::{
+use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
     NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
@@ -743,13 +743,13 @@ const NOT_RECORDED: &[(&str, &str, &str)] = &[
 fn unrecorded_sample(enumeration: &str, variant: &str) -> Option<InputRecord> {
     match (enumeration, variant) {
         ("WindowObservation", "Display") => {
-            let display = flui_platform_api::DisplayRegistry::new()
-                .mint(&flui_platform_api::DisplayKey::Injected(1))
+            let display = flui_platform::DisplayRegistry::new()
+                .mint(&flui_platform::DisplayKey::Injected(1))
                 .expect("display id");
             Some(window(WindowObservation::Display(
-                flui_runtime::owner::DisplayUpdate::new(Some(
-                    flui_platform_api::WindowDisplay::new(display, None),
-                )),
+                flui_runtime::owner::DisplayUpdate::new(Some(flui_platform::WindowDisplay::new(
+                    display, None,
+                ))),
             )))
         }
         ("WindowObservation", "State") => Some(window(WindowObservation::State)),

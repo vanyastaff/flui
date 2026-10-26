@@ -321,7 +321,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -511,7 +511,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
 }
 
 struct BackgroundDeadline {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     effects: Rc<Cell<usize>>,
     panic_after_effect: bool,
 }
@@ -521,11 +521,11 @@ impl flui_interaction::gesture::GestureArenaMember for BackgroundDeadline {
 
     fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
+    fn poll_deadline(&self, _: flui_platform::EventTime) {
         self.effects.set(self.effects.get() + 1);
         if self.panic_after_effect {
             std::panic::panic_any("unknown background deadline progress");
@@ -567,7 +567,7 @@ fn background_deadline_case(unknown: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -654,9 +654,8 @@ fn background_deadline_case(unknown: bool) {
         effects: Rc::clone(&unknown_effects),
         panic_after_effect: true,
     });
-    let contact = |value| {
-        flui_platform_api::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"))
-    };
+    let contact =
+        |value| flui_platform::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"));
     if unknown {
         let _ = primary.arena.add(contact(71), &unknown_timer);
     }
@@ -754,7 +753,7 @@ fn delivery_case(delivery: Delivery) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -850,16 +849,16 @@ fn delivery_case(delivery: Delivery) {
     }
     if delivery == Delivery::Deadline {
         let down = flui_interaction::events::make_down_event_for_id_with_button(
-            flui_platform_api::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(5.0, 5.0),
-            flui_platform_api::PointerKind::Touch,
-            flui_platform_api::PointerButton::PRIMARY,
+            flui_platform::PointerKind::Touch,
+            flui_platform::PointerButton::PRIMARY,
         )
         .expect("finite touch");
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentation_id(),
-                flui_platform_api::PlatformInput::Pointer(down),
+                flui_platform::PlatformInput::Pointer(down),
             );
         });
     }
@@ -1098,7 +1097,7 @@ fn source_failure_case(failure: SourceFailure) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1303,7 +1302,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(host.clone()),
         ),

@@ -42,7 +42,7 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 
 ## Consequences
 
-- `interaction_gallery`, the shared fixture, gives every interactive widget an identifier, and
+- [`interaction_gallery`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/interaction_gallery), the shared fixture, gives every interactive widget an identifier, and
   the device scenarios select by it.
 - Changing a widget's visible text no longer breaks its tests.
 

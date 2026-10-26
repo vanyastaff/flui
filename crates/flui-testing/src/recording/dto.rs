@@ -18,14 +18,14 @@ use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
 };
-use flui_platform_api::data_transfer::{
+use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
-use flui_platform_api::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
-use flui_platform_api::keyboard::{
+use flui_platform::input_capabilities::{Availability, InputCapabilities, PointerKindSet};
+use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
     PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
@@ -33,7 +33,7 @@ use flui_platform_api::pointer::{
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
 };
-use flui_platform_api::{
+use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, ImeEvent, Locale, MotionPreference,
     NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
@@ -659,7 +659,7 @@ struct ButtonEventDto {
     sample: SampleDto,
 }
 
-impl<D: flui_platform_api::pointer::ButtonDirection> TryFrom<&PointerButtonEvent<D>>
+impl<D: flui_platform::pointer::ButtonDirection> TryFrom<&PointerButtonEvent<D>>
     for ButtonEventDto
 {
     type Error = DtoError;
@@ -677,7 +677,7 @@ impl<D: flui_platform_api::pointer::ButtonDirection> TryFrom<&PointerButtonEvent
 }
 
 impl ButtonEventDto {
-    fn into_event<D: flui_platform_api::pointer::ButtonDirection>(
+    fn into_event<D: flui_platform::pointer::ButtonDirection>(
         self,
     ) -> Result<PointerButtonEvent<D>> {
         let mut event = PointerButtonEvent::<D>::new(

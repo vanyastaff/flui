@@ -267,16 +267,6 @@ cargo test -p flui-assets --all-features
 cargo doc -p flui-assets --open
 ```
 
-## Examples
-
-```bash
-# Basic usage
-cargo run -p flui-assets --example assets_basic_usage
-
-# With images (requires 'images' feature)
-cargo run -p flui-assets --example assets_basic_usage --features images
-```
-
 ## Documentation
 
 ### Quick Links

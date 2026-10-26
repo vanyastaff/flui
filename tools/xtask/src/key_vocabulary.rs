@@ -1,6 +1,6 @@
 //! FLUI's W3C key tables, generated from the `keyboard-types` the workspace pins (ADR-0089 §4).
 //!
-//! `flui_platform_api::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
+//! `flui_platform::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
 //! type reaches a Stable signature, but their variants are the W3C `key` and `code` value lists,
 //! which `keyboard-types` already transcribes from the specifications. This command reads the
 //! `keyboard-types` sources pinned by xtask (`named_key.rs` and `code.rs`) and writes
@@ -42,7 +42,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "NamedKey",
         upstream: "src/named_key.rs",
-        output: "crates/flui-platform-api/src/keyboard/named_key.rs",
+        output: "crates/flui-platform/src/keyboard/named_key.rs",
         summary: "A key the W3C names: the `key` value of a key that produces no character.\n\n\
                   The variants are the [UI Events `key` values](https://w3c.github.io/uievents-key/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
@@ -52,7 +52,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "Code",
         upstream: "src/code.rs",
-        output: "crates/flui-platform-api/src/keyboard/code.rs",
+        output: "crates/flui-platform/src/keyboard/code.rs",
         summary: "The physical key, independent of the keyboard layout: the W3C `code` value.\n\n\
                   The variants are the [UI Events `code` values](https://w3c.github.io/uievents-code/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
@@ -330,7 +330,7 @@ fn write_file(
         "# Examples".to_owned(),
         String::new(),
         "```".to_owned(),
-        format!("use flui_platform_api::keyboard::{name};"),
+        format!("use flui_platform::keyboard::{name};"),
         String::new(),
         format!("assert_eq!({name}::{example}.as_str(), \"{example}\");"),
         format!("assert_eq!({name}::from_w3c(\"{example}\"), Some({name}::{example}));"),

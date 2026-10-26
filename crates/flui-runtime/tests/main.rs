@@ -126,7 +126,7 @@ mod text_frame;
 
 /// The vsync these contracts deliver frames at. None of them resamples
 /// pointer motion, the only consumer of a frame's vsync.
-pub(crate) const VSYNC: flui_platform_api::EventTime = flui_platform_api::EventTime::from_nanos(0);
+pub(crate) const VSYNC: flui_platform::EventTime = flui_platform::EventTime::from_nanos(0);
 
 /// Window metrics from a logical size and scale, as a platform reports them.
 pub(crate) fn window_metrics(
@@ -152,7 +152,7 @@ pub(crate) trait HostInputExt {
 
     fn input(
         &self,
-        input: flui_platform_api::PlatformInput,
+        input: flui_platform::PlatformInput,
         effects: &dyn flui_runtime::owner::OwnerEffects,
     ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError>;
 }
@@ -168,7 +168,7 @@ impl HostInputExt for flui_runtime::owner::PresentationDispatcher {
 
     fn input(
         &self,
-        input: flui_platform_api::PlatformInput,
+        input: flui_platform::PlatformInput,
         effects: &dyn flui_runtime::owner::OwnerEffects,
     ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError> {
         self.dispatch(flui_runtime::HostInput::Platform(input), effects)
@@ -180,10 +180,8 @@ impl HostInputExt for flui_runtime::owner::PresentationDispatcher {
 pub(crate) fn event_at(
     clock: &flui_foundation::ManualClock,
     instant: web_time::Instant,
-) -> flui_platform_api::EventTime {
+) -> flui_platform::EventTime {
     use flui_foundation::MonotonicClock as _;
     let elapsed = instant.saturating_duration_since(clock.epoch());
-    flui_platform_api::EventTime::from_nanos(
-        u64::try_from(elapsed.as_nanos()).expect("test time fits"),
-    )
+    flui_platform::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).expect("test time fits"))
 }

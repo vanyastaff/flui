@@ -1,4 +1,4 @@
-[← Crates Map](crates.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Contributing →](../CONTRIBUTING.md)
+[← Crates Map](crates.md) · [Back to README](../README.md) · [Contributing →](../CONTRIBUTING.md)
 
 # Testing
 
@@ -38,8 +38,6 @@ the same bug found by a whole-demo snapshot names a demo.
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
 | GPU readback | Real pixels off a local device (adapter required) | `flui-engine`'s readback suite | `flui-engine/testing` |
-| Demo composition | A whole demo tree's committed `LayerTree`, as structured text | `tests/demo_layer_snapshots.rs` | `flui/material` + `flui/cupertino` |
-| Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `cargo xtask live-smoke` |
 
 Two structural rules hold across the stack:
 
@@ -112,11 +110,11 @@ next to its definition, the `default_pools_started` probe it reads exists only u
 the `testing` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
-`flui-platform`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
+`flui-native`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
 alone. Its `web_browser` target runs in headless Chrome instead, through
-`cargo xtask device web-input`: that check fetches the ChromeDriver matching the installed Chrome
-into `target/chromedriver/` and hands it to `wasm-bindgen-test-runner`. CI does not run it; a
-change to the web backend's DOM side runs it locally.
+`wasm-bindgen-test-runner` with a ChromeDriver matching the installed Chrome. CI does not run
+it; a change to the web backend's DOM side runs it locally with
+`CHROMEDRIVER=<path> cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked`.
 
 ## Quality Gates
 
@@ -129,11 +127,11 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
-cargo xtask test                          # nextest over the local scope, flui-platform headless, then the nested-cargo group (see "What `cargo xtask test` runs")
-cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
+cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
+cargo test --workspace --locked --doc     # doc-tests (flui-native included — its doctests need no display server)
 ```
 
 The reload-lifecycle fixture is a real plugin image. `test`
@@ -151,7 +149,7 @@ macro expansion or conditional module graphs.
 
 The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
-passes `--strict`, which makes a missing one a failure. The flui-platform step
+passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
@@ -173,7 +171,7 @@ only runs when someone remembers to run it by hand.
 ### What `cargo xtask test` runs
 
 One scope for the whole local suite:
-`--workspace --exclude flui-platform --lib --bins --tests
+`--workspace --exclude flui-native --lib --bins --tests
 --features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
@@ -244,7 +242,7 @@ Platform compiler diagnostics need no display or event loop. Exact diagnostics
 require the pinned toolchain's `rust-src` component
 (`rustup component add rust-src`), because exact snapshots include standard-library
 declarations. CI installs it in the diagnostic test job.
-The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
+The nested and trybuild stages run `flui-native`'s `compiler_guards` target separately on
 every host; the native platform leg excludes that group.
 
 To narrow either stage, combine with `&` inside the single `-E`:
@@ -321,8 +319,7 @@ multiplies that. To keep it bounded:
   once (AGENTS.md, "Checking a change"). A `--workspace` build or
   `cargo xtask test` is most of a short-lived worktree's disk.
 - **`CARGO_INCREMENTAL=0` in a short-lived worktree.** Incremental caches are
-  over half of a used debug directory (9.30 GB against 4.06 GB without them,
-  [build-footprint.md](../design/build-footprint.md) R2); they pay off only
+  over half of a used debug directory (9.30 GB against 4.06 GB without them); they pay off only
   across many edits to one crate, which a one-PR agent rarely makes.
 - **Delete a worktree's `target/` once its branch is pushed.** From then on CI
   is the proof; a review fix rebuilds in minutes, while keeping the directory
@@ -377,7 +374,7 @@ cargo test --workspace --release                  # run tests against the releas
 ```bash
 cargo test -p flui-foundation
 cargo test -p flui-painting
-cargo test -p flui-platform
+cargo test -p flui-native
 ```
 
 ### A single test or filter
@@ -393,7 +390,7 @@ cargo test -p flui-foundation -- --test-threads=1          # serialize tests (de
 All FLUI code logs through `tracing`. To see `debug!` traces during a test:
 
 ```bash
-RUST_LOG=debug cargo test -p flui-platform
+RUST_LOG=debug cargo test -p flui-native
 RUST_LOG=flui_engine=trace cargo test -p flui-engine
 ```
 
@@ -404,7 +401,7 @@ The constitution sets minimum coverage thresholds per crate category:
 | Category | Minimum | Examples |
 |----------|---------|----------|
 | Core | 80 % | `flui-foundation`, `flui-painting`, `flui-rendering`, `flui-view` |
-| Platform | 70 % | `flui-platform` |
+| Platform | 70 % | `flui-native` |
 | Widget | 85 % | (future widget crates) |
 
 Generate a coverage report with [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov),
@@ -521,10 +518,9 @@ is a finding too, until `--bless` locks the improvement in — otherwise a later
 regression back up to the old value would pass. Commit a re-blessed baseline
 with the change that moved it and say why in the PR. The run writes the merged
 counts to `<target>/perf/current.toml`. The checked-in baseline was blessed on
-Windows. The CI redesign (`design/ci.md`) places an advisory `perf` job in the
-`wide` and `full` lanes, blocking at the B1 exit; that job is not in
-the workflows yet, so only `perf --self-test` and the budget assertions are on
-the merge path.
+Windows. An advisory `perf` job belongs in the `wide` and `full` lanes; it is
+not in the workflows yet, so only `perf --self-test` and the budget assertions
+are on the merge path.
 
 ## Linting
 
@@ -590,7 +586,6 @@ The constitution requires `///` doc comments on every public item and `//!` over
   lists the failing row names. The rows keep their own assertions; the table keeps the
   set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
 
 ## Test Harnesses (`testing` feature)
@@ -638,7 +633,6 @@ properties should be omitted.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
 
 ```bash
-cargo run -p flui-rendering --example render_inspector --features testing
 cargo test -p flui-rendering --test render_object_harness
 ```
 
@@ -771,7 +765,7 @@ role rather than by node index.
 ### Text fields and IME
 
 `flui_testing::text_store_kit` is the conformance kit for any widget that
-implements `flui_platform_api::TextStore` (ADR-0090): write a
+implements `flui_platform::TextStore` (ADR-0090): write a
 `TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
 KIT_VERSION)`. The kit holds frame transactions itself, through the
 `CommitGate` it installs with `TextStore::set_commit_gate`; the fixture only
@@ -829,8 +823,8 @@ reach it without an edge.
 
 ## Agent workflow
 
-`tests/agent_workflow.rs` is the acceptance test for the "Agent workflow" row
-of `docs/BETA.md`: evidence that an agent (or a human, working the same way)
+`tests/agent_workflow.rs` is the acceptance test for the agent workflow:
+evidence that an agent (or a human, working the same way)
 can discover the public API, build a UI, inspect it two different ways,
 drive an interaction through it, and assert the result — using only
 `flui::…`, the same surface a consumer of the published crate has. It is
@@ -855,8 +849,7 @@ the state primitive. Five steps, each backed by a documented, facade-reachable A
 
 Step 4 is deliberately **not** `flui_testing::widgets::lay_out`'s
 `dispatch_pointer_down`/`find_text` convenience: those are widget-internal
-shortcuts this package's own tests use freely (see
-`tests/material_demo.rs`), but an outside agent driving the framework through
+shortcuts this package's own tests use freely, but an outside agent driving the framework through
 its documented surface has only `HeadlessBinding::replay` and a hit-test
 target it found itself — semantics bounds, here — to tap with. Steps 2 and 5
 reuse the same diagnostics dump for a structural check and a content check
@@ -888,56 +881,7 @@ Writing the test also found that the facade's `flui::testing::rendering`
 module did not re-export `render_diagnostics` (`flui-rendering`'s render-tree
 dump); it does now, and step 2 uses it.
 
-## Demo composition snapshots
-
-```bash
-cargo xtask demo-snapshots   # run
-cargo insta review           # review and accept intended changes (cargo-insta)
-```
-
-Each demo tree mounts headless at 900x760 through `flui-testing`'s canonical
-bootstrap, and the `LayerTree` its bootstrap frame commits is serialized to
-structured text — the layer structure plus every draw command, with geometry,
-colors, transforms, and text — and compared against a committed `insta`
-snapshot in `tests/snapshots/`. A widget that moves or resizes, a shadow that
-stops being emitted, a clip that disappears, a subtree that stops being built:
-each changes those lines and fails the matching test, naming the layer and the
-command.
-
-No GPU, no device-specific baseline: CI's `test` job (its scope turns
-`flui/material` and `flui/cupertino` on) runs the suite
-like any other test, and it takes about a tenth of a second.
-
-### Why structural and not pixels
-
-This suite replaced a pixel-golden suite that compared the same six demos
-against committed PNGs. That suite ran on no CI job and could not be moved onto
-one, and its own documentation blamed the GPU: "the goldens are specific to the
-machine that generated them (GPU / driver differences move anti-aliased edges)".
-Measured against a completely different rasterizer (llvmpipe vs. the reference
-device), that was not where the binding was:
-
-| Demo | Pixels past tolerance | Where |
-|------|----------------------|-------|
-| colored-box (flat fill) | 0 of 684 000 — bit-identical | — |
-| gallery (vector shapes) | 0.20%, max channel delta 48 | anti-aliased edges |
-| text, material, cupertino, vertical-slice | 0.52%–0.76%, against a 0.5% threshold, max delta 243–255 | **glyphs, and the widgets sized to them** |
-
-Shape, fill, and shadow raster carried across devices. The whole difference was
-text — the glyphs themselves, plus the button rectangles that hug them — and it
-was a *font* difference, not an anti-aliasing one: the same string measured
-24 px (9.4%) wider with a 2 px baseline shift, which a rasterizer cannot do.
-The real baseline was the host's font installation, and the suite's pass/fail
-line sat inside its own cross-machine noise.
-
-What the change gives up is the raster of a *composed* scene. Its pieces are
-covered elsewhere: blending, filters, gradients, and glyph raster per primitive
-by flui-engine's local readback/oracle suite (`cargo xtask gpu-test`), and
-that a real window presents at all by `tools/live-smoke`. What is genuinely
-lost — the anti-aliased pixels of a whole demo — was guarded by nothing before,
-since the suite ran on no job.
-
-### Determinism
+## Determinism
 
 Text is measured and painted on the UI runtime's `FontCollection`. A test bootstrap
 builds it with `FontCollection::new()`, which holds only the bundled faces and
@@ -949,67 +893,21 @@ wants a host's faces builds its own collection with
 `FontCollection::with_host_fonts(&HostFonts::scan())` and accepts that its
 geometry depends on the machine.
 
-To *look* at what a tree renders without a window, capture it:
+## Native recording goldens
 
-```bash
-cargo run -p flui --example screenshot --features "material cupertino" -- material 900 760 out.png
-```
-
-## Live E2E smoke
-
-```bash
-cargo xtask live-smoke             # X11 under Xvfb: real window, real XTEST input, real pixels
-cargo xtask live-smoke --wayland   # headless weston: the close-path teardown ordering
-```
-
-`tools/live-smoke` is the only executing coverage of the band **above**
-synthetic event dispatch — platform translation, the event-loop wake chain,
-window-close teardown — each of which has shipped broken while every synthetic
-gesture test stayed green. It also verifies hidden-surface gating against a real
-occlusion signal. Both variants run in CI.
-
-For driving a real app by hand, [`tools/desktop-mcp`](../tools/desktop-mcp/README.md) is an MCP
-server an agent uses to list and capture windows, read the Windows UI Automation tree, invoke
-element actions and send real input, on any application. Its ignored
-`tests/live_windows.rs` drives `a11y_probe` through it; the scripted Windows gates are
-`cargo xtask device windows-a11y` and `windows-input`.
-
-`windows-a11y` invokes the counter and exercises native ExpandCollapse and
-RangeValue patterns on the probe's generic semantics controls. It checks
-disclosure state, repeated-action refusal, fractional and endpoint values,
-unchanged published state after an out-of-range request, and a later valid
-action. Independent visible state labels and an intervening counter action
-observe the resulting frames. This does not establish native acceptance of the
-catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
-A second launch shows the probe's role-family page (`FLUI_PROBE_FIXTURE=roles`):
-one node per role of the semantics vocabulary, held to the control type and
-ARIA role `accesskit_windows` reports for it, and nodes for each family's
-states and properties (Toggle and SelectionItem states, ExpandCollapse,
-read-only RangeValue and a static separator without one, Value, required,
-placeholder and password fields, heading level, a modal dialog's Window
-pattern, a disabled control, live settings). The expected table names the
-adapter version it was read from, and a unit test fails when the lock moves.
-`windows-input` separately sends pointer input followed by Tab and Enter.
-Before that it records golden native recordings (ADR-0215 §4 and §8): each
-injected session runs in its own process as a child row of `flui-platform`'s
+Each injected native session runs in its own process as a child row of `flui-native`'s
 native window contract, built with `native-capture` (a debug build), and its
 registry journal must replay through the shared decoder to exactly what the
-window delivered. `a_captured_native_pointer_session_replays_to_what_it_delivered`
-injects a touch and a pen through `InjectSyntheticPointerInput`, and
-`a_captured_native_mouse_session_replays_to_what_it_delivered` sends clicks, a
-double click, a chord, a Control-held click and both wheels through
-`SendInput`. Each run is then held against its golden in
-`crates/flui-platform/tests/native_recording/` by shape: the replayed events
+window delivered (ADR-0215 §4 and §8). Each run is held against its golden in
+`crates/flui-native/tests/native_recording/` by shape: the replayed events
 with times left out and positions in device pixels, since the OS stamps every
-run anew. The fresh recordings land in `target/native-recordings/` to diff the
-rows themselves; `--bless` writes them over the goldens instead:
+run anew. `FLUI_NATIVE_RECORDING_DIR` also writes the fresh recordings to a
+directory to diff the rows themselves; `FLUI_NATIVE_RECORDING_BLESS` writes them
+over the goldens instead. One session by hand:
 
 ```bash
-cargo xtask device windows-input            # record, hold against the goldens, then drive the counter
-cargo xtask device windows-input --bless    # replace the goldens with this run's recordings
-# one session by hand:
 FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_mouse_session_replays_to_what_it_delivered \
-  cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
+  cargo test -p flui-native --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
 ```
 
 `native_recording_contracts` replays every golden through the shared decoders
@@ -1019,54 +917,15 @@ moves, prints `CANNOT_VERIFY` and records nothing. A precision touchpad has no
 injector: its DirectManipulation viewport calls are journaled, but the golden
 that certifies them has to come from a `native-capture` run on that hardware,
 and keyboard and OLE drag-and-drop input have no native recording rows yet.
-Both checks require an interactive Windows desktop. Before the probe launches,
-the shared UIA session asks Windows (`UOI_IO`) whether the desktop the check
-runs on, which the probe inherits, is the one receiving input: a locked
-workstation, a disconnected or service session, input going to another
-desktop, a failed query, or an unavailable UI Automation exits 2 (CANNOT VERIFY) rather than reporting a FAIL or a passing run.
+On an Android device, the host test
+`native_recording::pulled_device_recordings_replay_to_what_they_delivered`
+requires each recording pulled into `FLUI_DEVICE_RECORDING_DIR` to replay to
+the delivered events exactly and holds it against its golden by event grammar,
+since the device resamples moves by its frame timing.
 
-`android-input` does the same on an Android device over `adb`, from any host
-with the SDK (`ANDROID_HOME`), `cargo-ndk`, the `aarch64-linux-android`
-target and a JDK. It builds `flui-platform`'s `android_input_probe` with
-`native-capture`, packages a debuggable APK with the SDK's build tools,
-installs it and records three sessions, each in a fresh launch: `adb shell
-input` touches, swipes, a stylus and a mouse click; a `uinput` pen that
-hovers, touches with pressure and tilt and leaves; and a `uinput` touchpad
-that pinches and scrolls with two fingers. The recordings and the events the
-window delivered are pulled into `target/native-recordings/android/`; the host
-test `native_recording::pulled_device_recordings_replay_to_what_they_delivered`
-requires each replay to equal the delivered events exactly and holds it
-against its golden by event grammar, since the device resamples moves by its
-frame timing. A last launch reads back the probe's system gesture exclusion
-from the window manager, the haptics switch and long-press timeout from
-`SystemPreferences` after `settings put` (both put back), and its haptics from
-the vibrator service's record. No SDK, no device or a locked one exits 2;
-with several devices attached, `FLUI_ANDROID_SERIAL` picks one. Leave the
-device alone while it runs:
-
-```bash
-cargo xtask device android-input            # record, hold against the goldens, check the system rows
-cargo xtask device android-input --bless    # replace the goldens with this run's recordings
-```
-
-`android-gallery` is `windows-gallery`'s counterpart on the same device: it
-builds `examples/interaction_gallery`'s library with its `agent` feature,
-packages and installs it, and drives every screen with the phone's own input:
-touches from a virtual multi-touch screen the `uinput` command registers
-(written report by report as they fall due, since a `delay` read from its
-standard input does not hold the reports back), `input stylus` and
-`input mouse` events, hardware key events and the device's soft keyboard.
-FLUI publishes no Android accessibility tree, so each outcome is read from the
-gallery's development agent (ADR-0095 §3) over its socket, reached as the
-application's user (`run-as … nc -U`), and from `screencap` pixels where the
-right and the wrong outcome differ. The gallery is uninstalled at the end;
-`FLUI_GALLERY_KEEP=1` leaves it installed, and `FLUI_GALLERY_CHECKS=<text>`
-runs the checks whose name contains `<text>`:
-
-```bash
-cargo xtask device android-gallery
-FLUI_GALLERY_CHECKS=cards: cargo xtask device android-gallery
-```
+For driving a real app by hand, [`tools/desktop-mcp`](../tools/desktop-mcp/README.md) is an MCP
+server an agent uses to list and capture windows, read the Windows UI Automation tree, invoke
+element actions and send real input, on any application.
 
 ## CI Expectations
 
@@ -1076,7 +935,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, changelog fragments, ...; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, changelog fragments, ...; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
@@ -1086,12 +945,12 @@ cargo xtask feature-matrix --slice combinations               # same job: each f
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
-cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
-cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
+cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
+cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo xtask deps --strict --only policy                       # deps job: cargo-deny bans / licenses / sources + cargo-shear
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
-cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
+cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1)
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
@@ -1117,7 +976,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace |
 | `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild` (all Linux) |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
@@ -1140,9 +999,9 @@ runs `checks`, `plan` and the `ci` aggregator:
   you changed one command at a time (AGENTS.md, "Checking a change"), and
   their dependents' clippy when you changed a public API. CI runs the rest
   — the dependents' tests, the feature matrix, wasm32, cross-typecheck,
-  rustdoc, doctests, trybuild — and is the proof. `flui-platform`'s suite
+  rustdoc, doctests, trybuild — and is the proof. `flui-native`'s suite
   runs only on Linux, so a Windows or macOS backend change still needs
-  `cargo nextest run -p flui-platform` by hand; CI only type-checks those
+  `cargo nextest run -p flui-native` by hand; CI only type-checks those
   backends.
 - **Tooling lane**: nothing in the workspace compiles; `checks` and `deps`
   cover the change.
@@ -1182,11 +1041,10 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) and also links flui-platform's examples, which the all-targets build leaves out with the rest of flui-platform |
+| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
-| `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | the job runs these two commands; Linux only (Xvfb, lavapipe, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
@@ -1240,7 +1098,7 @@ restore it.
 workspace Cargo target and in target-specific dependency declarations. It
 selects packages directly with `--all-targets`, including their tests,
 examples and benches; indirect dependency compilation does not cover those
-targets. Required target features and declared `testing`/`a11y` features are
+targets. Required target features and a declared `testing` feature are
 enabled together. `--all-features` additionally compiles every feature of the
 selected packages. CI runs both configurations: all-features alone can hide
 disabled-feature branches. This is not an exhaustive optional-feature matrix or a

@@ -7,7 +7,7 @@ event.
 
 A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
 event rewritten into that entry's own space, `global` is the platform's own
-value passed through untouched. Both use the owned `flui-platform-api` pointer
+value passed through untouched. Both use the owned `flui-platform` pointer
 vocabulary, so the pair travels beside the event.
 Both halves borrow values the dispatch already owns, so carrying the second one
 costs no clone.
@@ -27,6 +27,11 @@ Executable pointer callbacks do not live in render storage or hit-test entries.
 Widgets register owner-local handlers through `RenderObjectContext`, render
 objects store the returned `PointerTarget`, and dispatch resolves those targets
 through the active `InteractionLane`.
+
+An entry's `pointer_target` and `cursor` come from the render object's
+node-wide hooks unless its `hit_test` chose them for the part hit
+(`HitTestContext::set_self_hit_pointer_target`, `set_self_hit_cursor`): a
+paragraph routes a hit on a link to that link's target and asks for its cursor.
 
 ## Ordinary pointer dispatch
 

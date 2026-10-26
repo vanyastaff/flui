@@ -173,7 +173,7 @@ impl FrameDispatcher {
     /// Refuses an expired host or exact presentation, or an active publication.
     pub fn deliver(
         &self,
-        vsync: flui_platform_api::EventTime,
+        vsync: flui_platform::EventTime,
         effects: &dyn OwnerEffects,
     ) -> Result<Delivery, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;

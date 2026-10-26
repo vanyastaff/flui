@@ -6,7 +6,7 @@ use flui_foundation::{
     geometry::{Offset, Size},
 };
 use flui_painting::TextSizing;
-use flui_platform_api::{Distance, PlatformWindow};
+use flui_platform::{Distance, PlatformWindow};
 use flui_view::prelude::*;
 use std::{
     cell::Cell,
@@ -36,7 +36,7 @@ struct Window {
     panic_query: AtomicBool,
 }
 impl PlatformWindow for Window {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -59,33 +59,27 @@ impl PlatformWindow for Window {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
         let panic = self.panic_query.swap(false, Ordering::Relaxed);
@@ -140,8 +134,8 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
     };
     for (in_query, panics) in [(true, false), (true, true), (false, false), (false, true)] {
         let window = Arc::new(Window {
-            inner: flui_platform::headless_platform()
-                .open_window(flui_platform::traits::WindowOptions::default())
+            inner: flui_native::headless_platform()
+                .open_window(flui_platform::WindowOptions::default())
                 .expect("window"),
             answer: Mutex::new(Ok(geometry(10.0))),
             panic_query: AtomicBool::new(false),
@@ -154,7 +148,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
                 RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(AtomicBool::new(false)),
-                    Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Manual(clock.clone()),
                 ),
@@ -249,7 +243,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             runtime.enter(|runtime| {
                 runtime.handle_input_addressed(
                     runtime.presentations.primary().id(),
-                    flui_platform_api::PlatformInput::Pointer(event),
+                    flui_platform::PlatformInput::Pointer(event),
                 )
             });
         }
@@ -261,7 +255,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentations.primary().id(),
-                flui_platform_api::PlatformInput::Pointer(
+                flui_platform::PlatformInput::Pointer(
                     pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch)
                         .expect("stationary down"),
                 ),
@@ -280,7 +274,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         runtime.enter(|runtime| {
             runtime.handle_input_addressed(
                 runtime.presentations.primary().id(),
-                flui_platform_api::PlatformInput::Pointer(
+                flui_platform::PlatformInput::Pointer(
                     pointer_up(Offset::new(40.0, 40.0), PointerKind::Touch).expect("stationary up"),
                 ),
             )
@@ -308,10 +302,10 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
 
 struct HapticWindow {
     inner: Arc<dyn PlatformWindow>,
-    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::haptics::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> Size<i32> {
@@ -334,26 +328,23 @@ impl PlatformWindow for HapticWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
         self.inner.capabilities()
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
         self.inner.apply(command)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(self.haptics.clone())
     }
 }
@@ -362,14 +353,14 @@ impl PlatformWindow for HapticWindow {
 /// before they reach the backend; unobserved and "on" play them, and each
 /// accepted revision decides the next request (ADR-0212 §1).
 pub(crate) fn haptics_preference_suppresses_both_tiers() {
-    use flui_platform_api::HapticFeedback;
-    use flui_platform_api::haptics::{
+    use flui_platform::HapticFeedback;
+    use flui_platform::haptics::{
         FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
     let haptics = Arc::new(FakeHaptics::new());
     let window = Arc::new(HapticWindow {
-        inner: flui_platform::headless_platform()
-            .open_window(flui_platform::traits::WindowOptions::default())
+        inner: flui_native::headless_platform()
+            .open_window(flui_platform::WindowOptions::default())
             .expect("window"),
         haptics: haptics.clone(),
     });
@@ -379,7 +370,7 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -451,8 +442,8 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
 pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
     use crate::{presentation::PresentationWindow, runtime_services::RuntimeHostServices};
     use crate::{sink::SubmitVerdict, testing::ScriptedSink};
-    use flui_platform_api::HapticFeedback;
-    use flui_platform_api::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
+    use flui_platform::HapticFeedback;
+    use flui_platform::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
     for verdict in [
         SubmitVerdict::Presented,
         SubmitVerdict::NotShown,
@@ -460,8 +451,8 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
     ] {
         let haptics = Arc::new(FakeHaptics::new());
         let window = Arc::new(HapticWindow {
-            inner: flui_platform::headless_platform()
-                .open_window(flui_platform::traits::WindowOptions::default())
+            inner: flui_native::headless_platform()
+                .open_window(flui_platform::WindowOptions::default())
                 .expect("window"),
             haptics: haptics.clone(),
         });
@@ -472,7 +463,7 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -531,5 +522,58 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
         }
         drop(runtime);
         drop(window);
+    }
+}
+
+/// A revision no newer than the accepted one is dropped whole: its values reach
+/// neither the runtime's snapshot nor the inherited data a mounted consumer
+/// reads, and a newer revision after it still applies.
+pub(crate) fn an_older_or_repeated_preference_revision_is_ignored() {
+    let origin = Rc::new(());
+    let scaled = |scale: f64, contrast: bool| {
+        SystemPreferences::default()
+            .with_text_scale(scale)
+            .expect("valid scale")
+            .with_high_contrast(contrast)
+    };
+    let mut runtime = UiRuntime::for_test();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("root");
+    let mut sink = crate::testing::ScriptedSink::always_presents();
+    for (revision, offered, label, shown, accepted) in [
+        (2, scaled(2.0, true), "the first revision", (2.0, true), 2),
+        (1, scaled(3.0, false), "an older revision", (2.0, true), 2),
+        (
+            2,
+            scaled(3.0, false),
+            "the accepted revision again",
+            (2.0, true),
+            2,
+        ),
+        (3, scaled(3.0, false), "a newer revision", (3.0, false), 3),
+    ] {
+        runtime.apply_preferences(SystemPreferencesSnapshot {
+            origin: Rc::clone(&origin),
+            revision,
+            values: Arc::new(offered),
+        });
+        let _ = runtime.pump(
+            &mut crate::pump::SampledClock(web_time::Instant::now()),
+            &mut sink,
+        );
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&(TextSizing::linear(shown.0).expect("valid scale"), shown.1)),
+            "{label} (revision {revision}) changed what a mounted consumer reads"
+        );
+        let current = runtime.preferences.borrow();
+        let current = current.as_ref().expect("an accepted snapshot");
+        assert_eq!(
+            (current.revision, current.values.text_scale()),
+            (accepted, Some(shown.0)),
+            "{label} (revision {revision}) changed the accepted snapshot"
+        );
     }
 }

@@ -19,11 +19,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
+use flui_native::OwnerPlatform;
 use flui_painting::{FontCollection, HostFontFeed};
-use flui_platform::OwnerPlatform;
 #[cfg(target_os = "android")]
-use flui_platform::traits::WindowExecutionState;
-use flui_platform::traits::{Clipboard, PlatformWindow};
+use flui_platform::WindowExecutionState;
+use flui_platform::{Clipboard, PlatformWindow};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,10 +137,10 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
 /// exit_policy` carries this to `run_desktop`'s bootstrap, which installs a
 /// hook (`runner.rs`'s `install_exit_policy_hook`) into
-/// `flui_platform::traits::Platform::set_exit_policy_hook`. The winit
+/// `flui_native::Platform::set_exit_policy_hook`. The winit
 /// backend's `CloseRequested` handling and the headless backend's window
 /// `close()`/`simulate_close()` both consult that hook — via the shared
-/// `flui_platform::shared::PlatformHandlers::exit_policy` slot — instead of
+/// `flui_native::PlatformHandlers::exit_policy` slot — instead of
 /// deciding from their own native window count alone; see
 /// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
 /// (`owner_dispatch/tests.rs`), which closes the last window through the
@@ -262,8 +262,8 @@ pub(super) enum QuitNotification {
 /// UI runtime the host builds so their drags name one platform instance.
 #[derive(Clone)]
 pub(crate) struct PlatformDataTransfer {
-    pub(crate) source: Arc<dyn flui_platform_api::DataTransferSource>,
-    pub(crate) nonce: flui_platform_api::drag::ProcessNonce,
+    pub(crate) source: Arc<dyn flui_platform::DataTransferSource>,
+    pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
 /// The loop-scoped composition root: installed host, platform event-loop
@@ -403,7 +403,7 @@ pub(crate) struct AppRuntime {
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
-    pub(super) host_storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
@@ -1093,7 +1093,7 @@ impl AppRuntime {
     #[must_use = "drop the returned window only after releasing TLS borrows"]
     pub(super) fn release_redraw_window_for(
         &self,
-        id: flui_platform::traits::WindowId,
+        id: flui_platform::WindowId,
     ) -> Option<Arc<dyn PlatformWindow>> {
         let mut slot = self.redraw_window.lock();
         if slot.as_ref().is_some_and(|window| window.id() == id) {
@@ -1142,13 +1142,13 @@ impl AppRuntime {
     /// retirement outside the caller's borrow.
     pub(super) fn set_platform_data_transfer(
         &self,
-        source: Arc<dyn flui_platform_api::DataTransferSource>,
+        source: Arc<dyn flui_platform::DataTransferSource>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
             .lock()
             .replace(PlatformDataTransfer {
                 source,
-                nonce: flui_platform_api::drag::ProcessNonce::mint(),
+                nonce: flui_platform::drag::ProcessNonce::mint(),
             })
     }
 
@@ -1164,7 +1164,7 @@ impl AppRuntime {
     /// replaces a storage an earlier run on this thread left, whose IO pool
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
-    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_platform::storage::DataDirs>) {
+    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
         self.host_storage = dirs.map(|dirs| {
             let io = Arc::downgrade(self.ensure_execution());
             super::storage_host::host_storage(dirs, io)
@@ -1172,7 +1172,7 @@ impl AppRuntime {
     }
 
     /// The host's byte storage, if the run configured one.
-    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform_api::Storage>> {
+    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform::Storage>> {
         self.host_storage.clone()
     }
 

@@ -29,20 +29,17 @@ fn pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(data) => {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(reading)
-                    .expect("valid pressure fixture"),
+                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
             );
         }
         PointerEvent::Up(data) => {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(reading)
-                    .expect("valid pressure fixture"),
+                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
             );
         }
         PointerEvent::Move(data) => {
             let sample = data.current().with_pressure(
-                flui_platform_api::pointer::Pressure::try_new(reading)
-                    .expect("valid pressure fixture"),
+                flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture"),
             );
             *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
                 .with_modifiers(data.modifiers)
@@ -221,7 +218,7 @@ fn scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale() {
 
 /// `event` stamped `ms` milliseconds into the timeline.
 fn timed(mut event: PointerEvent, ms: u64) -> PointerEvent {
-    let time = flui_platform_api::EventTime::from_nanos(ms * 1_000_000);
+    let time = flui_platform::EventTime::from_nanos(ms * 1_000_000);
     match &mut event {
         PointerEvent::Down(down) => down.sample.time = time,
         PointerEvent::Up(up) => up.sample.time = time,
@@ -379,7 +376,7 @@ fn scale_and_force_press_owner_lifecycle() {
 }
 
 fn force_history_preserves_thresholds_and_first_failure() {
-    use flui_platform_api::EventTime;
+    use flui_platform::EventTime;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     for failing in [false, true] {
@@ -460,11 +457,7 @@ fn force_history_preserves_thresholds_and_first_failure() {
     }
 }
 
-fn force_sample(
-    reading: Option<f32>,
-    x: f64,
-    time: u64,
-) -> flui_platform_api::pointer::PointerSample {
+fn force_sample(reading: Option<f32>, x: f64, time: u64) -> flui_platform::pointer::PointerSample {
     let PointerEvent::Move(movement) =
         make_move_event_for_id(pointer(1), Offset::new(x, 0.0), PointerKind::Touch)
             .expect("valid measured position")
@@ -472,14 +465,14 @@ fn force_sample(
         unreachable!("Move fixture")
     };
     let mut sample = *movement.current();
-    sample.time = flui_platform_api::EventTime::from_nanos(time);
+    sample.time = flui_platform::EventTime::from_nanos(time);
     sample.pressure = reading.map(|reading| {
-        flui_platform_api::pointer::Pressure::try_new(reading).expect("valid measured pressure")
+        flui_platform::pointer::Pressure::try_new(reading).expect("valid measured pressure")
     });
     sample
 }
 
-fn force_packet(samples: &[flui_platform_api::pointer::PointerSample]) -> PointerEvent {
+fn force_packet(samples: &[flui_platform::pointer::PointerSample]) -> PointerEvent {
     let PointerEvent::Move(movement) =
         make_move_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("Move")
     else {

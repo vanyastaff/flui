@@ -3,7 +3,7 @@
 //!
 //! # The seam this fills
 //!
-//! [`flui_platform::traits::PlatformWindow::on_should_close`] is a real
+//! [`flui_platform::PlatformWindow::on_should_close`] is a real
 //! per-window veto: the winit, Win32 and AppKit backends all consult it
 //! synchronously when the *user* asks a window to close, and a `false`
 //! answer stops the close before anything else in the arm runs — no
@@ -89,7 +89,7 @@ use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
-use flui_platform::traits::PlatformWindow;
+use flui_platform::PlatformWindow;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
 

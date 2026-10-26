@@ -15,7 +15,7 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::events::PointerKind;
 use flui_interaction::{GestureSettings, GestureSettingsSource};
 use flui_painting::styling::Color;
-use flui_platform_api::TargetPlatform;
+use flui_platform::TargetPlatform;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::row;
 use flui_widgets::{

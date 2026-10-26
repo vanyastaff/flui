@@ -14,7 +14,7 @@ body:
     id: contract
     attributes:
       label: Contract impact
-      description: Which contracts change (an ADR under docs/adr/, design/, or docs/FOUNDATIONS.md)?
+      description: Which contracts change (an ADR under docs/adr/, or a crate's ARCHITECTURE.md)?
     validations:
       required: true
   - type: textarea

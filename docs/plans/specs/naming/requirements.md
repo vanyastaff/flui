@@ -215,7 +215,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - **Где:** `tools/xtask/src/names.rs` + `names/{classes,scan,tests}.rs`. Лексер Rust берётся из `markers` (`markers/tokens.rs`,
   `lex.rs`), разбор элементов — через `syn` (уже зависимость xtask). Раннер таблиц — `table_test.rs`.
 - **Вход:** `git ls-files` по `crates packages src examples tools tests benches`. Вне проверки: архивные корни (`docs/plans`,
-  `docs/research`), `**/generated.rs`, `target/`, `.worktrees/`.
+  [`docs/research`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research)), `**/generated.rs`, `target/`, `.worktrees/`.
 - **Классы находок** (у каждого свой ключ в allowlist):
   1. `path-word` — сегмент пути (каталог или основа файла) после разбиения по `_`/`-` содержит слово из списка N1.
      `tmp`, `wip`, `old`, `new`, `v2` считаются только как целый сегмент или последний кусок. Fixture trybuild
@@ -230,7 +230,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   5. `acronym` — идентификатор типа или варианта с двумя заглавными подряд, за которыми идёт строчная, либо начало с
      строчной перед заглавной (`iOS`). Однобуквенный префикс (`RRect`) — тоже находка до решения В4.
   6. `case-expect` — `#[expect|allow(non_camel_case_types|non_upper_case_globals|non_snake_case)]` вне `generated.rs`.
-  7. `dup-name` — одно имя у двух `pub`-определений одного крейта, кроме взаимоисключающих `platforms/<os>/`.
+  7. `dup-name` — одно имя у двух `pub`-определений одного крейта, кроме взаимоисключающих файлов платформ одной фичи (`<feature>/windows.rs`, `apple.rs`, …; ADR-0151 §10).
   8. `ctx-spelling` — имена типов и модулей на `Ctx`/`Cx`/`Context` не в выбранном по В5 написании.
   9. `feature` — фича в `[features]` с `util`, `helper`, `support`, `use-`, `with-`; тестовая фича не названа `testing`.
   10. `test-name` — функция под `#[test]` начинается с `test_` или состоит из одного слова.
@@ -246,7 +246,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
   вариант `iOS` → находка; `#[expect(non_upper_case_globals)]` в `curve.rs` → находка, в `generated.rs` → нет;
   два `pub struct WindowManager` в одном крейте → находка, в `platforms/macos` и `platforms/windows` → нет;
   фича `test-utils` → находка; `#[test] fn test_x` → находка; `#[test] fn drag_cancels_on_second_pointer` → нет;
-  файл в `docs/research/` → не читается; запись allowlist с `count` больше факта, меньше факта, без совпадений → три находки.
+  файл в [`docs/research/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research) → не читается; запись allowlist с `count` больше факта, меньше факта, без совпадений → три находки.
 - **Подключение:** пары `("names --self-test", …)` и `("names", …)` в `tools/xtask/src/tasks/checks.rs`. Так гейт попадает в
   job `checks`, который проверяет агрегатор `ci` (AGENTS: «A new gate is a `cargo xtask` command *and* a step»). Строка в
   таблице «What the compiler and gates enforce» в AGENTS.md. `typos.toml`: `[default.extend-words]` для N6 (`canceled`,
@@ -314,7 +314,7 @@ c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_win
 - Дедупликация трёх `child_process.rs` и нескольких раннеров таблиц (строка 71) — только отметка.
 - Маркеры процесса в doc-комментариях (`FR-019`, `Phase 1` в `element/kind.rs`) — гейт `markers`.
 - Имена приватных локальных привязок и полей (кроме `cx`).
-- Документы `docs/plans`, `docs/research` (архив).
+- Документы `docs/plans`, [`docs/research`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research) (архив).
 
 ## Открытые вопросы (решает владелец)
 

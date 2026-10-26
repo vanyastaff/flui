@@ -18,7 +18,7 @@ use flui_animation::Vsync;
 use flui_interaction::focus::FocusScopeNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 use flui_widgets::interaction::Focus;
 use flui_widgets::prelude::*;
 use flui_widgets::{

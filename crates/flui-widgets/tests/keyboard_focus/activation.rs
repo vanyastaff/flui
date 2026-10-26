@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use flui_interaction::FocusManager;
 use flui_interaction::focus::FocusNode;
-use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::TargetPlatform;
+use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_view::EventCx;
 use flui_widgets::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,

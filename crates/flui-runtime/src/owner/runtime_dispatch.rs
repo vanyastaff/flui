@@ -18,7 +18,7 @@ pub enum RuntimeOperation {
     /// Apply the host lifecycle to all presentations in this runtime.
     Lifecycle(AppLifecycleState),
     /// Deliver a system notice to every presentation in this runtime.
-    HostNotice(flui_platform_api::HostNotice),
+    HostNotice(flui_platform::HostNotice),
     /// Irreversibly stop every presentation in this runtime without removing it.
     Stop,
     /// Reassemble the runtime's mounted presentations at the requested tier.
@@ -87,7 +87,7 @@ pub(super) enum RuntimeWork {
         super::presentation_dispatch::PendingWindowState,
     ),
     /// A frame and its vsync on the event timeline.
-    Frame(PresentationAddress, flui_platform_api::EventTime),
+    Frame(PresentationAddress, flui_platform::EventTime),
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
@@ -103,7 +103,7 @@ pub(super) enum RuntimeWork {
     Input {
         address: PresentationAddress,
         surface: flui_interaction::InputSurface,
-        input: flui_platform_api::PlatformInput,
+        input: flui_platform::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },
 }
@@ -151,8 +151,8 @@ impl RuntimeWork {
                     && matches!(
                         (queued, next),
                         (
-                            flui_platform_api::HostNotice::MemoryPressure(queued),
-                            flui_platform_api::HostNotice::MemoryPressure(next),
+                            flui_platform::HostNotice::MemoryPressure(queued),
+                            flui_platform::HostNotice::MemoryPressure(next),
                         ) if queued == next
                     )
             }
@@ -300,12 +300,14 @@ impl RuntimeWork {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
+    use std::{rc::Rc, sync::Arc};
 
     use flui_foundation::UiRuntimeId;
     use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
-    use flui_platform_api::HostNotice;
+    use flui_platform::{HostNotice, SystemPreferences};
 
     use super::{RuntimeOperation, RuntimeWork};
+    use crate::owner::SystemPreferencesSnapshot;
 
     fn runtime(generation: u32) -> UiRuntimeId {
         UiRuntimeId::new_gen(0, NonZeroU32::new(generation).expect("nonzero"))
@@ -349,11 +351,50 @@ mod tests {
         );
     }
 
+    /// Each accepted preference revision is its own delivery: a queued one is
+    /// never folded into the next, whatever the next carries, so no input
+    /// queued between them can run under values that were not accepted before it.
+    fn two_preference_deliveries_for_one_runtime_never_merge() {
+        let origin = Rc::new(());
+        let delivery = |revision, scale: f64| {
+            RuntimeWork::Preferences(
+                runtime(1),
+                SystemPreferencesSnapshot {
+                    origin: Rc::clone(&origin),
+                    revision,
+                    values: Arc::new(
+                        SystemPreferences::default()
+                            .with_text_scale(scale)
+                            .expect("valid scale"),
+                    ),
+                },
+            )
+        };
+        for (mut queued, next, label) in [
+            (
+                delivery(1, 1.0),
+                delivery(1, 1.0),
+                "the same revision twice",
+            ),
+            (delivery(1, 1.0), delivery(2, 1.0), "equal values"),
+            (delivery(1, 1.0), delivery(2, 2.0), "different values"),
+        ] {
+            assert!(
+                !queued.merge_pending_state(&next),
+                "{label}: the second delivery was folded into the first"
+            );
+        }
+    }
+
     #[test]
-    fn host_notice_coalescing() {
+    fn queued_work_merging() {
         crate::table_test::run_table(
-            "host_notice_coalescing",
+            "queued_work_merging",
             &[
+                (
+                    "two_preference_deliveries_for_one_runtime_never_merge",
+                    two_preference_deliveries_for_one_runtime_never_merge as fn(),
+                ),
                 (
                     "the_same_pressure_level_queued_twice_folds_into_one",
                     the_same_pressure_level_queued_twice_folds_into_one as fn(),

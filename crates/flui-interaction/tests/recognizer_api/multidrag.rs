@@ -20,7 +20,7 @@ use std::{
 
 fn first_multidrag_update_reports_observed_transformed_coordinates() {
     use flui_foundation::MonotonicClock;
-    use flui_platform_api::EventTime;
+    use flui_platform::EventTime;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -83,7 +83,7 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
                 PointerEvent::Move(movement) => {
                     let mut sample = *movement.current();
                     sample.time = EventTime::from_nanos(millis * 1_000_000);
-                    *movement = flui_platform_api::pointer::PointerMove::new(
+                    *movement = flui_platform::pointer::PointerMove::new(
                         movement.pointer,
                         movement.buttons,
                         sample,

@@ -128,14 +128,14 @@ fn motion(pointer: PointerId, position: Offset<f64>, kind: PointerKind) -> Point
 fn stamped(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            data.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            data.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(data) => {
             let mut sample = *data.current();
-            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            sample.time = flui_platform::EventTime::from_nanos(nanos);
             *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
                 .with_modifiers(data.modifiers)
                 .with_coalesced(data.coalesced().to_vec())
@@ -788,7 +788,7 @@ fn a_held_earlier_contest_cannot_end_the_next_contact() {
 /// `event` reporting `reading` as its pressure.
 fn with_pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
     let pressure =
-        flui_platform_api::pointer::Pressure::try_new(reading).expect("valid pressure fixture");
+        flui_platform::pointer::Pressure::try_new(reading).expect("valid pressure fixture");
     match &mut event {
         PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
         PointerEvent::Up(data) => data.sample.pressure = Some(pressure),
@@ -1317,18 +1317,18 @@ fn selected_velocity_cases(family: &str) {
             // clock stays fixed. Scale must fit ratios from that history;
             // the other producers fit admitted positions.
             let sample = |millis: u64, x| {
-                flui_platform_api::pointer::PointerSample::new(
-                    flui_platform_api::EventTime::from_nanos(base + millis * 1_000_000),
-                    flui_platform_api::pointer::PointerPosition::try_new(
+                flui_platform::pointer::PointerSample::new(
+                    flui_platform::EventTime::from_nanos(base + millis * 1_000_000),
+                    flui_platform::pointer::PointerPosition::try_new(
                         flui_foundation::geometry::Point::new(x, 0.0),
                     )
                     .expect("finite position"),
                 )
             };
             let last = samples.last().expect("authored history");
-            let movement = flui_platform_api::pointer::PointerMove::new(
-                flui_platform_api::pointer::PointerInfo::new(id(2), PointerKind::Touch),
-                flui_platform_api::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
+            let movement = flui_platform::pointer::PointerMove::new(
+                flui_platform::pointer::PointerInfo::new(id(2), PointerKind::Touch),
+                flui_platform::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
                 sample(last.0, last.1),
             )
             .with_coalesced(
@@ -1876,7 +1876,7 @@ fn preferred_death_releases_accepted_fallback_debt() {
 }
 
 struct DeadlineFailure {
-    due: Cell<Option<flui_platform_api::EventTime>>,
+    due: Cell<Option<flui_platform::EventTime>>,
     entry: RefCell<Option<GestureArenaEntry>>,
     member: CompositionMember,
 }
@@ -1889,10 +1889,10 @@ impl GestureArenaMember for DeadlineFailure {
         self.due.set(None);
         self.member.reject_gesture(contest);
     }
-    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
+    fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.due.get()
     }
-    fn poll_deadline(&self, now: flui_platform_api::EventTime) {
+    fn poll_deadline(&self, now: flui_platform::EventTime) {
         if self.due.get().is_some_and(|due| due <= now) {
             self.due.set(None);
             let entry = self.entry.borrow_mut().take();

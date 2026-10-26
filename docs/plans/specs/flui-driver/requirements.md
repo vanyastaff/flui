@@ -492,7 +492,7 @@ The driver can only report what the framework can describe, and today that descr
 elements describe nothing. Tracing has four target spellings, phase spans matched by name alone,
 recognizer spans that are never entered, and ids logged as `Debug` strings. Errors carry bare ids.
 Each of these was weighed against prior art in the
-[introspection and tracing survey](../../../research/2026-10-18-flui-introspection-and-tracing.md),
+[introspection and tracing survey](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-introspection-and-tracing.md),
 and each idea was accepted or rejected there with a reason.
 
 - **R50.** **`Inspect` replaces `Diagnosticable`** (owner decision). It is a typed, borrowed
@@ -653,7 +653,7 @@ and each idea was accepted or rejected there with a reason.
 
 ## Market survey refinements (2026-10-18)
 
-The [market and prior-art survey](../../../research/2026-10-18-flui-driver-market-survey.md)
+The [market and prior-art survey](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-driver-market-survey.md)
 corrected three draft errors:
 - large-text contrast thresholds;
 - the near-miss lower bound;

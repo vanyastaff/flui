@@ -27,7 +27,7 @@ its subtree, and `Clip::None` clips nothing. `find_annotation` takes the first.
 a paint scope; `AnnotatedRegion<T>` is the widget, comparing values so an equal
 value on rebuild does not repaint.
 
-**Overlay style.** `flui-platform-api` owns `SystemUiOverlayStyle` and the
+**Overlay style.** `flui-platform` owns `SystemUiOverlayStyle` and the
 `PlatformSystemChrome` capability (`PlatformWindow::system_chrome`, `None` by
 default). After each painted frame a presentation probes the middle of its window's
 top edge and stages the topmost style; it delivers it once that frame is on screen

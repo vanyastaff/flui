@@ -16,8 +16,7 @@ playback. The registry retains that obligation across gates and rebinding.
 Property owners keep independent timelines: retargeting one property does not
 restart unchanged properties. Render-owned opacity, rotation, Drawer and
 Dismissible transitions invalidate their retained render path instead of
-rebuilding content on every sample. The workspace `motion_lab` example makes
-these paths interactive; its activity indicator intentionally keeps frames
+rebuilding content on every sample. An activity indicator intentionally keeps frames
 running, so it is not an idle-frame benchmark.
 
 The dated comparisons below identify the revisions and workloads they measure;
@@ -68,7 +67,7 @@ while Color and ColorAndOpacity rebuild their property consumers.
 
 The complete paired registry, primitive and mounted results, fixture identities,
 commands and native/GPU boundaries are in
-[the dated acceptance evidence](../../../docs/plans/specs/flui-animation/release-evidence.md).
+[the dated acceptance evidence](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-animation/release-evidence.md).
 They establish measured workload costs, not a uniform speedup or a fixed budget.
 
 ## Registry workload validation

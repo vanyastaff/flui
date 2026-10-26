@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui-platform`**: Windows drag and drop through OLE, as target and as source
+- **`flui-native`**: Windows drag and drop through OLE, as target and as source
   ([ADR-0211](/docs/adr/ADR-0211-unified-drag-and-drop.md)). Every window registers an
   `IDropTarget`: a drag from this process or another arrives as `DragDropEvent`s whose offer
   carries text, HTML, files, media types and the FLUI session identity, the OS is answered from the
@@ -12,5 +12,5 @@
 
 ### Changed
 
-- **`flui-platform`**: the Win32 platform enters its thread's apartment with `OleInitialize`
+- **`flui-native`**: the Win32 platform enters its thread's apartment with `OleInitialize`
   instead of `CoInitializeEx`, which drag and drop needs.

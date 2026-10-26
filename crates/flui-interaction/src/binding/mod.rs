@@ -94,7 +94,7 @@
 //! ```rust
 //! use flui_interaction::{GestureBinding, HitTestResult};
 //! use flui_foundation::geometry::Point;
-//! use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons,
+//! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
 //!     PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
 //!     PointerPress, PointerSample}};
 //!
@@ -118,7 +118,9 @@ mod arena_driver;
 mod close_coordinator;
 mod move_coalescer;
 mod pan_zoom_sequences;
+mod pointer_frame;
 mod pointer_sequences;
+mod scroll_contact;
 mod scroll_sequences;
 
 use std::{
@@ -130,7 +132,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
-use flui_platform_api::pointer::{PanZoomEvent, ScrollEvent};
+use flui_platform::pointer::{PanZoomEvent, ScrollEvent};
 use smallvec::SmallVec;
 
 use self::{
@@ -318,7 +320,7 @@ pub struct InvalidSamplingWindow;
 /// render hit-test entries and route tokens remain on the separate data plane.
 pub struct GestureBinding {
     close: CloseCoordinator,
-    capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
+    capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform::PlatformWindow>>>,
     contacts: PointerSequences,
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
@@ -623,7 +625,7 @@ impl GestureBinding {
 
     pub(crate) fn set_pointer_capture_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+        window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.arena.arena().set_deadline_wake(window.clone());
         *self.capture_wake.borrow_mut() = Some(window);
@@ -882,54 +884,6 @@ impl GestureBinding {
         outcome
     }
 
-    /// Dispatch the pointer events `surface` reported as one frame: the
-    /// contacts a touch screen sampled at the same instant, or the motion of
-    /// one display frame. Each event is dispatched as
-    /// [`dispatch_pointer_on`](Self::dispatch_pointer_on) dispatches it, in
-    /// order, and `outcomes` has the outcome of each. What differs is when the
-    /// arena settles and when recognizers that measure several contacts do:
-    /// once, after the last event, so a pinch never sees one finger moved and
-    /// the other not. A frame of one is an ordinary event.
-    ///
-    /// An event that panics does not drop the rest of the frame: every event
-    /// is delivered and the frame settles before the first failure resumes.
-    pub fn dispatch_pointer_frame_on<F>(
-        &self,
-        surface: InputSurface,
-        frame: &[PointerEvent],
-        mut hit_test_fn: F,
-    ) -> SmallVec<[DispatchOutcome; 4]>
-    where
-        F: FnMut(Offset<f64>) -> HitTestResult,
-    {
-        let mut outcomes = SmallVec::new();
-        if self.close.is_closed() {
-            // Each event is refused by its own dispatch, which owns the
-            // rejection of a closed binding's callbacks.
-            for event in frame {
-                outcomes.push(self.dispatch_pointer_on(surface, event, &mut hit_test_fn));
-            }
-            return outcomes;
-        }
-        self.dispatch(|| {
-            let arena = self.arena.arena();
-            arena.begin_pointer_frame();
-            let mut first = None;
-            for event in frame {
-                let delivered = RoutePanic::capture(|| {
-                    outcomes.push(self.dispatch_pointer_on(surface, event, &mut hit_test_fn));
-                });
-                RoutePanic::preserve_first(&mut first, delivered, "pointer frame event");
-            }
-            let ended = arena.end_pointer_frame();
-            RoutePanic::preserve_first(&mut first, ended, "pointer frame end");
-            if let Some(failure) = first {
-                failure.resume();
-            }
-        });
-        outcomes
-    }
-
     fn dispatch_pointer_kernel<F>(
         &self,
         surface: InputSurface,
@@ -1047,30 +1001,6 @@ impl GestureBinding {
                 next_sample_time,
             ))))
         }))
-    }
-
-    /// Deliver a flush's motion as one pointer frame: a recognizer that
-    /// measures several contacts settles once, after all of them moved.
-    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
-        let arena = self.arena.arena();
-        arena.begin_pointer_frame();
-        let flushed = RoutePanic::try_run(|| self.deliver_pending_moves(mode));
-        let ended = arena.end_pointer_frame();
-        match flushed {
-            Ok(count) => {
-                if let Some(failure) = ended {
-                    failure.resume();
-                }
-                count
-            }
-            Err(failure) => {
-                let mut first = Some(failure);
-                RoutePanic::preserve_first(&mut first, ended, "pointer frame end");
-                first
-                    .expect("BUG: the failure of the flush was stored just above")
-                    .resume()
-            }
-        }
     }
 
     fn deliver_pending_moves(&self, mode: MotionFlush) -> usize {
@@ -1573,16 +1503,13 @@ impl GestureBinding {
     /// animation) still wakes at the right instant to resolve an in-flight
     /// long-press/double-tap deadline, rather than only lazily on the next
     /// unrelated event.
-    pub fn next_deadline(&self) -> Option<flui_platform_api::EventTime> {
+    pub fn next_deadline(&self) -> Option<flui_platform::EventTime> {
         self.arena.arena().next_deadline()
     }
 
     /// The instant `time` names on this binding's clock, so a host can turn a
     /// deadline into a native wake; `None` past the last representable one.
-    pub(crate) fn instant_at(
-        &self,
-        time: flui_platform_api::EventTime,
-    ) -> Option<web_time::Instant> {
+    pub(crate) fn instant_at(&self, time: flui_platform::EventTime) -> Option<web_time::Instant> {
         crate::events::instant_at(self.clock.as_ref(), time)
     }
 
@@ -1616,7 +1543,8 @@ impl GestureBinding {
         }
         if let PointerEvent::Cancel(cancel) = event {
             let source = SignalSource::from(cancel.pointer);
-            self.scrolls.withdraw_source(source);
+            let orphans = self.scrolls.withdraw_source(source);
+            self.cancel_orphaned_scroll_contacts(orphans, cancel.time, first);
             let native = self.pan_zooms.withdraw_source(source);
             pan_zoom_sequences::retire_sequences(native, first);
         }
@@ -1650,7 +1578,8 @@ impl GestureBinding {
                 });
                 RoutePanic::preserve_first(&mut first_panic, dropped, "removed-device hover moves");
                 let source = SignalSource::Device(device.device);
-                self.scrolls.withdraw_source(source);
+                let orphans = self.scrolls.withdraw_source(source);
+                self.cancel_orphaned_scroll_contacts(orphans, device.time, &mut first_panic);
                 let native = self.pan_zooms.withdraw_source(source);
                 pan_zoom_sequences::retire_sequences(native, &mut first_panic);
                 for contact in self.contacts.contacts(Some(device.device)) {
@@ -2180,13 +2109,16 @@ impl GestureBinding {
     {
         // Commit source admission (or terminal withdrawal) before
         // hit testing and observers, which may reenter this binding.
+        let mut orphans = Vec::new();
         let sequence = self.scrolls.prepare(
             surface,
             scroll,
             crate::events::interaction_now(self.clock.as_ref()),
             self.default_profiles.latch_idle(scroll.pointer.kind),
             &self.sequences,
+            &mut orphans,
         );
+        let momentum_dropped = self.scrolls.drops_momentum(surface, scroll);
         let dispatched = match &sequence {
             ScrollAdmission::Active(latch) => {
                 Some((latch, latch.lapses_at().map(ScrollLatchEnd::IdleAt)))
@@ -2211,7 +2143,13 @@ impl GestureBinding {
         // the consumptive channel stays with the first scroll claimant.
         let fresh_result = hit_test_fn(position);
         let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
+        self.cancel_orphaned_scroll_contacts(orphans, scroll.time, &mut first_panic);
+        let contact =
+            self.drive_scroll_contact(surface, scroll, &sequence, &fresh_result, &mut first_panic);
         let claim = RoutePanic::capture(|| {
+            if contact == scroll_contact::ContactOutcome::Consumed || momentum_dropped {
+                return;
+            }
             let claimed = match &sequence {
                 ScrollAdmission::Terminal(ended) => {
                     match ended.as_ref().and_then(|s| s.route.get()) {
@@ -2533,7 +2471,7 @@ impl GestureBinding {
     fn cancel_claimed(
         &self,
         pointer: PointerInfo,
-        time: flui_platform_api::EventTime,
+        time: flui_platform::EventTime,
         token: ResolvedRouteToken,
         owner: crate::pointer::PointerTarget,
     ) -> Option<RoutePanic> {
@@ -2567,17 +2505,15 @@ impl GestureBinding {
     /// Returns whether the pointer identities matched; a refusal changes
     /// neither move.
     ///
-    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT
+    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT
     fn fold_history(
-        newer: &mut flui_platform_api::pointer::PointerMove,
-        older: &mut flui_platform_api::pointer::PointerMove,
+        newer: &mut flui_platform::pointer::PointerMove,
+        older: &mut flui_platform::pointer::PointerMove,
     ) -> bool {
         if newer.try_coalesce_from(older).is_err() {
             return false;
         }
-        newer.retain_latest_coalesced(
-            flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT,
-        );
+        newer.retain_latest_coalesced(flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT);
         true
     }
 

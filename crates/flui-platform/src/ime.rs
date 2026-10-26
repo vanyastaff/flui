@@ -1,0 +1,92 @@
+//! IME (Input Method Editor) composition vocabulary.
+//!
+//! [`ImeEvent`] is the framework-wide vocabulary a platform backend converts
+//! its native IME notifications into. The shape follows winit 0.30's `Ime`
+//! enum (`Enabled` / `Preedit` / `Commit` / `Disabled`) rather than the W3C
+//! `compositionstart`/`compositionupdate`/`compositionend` web events or
+//! Android's `InputConnection` callback set — winit is FLUI's lead desktop
+//! backend (see `flui-native`'s winit integration), and its four-variant
+//! shape maps *imperfectly* onto both alternatives:
+//!
+//! - The W3C model splits "composition changed" from "commit" as two
+//!   `compositionupdate`/`compositionend` events that both carry text, where
+//!   winit collapses the change into [`ImeEvent::Preedit`] and the commit
+//!   into a separate [`ImeEvent::Commit`] with no shared "composition id".
+//! - Android's `InputConnection` is a pull model (the IME calls back into
+//!   the app's `Editable` to read/replace spans) rather than winit's push
+//!   model of discrete events.
+//!
+//! This is the vocabulary of push-model sources only. The IME contract is a
+//! pull text store (ADR-0090, `flui_platform::text_store`): a field is a
+//! `TextStore` the platform locks, reads and edits, and
+//! `flui_platform::text_store::project_ime_event` turns each of these
+//! events into edits on that store. A pull-model platform (Windows TSF,
+//! AppKit, Android's `InputConnection`) talks to the store directly and does
+//! not adapt into this enum, which does not grow variants for them.
+//!
+//! See ADR-0030 for the capability (`PlatformTextInput`, in
+//! `flui-platform`) and ADR-0090 for the store this vocabulary is
+//! projected onto.
+
+/// A single IME composition/commit notification delivered by the platform.
+///
+/// # Preedit cursor offsets
+///
+/// [`ImeEvent::Preedit`]'s `cursor` field indexes *into the preedit string
+/// itself* (`text`), as a byte offset `(start, end)` range — not into the
+/// surrounding committed document. `cursor == None` means the platform wants
+/// the composition caret hidden (winit's own semantics for this case); the
+/// projection marks the store's composition `hides_caret`, and the owning
+/// widget suppresses its painted caret accordingly (ADR-0030).
+///
+/// # `Preedit` with an empty `text` is composition cancellation (when composing)
+///
+/// Winit signals a **cancelled** composition as `Preedit { text: "", cursor:
+/// None }`, with **no** following `Commit`/`Disabled` event. A client must
+/// treat this the same as composition *ending* — not as "an empty but still
+/// active" preedit. Getting this wrong is a real, previously-shipped bug
+/// class: a client that leaves its "is composing" state `true` after an
+/// empty preedit permanently suppresses `Key::Character` insertion for the
+/// rest of the focus session (see the suppression contract below), since
+/// nothing else ever tells it composition ended.
+///
+/// When **no** composition is active, empty `Preedit` is inert bookkeeping:
+/// committed text and selection must not change. Winit's X11 path also emits
+/// empty `Preedit` on IME Start (before any composing slice exists); that
+/// event must not delete a committed selection.
+///
+/// # Suppression contract (documented here for the client authors that
+/// consume this vocabulary)
+///
+/// A text-input client must suppress `Key::Character` insertion **only**
+/// while a composition is in progress (a non-empty preedit is active — see
+/// the empty-`Preedit`-is-cancellation note above for the case this excludes)
+/// — winit itself already withholds `KeyboardInput` events during
+/// composition and immediately after a commit, so a client that suppressed
+/// *all* typing after [`ImeEvent::Enabled`] would silently kill plain
+/// (non-IME) keyboard input for the rest of the session. [`ImeEvent::Disabled`]
+/// delivered mid-composition strips the in-progress composing slice from the
+/// buffer — winit's semantics, applied by the projection as an explicit edit.
+/// Closing an input connection without stripping would instead *keep* the
+/// uncommitted text; FLUI deliberately does not. Detach-on-dispose is part
+/// of the same client contract (the bound-drop-cascade knot class this workspace has hit before with
+/// other owner-thread callback registries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImeEvent {
+    /// IME composition became available for the focused input.
+    Enabled,
+    /// The in-progress composition text changed.
+    Preedit {
+        /// The current composition text.
+        text: String,
+        /// Byte offset range within `text` for the composition cursor or
+        /// selection. `None` hides the caret (see the type-level doc).
+        cursor: Option<(usize, usize)>,
+    },
+    /// Composition finished; `String` is the final text to insert.
+    Commit(String),
+    /// IME composition ended; the input is no longer receiving composition
+    /// events.
+    Disabled,
+}

@@ -2,7 +2,7 @@
 # Counts are exact and only go down: a file whose count of a class grows past its
 # entry, or falls below it, is a finding. `reason` and `exit` apply to every entry.
 reason = "written before the markers gate; each is to be restated as the invariant it stands for"
-exit = "W1-A14"
+exit = "ADR-0078"
 
 [[allow]]
 path = "CHANGELOG.md"
@@ -140,42 +140,32 @@ class = "slice"
 count = 3
 
 [[allow]]
-path = "crates/flui-platform-api/src/platform_window.rs"
+path = "crates/flui-platform/src/platform_window.rs"
 class = "spec-task"
 count = 2
 
 [[allow]]
-path = "crates/flui-platform/ARCHITECTURE.md"
+path = "crates/flui-native/ARCHITECTURE.md"
 class = "tracker-h"
 count = 2
 
 [[allow]]
-path = "crates/flui-platform/src/lib.rs"
+path = "crates/flui-native/src/lib.rs"
 class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/headless/platform.rs"
-class = "spec-task"
-count = 4
-
-[[allow]]
-path = "crates/flui-platform/src/platforms/windows/platform.rs"
-class = "spec-task"
-count = 9
-
-[[allow]]
-path = "crates/flui-platform/src/traits/owner.rs"
+path = "crates/flui-native/src/owner/mod.rs"
 class = "slice"
 count = 4
 
 [[allow]]
-path = "crates/flui-platform/src/traits/platform.rs"
+path = "crates/flui-native/src/platform.rs"
 class = "slice"
 count = 1
 
 [[allow]]
-path = "crates/flui-platform/src/traits/platform.rs"
+path = "crates/flui-native/src/platform.rs"
 class = "spec-task"
 count = 4
 
@@ -252,14 +242,4 @@ count = 1
 [[allow]]
 path = "crates/flui-widgets/src/lib.rs"
 class = "wave"
-count = 1
-
-[[allow]]
-path = "docs/designs/2026-06-28-hot-reload-runtime-protocol.md"
-class = "phase-letter"
-count = 4
-
-[[allow]]
-path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"
-class = "slice"
 count = 1

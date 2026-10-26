@@ -37,7 +37,7 @@
 
 ### Changed
 
-- `SystemUiOverlayStyle` moved from `flui-layer` to `flui-platform-api`.
+- `SystemUiOverlayStyle` moved from `flui-layer` to `flui-platform`.
   `RasterBackend` gains `apply_texture_updates` (a no-op by default).
 
 - `PaintCx::with_backdrop_filter` takes an optional `BackdropGroupKey`; pass

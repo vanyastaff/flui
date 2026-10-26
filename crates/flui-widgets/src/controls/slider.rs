@@ -10,7 +10,7 @@ use flui_interaction::{
     focus::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
-use flui_platform_api::keyboard::ImeComposition;
+use flui_platform::keyboard::ImeComposition;
 use flui_rendering::{
     delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,
 };

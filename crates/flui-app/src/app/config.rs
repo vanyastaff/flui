@@ -253,11 +253,11 @@ pub struct AppConfig {
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
-    pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
+    pub(crate) storage_dir: Option<flui_platform::StorageName>,
 
     /// The storage name a window's placement is kept under, set with
     /// [`Self::restore_placement`].
-    pub(crate) placement: Option<flui_platform_api::StorageName>,
+    pub(crate) placement: Option<flui_platform::StorageName>,
 
     /// The receivers registered with [`Self::with_memory_reclaim`].
     pub(crate) memory_reclaimers: MemoryReceivers,
@@ -393,7 +393,7 @@ impl AppConfig {
     /// Set the initial outer position, in global logical pixels.
     ///
     /// Applied where the backend places a window at open
-    /// ([`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)):
+    /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// Win32 today. The winit and AppKit backends do not yet read it and leave
     /// the place to the system.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -548,7 +548,7 @@ impl AppConfig {
     /// application of the user, so pick a name only this application uses
     /// (`acme-notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
+    pub fn with_storage_dir(mut self, name: flui_platform::StorageName) -> Self {
         self.storage_dir = Some(name);
         self
     }
@@ -576,13 +576,13 @@ impl AppConfig {
     /// Where it is applied: Win32 opens the window at the remembered position,
     /// size and mode, and matches the display it was on. The winit and AppKit
     /// backends do not yet place a window at open (they report so through
-    /// [`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)),
+    /// [`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)),
     /// so there only the size is restored and the position is left to the
     /// system; see `docs/platform-parity.md`.
     ///
-    /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
+    /// [`WindowPlacement::resolve`]: flui_platform::WindowPlacement::resolve
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn restore_placement(mut self, name: flui_platform_api::StorageName) -> Self {
+    pub fn restore_placement(mut self, name: flui_platform::StorageName) -> Self {
         self.placement = Some(name);
         self
     }
@@ -595,7 +595,7 @@ impl AppConfig {
     /// through, which keeps their decoded pixels (an `Arc` of a receiver is a
     /// receiver). Receivers are reclaimed once per notice, in the
     /// order registered, before any subscriber of
-    /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
+    /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
     /// configuration the run starts with.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -637,7 +637,7 @@ mod tests {
 
     use flui_interaction::events::Code;
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform_api::PlatformInput;
+    use flui_platform::PlatformInput;
     use flui_runtime::ui_runtime::UiRuntime;
     use flui_runtime::{HostInput, InputRecord, InputTapFactory};
 

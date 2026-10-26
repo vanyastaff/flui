@@ -8,10 +8,10 @@
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
   [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
-- **Market survey:** [2026-10-18](../../../research/2026-10-18-flui-driver-market-survey.md). It
+- **Market survey:** [2026-10-18](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-driver-market-survey.md). It
   covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
   servers, and performance and exploration tooling; its corrections are folded in here.
-- **Prior art read** ([checklist](../../../research/2026-10-17-flui-driver-prior-art.md); primary
+- **Prior art read** ([checklist](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-flui-driver-prior-art.md); primary
   sources, 2026-10-17): Playwright (locators,
   actionability, web-first assertions, `toHaveScreenshot`, trace, wire protocol), W3C WebDriver BiDi
   (Editor's Draft 2026-10-08), Flutter `flutter_driver` and `integration_test`, Appium with
@@ -841,7 +841,7 @@ The driver is only as good as what the framework can describe about itself. This
 framework's own description and instrumentation, so the driver, the inspector, devtools, tests and
 logs all read one model. The full signatures, the current-state audit and the accept or reject
 verdict for each idea are in the
-[introspection and tracing survey](../../../research/2026-10-18-flui-introspection-and-tracing.md).
+[introspection and tracing survey](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-introspection-and-tracing.md).
 What the driver relies on:
 
 | Piece | Where | Driver consumer |

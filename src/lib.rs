@@ -86,10 +86,10 @@ await its returned request or poll `try_result` to obtain the window result."
 //! an otherwise supported cross-target build.
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
-//! harness, normally enabled in a development dependency), `a11y` (native
-//! accessibility adapters on supported platforms), and `serde` (serialization
-//! for framework value types). Emitting widget semantics alone does not enable
-//! a native accessibility adapter; select `a11y` for that integration.
+//! harness, normally enabled in a development dependency) and `serde`
+//! (serialization for framework value types). Native accessibility is not a
+//! feature: on Windows, macOS and Linux every window offers its semantics tree
+//! to the operating system's assistive technology through AccessKit.
 //!
 //! # Using a design system
 //!
@@ -127,14 +127,14 @@ fn main() {
 //! # Layers
 //!
 //! Each re-exported module is one workspace crate; the layering (no upward
-//! edges) is documented in `docs/FOUNDATIONS.md`:
+//! edges) is documented in `docs/architecture.md`:
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
 //! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
 //! | [`painting`] | `flui-painting` | — | custom painting; paint, style and text values |
-//! | [`platform`] | `flui-platform-api` | — | platform contracts and values (brightness, locale, IME) |
+//! | [`platform`] | `flui-platform` | — | platform contracts and values (brightness, locale, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
@@ -183,10 +183,10 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
-/// The platform contracts and input vocabulary (`flui-platform-api`).
+/// The platform contracts and input vocabulary (`flui-platform`).
 ///
-/// [`input_capabilities`](flui_platform_api::input_capabilities) and
-/// [`haptics`](flui_platform_api::haptics), the second haptic tier with its
+/// [`input_capabilities`](flui_platform::input_capabilities) and
+/// [`haptics`](flui_platform::haptics), the second haptic tier with its
 /// requests and outcomes, are unstable and present only under the additive
 /// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
 /// are private, not merely undocumented:
@@ -201,11 +201,11 @@ pub use flui_material as material;
 /// use flui::platform::haptics::HapticPattern;
 /// ```
 pub mod platform {
-    pub use flui_platform_api::*;
+    pub use flui_platform::*;
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform_api::input_capabilities::{
+        pub use flui_platform::input_capabilities::{
             Availability, InputCapabilities, PointerKindSet,
         };
     }
@@ -220,7 +220,7 @@ pub mod platform {
     /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
-        pub use flui_platform_api::haptics::{
+        pub use flui_platform::haptics::{
             ControlPoint, HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern,
             HapticPatternBuilder, HapticPatternError, HapticRequest, HapticTicket, HapticTiming,
             Intensity, ParameterCurve, PatternPlayback, Sharpness, UnitRangeError,

@@ -4,8 +4,8 @@
 - **Date:** 2026-10-07
 - **Related:** [ADR-0113](ADR-0113-finite-inverse-hit-admission.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)
-- **Design source:** [Interaction patterns](../plans/specs/flui-interaction/patterns.md),
-  [routing contract handoff](../plans/specs/flui-interaction/t6d-handoff.md)
+- **Design source:** [Interaction patterns](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/patterns.md),
+  [routing contract handoff](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/t6d-handoff.md)
 
 ## Decision
 

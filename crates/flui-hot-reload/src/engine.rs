@@ -1,6 +1,6 @@
 //! Hot reload engine — tiers, outcomes, and host/worker contract.
 //!
-//! See `docs/designs/2026-06-28-hot-reload-runtime-protocol.md` for the full plan.
+//! See `docs/hot-reload.md` for the runtime protocol and ADR-0094 for the decision.
 
 /// How a code change is applied at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

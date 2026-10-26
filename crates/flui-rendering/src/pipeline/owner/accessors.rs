@@ -1018,8 +1018,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // advertises its data-only pointer target here; it rides on the
                 // entry so dispatch can resolve the owner-local handler. Every
                 // other render object returns `None`, leaving a target-less entry.
+                // A hit that chose its own target and cursor (a paragraph's
+                // link) overrides the node-wide ones.
                 let entry = crate::hit_testing::HitTestEntry::new(id);
-                let entry = match render_object.pointer_target() {
+                let entry = match hit
+                    .pointer_target
+                    .or_else(|| render_object.pointer_target())
+                {
                     Some(target) => entry.pointer_target(target),
                     None => entry,
                 };
@@ -1031,7 +1036,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     Some(target) => entry.pan_zoom_target(target),
                     None => entry,
                 };
-                let entry = entry.cursor_request(render_object.mouse_cursor());
+                let entry = entry
+                    .cursor_request(hit.cursor.unwrap_or_else(|| render_object.mouse_cursor()));
                 let entry = match render_object.metadata() {
                     Some(payload) => entry.metadata(payload),
                     None => entry,
@@ -1382,7 +1388,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit.add_self {
             let entry = crate::hit_testing::HitTestEntry::new(id)
-                .cursor_request(render_object.mouse_cursor());
+                .cursor_request(hit.cursor.unwrap_or_else(|| render_object.mouse_cursor()));
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,
@@ -2192,7 +2198,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 ///
 /// The callback receives an already-translated `accesskit::TreeUpdate`, so a
 /// real bridge forwards it to the platform capability without touching
-/// semantics types — which is what keeps `flui-platform` (layer 2) free of a
+/// semantics types — which is what keeps `flui-native` (layer 2) free of a
 /// dependency on `flui-semantics` (layer 3).
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
     std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})

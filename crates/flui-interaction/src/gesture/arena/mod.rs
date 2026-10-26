@@ -69,7 +69,7 @@ use std::{
     sync::Arc,
 };
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 use smallvec::SmallVec;
 use tracing::instrument;
 
@@ -1775,7 +1775,7 @@ impl GestureArena {
 
     pub(crate) fn set_deadline_wake(
         &self,
-        window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+        window: std::sync::Weak<dyn flui_platform::PlatformWindow>,
     ) {
         self.shared.observers.set_wake(window.clone());
         self.shared.deadlines.set_wake(window);

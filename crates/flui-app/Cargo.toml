@@ -46,15 +46,6 @@ android = []
 ios = []
 web = []
 
-# === Native accessibility ===
-# Forwards `flui-platform`'s `a11y`: the per-OS AccessKit adapters
-# (NSAccessibility, UIA, AT-SPI) that hand the semantics tree to an
-# assistive technology. Off by default because the AT-SPI adapter brings a
-# D-Bus stack with it; the facade's own `a11y` feature turns it on for a
-# consumer. Without it the semantics tree is built for the framework's own
-# use (tests, `A11yTree`) but no screen reader can see it.
-a11y = ["flui-platform/a11y"]
-
 # === Debug Features ===
 # Honest note (verified 2026-08-04): also no-op selectors — zero
 # `feature = "debug-overlay"` / `feature = "performance-overlay"` references
@@ -68,7 +59,7 @@ debug-overlay = []
 performance-overlay = []
 
 [dependencies]
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 # Core FLUI crates
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
@@ -82,12 +73,13 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
-# only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
+# only a direct Cargo edge + re-exports. The layering allows app → widgets
+# (`docs/architecture.md`).
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
 # per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the
@@ -122,8 +114,8 @@ wasm-bindgen-futures = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { workspace = true }
 
-# Linux desktop: native Wayland/X11 (`LinuxPlatform`) is a stub (roadmap
-# Cross.P), so enable flui-platform's winit fallback backend here. Additive
+# Linux desktop: the native Wayland and X11 host does not exist yet (ADR-0151
+# section 11), so enable flui-native's winit fallback host here. Additive
 # `features` on a target-scoped re-declaration of an existing dependency —
 # Windows/macOS builds stay on their native backends and never pull in
 # `winit-backend`'s `arboard` (clipboard) dependency.
@@ -134,7 +126,7 @@ android-activity = { workspace = true }
 # without this the surface never gets a usable adapter (`SurfaceCreation`
 # fails at GPU init).
 [target.'cfg(target_os = "linux")'.dependencies]
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev", features = ["winit-backend"] }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["winit-backend"] }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vulkan"] }
 
 [dev-dependencies]

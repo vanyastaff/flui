@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use flui_foundation::InputSequenceId;
 use flui_interaction::{GestureDisposition, InputSurface, PointerId};
-use flui_platform_api::{EventTime, PlatformInput, SystemPreferences, WindowId};
+use flui_platform::{EventTime, PlatformInput, SystemPreferences, WindowId};
 
 use crate::HostInput;
 use crate::owner::InputOutcome;

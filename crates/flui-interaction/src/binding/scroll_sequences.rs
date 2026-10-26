@@ -3,12 +3,13 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
+use flui_foundation::geometry::Point;
 use flui_foundation::{IdMint, InputSequenceId};
-use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
+use flui_platform::pointer::{ScrollEvent, ScrollPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
@@ -22,7 +23,10 @@ pub(super) struct ScrollSequence {
     /// The wheel or trackpad sequence this latch serves (ADR-0207 §4).
     pub(super) id: InputSequenceId,
     pub(super) route: Cell<Option<ScrollRoute>>,
-    last_packet: Cell<flui_platform_api::EventTime>,
+    /// The arena contact this sequence opened because feeds were on the hit
+    /// path at its start (ADR-0251). Such a sequence never claims a route.
+    pub(super) contact: Cell<Option<ScrollContact>>,
+    last_packet: Cell<flui_platform::EventTime>,
     /// How long the latch may idle after its last packet: the preset's
     /// phase-less or phased value (ADR-0209 §5).
     idle: Cell<std::time::Duration>,
@@ -32,9 +36,18 @@ impl ScrollSequence {
     /// When the latch lapses without another packet: its idle time after
     /// the last one, on the owner clock [`prepare`](ScrollSequences::prepare)
     /// reads. `None` only past the end of the event timeline.
-    pub(super) fn lapses_at(&self) -> Option<flui_platform_api::EventTime> {
+    pub(super) fn lapses_at(&self) -> Option<flui_platform::EventTime> {
         self.last_packet.get().checked_add(self.idle.get())
     }
+}
+
+/// The arena contact a phased touchpad pan opened: the virtual pointer that
+/// carries it and where its finger-displacement integral stands.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ScrollContact {
+    pub(super) surface: InputSurface,
+    pub(super) pointer: PointerInfo,
+    pub(super) position: Point<f64>,
 }
 
 pub(super) enum ScrollAdmission {
@@ -48,6 +61,10 @@ pub(super) enum ScrollAdmission {
 #[derive(Default)]
 pub(super) struct ScrollSequences {
     latches: RefCell<HashMap<(InputSurface, SignalSource), Rc<ScrollSequence>>>,
+    /// Sources whose momentum packets belong to a recognizer that took the
+    /// touchpad pan: the platform keeps scrolling after the fingers lift, and
+    /// the recognizer already ended with its own velocity (ADR-0251 §5).
+    momentum_dropped: RefCell<HashSet<(InputSurface, SignalSource)>>,
 }
 
 impl ScrollSequences {
@@ -62,14 +79,20 @@ impl ScrollSequences {
         &self,
         surface: InputSurface,
         event: &ScrollEvent,
-        now: flui_platform_api::EventTime,
+        now: flui_platform::EventTime,
         idle: LatchIdle,
         mint: &IdMint<InputSequenceId>,
+        orphans: &mut Vec<ScrollContact>,
     ) -> ScrollAdmission {
         let key = (surface, SignalSource::from(event.pointer));
         let mut sequences = self.latches.borrow_mut();
         sequences.retain(|_, sequence| {
-            now.saturating_duration_since(sequence.last_packet.get()) < sequence.idle.get()
+            let live =
+                now.saturating_duration_since(sequence.last_packet.get()) < sequence.idle.get();
+            if !live {
+                orphans.extend(sequence.contact.take());
+            }
+            live
         });
         let idle = if event.phase.is_none() {
             idle.phase_less
@@ -86,8 +109,9 @@ impl ScrollSequences {
         if matches!(
             event.phase,
             Some(ScrollPhase::Began | ScrollPhase::MomentumBegan)
-        ) {
-            sequences.remove(&key);
+        ) && let Some(replaced) = sequences.remove(&key)
+        {
+            orphans.extend(replaced.contact.take());
         }
         if let Some(sequence) = sequences.get(&key) {
             sequence.last_packet.set(now);
@@ -106,6 +130,7 @@ impl ScrollSequences {
         let sequence = Rc::new(ScrollSequence {
             id,
             route: Cell::new(None),
+            contact: Cell::new(None),
             last_packet: Cell::new(now),
             idle: Cell::new(idle),
         });
@@ -125,15 +150,50 @@ impl ScrollSequences {
             .is_some_and(|current| Rc::ptr_eq(current, sequence))
     }
 
-    /// End `source`'s latch on every surface: the source cancelled or left.
-    pub(super) fn withdraw_source(&self, source: SignalSource) {
-        self.latches
+    /// End `source`'s latch on every surface: the source cancelled or left. The
+    /// contacts those latches opened are returned, so the caller cancels them.
+    pub(super) fn withdraw_source(&self, source: SignalSource) -> Vec<ScrollContact> {
+        let mut orphans = Vec::new();
+        self.latches.borrow_mut().retain(|(_, latched), sequence| {
+            let keep = *latched != source;
+            if !keep {
+                orphans.extend(sequence.contact.take());
+            }
+            keep
+        });
+        self.momentum_dropped
             .borrow_mut()
-            .retain(|(_, latched), _| *latched != source);
+            .retain(|(_, dropped)| *dropped != source);
+        orphans
+    }
+
+    /// Record that `source`'s momentum now belongs to nobody.
+    pub(super) fn drop_momentum_of(&self, surface: InputSurface, pointer: PointerInfo) {
+        self.momentum_dropped
+            .borrow_mut()
+            .insert((surface, SignalSource::from(pointer)));
+    }
+
+    /// Whether `event` is a momentum packet of a pan a recognizer took. Any
+    /// other packet of the source, or the end of the momentum, ends the drop.
+    pub(super) fn drops_momentum(&self, surface: InputSurface, event: &ScrollEvent) -> bool {
+        let key = (surface, SignalSource::from(event.pointer));
+        let mut dropped = self.momentum_dropped.borrow_mut();
+        match event.phase {
+            Some(ScrollPhase::MomentumBegan | ScrollPhase::MomentumChanged) => {
+                dropped.contains(&key)
+            }
+            Some(ScrollPhase::MomentumEnded) => dropped.remove(&key),
+            _ => {
+                dropped.remove(&key);
+                false
+            }
+        }
     }
 
     /// Release every latch. The records own no user code.
     pub(super) fn drain(&self) {
         drop(self.latches.take());
+        self.momentum_dropped.take();
     }
 }

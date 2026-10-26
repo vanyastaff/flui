@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
-use flui_platform::{HeadlessPlatform, Platform};
+use flui_native::{HeadlessPlatform, Platform};
 use std::sync::atomic::AtomicUsize;
 
 fn service_factory_can_use_owner_window_capabilities() {
@@ -137,8 +137,8 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
             .expect("open B")
             .try_ready()
             .expect("ready B");
-            let a_window: Arc<dyn flui_platform::traits::PlatformWindow> = a_host.clone();
-            let b_window: Arc<dyn flui_platform::traits::PlatformWindow> = b_host.clone();
+            let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
+            let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
             a_window.on_request_frame(Box::new(move || {
                 a_seen.fetch_add(1, Ordering::SeqCst);
             }));

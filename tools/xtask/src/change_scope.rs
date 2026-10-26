@@ -224,9 +224,9 @@ mod tests {
             mode: "packages".to_owned(),
             heavy_required: false,
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
-            packages: "flui flui-material flui-web-counter".to_owned(),
-            pkg_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
-            test_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
+            packages: "flui flui-material flui-web-demo".to_owned(),
+            pkg_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
+            test_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
             features: "--features flui/cupertino".to_owned(),
             platform: false,
             cross_platform: false,
@@ -234,10 +234,10 @@ mod tests {
             cross_cli: false,
             cross_desktop_mcp: false,
             cross_ios: true,
-            wasm_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
+            wasm_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
             wasm_facade: true,
             hack_args: String::new(),
-            doc_args: "-p flui -p flui-material -p flui-web-counter --features flui/testing"
+            doc_args: "-p flui -p flui-material -p flui-web-demo --features flui/testing"
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
         }
@@ -246,11 +246,11 @@ mod tests {
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
         let expected = "lane=wide\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
-             packages=flui flui-material flui-web-counter\npkg_args=-p flui -p flui-material -p flui-web-counter\n\
-             test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino\n\
+             packages=flui flui-material flui-web-demo\npkg_args=-p flui -p flui-material -p flui-web-demo\n\
+             test_args=-p flui -p flui-material -p flui-web-demo\nfeatures=--features flui/cupertino\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
-             wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
-             doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
+             wasm_args=-p flui -p flui-material -p flui-web-demo\nwasm_facade=true\nhack_args=\n\
+             doc_args=-p flui -p flui-material -p flui-web-demo --features flui/testing\n\
              doctest_args=-p flui -p flui-material\n";
         assert_eq!(out, expected);
         let mut multi = sample();

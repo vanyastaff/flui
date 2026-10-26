@@ -67,7 +67,7 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    member (`GestureDetector` and `Draggable` feed recognizers through a `Listener`), receive
    exactly one `Cancel { reason: CancelReason::Claimed }` and nothing more for that
    `InputSequenceId`, as `pointercancel` does. `Claimed` is a new variant of the
-   `#[non_exhaustive]` `flui_platform_api::pointer::CancelReason`, emitted only by the framework;
+   `#[non_exhaustive]` `flui_platform::pointer::CancelReason`, emitted only by the framework;
    an observing `Listener` is cancelled too. Verdicts precede it (ADR-0159 order); an accepted end
    still carries `GestureEndReason` (ADR-0112).
    Only a *claimed* hand-off cancels: a member that asked for the contact (an acceptance, a
@@ -143,11 +143,11 @@ axis; `TransformLock` locks rotation or scale in a gesture that begins as a pan.
   widget. `assert_backend_conforms`
   has a row that no backend emits `CancelReason::Claimed`.
 - All rows run headless in CI; native touch, pen and touchpad paths run only on a native host
-  (`cargo xtask device <os>-input`, recorded traces).
+  ([`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), recorded traces).
 
 ## Alternatives rejected
 
-- **`Simultaneous`** (SwiftUI `simultaneously(with:)`; [research](../research/2026-10-12-interaction-input-best-practices.md)
+- **`Simultaneous`** (SwiftUI `simultaneously(with:)`; [research](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md)
   §1): it duplicates what the channel shares by delta; UIKit's pairwise predicate is non-local.
 - **Flutter `GestureArenaTeam`, axis races, imperative intercept** (Android
   `requestDisallowInterceptTouchEvent`, eager winner): replaced by `PanClaim` and rule 3.

@@ -6,7 +6,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -88,7 +88,7 @@ pub(crate) fn admission_kind(event: &PointerEvent) -> crate::events::PointerKind
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    crate::events::event_time(event).map(flui_platform_api::EventTime::as_nanos)
+    crate::events::event_time(event).map(flui_platform::EventTime::as_nanos)
 }
 
 /// Historical local positions only. Geometry and callbacks still publish the

@@ -1,471 +1,180 @@
-//! Platform abstraction layer for FLUI
+//! Platform contracts for FLUI.
 //!
-//! This crate provides a complete platform abstraction for the FLUI framework,
-//! enabling cross-platform UI development with a unified API.
+//! This crate holds what the framework, plugins and tests program against
+//! when they talk to the platform, and nothing that implements it:
 //!
-//! # Architecture
+//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
+//!   [`Clipboard`] and the data-transfer transport
+//!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
+//!   [`DisplayId`] a [`DisplayRegistry`] issues, and the validated
+//!   [`RefreshPeriod`] (ADR-0236);
+//! - the byte-storage capability [`Storage`] and its vocabulary
+//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
+//! - the text store an input method pulls from ([`TextStore`] and the rest of
+//!   [`text_store`], ADR-0090);
+//! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
+//!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
+//!   ([`input_capabilities`], ADR-0213);
+//! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
+//! - the per-window contract [`PlatformWindow`] and the window vocabulary
+//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
+//!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
+//!   operations return);
+//! - the window state contract: the [`WindowState`] snapshot a window
+//!   publishes, the [`WindowCommand`]s it takes and the
+//!   [`WindowCapabilities`] that say which (ADR-0237).
 //!
-//! The architecture is inspired by GPUI's platform layer:
+//! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
+//! is the point of the crate: naming a contract must not link a backend, so a
+//! framework crate or plugin that names or implements a capability depends on
+//! this crate, stays free of every OS stack and builds without
+//! `flui-native`. The one AccessKit-speaking window capability, the
+//! accessibility bridge, is reached through `flui_native::HostWindow`, a
+//! subtrait of [`PlatformWindow`] that only the composition root sees.
 //!
-//! ```text
-//! flui-platform-api         - Contracts: PlatformWindow, capability traits,
-//!                             window/input and data-transfer vocabulary
-//!                             (re-exported here)
+//! The host-facing `Platform` trait, the owner-thread capability, the
+//! host-side window subtrait and every OS backend live in `flui-native`,
+//! which re-exports everything defined here at its old paths. Only
+//! composition roots depend on `flui-native` (ADR-0082 §2).
 //!
-//! flui-platform
-//!   ├─ traits/              - Host-facing abstractions
-//!   │   ├─ platform.rs      - Central Platform trait
-//!   │   ├─ host_window.rs   - HostWindow: PlatformWindow + accessibility
-//!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
-//!   │   └─ capabilities.rs  - Platform capabilities
-//!   │
-//!   ├─ shared/              - Shared infrastructure
-//!   │   └─ handlers.rs      - Callback registry
-//!   │
-//!   └─ platforms/           - Concrete implementations
-//!       ├─ winit/           - Cross-platform (Windows/macOS/Linux)
-//!       └─ headless/        - Testing implementation
+//! [`PlatformInput`] carries FLUI's owned vocabulary (ADR-0143), defined in
+//! [`pointer`](mod@pointer), [`keyboard`] and [`EventTime`]. Upstream translator
+//! types stay behind the backend boundary.
+//!
+//! # Implementing a capability without a backend
+//!
 //! ```
+//! use std::sync::{Arc, Mutex};
 //!
-//! # Key Concepts
+//! use flui_platform::{PlatformHaptics, PlatformTextInput};
+//! use flui_platform::HapticFeedback;
+//! use flui_foundation::geometry::{Bounds, Point, Size};
 //!
-//! ## Platform Trait
-//!
-//! The [`Platform`] trait is the central abstraction that all platform
-//! implementations must provide. It covers:
-//!
-//! - **Lifecycle**: Event loop, quit
-//! - **Windows**: Creation, management, events
-//! - **Displays**: Monitor enumeration and information
-//! - **Executor**: Thread-safe background task execution
-//! - **Clipboard**: Read/write operations
-//! - **Callbacks**: Event handler registration
-//!
-//! ## Platform Selection
-//!
-//! Use [`current_platform()`] to get the appropriate platform for the current
-//! environment:
-//!
-//! ```rust,ignore
-//! use flui_platform::current_platform;
-//!
-//! let platform = current_platform()?;
-//! platform.run(Box::new(|owner| {
-//!     println!("Platform ready: {}", owner.shared().name());
-//!     Ok(())
-//! }))?;
-//! ```
-//!
-//! ## Testing with Headless Mode
-//!
-//! The [`HeadlessPlatform`] provides a mock implementation perfect for
-//! CI/testing without requiring a display server, GPU, or OS windowing system.
-//!
-//! ### Direct Usage
-//!
-//! ```rust
-//! use flui_platform::{Platform, headless_platform};
-//!
-//! let platform = headless_platform();
-//! assert_eq!(platform.name(), "Headless");
-//! ```
-//!
-//! ### Environment Variable (Recommended for CI)
-//!
-//! Set `FLUI_HEADLESS=1` to force headless mode via [`current_platform()`]:
-//!
-//! ```bash
-//! # Run tests in headless mode
-//! FLUI_HEADLESS=1 cargo test
-//!
-//! # CI configuration
-//! - name: Run tests
-//!   run: cargo test
-//!   env:
-//!     FLUI_HEADLESS: 1
-//! ```
-//!
-//! ```rust,ignore
-//! use flui_platform::current_platform;
-//!
-//! // Returns HeadlessPlatform when FLUI_HEADLESS=1
-//! let platform = current_platform()?;
-//! assert_eq!(platform.name(), "Headless");
-//! ```
-//!
-//! ### What Headless Mode Provides
-//!
-//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
-//!   created)
-//! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
-//! - **Mock Displays**: Single virtual display at 1920x1080
-//! - **Background Executor**: Async task execution with tokio runtime
-//! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
-//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
-//!   execution
-//!
-//! ### Example Test
-//!
-//! ```rust
-//! use flui_platform::{WindowOptions, headless_platform};
-//! use flui_foundation::geometry::Size;
-//!
-//! fn test_window_creation() {
-//!     let platform = headless_platform();
-//!
-//!     let options = WindowOptions::default()
-//!         .with_title("Test")
-//!         .with_size(Size::new(800.0, 600.0))
-//!         .with_visible(true);
-//!
-//!     let window = platform
-//!         .open_window(options)
-//!         .expect("Failed to create window");
-//!     // Window is a mock, no actual OS resources allocated
+//! #[derive(Default)]
+//! struct Recorder {
+//!     ime_allowed: Mutex<Vec<bool>>,
+//!     feedback: Mutex<Vec<HapticFeedback>>,
 //! }
+//!
+//! impl PlatformTextInput for Recorder {
+//!     fn set_ime_allowed(&self, allowed: bool) {
+//!         self.ime_allowed.lock().expect("unpoisoned").push(allowed);
+//!     }
+//!
+//!     fn set_ime_cursor_area(&self, _area: Bounds) {}
+//! }
+//!
+//! impl PlatformHaptics for Recorder {
+//!     fn perform(&self, feedback: HapticFeedback) {
+//!         self.feedback.lock().expect("unpoisoned").push(feedback);
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
+//! }
+//!
+//! let recorder = Arc::new(Recorder::default());
+//! let text_input: Arc<dyn PlatformTextInput> = recorder.clone();
+//! let haptics: Arc<dyn PlatformHaptics> = recorder.clone();
+//!
+//! text_input.set_ime_allowed(true);
+//! text_input.set_ime_cursor_area(Bounds::new(
+//!     Point::new(0.0, 0.0),
+//!     Size::new(10.0, 20.0),
+//! ));
+//! haptics.perform(HapticFeedback::LightImpact);
+//!
+//! assert_eq!(*recorder.ime_allowed.lock().expect("unpoisoned"), [true]);
+//! assert_eq!(
+//!     *recorder.feedback.lock().expect("unpoisoned"),
+//!     [HapticFeedback::LightImpact]
+//! );
 //! ```
-//!
-//! # Feature Flags
-//!
-//! - `default` (`desktop`): the native desktop backend for the target OS. It
-//!   does not include winit.
-//! - `winit-backend`: the winit backend, the Linux windowing path today. It
-//!   brings `wayland` and `x11`.
-//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
-//!   outputs and their refresh rates from the compositor. On other targets they
-//!   add nothing.
-//! - `a11y`: the per-OS accessibility bridges.
-//!
-//! The headless testing platform needs no feature.
-//!
-//! # Input capabilities
-//!
-//! There is no per-platform capability constant (ADR-0213). A capability with
-//! a handle answers through it (`PlatformWindow::haptics`, `text_input`); the
-//! rest arrive per window as `PlatformInput::Capabilities`, first as a
-//! snapshot before any other input once the window's input callback is
-//! installed, then as changes in order with the input around them.
 
-// Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
-// AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
-// crate no longer opts the whole tree out of `unsafe_code = "warn"`: each
-// FFI island (`platforms::windows`, `platforms::macos`, `platforms::web`,
-// `platforms::winit`, `platforms::android::memory`) carries its own
-// module-level `#![allow(unsafe_code)]` where it is declared, and the two
-// small marker-trait impls in `window.rs`/`task.rs` carry item-level allows.
-// `platforms::windows` (every file: `window.rs`, `platform.rs`, `clipboard.rs`,
-// `display.rs`, `events.rs`, `util.rs`) is fully SAFETY-documented — every
-// `unsafe` block there carries a `// SAFETY:` comment (or, for `unsafe fn`,
-// a `# Safety` rustdoc section) stating the invariant that makes it sound.
-// `platforms::macos`/`android`/`web` are NOT yet at that bar; see the
-// per-crate documentation coverage tracked in the root `Cargo.toml`'s
-// `undocumented_unsafe_blocks` note — do not restate "every block" as a
-// crate-wide claim until that note says so too.
-// Ship bar (wave 4): every public item is documented; keep it that way.
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-pub mod config;
-/// The data-transfer transport (ADR-0038), defined in `flui-platform-api`
-/// and re-exported here at its old path.
-pub use flui_platform_api::data_transfer;
-pub use flui_platform_api::{
+mod brightness;
+mod clipboard;
+pub mod data_transfer;
+mod display;
+pub mod drag;
+mod event_time;
+mod flag_set;
+mod haptic_feedback;
+pub mod haptics;
+mod host_notice;
+mod ime;
+mod input;
+pub mod input_capabilities;
+pub mod input_regions;
+pub mod keyboard;
+mod locale;
+mod placement;
+mod platform_window;
+pub mod pointer;
+mod preferences;
+mod storage;
+mod system_chrome;
+mod target_platform;
+mod text_input;
+pub mod text_store;
+mod window;
+mod window_state;
+
+pub use brightness::Brightness;
+pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
+/// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
+/// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
+pub use cursor_icon::CursorIcon;
+pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
+pub use display::{
+    DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
+    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
+    WindowDisplay,
+};
+pub use event_time::EventTime;
+pub use haptic_feedback::HapticFeedback;
+pub use haptics::PlatformHaptics;
+pub use host_notice::{
+    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
+    SessionEndPhase, SessionEndRequest, SystemNotice,
+};
+pub use ime::ImeEvent;
+pub use input::{
+    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
+    logical_to_device, offset_from_coords,
+};
+pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
+pub use locale::{InvalidLocale, Locale};
+pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
+pub use platform_window::{PlatformWindow, WindowAt};
+pub use pointer::{
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
+    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
+};
+pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
     MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceQueryError,
-    SystemPreferences, WheelPreferences, WheelStep,
+    SystemPreferences, TextWeightPreference, WheelPreferences, WheelStep,
 };
-pub mod error;
-mod text_sizing;
-pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
-#[cfg(not(target_arch = "wasm32"))]
-pub mod executor;
-pub mod platforms;
-#[cfg(any(test, target_os = "android"))]
-mod redraw_poll;
-pub mod shared;
-pub mod storage;
-#[cfg(test)]
-mod table_test;
-pub mod task;
-pub mod traits;
-
-// Re-export configuration types
-// ==================== Platform Detection ====================
-
-pub use config::{FullscreenMonitor, WindowConfiguration};
-// Data-transfer transport (ADR-0038): one source per platform instance,
-// reachable via `Platform::data_transfer()`.
-pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
-// The typed lifecycle/service error taxonomy — `anyhow` is retired from
-// this crate's public API (the window-open family lives with its
-// capability types in `traits`).
-pub use error::{BootstrapError, PlatformError, PlatformResult};
-// One cursor vocabulary is shared by widgets, interaction, and platforms.
-pub use cursor_icon::CursorIcon;
-// Re-export executor types
-#[cfg(not(target_arch = "wasm32"))]
-pub use executor::BackgroundExecutor;
-// Mobile platforms
-#[cfg(target_os = "android")]
-pub use platforms::AndroidPlatform;
-// Re-export platform implementations
-#[cfg(target_os = "ios")]
-pub use platforms::IOSPlatform;
-#[cfg(target_os = "linux")]
-pub use platforms::LinuxPlatform;
-#[cfg(target_os = "macos")]
-pub use platforms::MacOSPlatform;
-pub use platforms::{
-    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
-    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, HeadlessWindowPolicy, MockWindow,
+pub use storage::{
+    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
-// Web platform
-#[cfg(target_arch = "wasm32")]
-pub use platforms::WebPlatform;
-// Desktop platforms
-#[cfg(windows)]
-pub use platforms::WindowsPlatform;
-// winit fallback backend — primary on Linux until native Wayland/X11 lands
-// (roadmap Cross.P)
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub use platforms::WinitPlatform;
-// Re-export shared infrastructure
-pub use shared::{PlatformHandlers, WindowCallbacks};
-// Re-export task types
-pub use task::{Task, TaskLabel};
-// Re-export core traits
-pub use traits::{
-    AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice, HostWindow, InputLatency,
-    MemoryPressureLevel, PathPromptOptions, Platform, PlatformAccessibility, PlatformExecutor,
-    PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod,
-    SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest,
-    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
-    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
-    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
+pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
+pub use target_platform::TargetPlatform;
+pub use text_input::PlatformTextInput;
+pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
+pub use window::{
+    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowEvent,
+    WindowExecutionState, WindowId, WindowOptions, WindowReveal, WindowShowError,
 };
-// The owner-thread capability (ADR-0039 §1): minted only by a backend,
-// handed to `on_ready`, never re-exported with a public minting seam.
-pub use traits::{
-    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WakeRegistrationError, WindowOpen,
+pub use window_state::{
+    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };
-
-/// Get the current platform implementation
-///
-/// Automatically selects the correct platform based on the target OS at compile
-/// time. This is the recommended way to obtain a platform instance in
-/// cross-platform code.
-///
-/// # Detection Logic
-///
-/// The platform selection follows a two-stage process:
-///
-/// 1. **Runtime Environment Check** (executed first):
-///    - Checks `FLUI_HEADLESS` environment variable
-///    - If set (any value), returns `HeadlessPlatform` immediately
-///    - Bypasses all compile-time OS detection
-///    - Used for CI/testing without GPU or display server
-///
-/// 2. **Compile-Time OS Detection** (if not headless):
-///    - Uses Rust's `#[cfg]` attributes to select platform at compile time
-///    - Selection order (first match wins):
-///      - `cfg(windows)` → `WindowsPlatform`
-///      - `cfg(target_os = "macos")` → `MacOSPlatform`
-///      - `cfg(target_os = "linux")` → `LinuxPlatform`
-///      - `cfg(target_os = "android")` → `AndroidPlatform`
-///      - `cfg(target_os = "ios")` → `IOSPlatform`
-///      - `cfg(target_arch = "wasm32")` → `WebPlatform`
-///    - Conditional guards prevent multiple platforms being compiled
-///    - Results in zero runtime overhead (selection happens at compile time)
-///
-/// # Environment Variables
-///
-/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS
-///   detection)
-///
-/// # Platform Selection
-///
-/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing
-///   mode
-/// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
-/// - **macOS**: Returns `MacOSPlatform` - the native AppKit backend: windows,
-///   input, clipboard, IME, displays, and a vsync-paced frame loop
-/// - **Linux**: Returns `WinitPlatform` if the `winit-backend` feature is
-///   enabled (native Wayland/X11 — `LinuxPlatform` — is not implemented yet,
-///   roadmap Cross.P); otherwise returns an error. `flui-app` enables
-///   `winit-backend` for Linux builds.
-/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
-///   available)
-/// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
-///   input, clipboard, displays, a `CADisplayLink` frame source, and the
-///   background/foreground lifecycle (verified on a real simulator)
-/// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap
-///   available)
-///
-/// # Platform Status
-///
-/// | Platform | Status | Quality | Features |
-/// |----------|--------|---------|----------|
-/// | Windows | ✅ Production | 10/10 | Full featured; no executing coverage in CI (lint-only via `cross-typecheck`) |
-/// | macOS | ✅ Native AppKit | 9/10 | Windowing, input, clipboard, IME, displays, vsync-paced frame loop; lint-only + bundled probes locally, no CI test job |
-/// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; native Wayland/X11 still a stub |
-/// | Android | 📋 Stub | 2/10 | Roadmap complete |
-/// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI plus `cargo xtask device ios-sim` locally (simulator verified) |
-/// | Web | 📋 Stub | 2/10 | Roadmap complete |
-///
-/// # Errors
-///
-/// Returns [`PlatformError::Init`] if:
-/// - Platform initialization fails (e.g., COM failure on Windows)
-/// - Platform is not supported (should not happen with cfg guards)
-/// - Platform stub is called (Android, Web)
-/// - Linux is reached without the `winit-backend` feature enabled
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_platform::current_platform;
-///
-/// // Get platform and run event loop
-/// let platform = current_platform()?;
-/// println!("Running on: {}", platform.name());
-///
-/// platform.run(Box::new(|_owner| {
-///     println!("Platform ready!");
-///     Ok(())
-/// }))?;
-/// ```
-///
-/// # Platform-Specific Code
-///
-/// For platform-specific features, use cfg guards:
-///
-/// ```rust,ignore
-/// let platform = current_platform()?;
-///
-/// #[cfg(windows)]
-/// {
-///     let windows_platform = platform.as_any()
-///         .downcast_ref::<WindowsPlatform>()
-///         .unwrap();
-///     // Use Windows-specific features
-/// }
-/// ```
-pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
-    // Check for headless mode via environment variable (CI/testing)
-    if std::env::var("FLUI_HEADLESS").is_ok() {
-        tracing::info!("FLUI_HEADLESS detected, using headless platform");
-        return Ok(Box::new(HeadlessPlatform::new()));
-    }
-
-    #[cfg(windows)]
-    {
-        Ok(Box::new(WindowsPlatform::new()?))
-    }
-
-    #[cfg(all(target_os = "macos", not(windows)))]
-    {
-        Ok(Box::new(MacOSPlatform::new()?))
-    }
-
-    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
-    {
-        // Native Wayland/X11 is not implemented yet (`LinuxPlatform` is a
-        // stub — roadmap Cross.P); the winit fallback backend is the Linux
-        // path until then. It is opt-in via `winit-backend` because it pulls
-        // in `arboard` (clipboard); `flui-app` enables it for Linux builds.
-        #[cfg(feature = "winit-backend")]
-        {
-            Ok(Box::new(WinitPlatform::new()))
-        }
-
-        #[cfg(not(feature = "winit-backend"))]
-        {
-            Err(PlatformError::Init {
-                message: "no Linux windowing backend enabled — flui-app enables `winit-backend` \
-                          on Linux"
-                    .to_string(),
-            })
-        }
-    }
-
-    #[cfg(all(
-        target_os = "android",
-        not(any(windows, target_os = "macos", target_os = "linux"))
-    ))]
-    {
-        // On Android, use AndroidPlatform::new(app) directly from android_main().
-        // current_platform() cannot be used because AndroidApp is required.
-        Err(PlatformError::Init {
-            message: "On Android, use AndroidPlatform::new(app) from android_main() instead of \
-                      current_platform()"
-                .to_string(),
-        })
-    }
-
-    #[cfg(all(
-        target_os = "ios",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android"
-        ))
-    ))]
-    {
-        Ok(Box::new(IOSPlatform::new()?))
-    }
-
-    #[cfg(all(
-        target_arch = "wasm32",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android",
-            target_os = "ios"
-        ))
-    ))]
-    {
-        Ok(Box::new(WebPlatform::new()?))
-    }
-
-    #[cfg(not(any(
-        windows,
-        target_os = "macos",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "ios",
-        target_arch = "wasm32"
-    )))]
-    {
-        Err(PlatformError::Init {
-            message: "Unsupported platform - no platform implementation available for this target"
-                .to_string(),
-        })
-    }
-}
-
-/// Create a headless platform for testing
-///
-/// This is a convenience function for tests. Prefer using this over
-/// `current_platform()` in test code for clarity.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_platform::headless_platform;
-///
-/// let platform = headless_platform();
-/// assert_eq!(platform.name(), "Headless");
-/// ```
-pub fn headless_platform() -> Box<dyn Platform> {
-    Box::new(HeadlessPlatform::new())
-}

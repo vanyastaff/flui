@@ -75,7 +75,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Point, Vec2};
 use flui_interaction::{InputSequenceId, Velocity};
-use flui_platform_api::pointer::{DeviceId, PointerKind};
+use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 

@@ -1,18 +1,18 @@
-//! Reproducible "agent workflow" acceptance test (`docs/BETA.md`'s "Agent
-//! workflow" row): an agent can discover the public API, create a UI, inspect
-//! structure/semantics, drive an interaction, and assert the result — all
-//! through the facade's *documented* interfaces, with no widget-internal
-//! shortcut and no fabricated result.
+//! Reproducible "agent workflow" acceptance test: an agent can discover the
+//! public API, create a UI, inspect structure/semantics, drive an
+//! interaction, and assert the result — all through the facade's
+//! *documented* interfaces, with no widget-internal shortcut and no
+//! fabricated result.
 //!
 //! Everything below is reachable from `use flui::…` alone (the `flui` crate
 //! with its `testing` feature on): no direct dependency on `flui-testing`,
 //! `flui-widgets`, `flui-rendering`, or any other implementation crate. That
 //! is the point of the test — it is written the way an outside consumer of
 //! the published `flui` crate would have to write it, not the way this
-//! workspace's own internal tests do (compare `tests/material_demo.rs` or
-//! `packages/flui-material/tests/elevated_button.rs`, both of which reach past
-//! the facade into `flui_rendering`/`flui_interaction` directly, and both of
-//! which drive taps through a widget-testing convenience
+//! workspace's own internal tests do (compare
+//! `packages/flui-material/tests/elevated_button.rs`, which reaches past
+//! the facade into `flui_rendering`/`flui_interaction` directly, and
+//! drives taps through a widget-testing convenience
 //! (`flui_testing::widgets::lay_out`'s `dispatch_pointer_down`) rather than
 //! the general pointer-replay path this test uses).
 //!
