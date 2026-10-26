@@ -9,12 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{
+use flui_native::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
     MockWindow, Platform as _,
 };
-use flui_platform_api::{DisplayId, DisplaySnapshot, WindowDisplay};
+use flui_platform::PlatformWindow;
+use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
 
 use super::super::host::{
     OwnerHostClearGuard, build_ui_runtime, install_owner_platform, refresh_displays_with,
@@ -122,7 +122,7 @@ fn install_window(
     let host_window =
         with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
     let native = host_window
         .as_any()
@@ -280,7 +280,7 @@ fn snapshot_is_committed_before_observers_run() {
     // One sample, taken directly: owner turns re-sample until they are idle, and
     // a later pass would hide what the first one did.
     rig.period(LEFT, 8);
-    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot).expect("sample");
+    refresh_displays_with(flui_native::OwnerPlatform::display_snapshot).expect("sample");
 
     assert_eq!(
         *seen.lock(),
@@ -759,7 +759,7 @@ fn display_pacing_contract() {
 /// presentation follows, and a native surface that replaces the one it rode on
 /// gets the request again.
 fn hint_is_reapplied_when_the_native_window_is_replaced_after_resume() {
-    use flui_platform_api::FrameRateHint::{Default, High};
+    use flui_platform::FrameRateHint::{Default, High};
     use flui_runtime::frame_rate_demand::FrameRateDemand;
 
     let rig = boot();

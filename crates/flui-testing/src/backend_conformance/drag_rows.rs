@@ -7,12 +7,12 @@
 
 use std::sync::Arc;
 
-use flui_platform_api::data_transfer::TransferActions;
-use flui_platform_api::drag::{
+use flui_platform::data_transfer::TransferActions;
+use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, OsDragStart, OsOffer, OsSessionPlan,
     PlatformDragSource, plan_os_session,
 };
-use flui_platform_api::input_capabilities::Availability;
+use flui_platform::input_capabilities::Availability;
 
 use super::rows::Outcome;
 use super::{BackendUnderTest, RowOutcome};

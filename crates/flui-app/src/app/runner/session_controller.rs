@@ -3,8 +3,8 @@ use super::host::APP_RUNTIME;
 use super::installed_host::Installation;
 use super::owner_dispatch::{PresentationDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
-use flui_platform::HostWindow;
-use flui_platform::shared::window_installation::WindowInstallation;
+use flui_native::HostWindow;
+use flui_native::WindowInstallation;
 use flui_runtime::dev_agent::DevAgentAttachment;
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
@@ -238,7 +238,7 @@ mod tests {
         owner_dispatch::{prepare_ui_runtime_alongside, teardown_platform_ui_runtime},
     };
     use super::*;
-    use flui_platform::Platform;
+    use flui_native::Platform;
     use flui_view::{StatefulView, View, ViewState};
     use std::{
         cell::{Cell, RefCell},
@@ -352,7 +352,7 @@ mod tests {
         );
         let saved = Rc::new(RefCell::new(None));
         let installed = Rc::clone(&saved);
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 *installed.borrow_mut() = Some(owner);
                 Ok(())
@@ -454,7 +454,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new()).run(Box::new(move |owner| {
+        Box::new(flui_native::HeadlessPlatform::new()).run(Box::new(move |owner| {
             let window = owner.open_window(flui_platform::WindowOptions::default())?.try_ready()?;
             let retained_window = Arc::clone(&window);
             let outer = install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &crate::app::window_test_support::headless_test_window());
@@ -478,7 +478,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window = owner
                     .open_window(flui_platform::WindowOptions::default())?

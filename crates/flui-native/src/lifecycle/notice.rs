@@ -1,0 +1,410 @@
+//! The one path every host's system notices take to the application: the
+//! owner's [`NoticeChannel`], which each host's table makes for its loop.
+//!
+//! The application's notice hook sits in the channel as its other handlers sit
+//! in the handler set, called through the call point. For
+//! [`SystemNotice::Wake`] the dispatch first marks everything the platform
+//! cached about the world stale: the displays it sampled and each window's
+//! published state. Both can have changed while the machine slept without an
+//! event reaching the process, and a backend that forgot to mark them would
+//! answer from before the sleep until some unrelated event happened to
+//! invalidate them. Putting the marking here, in the dispatch, makes a Wake that
+//! reaches the host without it impossible.
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Weak};
+
+use flui_platform::SystemNotice;
+use parking_lot::Mutex;
+
+use crate::owner::call_point::{Field, call, install};
+use crate::owner::notices::{NoticeChannel, StaleOnWake, SystemNoticeHook};
+
+/// The system-notice channel each host's table makes for its loop: the
+/// application's hook, what a wake marks stale before the hook hears of it,
+/// and the notices accepted but not yet heard.
+#[derive(Default)]
+pub(crate) struct SystemNotices {
+    state: Mutex<Delivery>,
+    cached: Mutex<Vec<Weak<dyn StaleOnWake>>>,
+    /// Runs once, on the dispatching thread, after a walk's last look at the
+    /// queue and before its guard is disarmed: the instant a notice from
+    /// another thread can arrive once the walk has stopped looking.
+    #[cfg(test)]
+    on_walk_end: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+#[derive(Default)]
+struct Delivery {
+    hook: Option<SystemNoticeHook>,
+    /// Accepted, in order, and not yet handed to the hook.
+    pending: VecDeque<SystemNotice>,
+    /// Whether a dispatch is walking `pending` right now.
+    delivering: bool,
+}
+
+impl Delivery {
+    /// The next notice for the hook. With none left, or no hook to hear it,
+    /// the walk is over, under this same lock: a notice accepted from here on
+    /// finds `delivering` false and walks itself.
+    fn next_or_end(&mut self) -> Option<SystemNotice> {
+        let next = if self.hook.is_some() {
+            self.pending.pop_front()
+        } else {
+            // Nobody to tell: what was accepted has no listener.
+            self.pending.clear();
+            None
+        };
+        if next.is_none() {
+            self.delivering = false;
+        }
+        next
+    }
+}
+
+/// Ends a walk that unwinds out of the hook, so the next dispatch walks again.
+/// A walk that runs out of notices has already ended under the lock and
+/// disarms this: a newer walk may have begun since, and its flag is not this
+/// one's to clear.
+struct Walk<'a>(&'a SystemNotices);
+
+impl Walk<'_> {
+    fn disarm(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for Walk<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().delivering = false;
+    }
+}
+
+impl SystemNotices {
+    /// The host's hook, as a slot of the delivery state.
+    fn hook(&self) -> Field<'_, Mutex<Delivery>, SystemNoticeHook> {
+        Field::new(&self.state, |delivery| &mut delivery.hook)
+    }
+
+    /// The channel's tests register caches by their own type, as a loop does
+    /// through `dyn NoticeChannel`.
+    #[cfg(test)]
+    fn mark_stale_on_wake<T: StaleOnWake + 'static>(&self, cache: &Arc<T>) {
+        let cache: Weak<T> = Arc::downgrade(cache);
+        self.mark_held_stale_on_wake(cache);
+    }
+}
+
+impl NoticeChannel for SystemNotices {
+    /// The earlier hook is dropped outside the channel's lock.
+    fn set_hook(&self, hook: SystemNoticeHook) {
+        install(&self.hook(), hook);
+    }
+
+    fn mark_held_stale_on_wake(&self, cache: Weak<dyn StaleOnWake>) {
+        let mut cached = self.cached.lock();
+        cached.retain(|entry| entry.strong_count() > 0);
+        cached.push(cache);
+    }
+
+    /// The hook runs through the call point, with no lock of this channel
+    /// held, and goes back to its slot between notices, so a replacement
+    /// installed meanwhile is not displaced. A notice that arrives from inside
+    /// the hook (or while another thread's dispatch is running it) is queued
+    /// behind the one being delivered and heard, in order, as soon as the hook
+    /// returns. A walk ends under the same lock that finds nothing left to
+    /// deliver, so a notice from another thread is taken by the walk or starts
+    /// one of its own. A hook that panics keeps its place and its panic reaches
+    /// the caller: the next dispatch calls it again, and the notices queued
+    /// behind the failure wait for it and are delivered then. That is the one
+    /// case in which an accepted notice waits for a later one to carry it.
+    fn dispatch(&self, notice: SystemNotice) {
+        if notice == SystemNotice::Wake {
+            let live: Vec<Arc<dyn StaleOnWake>> = self
+                .cached
+                .lock()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect();
+            for cache in live {
+                cache.mark_stale();
+            }
+        }
+        {
+            let mut state = self.state.lock();
+            state.pending.push_back(notice);
+            if state.delivering {
+                return;
+            }
+            state.delivering = true;
+        }
+        let walk = Walk(self);
+        loop {
+            let next = self.state.lock().next_or_end();
+            let Some(notice) = next else { break };
+            call(&self.hook(), |hook| hook(notice)).or_resume(());
+        }
+        #[cfg(test)]
+        {
+            let on_walk_end = self.on_walk_end.lock().take();
+            if let Some(on_walk_end) = on_walk_end {
+                on_walk_end();
+            }
+        }
+        walk.disarm();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_foundation::memory::MemoryPressureLevel;
+
+    use super::*;
+
+    struct Cache(AtomicUsize);
+
+    impl StaleOnWake for Cache {
+        fn mark_stale(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn marked(cache: &Cache) -> usize {
+        cache.0.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn a_wake_marks_the_registered_caches_before_the_host_hears_it() {
+        let notices = SystemNotices::default();
+        let cache = Arc::new(Cache(AtomicUsize::new(0)));
+        notices.mark_stale_on_wake(&cache);
+        let seen_by_hook = Arc::new(AtomicUsize::new(usize::MAX));
+        let (observed, cache_in_hook) = (Arc::clone(&seen_by_hook), Arc::clone(&cache));
+        notices.set_hook(Box::new(move |_| {
+            observed.store(marked(&cache_in_hook), Ordering::SeqCst);
+        }));
+
+        notices.dispatch(SystemNotice::Wake);
+
+        assert_eq!(marked(&cache), 1);
+        assert_eq!(
+            seen_by_hook.load(Ordering::SeqCst),
+            1,
+            "the cache was already stale when the host was told"
+        );
+    }
+
+    #[test]
+    fn other_notices_leave_the_caches_alone() {
+        let notices = SystemNotices::default();
+        let cache = Arc::new(Cache(AtomicUsize::new(0)));
+        notices.mark_stale_on_wake(&cache);
+        for notice in [
+            SystemNotice::Sleep,
+            SystemNotice::SessionLocked,
+            SystemNotice::SessionUnlocked,
+            SystemNotice::MemoryPressure(MemoryPressureLevel::Critical),
+        ] {
+            notices.dispatch(notice);
+        }
+        assert_eq!(marked(&cache), 0);
+    }
+
+    /// The platform's own caches, not a stand-in: a wake leaves the display
+    /// source and the window's state cell stale, so the next read of either asks
+    /// the operating system.
+    #[test]
+    fn a_wake_leaves_a_real_display_source_and_window_state_cell_stale() {
+        use flui_foundation::geometry::Size;
+        use flui_platform::{WindowGeometry, WindowState};
+
+        use crate::display::source::DisplaySource;
+        use crate::window::state::WindowStateCell;
+
+        let displays = Arc::new(DisplaySource::new());
+        displays
+            .snapshot_with(|| Ok(Vec::new()))
+            .expect("an empty sample publishes");
+        let window = Arc::new(WindowStateCell::new(WindowState::new(
+            WindowGeometry::new(None, Size::new(10.0, 10.0)),
+            Size::new(10.0, 10.0),
+        )));
+        let _ = window.state_with(|| {
+            WindowState::new(
+                WindowGeometry::new(None, Size::new(10.0, 10.0)),
+                Size::new(10.0, 10.0),
+            )
+        });
+        assert!(
+            !displays.is_stale() && !window.is_stale(),
+            "fresh to begin with"
+        );
+
+        let notices = SystemNotices::default();
+        notices.mark_stale_on_wake(&displays);
+        notices.mark_stale_on_wake(&window);
+        notices.dispatch(SystemNotice::Sleep);
+        assert!(
+            !displays.is_stale() && !window.is_stale(),
+            "sleep leaves them"
+        );
+
+        notices.dispatch(SystemNotice::Wake);
+        assert!(displays.is_stale(), "the display source reads the OS again");
+        assert!(window.is_stale(), "the window state reads the OS again");
+    }
+
+    #[test]
+    fn a_hook_that_panics_keeps_its_place_and_the_queue_behind_it() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = SystemNotices::default();
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let log = Arc::clone(&heard);
+        let mut first = true;
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+            assert!(
+                !std::mem::take(&mut first),
+                "the first notice fails the hook"
+            );
+        }));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            notices.dispatch(SystemNotice::Sleep);
+        }));
+        assert!(outcome.is_err(), "the hook's panic reaches the dispatcher");
+
+        notices.dispatch(SystemNotice::SessionLocked);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [SystemNotice::Sleep, SystemNotice::SessionLocked],
+            "the hook was not lost with the unwind"
+        );
+    }
+
+    #[test]
+    fn a_notice_from_inside_the_hook_is_heard_after_it_in_order() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let (log, again) = (Arc::clone(&heard), Arc::clone(&notices));
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(("start", notice));
+            if notice == SystemNotice::Sleep {
+                again.dispatch(SystemNotice::Wake);
+                log.lock().expect("log").push(("end", notice));
+            }
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [
+                ("start", SystemNotice::Sleep),
+                ("end", SystemNotice::Sleep),
+                ("start", SystemNotice::Wake),
+            ],
+            "a nested notice is queued, not dropped and not recursed into"
+        );
+    }
+
+    /// A notice another thread dispatches in the instant a walk ends is not
+    /// left queued for whichever notice comes next: the walk takes it, or it
+    /// walks itself.
+    #[test]
+    fn a_notice_accepted_as_a_walk_ends_is_heard_without_waiting_for_the_next() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let log = Arc::clone(&heard);
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+        }));
+        let other = Arc::clone(&notices);
+        *notices.on_walk_end.lock() = Some(Box::new(move || {
+            std::thread::spawn(move || other.dispatch(SystemNotice::Wake))
+                .join()
+                .expect("the second dispatch returns");
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [SystemNotice::Sleep, SystemNotice::Wake],
+            "the wake was heard before any later notice arrived"
+        );
+    }
+
+    /// A walk that begins as an earlier one ends is still delivering once the
+    /// earlier one is over: a notice dispatched while its hook runs queues
+    /// behind it, instead of starting a second walk that finds the hook out of
+    /// its slot and drops the notice.
+    #[test]
+    fn the_end_of_a_walk_leaves_the_walk_begun_after_it_delivering() {
+        use std::sync::Mutex as StdMutex;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let (entered, in_the_hook) = mpsc::channel();
+        let (release, held) = mpsc::channel::<()>();
+        let log = Arc::clone(&heard);
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+            if notice == SystemNotice::Wake {
+                entered.send(()).expect("the first walk's end waits");
+                held.recv().expect("the test releases the hook");
+            }
+        }));
+        let (started, second_walk) = mpsc::channel();
+        let other = Arc::clone(&notices);
+        *notices.on_walk_end.lock() = Some(Box::new(move || {
+            let second = std::thread::spawn(move || other.dispatch(SystemNotice::Wake));
+            // A wake left queued never reaches the hook: fail, don't hang.
+            let walked = in_the_hook.recv_timeout(Duration::from_secs(10)).is_ok();
+            started.send((second, walked)).expect("the test waits");
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        let (second, walked) = second_walk.recv().expect("the first walk ended");
+        assert!(
+            walked,
+            "the wake accepted as the first walk ended walked itself"
+        );
+        notices.dispatch(SystemNotice::SessionLocked);
+        release.send(()).expect("the hook is held");
+        second.join().expect("the second walk ends");
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [
+                SystemNotice::Sleep,
+                SystemNotice::Wake,
+                SystemNotice::SessionLocked
+            ],
+            "the notice dispatched during the second walk queued behind it"
+        );
+    }
+
+    #[test]
+    fn a_dropped_cache_is_forgotten_and_a_wake_without_a_hook_still_marks() {
+        let notices = SystemNotices::default();
+        let kept = Arc::new(Cache(AtomicUsize::new(0)));
+        notices.mark_stale_on_wake(&kept);
+        notices.mark_stale_on_wake(&Arc::new(Cache(AtomicUsize::new(0))));
+        notices.dispatch(SystemNotice::Wake);
+        assert_eq!(marked(&kept), 1);
+        assert_eq!(
+            notices.cached.lock().len(),
+            2,
+            "pruned on the next registration"
+        );
+        notices.mark_stale_on_wake(&Arc::new(Cache(AtomicUsize::new(0))));
+        assert_eq!(notices.cached.lock().len(), 2);
+    }
+}

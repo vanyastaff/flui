@@ -8,7 +8,7 @@ fn seed_round_trips() {
     let seeded = seed(root, &tree);
     // the seed's empty exit and reason are refused until someone fills them in
     let empty = Allowlist::parse(&seeded).expect("the seed parses");
-    let exits = Exits::from_parts(["0081".to_owned()], PLANTED_PLAN);
+    let exits = Exits::from_adrs(["0081".to_owned()]);
     let refused = scan(root, &tree, &empty, &exits);
     assert!(
         refused.iter().any(|f| matches!(f, Finding::BadExit { .. }))

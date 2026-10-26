@@ -267,7 +267,7 @@ enum Commands {
         /// Build a named example instead of the current package's binary.
         ///
         /// Needed inside the FLUI source tree, where the runnable entry points
-        /// are examples (`widgets_gallery`, `counter`, ...) rather than
+        /// are examples (`counter`, ...) rather than
         /// one application package.
         #[arg(long)]
         example: Option<String>,

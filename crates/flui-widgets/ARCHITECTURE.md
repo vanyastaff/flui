@@ -436,7 +436,12 @@ restores the current outer authority. Raw system text-scale observations retain
 their separate admitted range `1/64..=64`. Initial sizing is pinned by
 `media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
 authored size and nested override retention by
-`a_text_scale_change_relayouts_a_preserved_text_subtree`.
+`a_text_scale_change_relayouts_a_preserved_text_subtree`. Each span resolves
+once, from its own authored size: unstyled text from the default, ambient
+styles after `Text` merges them, and fixed spans not at all. The paragraph's
+intrinsics measure the same resolved sizes as its layout.
+`the_system_text_scale_grows_each_span_once` pins this under the runtime's root
+policy, with no provider of the test's own.
 
 `Icon` resolves its square and glyph from one logical size. Its default stays
 fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
@@ -460,7 +465,10 @@ authored font sizes, through `RenderEditable`'s automatic-height policy.
 `RawTextField` preserves that default. An explicitly configured caret height
 remains a logical length; removing the override restores automatic height. Mount/update
 equivalence and restoration of glyph/caret geometry are pinned by
-`inherited_text_sizing_updates_editable_glyphs_and_caret`.
+`inherited_text_sizing_updates_editable_glyphs_and_caret`. The field's
+intrinsics and a tap both resolve against the glyphs of the current scale,
+after a live change in either direction:
+`a_field_measures_and_hit_tests_the_current_text_scale`.
 
 ## Accessibility of hidden retained children
 
@@ -613,7 +621,7 @@ write-context contract rather than an invented ambient writer.
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
-the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md)
+the workspace DAG live in [`docs/architecture.md`](../../docs/architecture.md)
 and this crate's `[package.metadata.flui] layer`; this file
 records the per-widget design decisions that would otherwise read as drift.
 
@@ -2770,7 +2778,7 @@ enclosing control. Pressed and hovered looks are not implemented. **Tests:**
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 
-**Choice:** `EditableText` is a `flui_platform_api::TextStore` (ADR-0090). The
+**Choice:** `EditableText` is a `flui_platform::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
 offsets and edits under a lock; a push `ImeEvent` is projected onto the same
 store. A read-write session is written back to the controller once, at the
@@ -3750,3 +3758,47 @@ just this one. **Tests:** `a_focus_keeps_its_subtree_when_it_stops_being_focusab
 `the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`,
 `a_held_press_moved_past_the_slop_closes_the_menu_and_drags` (a real `ContextMenuArea`
 around a long-press `Draggable`).
+
+### A paragraph's links are focus stops of their own
+
+**Choice:** `RichText` with `on_link` lays its paragraph in a `Stack` (constraints passed
+through) beside one zero-size focus stop per link. Each stop hosts a node whose rect is the
+link's glyph bounds from the committed layout, kept within the paragraph's box
+(`Focus::rect_provider`, `RenderParagraph::link_bounds`; a last line's box can end a
+rounding error past the paragraph, which would put the link in one row with whatever
+touches it). Tab therefore reaches links in reading order among every other control, at any
+text scale, and the reveal on focus scrolls the link, not the paragraph, into view.
+
+A link is one link across rebuilds by what it links to and which occurrence of that target
+it is, not by its place in the text. Its slot keeps the tap recognizer, the focus node, the
+lane registrations and a `TextLinkKey` for its accessible node, and its stop is keyed by
+that slot. So a link added or removed before the focused one leaves the focus, a press in
+flight and the node with their link.
+
+Enter and Select open the focused link through a `Shortcuts` around the paragraph that binds
+them to `ActivateLinkIntent` (ADR-0079, amendment for links). The link declares
+`ActivateIntent` and `ActivationPressIntent` disabled, because the default bindings send
+`ActivateIntent` for Space's release too: Space neither opens a link nor activates a control
+around it, and keeps bubbling.
+
+While the focus is visible the paragraph draws the `FocusRingStyle` bands just outside each
+line of the link's glyphs, so a wrapped link gets a ring per line and the letters stay
+uncovered. The link nodes are focusable and focused with the link, and their `Focus` action
+requests assistive focus; the stops publish no semantics of their own. A link that
+`max_lines` or an ellipsis cut takes no focus: after each layout that changes it, the
+paragraph tells a `ShownLinksListener` which links have glyphs, and the paragraph's state
+rebuilds its stops.
+
+**Why:** one paragraph stop roving between its links would need to re-run outer traversal
+at its first and last link (resolution stops at the nearest `Actions`) and map entry
+direction and assistive focus by hand; a real node per link gets traversal groups,
+directional focus, reveal and modality from the focus system. Nesting one `Focus` per link
+around the paragraph would tie each `Focus` element to a place in the text, so a link added
+before the focused one would move the focused node to another element. **Tests:**
+`tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
+`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`,
+`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`,
+`select_opens_a_link_and_space_activates_nothing_around_it`,
+`a_link_the_layout_cut_takes_no_focus`,
+`links_keep_their_focus_and_presses_when_links_before_them_change`,
+`unmounting_a_linked_paragraph_releases_its_links`.

@@ -1,6 +1,7 @@
 # ADR-0084: Platform capabilities are an open, typed set registered by plugins
 
 - **Status:** Proposed
+- **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) as a whole
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the seam; see Context)
 - **Supersedes in part (on acceptance):** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
@@ -23,8 +24,8 @@
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
 - **Refs:** decision D3 of the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md);
-  index in [`design/decisions.md`](../../design/decisions.md)
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
+  index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
 
@@ -40,7 +41,7 @@ rule.
 
 The platform side already has more than the widget side can reach:
 
-- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform-api/src/platform_window.rs`),
+- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
   (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
   `UiRuntime::perform_haptic_feedback` (`crates/flui-runtime/src/ui_runtime/frame_clock.rs:466`) carry
@@ -48,7 +49,7 @@ The platform side already has more than the widget side can reach:
   ADR-0083). ADR-0031 §4 deferred the widget-facing handle "with the first widget
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
-  (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
+  (`crates/flui-native/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
   (ADR-0038 §9). When this ADR was written the accessor that would hand it out was dead code.
   It now has a caller: every UI runtime takes the platform clipboard at construction
   (`runner::host::runtime_clipboard`) and installs a `ClipboardHandle` in each presentation's
@@ -69,12 +70,12 @@ Three constraints shape any fix:
   wasm and static libraries; neither is a dependency today.
 - Flutter's federated plugins have no way for an application to replace a plugin's endorsed
   implementation (flutter#80374, cited in the review's
-  [ecosystem design](../research/2026-09-25-architecture-review/designs/ecosystem_evolution_first.md)).
+  [ecosystem design](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/designs/ecosystem_evolution_first.md)).
 
 ### What a prototype showed (2026-09-26)
 
 Branch `spike/capability_seam`, commits `d80215406` and `e2c96d35a`, not merged. The seam and
-the registry stood in `crates/flui-view/src/capability/` in place of `flui-platform-api` and
+the registry stood in `crates/flui-view/src/capability/` in place of `flui-platform` and
 `flui-runtime`.
 
 - **Shown.**
@@ -88,8 +89,8 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
     without its plugin it got `NotRegistered`.
   - 3 of 5 external tests fail when `BuildCtx::capability_erased` ignores the scope.
 - **Narrower than the success metric.**
-  - The fixture depended on `flui-view`, `flui-platform` and `flui-types`, not on
-    `flui-platform-api` and `flui-sdk`.
+  - The fixture depended on `flui-view`, `flui-native` and `flui-types`, not on
+    `flui-platform` and `flui-sdk`.
   - Its provider wrapped the in-tree `PlatformWindow::haptics()` and `FakeHaptics`.
   - The tests built the registry by hand. The runner path (`main_window.rs` and the
     `presentation.rs` wiring) and the conflict-at-run path were **not exercised**.
@@ -100,14 +101,14 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   - It registered `Cursor`, `TextInput` and `Accessibility` as widget capabilities, against §5.
   - It removed the defaults of `text_input()` and `accessibility()` but kept `Option`.
   - It did not edit macOS. `MacOSWindow::accessibility` exists only under `a11y`
-    (`crates/flui-platform/src/platforms/macos/window.rs:926-927`), and `a11y` is off by default
-    (`crates/flui-platform/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
+    (`crates/flui-native/src/window/apple/macos.rs:1096-1097`), and `a11y` is off by default
+    (`crates/flui-native/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
     was never compiled for macOS.
   - There are three `cfg`-gated `accessibility` overrides, not two: Windows
     (`windows/window.rs:707-708`), winit (`winit/window.rs:324-325`) and macOS. Their `None`
     without `a11y` was intended behaviour.
   - `build()` walked a `HashMap`, so which of several conflicts it reported varied between runs.
-  - Its `flui-view → flui-platform` edge is not carried forward; ADR-0082 §2 forbids it.
+  - Its `flui-view → flui-native` edge is not carried forward; ADR-0082 §2 forbids it.
 
 ## Decision
 
@@ -125,7 +126,7 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
 
 ### 2. The seam
 
-In `flui-platform-api` (ADR-0082), so that a plugin's interface crate needs nothing else:
+In `flui-platform` (ADR-0082), so that a plugin's interface crate needs nothing else:
 
 ```rust
 pub trait PlatformCapability: 'static {
@@ -166,7 +167,7 @@ impl fmt::Display for UnsupportedReason {
   `#[non_exhaustive]`.
 - `UnsupportedReason` implements `Display` by hand, because the `thiserror` message formats it
   with `{reason}`; `ProviderOrigin` (§4) does the same for `{first}` and `{second}`.
-- The provider names `PlatformWindow`, so the seam lands in `flui-platform-api` no earlier than
+- The provider names `PlatformWindow`, so the seam lands in `flui-platform` no earlier than
   `PlatformWindow` does (ADR-0082 §3).
 - The class of §5 is deliberately not encoded on `PlatformCapability`, so a move between classes
   stays a change to the provider only.
@@ -193,8 +194,8 @@ pub trait LifecycleContextExt: LifecycleContext {
 impl<T: LifecycleContext + ?Sized> LifecycleContextExt for T {}
 ```
 
-`Unsupported` is defined in `flui-platform-api`, so this adds a new normal edge
-`flui-view → flui-platform-api` (tier K to tier C, legal under ADR-0081 §1).
+`Unsupported` is defined in `flui-platform`, so this adds a new normal edge
+`flui-view → flui-platform` (tier K to tier C, legal under ADR-0081 §1).
 
 `LifecycleContext` stays sealed, so only `flui-view`'s contexts implement `capability_erased`,
 and they forward to the UI runtime. `LifecycleContextExt` is in the prelude. Because the method lives
@@ -297,22 +298,22 @@ No `inventory` or `linkme`.
 The owner decided on 2026-09-25 that platform capabilities fall into two classes behind the one
 door of §2. The class decides where the backend obligation lives, not how a widget asks.
 
-**Core-required.** Methods of the backend traits in `flui-platform-api`; a backend that lacks one
+**Core-required.** Methods of the backend traits in `flui-platform`; a backend that lacks one
 does not compile. ADR-0038 §9 made `Platform::clipboard()` required so that no backend can forget
 it, and rejected a handle with `None` defaults for exactly that reason; this class generalises
 that rule. The class holds:
 
 - **clipboard** and **data transfer**: `Platform::clipboard()` and `Platform::data_transfer()`
-  (`crates/flui-platform/src/traits/platform.rs:423,435`), already required;
-- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform-api/src/platform_window.rs`),
+  (`crates/flui-native/src/traits/platform.rs:423,435`), already required;
+- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/platform_window.rs`),
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
   `None` (same file), becomes required;
 - **accessibility**: the backend-side window extension trait's `accessibility()` (ADR-0082 §3
   moved it off `PlatformWindow`), today `HostWindow::accessibility()` defaulting to `None`
-  (`crates/flui-platform/src/traits/host_window.rs`), becomes required;
+  (`crates/flui-native/src/traits/host_window.rs`), becomes required;
 - **window chrome basics**: title, size, close request and decorations; the exact method list is
-  fixed when the traits move into `flui-platform-api` (ADR-0082).
+  fixed when the traits move into `flui-platform` (ADR-0082).
 
 Core methods return an object, not an `Option`:
 
@@ -393,7 +394,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   ADR-0038 §9 rejected.
 - **Make every capability core-required.** Every backend, including a minimal embedder, would
   have to implement camera, geolocation and the like, and the set would be closed again: a
-  third-party capability could not exist without a change to `flui-platform-api`.
+  third-party capability could not exist without a change to `flui-platform`.
 - **Two doors: backend methods for core capabilities, the registry for optional ones.** A move
   between classes would change every call site; with one door it changes only the provider.
 - **A registry per application shared through an owner-thread cell** (the prototype). Rejected:
@@ -408,7 +409,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 
 - ADR-0078 §1's closing sentence is narrowed to framework capabilities; the "Platform
   capability (a new handle)" row of `docs/extending.md` changes in the implementing change to: an
-  interface crate on `flui-platform-api`, a provider per target, registration through a plugin,
+  interface crate on `flui-platform`, a provider per target, registration through a plugin,
   a headless fake, and a test that fails without it.
 - The interim `LifecycleContext::clipboard_handle` gives way to the built-in clipboard
   provider, which hands out the same `ClipboardHandle`. The haptics forwarders
@@ -430,7 +431,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 - ADR-0038 §7's `DataTransferHandle` is acquired as `cx.capability::<DataTransfer>()`.
 - Registered capabilities are data the UI runtime can list; ADR-0095's protocol can expose that list
   to tools and agents.
-- The seam depends on ADR-0082 (for `flui-platform-api`) and ADR-0083 (for the UI runtime's
+- The seam depends on ADR-0082 (for `flui-platform`) and ADR-0083 (for the UI runtime's
   registry).
 - The runtime's handle cache is per presentation; a presentation that closes drops its handles,
   so a widget that outlives its window sees `Unsupported { reason: NoWindow }` on its next
@@ -444,7 +445,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 |---|---|---|
 | `compile_fail,E0599`: `cx.capability::<C>()` on `&dyn BuildContext`, plus a compiling twin on `&dyn LifecycleContext` (prototype) | The build/lifecycle split holds | No seam |
 | `cargo check --workspace --all-targets --all-features` (prototype) | The 136 `&dyn LifecycleContext` sites are unaffected | — |
-| An out-of-workspace fixture on **`flui-platform-api` and `flui-sdk` only**: `a_plugin_capability_reaches_init_state`, `without_the_plugin_the_capability_is_not_registered` | A third-party capability is declared, registered through a plugin and acquired in `init_state`; without the plugin it is `NotRegistered`. Still outstanding: the prototype used stand-ins | The crates do not exist |
+| An out-of-workspace fixture on **`flui-platform` and `flui-sdk` only**: `a_plugin_capability_reaches_init_state`, `without_the_plugin_the_capability_is_not_registered` | A third-party capability is declared, registered through a plugin and acquired in `init_state`; without the plugin it is `NotRegistered`. Still outstanding: the prototype used stand-ins | The crates do not exist |
 | `a_capability_conflict_fails_run_before_any_window_opens` (`flui-app`, headless runner) | `Application::run` returns `Err(AppRunError::CapabilityConflict(..))` with `first: Plugin(a)`, `second: Plugin(b)`, and zero windows opened | No plugin API; the prototype's quit path was never run |
 | `a_plugin_over_a_built_in_is_a_conflict`, `an_application_override_resolves_a_conflict`, `a_later_override_replaces_an_earlier_one`, `conflicts_are_reported_in_installation_order` | The rules of §4; the last one is deterministic across runs | No registry |
 | `every_ui_runtime_the_runner_builds_resolves_the_clipboard` (through `Application` and the runner, main and secondary windows) | An `Ok` handle, never `NotRegistered` | No seam; the prototype's runner path was untested |

@@ -8,7 +8,7 @@ use std::{
 
 use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
 use flui_interaction::GestureProfiles;
-use flui_platform_api::{
+use flui_platform::{
     DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
 use flui_rendering::binding::RendererBinding as _;
@@ -152,7 +152,7 @@ pub(super) fn publish(
     presentation.set_system_motion(
         values
             .motion()
-            .unwrap_or(flui_platform_api::MotionPreference::NoPreference),
+            .unwrap_or(flui_platform::MotionPreference::NoPreference),
     );
     refresh(presentation, values, now, true);
 }
@@ -262,8 +262,8 @@ fn refresh(
             let rebuild = presentation.media_query.commit(|data| {
                 data.text_sizing = sizing;
                 data.font_weight_adjustment = match values.text_weight() {
-                    Some(flui_platform_api::TextWeightPreference::Bold) => 300,
-                    Some(flui_platform_api::TextWeightPreference::Adjustment(value)) => value.get(),
+                    Some(flui_platform::TextWeightPreference::Bold) => 300,
+                    Some(flui_platform::TextWeightPreference::Adjustment(value)) => value.get(),
                     _ => 0,
                 };
                 data.high_contrast = values.high_contrast().unwrap_or(false);
@@ -519,7 +519,7 @@ impl UiRuntime {
                 snapshot
                     .values
                     .motion()
-                    .unwrap_or(flui_platform_api::MotionPreference::NoPreference),
+                    .unwrap_or(flui_platform::MotionPreference::NoPreference),
             );
             if motion_changed {
                 presentation.mark_redraw_pending();
@@ -566,9 +566,14 @@ impl UiRuntime {
                 origin: current
                     .as_ref()
                     .map_or_else(|| Rc::new(()), |current| Rc::clone(&current.origin)),
-                revision: current
-                    .as_ref()
-                    .map_or(1, |current| current.revision.saturating_add(1)),
+                // A saturated revision would equal the current one and be
+                // dropped as stale; running out is a broken test, not a value.
+                revision: current.as_ref().map_or(1, |current| {
+                    current
+                        .revision
+                        .checked_add(1)
+                        .expect("BUG: test preference revisions exhausted")
+                }),
                 values: Arc::new(values),
             }
         };
@@ -587,7 +592,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         events::{PointerEventExt, PointerKind},
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::Distance;
+    use flui_platform::Distance;
     use std::cell::Cell;
     let baseline = GestureSettings::default()
         .try_with_touch_slop(10.0)

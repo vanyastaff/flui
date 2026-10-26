@@ -7,606 +7,83 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
-keywords = ["gui", "window", "platform", "input", "flui"]
-categories = ["gui", "os"]
+description = "Platform contracts for FLUI: capability traits and the window, input and data-transfer vocabulary, with no OS backend"
+documentation = "https://docs.rs/flui-platform"
+keywords = ["gui", "platform", "input", "ime", "flui"]
+categories = ["gui"]
 
-# Dev-only files a `cargo package --list` sweep found leaking into the
-# published archive (internal architecture docs, criterion benches, etc.):
+# Dev-only files kept out of the published archive:
 exclude = ["/ARCHITECTURE.md"]
-# Single-binary integration-test consolidation: every root test file is a
-# module of `tests/main.rs` (one link of the full dep stack instead of 11
-# separate binaries). See the `[[test]] name = "platform_it"` target below.
 autotests = false
 
-[dependencies]
-# The accessibility tree the `PlatformAccessibility` capability speaks. Data
-# model only -- the per-OS `accesskit_*` adapters are separate and
-# feature-gated. An already-translated `accesskit::TreeUpdate` is what crosses
-# the seam.
-accesskit = { workspace = true }
-# `PlatformAccessibility` and its listener types, which the backends implement
-# and `traits` re-exports at their old paths. The trait lives there so the
-# frame runtime can hold a window's bridge without linking a backend
-# (ADR-0082 §2).
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
-
-# The contracts the backends implement (capability traits, window/input and
-# data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
-flui-platform-api = { workspace = true }
-# Layer-legal downward edge (foundation sits below platform in the DAG),
-# carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
-# hosted in foundation so its tests run in CI (flui-platform's suite does
-# not) — and the generational DataTransferId for the ADR-0038 transport.
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-# Wasm-safe Instant for input timestamps (std re-export on native).
-web-time = { workspace = true }
-
-cursor-icon = { workspace = true }
-# Native keyboard adapters are confined to Winit and Android.
-keyboard-types = { workspace = true, optional = true }
-
-# Windowing (for platform implementations)
-winit = { workspace = true, optional = true }
-
-# The ecosystem bridge from winit's native event types to our canonical
-# `ui_events`/`keyboard-types` vocabulary (Masonry ships it too) — the winit
-# backend's whole keyboard event (code, logical key, location, state,
-# repeat, modifiers) delegates to it entirely rather than hand-assembling
-# any of those fields here. See ARCHITECTURE.md §Mapping decisions for why
-# the Win32 and AppKit backends keep their own hand-written `Code`/`Key`
-# tables instead of also delegating. Pins `winit ^0.30`; if the workspace
-# winit pin needs to move to 0.31 before this crate follows, patch it via
-# `[patch.crates-io]` pointing at the upstream git repo (and add that repo
-# to `deny.toml`'s `sources.allow-git`) rather than reviving a hand table.
-ui-events-winit = { version = "0.3", optional = true }
-
-# Error handling & logging. `anyhow` is deliberately absent here: the
-# public API is typed (`PlatformError`/`OpenWindowError`, thiserror), and
-# only tests/examples still consume `anyhow` (see [dev-dependencies]).
-thiserror = { workspace = true }
-tracing = { workspace = true }
-# Pointer assembly returns the one or two events a reading makes inline.
-smallvec = { workspace = true }
-
-# Synchronization
-parking_lot = { workspace = true }
-crossbeam-channel = { workspace = true, optional = true }
-
-# Window handle abstraction
-raw-window-handle = "0.6"
-
-# Compile-time auto-trait fences for `OwnerPlatform`/`PlatformProxy`/
-# `PendingWindow` (ADR-0039 §6-8): item-position `assert_not_impl_any!`/
-# `assert_impl_all!` in `traits/owner.rs`, expanded unconditionally by every
-# `cargo check` (including cross-typecheck on win/mac) — not gated behind
-# `#[cfg(test)]` — so this must be a real dependency, not dev-only, or the
-# assertions never expand outside this crate's own test builds.
-static_assertions = { workspace = true }
-
-# The winit fallback uses a desktop clipboard; mobile backends own their
-# native clipboard implementations even when every feature is enabled.
-[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-arboard = { workspace = true, optional = true }
-
-# Windows platform
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = [
-    "Foundation",
-    # Pen haptics: `PenDevice::GetFromPointerId` and its
-    # `SimpleHapticsController` (ADR-0210 §7).
-    "Devices_Haptics",
-    "Devices_Input",
-    "UI_ViewManagement",
-    "Win32_System_WinRT",
-    "Win32_Foundation",
-    "Win32_Globalization",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Input_Pointer",
-    # Precision touchpad: the manual-update viewport behind precise scrolling
-    # and pinch (ADR-0217 §4).
-    "Win32_Graphics_DirectManipulation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Accessibility",
-    "Win32_UI_Controls",
-    "Win32_UI_Shell",
-    "Win32_Graphics_Gdi",
-    "Win32_Devices_Display",
-    "Win32_Graphics_Dwm",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Registry",
-    "Win32_UI_HiDpi",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_System_Ole",
-    # OLE drag and drop: `IDataObject`'s implementable trait needs the
-    # structured-storage medium, `IDropTarget`/`IDropSource` the `MK_*` key
-    # state (ADR-0211).
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_SystemServices",
-    "Win32_System_Threading",
-    "Win32_Security",
-    "Win32_System_SystemInformation",
-    # `RtlGetVersion`: the real OS build, which the display source reads once.
-    "Wdk_System_SystemServices",
-    # Pointer readings carry a `QueryPerformanceCounter` timestamp.
-    "Win32_System_Performance",
-    # TSF: the thread manager, document managers and the `ITextStoreACP`
-    # text store (ADR-0090 §3). `Win32_UI_Input_Ime` (IMM32) stays off: the
-    # text services are the only IME path. `Variant` is required by the
-    # `ITextStoreACP` bindings.
-    "Win32_UI_TextServices",
-    "Win32_System_Variant",
-    # Session end: `ShutdownBlockReasonCreate`/`Destroy` while the
-    # registry is flushed on log-off.
-    "Win32_System_Shutdown",
-    # Session lock and unlock: `WTSRegisterSessionNotification` on the hidden
-    # top-level receiver.
-    "Win32_System_RemoteDesktop",
-] }
-# `#[implement]` (the COM objects the text services hand TSF) expands to
-# `::windows_core` paths.
-windows-core = { workspace = true }
-
-# macOS platform
-[target.'cfg(target_os = "macos")'.dependencies]
-# `objc2` is the backend's binding stack. The `cocoa`/`objc` pair it replaced
-# is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
-# its whole surface in favor of this family. Versions are the ones `wgpu-hal`
-# already pins, so no new crate generation was introduced.
-objc2.workspace = true
-objc2-foundation = { workspace = true, features = [
-    "std",
-    "objc2-core-foundation",
-    "NSObject",
-    "NSString",
-    "NSArray",
-    "NSDictionary",
-    "NSValue",
-    "NSThread",
-    "NSProcessInfo",
-    "NSGeometry",
-    "NSEnumerator",
-    "NSRunLoop",
-    "NSBundle",
-    "NSRange",
-    "NSNotification",
-    "NSDistributedNotificationCenter",
-    "NSOperation",
-    "block2",
-] }
-# The screen-parameters observer is a block handed to `NSNotificationCenter`.
-block2.workspace = true
-# `CGDisplayCreateUUIDFromDisplayID` returns a `CFUUID`, whose 16 bytes are the
-# display key. The version `core-graphics` 0.25 already uses.
-core-foundation = { workspace = true }
-objc2-app-kit = { workspace = true, features = [
-    "objc2-core-foundation",
-    "NSApplication",
-    "NSGraphicsContext",
-    "NSRunningApplication",
-    "NSView",
-    "NSWindow",
-    "NSResponder",
-    "NSEvent",
-    "NSAccessibility",
-    "NSWorkspace",
-    "NSScreen",
-    "NSPasteboard",
-    "NSGraphics",
-    "NSCursor",
-    "NSVisualEffectView",
-    "NSWindowScripting",
-    "NSAppearance",
-    # `NSHapticFeedbackManager`, the window's haptic actuator (ADR-0210).
-    "NSHapticFeedback",
-] }
-dispatch2.workspace = true
-# CoreGraphics, for the one display property Cocoa does not expose: the
-# refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
-# which is what `PlatformWindow::refresh_period` needs. NSScreen has no
-# current-mode rate — its `maximumFramesPerSecond` is the hardware *maximum*
-# (it over-reports on a ProMotion panel running a 60 Hz mode) and is macOS 12+,
-# above this crate's 11.0 deployment floor — and the winit backend this mirrors
-# reads the mode rate the same way. Pinned to the version `cocoa` 0.27 already
-# pulls in, so no second copy of the crate enters the tree.
-core-graphics = { workspace = true }
-# Grand Central Dispatch: the owner lane (AppKit main queue, or a test serial
-# queue) every NSPasteboard operation is routed through. Zero-dep crate;
-# 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
-dispatch = "0.2"
-
-# Android platform
-[target.'cfg(target_os = "android")'.dependencies]
-ui-events = { workspace = true }
-keyboard-types = { workspace = true }
-android-activity = { workspace = true }
-jni.workspace = true
-libc.workspace = true
-
-# Native-only async dependencies (not available on wasm32)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-# The file store behind `flui::AppConfig::with_storage_dir`: the per-user data directories, and
-# the uniquely named temporary file each write is staged in before it
-# replaces the target. wasm32 keeps values in the page's IndexedDB
-# instead, so neither is there.
-dirs = { workspace = true }
-tempfile = { workspace = true }
-
-# Web/WASM platform
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-icu_properties.workspace = true
-icu_normalizer.workspace = true
-wasm-bindgen = "0.2"
-js-sys.workspace = true
-# The page store answers from IndexedDB in a later task of the page; its
-# futures hand that answer to the host's `Send` IO tasks through a oneshot.
-wasm-bindgen-futures.workspace = true
-tokio = { workspace = true, features = ["sync"] }
-web-sys = { version = "0.3", features = [
-    # Core DOM
-    "Window",
-    "Document",
-    "Element",
-    "HtmlCanvasElement",
-    "HtmlElement",
-    # Events
-    "Event",
-    "EventTarget",
-    "AddEventListenerOptions",
-    "PointerEvent",
-    "KeyboardEvent",
-    "WheelEvent",
-    "MouseEvent",
-    "FocusEvent",
-    "UiEvent",
-    # Text input: the hidden editor where the browser has no EditContext
-    "HtmlTextAreaElement",
-    "Node",
-    # HTML drag and drop
-    "DragEvent",
-    "DataTransfer",
-    "DataTransferItem",
-    "DataTransferItemList",
-    "File",
-    "FileList",
-    "Blob",
-    # Rendering
-    "CanvasRenderingContext2d",
-    "DomRect",
-    # Display
-    "Screen",
-    "MediaQueryList",
-    "MediaQueryListEvent",
-    # Observers
-    "ResizeObserver",
-    "ResizeObserverEntry",
-    "ResizeObserverSize",
-    # Animation
-    "Performance",
-    # Clipboard
-    "Clipboard",
-    "Navigator",
-    # Visibility
-    "VisibilityState",
-    # Location
-    "Location",
-    # Styling
-    "CssStyleDeclaration",
-    # Console
-    "console",
-] }
-console_error_panic_hook = "0.1"
-
-# AT-SPI bridge for Linux, behind the `a11y` feature. Off by default because it
-# brings the AT-SPI bridge and its async stack. Linux winit preferences also
-# use D-Bus, independently of whether the screen-reader bridge is enabled.
-[target.'cfg(target_os = "linux")'.dependencies]
-bitflags = { workspace = true }
-# The display source's protocol clients and descriptor primitives, behind the
-# `wayland` and `x11` features (`winit-backend` enables both on Linux).
-x11rb = { workspace = true, optional = true }
-wayland-client = { workspace = true, optional = true }
-wayland-protocols = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
-accesskit_unix = { version = "0.24", optional = true }
-zbus = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["macros"] }
-
-# iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
-# binding stack — the `objc` crate the macOS backend still uses has not
-# released since 2019, and `cocoa` has no UIKit surface at all. Only the
-# classes this backend messages are enabled: objc2-ui-kit exposes one feature
-# per header and turns all ~456 on by default, which would compile the whole
-# framework's bindings for a handful of classes. Versions are the ones already
-# in the lock via `wgpu-hal` 30.0.1, so this adds no new crate generation.
-#   - `dispatch2` is Grand Central Dispatch (the main queue, the owner lane).
-#   - `objc2-quartz-core`'s `CADisplayLink` is the per-frame signal; QuartzCore
-#     rather than UIKit because `CADisplayLink` is declared there.
-[target.'cfg(target_os = "ios")'.dependencies]
-objc2 = { version = "0.6.4", features = ["std", "exception"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = [
-    "block2",
-    "NSOperation",
-    "std",
-    "objc2-core-foundation",
-    "NSObject",
-    "NSString",
-    "NSSet",
-    "NSProcessInfo",
-    "NSArray",
-    "NSDictionary",
-    "NSNotification",
-    "NSValue",
-    "NSThread",
-    "NSGeometry",
-    "NSData",
-    "NSURL",
-    "NSEnumerator",
-    "NSRunLoop",
-] }
-objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
-    "UIFont",
-    "UIFontDescriptor",
-    "UIFontMetrics",
-    "UIContentSizeCategory",
-    "UIAccessibility",
-    "objc2-core-foundation",
-    "UIApplication",
-    "UIScene",
-    "UISceneDefinitions",
-    "block2",
-    "UISceneSession",
-    "UISceneConfiguration",
-    "UISceneOptions",
-    "UIWindowScene",
-    "UIEvent",
-    "UIGestureRecognizer",
-    "UIHoverGestureRecognizer",
-    "UIGeometry",
-    "UIKey",
-    "UIResponder",
-    "UIScreen",
-    "UIScreenMode",
-    "UITraitCollection",
-    "UIInterface",
-    "UITouch",
-    "UIView",
-    "UIViewController",
-    "UIWindow",
-    "UIPasteboard",
-    "UIColor",
-    # The feedback generators, the window's haptic actuator (ADR-0210).
-    "UIFeedbackGenerator",
-    "UIImpactFeedbackGenerator",
-    "UINotificationFeedbackGenerator",
-    "UISelectionFeedbackGenerator",
-] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
-    "CADisplayLink",
-    # `CAFrameRateRange` is the type of `preferredFrameRateRange`; the
-    # `objc2-core-foundation` feature gates the link's `timestamp` and
-    # `targetTimestamp`, whose difference is the cadence the link runs at.
-    "CAFrameRateRange",
-    "CALayer",
-    "CAMetalLayer",
-    "objc2-core-foundation",
-] }
-block2.workspace = true
-dispatch2 = "0.3.1"
-# Core Haptics plays haptic patterns exactly (ADR-0210 §7).
-objc2-core-haptics = { workspace = true, features = [
-    "std",
-    "block2",
-    "CHHapticEngine",
-    "CHHapticPattern",
-    "CHHapticEvent",
-    "CHHapticParameter",
-    "CHHapticPatternPlayer",
-    "CHHapticDeviceCapability",
-] }
-
-# UIA bridge for Windows, same `a11y` feature. Version cohort must match the
-# workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its `windows`
-# dependency (0.62) matches the backend's own, so no duplicate windows-rs
-# stack is linked.
-[target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
-version = "0.35.1"
-optional = true
-
-# NSAccessibility bridge for macOS, same `a11y` feature and the same 0.25
-# accesskit cohort. Uses the same objc2 binding family as the backend.
-[target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
-version = "0.27.1"
-optional = true
-
-[features]
-default = ["desktop"]
-
-# Compatibility selector for the native desktop backends, selected by target OS.
-# The optional winit fallback belongs to `winit-backend` alone.
-desktop = []
-
-# Per-OS accessibility bridges (AT-SPI on Linux, UIA on Windows,
-# NSAccessibility on macOS) -- one feature, target-gated dependencies, so a
-# build only ever links its own OS's stack. Off by default: see the Linux
-# dependency note above for why the bridge remains an opt-in.
-a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
-
-# winit fallback backend — primary on Linux until native Wayland/X11 lands
-# (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = [
-    "dep:zbus",
-    "dep:futures-util",
-    "dep:winit",
-    "dep:arboard",
-    "dep:crossbeam-channel",
-    "dep:ui-events-winit",
-    "dep:keyboard-types",
-    # The winit backend takes its Linux display list from the compositor
-    # through these two (the dependencies themselves exist on Linux only).
-    "wayland",
-    "x11",
-]
-
-# Web platform
-# Honest note (verified 2026-08-04): no-op selector — zero
-# `feature = "web"` references in this crate's src. `platforms::web` is
-# gated by `#[cfg(target_arch = "wasm32")]` on the actual compile target
-# (`src/platforms/mod.rs`), not by this flag; enabling or disabling it
-# changes nothing observable. Kept as a forward-compatible name for
-# downstream `Cargo.toml`s, mirroring `desktop`.
-web = []
-
-# Linux display server protocols: each connects to its compositor to read the
-# outputs and their refresh rates (`platforms::linux::display`). On other
-# targets the features exist and add nothing.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
-x11 = ["dep:x11rb", "dep:rustix"]
-
-# Debug builds only: `shared::pointer_assembly::capture` journals every
-# pointer registry call on a thread as a native recording (ADR-0215 §4), for
-# turning a session on a native host into a checked-in test. No dependency;
-# the recording codec lives in the tests.
-native-capture = []
-
-# The `unexpected_cfgs` check-cfg declaration for objc 0.2's
-# `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
-# mixing local lint keys with `workspace = true`.
 [lints]
 workspace = true
 
+[dependencies]
+# `PlatformWindow::set_cursor`'s `CursorIcon`, allowed in stable signatures
+# by ADR-0089.
+cursor-icon = { workspace = true }
+# `DataTransferId`, the generational id of the ADR-0038 transport.
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+language-tags = { workspace = true }
+# The one-shot slot inside `TransferRequest`.
+parking_lot = { workspace = true }
+# `PlatformWindow`'s GPU handles, through `HasWindowHandle`/`HasDisplayHandle`
+# only (ADR-0089). `alloc` carries those traits through `Arc`, so the
+# `Arc<dyn PlatformWindow>` a renderer holds is itself a handle source; without
+# it that holds only while something else in the graph (wgpu, winit) turns the
+# feature on.
+raw-window-handle = { workspace = true, features = ["alloc"] }
+thiserror = { workspace = true }
+# `Locale` and the other platform values serialize under the `serde` feature.
+serde = { workspace = true, optional = true }
+# An edit the `ImeEvent` projection could not apply, reported where a
+# deferred grant has no caller left to return an error to.
+tracing = { workspace = true }
+
 [dev-dependencies]
-# `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
-# headless backend. Checkout-only test edge: versionless, so Cargo drops it
-# from the published manifest; flui-testing never depends on this crate.
-flui-testing = { path = "../flui-testing" }
-# Application-side error handling in tests/examples only — never a normal
-# dependency again: no `anyhow` token may appear in this crate's public API.
-anyhow = { workspace = true }
-tracing-subscriber = { workspace = true }
-# Exact diagnostics for owner capabilities and retired public names.
+# Pins that the lock arbiter and the reference store are owner-thread only.
+static_assertions = { workspace = true }
+serde_json = { workspace = true }
+# The ledger's property test against its reference.
+proptest = { workspace = true }
+# Compile-fail fixtures: `DisplayId` cannot be built from a number.
 trybuild = { workspace = true }
-# The native recording codec (ADR-0215 §4) lives in the tests: recordings are
-# JSON Lines, and serde stays out of the backend graph. A replay reproduces
-# the delivered floats only if every number reads back to the bits it was
-# written from, which serde_json's default parser does not guarantee.
-serde = { workspace = true }
-serde_json = { workspace = true, features = ["float_roundtrip"] }
-
-# Browser API fixtures mutate JS globals and therefore have their own process.
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test.workspace = true
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-libtest-mimic.workspace = true
-
-# Main-thread winit ownership plus one private D-Bus service per process.
-# libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
-[[test]]
-name = "linux_preferences"
-path = "tests/linux_preferences.rs"
-harness = false
-required-features = ["winit-backend"]
-
-[[example]]
-name = "linux_preferences_probe"
-required-features = ["winit-backend"]
 
 [[test]]
-name = "wasm32"
-path = "tests/wasm32.rs"
-
-# The web backend's producer in a real browser: `cargo xtask device web-input`
-# runs it in headless Chrome. Its own target because `cargo xtask wasm-test`
-# runs `wasm32` on node, which has no DOM.
-[[test]]
-name = "web_browser"
-path = "tests/web_browser.rs"
-
-# Nested Cargo stays separate from the native platform contract binary.
-[[test]]
-name = "compiler_guards"
-path = "tests/compiler_guards.rs"
-
-[[test]]
-name = "platform_it"
+name = "platform_api_it"
 path = "tests/main.rs"
 
-# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+# Compiler contracts invoke Cargo in a separate test process.
 [[test]]
-name = "pointer_assembly_allocation"
-path = "tests/pointer_assembly_allocation.rs"
+name = "compile_fail"
+path = "tests/compile_fail.rs"
 
-# The page `cargo xtask device web-input` drives: the web backend under a
-# native capture.
-[[example]]
-name = "web_input_probe"
-required-features = ["native-capture"]
+# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
+# `compile_fail` test hands them to rustc by glob, no module declares them.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/compile_fail/*.rs"]
 
-[[example]]
-name = "winit_preferences_probe"
-required-features = ["winit-backend"]
+[features]
+default = []
+serde = ["dep:serde"]
 
-# The NativeActivity library `cargo xtask device android-input` installs on a
-# device: the Android backend under the native capture. Empty off Android.
-[[example]]
-name = "android_input_probe"
-crate-type = ["cdylib"]
-required-features = ["native-capture"]
+# A browser page's entropy for `ProcessNonce::mint`: wasm32-unknown-unknown's
+# std has none, so `RandomState` alone mints the same nonce on every page.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { workspace = true }
 
-# Deliberately its own process: these tests WRITE the process-wide
-# `FLUI_HEADLESS` env var (`unsafe env::set_var`/`remove_var`) to exercise
-# headless-backend selection; env vars are process-global, so isolation —
-# not opt-in locking — keeps the rest of the suite (which READS
-# `FLUI_HEADLESS`) from racing the mutation.
-[[test]]
-name = "headless"
-path = "tests/headless.rs"
-
-# Re-export dependencies that might be needed by consumers
 [package.metadata.docs.rs]
 all-features = true
 
-# Exercise the exact asynchronous UIKit error block on an Apple host.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-block2.workspace = true
-
-# Layer 3, not the substrate's 2: its `flui-semantics` edge (the
-# `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only
-# `flui-app` (layer 9) depends on it, so nothing below is affected.
+# Layer 1: depends only on `flui-foundation` (layer 1) among framework
+# crates; its dependents are `flui-interaction`, `flui-native`,
+# `flui-widgets` and `flui-app`. The contracts sit below every backend
+# (ADR-0082 §1), and on top of its tier's set this crate may never reach
+# AccessKit or tokio (ADR-0082 Verification).
 [package.metadata.flui]
-layer = 3
-tier = "H"
-tier-kind = "internal"
+layer = 1
+tier = "C"
+tier-kind = "stable"
 order = 1
-# ADR-0082 §2: only composition roots link the OS backends. Crates that
-# program against a capability trait depend on `flui-platform-api` instead.
-# Examples and tools are applications and are exempt from this list.
-allowed-dependents = ["flui-app"]
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "platforms::windows::platform::WindowIdentity::source::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
-    { item = "platforms::android::AndroidPlatform::process_input_events::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
-    { item = "shared::owner_slot::LAST_SLOT_KEY", grant = "ADR-0097", class = "counter", reason = "owner-slot keys, advanced by `try_update` so exhaustion refuses the slot instead of reissuing a key" },
-    { item = "shared::owner_slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
-    { item = "platforms::headless::platform::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
-    { item = "platforms::ios::platform::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
-    { item = "platforms::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
-    { item = "platforms::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
-    { item = "platforms::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
-    { item = "platforms::macos::view::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
-    { item = "platforms::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
-    { item = "platforms::macos::window::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
-    { item = "platforms::macos::window::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
-    { item = "platforms::windows::clipboard::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
-    { item = "platforms::windows::owner_control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
-    { item = "platforms::windows::platform::REGISTER_WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "registers the Win32 window class, which Windows holds once per process" },
-    { item = "platforms::winit::platform::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
-    { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
-    { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
-    { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
-]
+reach-forbid = ["accesskit", "dpi", "keyboard-types", "tokio", "ui-events"]

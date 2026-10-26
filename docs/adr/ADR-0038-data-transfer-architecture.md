@@ -4,9 +4,9 @@
 - **Date:** 2026-07-28
 - **Absorbs:** ADR-0034
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its
-  vocabulary live in `flui-platform-api`, re-exported at `flui_platform::data_transfer`; §9: the
+  vocabulary live in `flui-platform`, re-exported at `flui_native::data_transfer`; §9: the
   `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
-  `Platform` in `flui-platform`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
+  `Platform` in `flui-native`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
   side, sessions and escalation from in-window drags; §8: the Web target)
 
 ## Context
@@ -30,7 +30,7 @@ needs `wl_data_offer.accept`/`set_actions` during motion. A design without a
 target→OS feedback channel during hover cannot be implemented on any of them.
 
 Flutter is not the reference: its `Clipboard` is a `services` method channel
-and it has no core DnD contract. `services` is dissolved into `flui-platform`
+and it has no core DnD contract. `services` is dissolved into `flui-native`
 capability traits, and thread/window topology is a leapfrog zone (ADR-0027).
 
 ## Decision
@@ -70,7 +70,7 @@ slot 0 produce ids that pass each other's checks — so:
 > or DnD, is minted there and redeemable at `Platform::data_transfer()`.
 
 `OfferTable` (mint / generation-checked get / retire-and-bump) is one shared
-type in `flui_platform::data_transfer`, not reimplemented per backend. A
+type in `flui_native::data_transfer`, not reimplemented per backend. A
 request for a mismatched id is `TransferError::StaleOffer`.
 
 Offer lifecycle:
@@ -87,11 +87,11 @@ Offer lifecycle:
   single drop-conclusion authority. Letting any consumer retire an offer would
   cancel every other consumer's fetch.
 
-`flui-platform` depends on `flui-foundation` for the ID — a downward edge.
+`flui-native` depends on `flui-foundation` for the ID — a downward edge.
 
 ### 3. Vocabulary
 
-Plain data in `flui_platform::data_transfer`; no lock guard in any public
+Plain data in `flui_native::data_transfer`; no lock guard in any public
 signature:
 
 - `Mime` — type/subtype and parameter names lowercased, parameter values kept
@@ -132,7 +132,7 @@ dropping the completer without completing resolves the request with
 The consumer spawns the request on the UI runtime scheduler and holds the house
 `TaskToken`; it is polled by the frame-driven async driver, and the
 completer's wake requests a frame. This is the only delivery mechanism — not
-`flui_platform::Task`, not the tokio background executor.
+`flui_native::Task`, not the tokio background executor.
 
 ### 5. DnD enters as `PlatformInput::DragDrop`
 
@@ -290,7 +290,7 @@ transports; image/HTML representations; write-side offers and drag sources.
   the UI thread for drops the target may reject.
 - **Separate clipboard and DnD transports.** Duplicates negotiation, limits,
   staleness and cancellation; the semantics differ only at the facades.
-- **A plain `u64` id inside `flui-platform`.** Forfeits the tested ABA
+- **A plain `u64` id inside `flui-native`.** Forfeits the tested ABA
   defense to avoid a cheap, legal dependency edge.
 - **Post-drop accept/reject.** Unimplementable on Win32, AppKit and Wayland,
   which all decide during hover.

@@ -737,8 +737,8 @@ ids! {
         ///
         /// Minted by the process composition root (`AppRuntime`); the
         /// platform layer maps native window handles to it. This is a
-        /// distinct type from flui-platform's native `WindowId(pub u64)`
-        /// (`flui-platform/src/window.rs`), which remains the
+        /// distinct type from flui-native's native `WindowId(pub u64)`
+        /// (`flui-native/src/window.rs`), which remains the
         /// platform-internal native handle key — the two are not
         /// interchangeable and neither converts implicitly to the other.
         pub type UiRuntimeId Runtime;

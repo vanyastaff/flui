@@ -37,6 +37,7 @@ use flui_foundation::Arity;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
+    hit_testing::{CursorRequest, PointerTarget},
     parent_data::ParentData,
     protocol::{
         BoxHitTest, HitTestCapability, HitTestContextApi, MainAxisPosition, Protocol, SliverHitTest,
@@ -68,6 +69,10 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     /// Whether this render object should be appended to the global hit-test
     /// path even when its `hit_test` return value keeps sibling traversal open.
     self_hit_entry_registered: bool,
+    /// The pointer target the part hit routes to, over the node-wide one.
+    self_hit_pointer_target: Option<PointerTarget>,
+    /// The cursor the part hit asks for, over the node-wide one.
+    self_hit_cursor: Option<CursorRequest>,
 }
 
 /// Owns the matching pop while lending the context to a scoped callback.
@@ -119,6 +124,8 @@ where
             own_size,
             child_count: 0,
             self_hit_entry_registered: false,
+            self_hit_pointer_target: None,
+            self_hit_cursor: None,
         }
     }
 
@@ -171,6 +178,14 @@ where
 
     pub(crate) fn self_hit_entry_registered(&self) -> bool {
         self.self_hit_entry_registered
+    }
+
+    pub(crate) fn self_hit_pointer_target(&self) -> Option<PointerTarget> {
+        self.self_hit_pointer_target
+    }
+
+    pub(crate) fn self_hit_cursor(&self) -> Option<CursorRequest> {
+        self.self_hit_cursor
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -377,6 +392,25 @@ where
     /// but reads the driver-supplied size instead of a per-object field.
     pub fn is_within_own_size(&self) -> bool {
         self.is_within_size(self.own_size.width, self.own_size.height)
+    }
+
+    /// Routes this hit's pointer events to `target`, in place of the
+    /// node-wide [`RenderBox::pointer_target`](crate::traits::RenderBox::pointer_target).
+    ///
+    /// For a node whose parts answer a pointer differently: a paragraph
+    /// routes a hit on a link to that link's target and a hit on plain text
+    /// to none. It applies only when this node is hit — `hit_test` returns
+    /// `true` or registers the node's entry.
+    pub fn set_self_hit_pointer_target(&mut self, target: PointerTarget) {
+        self.self_hit_pointer_target = Some(target);
+    }
+
+    /// Asks for `cursor` over this hit, in place of the node-wide
+    /// [`RenderBox::mouse_cursor`](crate::traits::RenderBox::mouse_cursor),
+    /// under the same condition as
+    /// [`set_self_hit_pointer_target`](Self::set_self_hit_pointer_target).
+    pub fn set_self_hit_cursor(&mut self, cursor: CursorRequest) {
+        self.self_hit_cursor = Some(cursor);
     }
 
     /// Tests a child at the given offset.

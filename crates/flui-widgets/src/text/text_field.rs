@@ -32,7 +32,7 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
-use flui_platform_api::text_store::TextInputPurpose;
+use flui_platform::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
 use crate::interaction::Listener;

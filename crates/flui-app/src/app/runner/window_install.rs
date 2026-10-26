@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use flui_platform::traits::PlatformWindow;
+use flui_platform::PlatformWindow;
 use flui_runtime::owner::{InstallInitialization, PreparedInstall, WindowObservation};
 
 #[cfg(all(
@@ -265,7 +265,7 @@ impl WindowInstall {
         let dispatcher = self.dispatcher();
         // Bound to this host's owner now, so a late hint after a replacement wakes the
         // retired owner only (a cheap defence; nothing pins it).
-        let proxy = super::host::with_owner_platform(flui_platform::OwnerPlatform::proxy);
+        let proxy = super::host::with_owner_platform(flui_native::OwnerPlatform::proxy);
         window.on_display_changed(Box::new(move || {
             if let Some(proxy) = &proxy {
                 // A failed wake leaves the owner's retry debt; nothing to do.
@@ -298,7 +298,7 @@ impl WindowInstall {
     pub(super) fn submit_web(
         mut self,
         driver: FrameDriver,
-        platform: &flui_platform::SharedPlatform,
+        platform: &flui_native::SharedPlatform,
     ) -> anyhow::Result<()> {
         use super::owner_dispatch::{RuntimeEvent, install_input_wiring, with_owner_callback};
 
@@ -369,13 +369,23 @@ impl WindowInstall {
         self.initial.lifecycle = Some(lifecycle);
     }
 
+    /// Close the window when the platform quits, unless something closed it
+    /// first.
+    ///
+    /// The flag is set by the window's native close (the `on_close` that
+    /// [`new`](Self::new) registers) and by a cancelled installation, and each
+    /// owns the presentation's retirement. Android's `Destroy` fires that close
+    /// before its loop exits and runs this hook, and the close retires the sole
+    /// presentation together with its UI runtime, so a second close here would
+    /// only be refused by a runtime that no longer exists.
     #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
-    pub(super) fn terminal_callbacks(&self, platform: &flui_platform::SharedPlatform) {
+    pub(super) fn terminal_callbacks(&self, platform: &flui_native::SharedPlatform) {
         let closed = self.window.cancellation();
         let dispatcher = self.dispatcher();
         platform.on_quit(Box::new(move || {
-            closed.store(true, Ordering::Release);
-            super::owner_dispatch::close_this_window(dispatcher);
+            if !closed.swap(true, Ordering::AcqRel) {
+                super::owner_dispatch::close_this_window(dispatcher);
+            }
         }));
     }
 

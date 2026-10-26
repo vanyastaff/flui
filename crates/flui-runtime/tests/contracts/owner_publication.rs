@@ -10,7 +10,7 @@ use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 static_assertions::assert_not_impl_any!(OwnerHost: Send, Sync);
 
 pub(super) fn window() -> PresentationWindow {
-    let window = flui_platform::headless_platform()
+    let window = flui_native::headless_platform()
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless window");
     let accessibility = window.accessibility();
@@ -28,7 +28,7 @@ pub(super) fn runtime_with_wake(wake: Arc<dyn Fn() + Send + Sync>) -> UiRuntime 
         RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

@@ -103,5 +103,5 @@ The executable checks are `gradients_read_back_as_specified`,
 `prepared_quota_failure_and_retirement`,
 `an_invalid_target_promotes_to_full` and `every_failure_boundary_retires_its_ticket`.
 Private quota/fault seams exercise inaccessible failures; rendering assertions use
-actual GPU readbacks. The [measurement record](../research/engine-foundation-measurements.ru.md)
+actual GPU readbacks. The [measurement record](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/engine-foundation-measurements.ru.md)
 distinguishes measured round trips, the candidate cost model and unmeasured targets.

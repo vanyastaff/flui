@@ -1,19 +1,40 @@
 # ADR-0152: The capability seam, revised from ADR-0084
 
-- **Status:** Proposed (2026-10-06). Awaiting the owner's approval; nothing in this ADR is
-  implemented.
+- **Status:** Accepted (2026-10-20). Not implemented: the seam lands together with the clipboard,
+  its first consumer (see "Landing rule and first consumer").
 - **Date:** 2026-10-06
-- **Supersedes, on acceptance:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md)
-  (Proposed) as a whole; what carries over is restated in §1.
-  [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("a new capability
-  is a method on `LifecycleContext`"), for platform capabilities only.
+- **Revised:** 2026-10-20 — after reading how ten frameworks ship platform services (sources
+  below): one result type, the first two `ProviderContext` methods, the full reason and
+  permission vocabulary, `Plugin` and the registrar in the contract crate, and the carve-out for
+  handles that framework widgets name. Providers of the seam are assembled by `flui-app`, not by
+  the core host.
+- **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
+  what carries over is restated in §1.
+  [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
+  method on `LifecycleContext`"), for platform capabilities only.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),
+  [ADR-0153](ADR-0153-release-train-and-capability-crates.md),
   [ADR-0154](ADR-0154-capability-crates.md),
+  [ADR-0254](ADR-0254-window-contract.md) (the window contract shares `Unsupported`),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
-  [ADR-0097](ADR-0097-no-process-global-state-gate.md)
+  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md),
+  [ADR-0097](ADR-0097-no-process-global-state-gate.md),
+  [ADR-0244](ADR-0244-os-version-floors-and-gates.md)
+- **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
+  Tauri v2 (`tauri-apps/tauri@9318ab84b8`) and its plugins (`tauri-apps/plugins-workspace@11211c30e7`),
+  Flutter (`flutter/flutter@6597889f57`) and its packages (`flutter/packages@1383427519`,
+  `Baseflow/flutter-permission-handler@0684469188`), Capacitor (`ionic-team/capacitor@841017a3c7`),
+  Expo (`expo/expo@0937842df7`), Compose Multiplatform
+  (`JetBrains/compose-multiplatform-core@13b7599795`), Bevy (`bevyengine/bevy@2614884437`), GPUI
+  (`zed-industries/zed@fae8a35482`), Project Robius (`project-robius/robius-location@1974355613`),
+  `rust-mobile/ndk-context@0eb252bf23`, Crux (`redbadger/crux@1ef0f547e6`) and the XDG portals
+  (`flatpak/xdg-desktop-portal@49075617ff`).
 
-## Context
+Crate names follow ADR-0151: the contract crate is `flui-platform` and the core host is
+`flui-native`.
+
+## Context and problem statement
 
 A platform capability reaches a widget through named fields today: `RuntimeHostServices` →
 `RuntimeServices` → the presentation's capabilities → `BuildOwner` → `BuildCapabilities` →
@@ -24,25 +45,111 @@ sealed and ADR-0078 closes its method set.
 ADR-0084 proposed an open seam and has no code. Since then: `LifecycleContext` has 16 methods
 (15 public), and `storage`, `close_guard` and the hidden `flush_registry_in_crate` were never
 classified; owner-side handles are owner-local; system settings became one pushed snapshot
-(ADR-0151 §4), which is not a pull handle; and the 1.0 direction puts optional capabilities in
-their own crates (ADR-0154), which needs a provider that works without a window and handles that
-end subscriptions.
+(ADR-0172), which is not a pull handle; and the 1.0 direction puts optional capabilities in their
+own crates (ADR-0154), which needs a provider that works without a window and handles that end
+their subscriptions.
 
 The one existing platform handle, `flui_interaction::ClipboardHandle`, is owner-local
 (`PhantomData<Rc<()>>`) and reads through a callback so it can become asynchronous (ADR-0038
-§6); web and Wayland clipboards only read asynchronously. The seam must hand out that handle,
-not the `Send + Sync` backend trait object.
+§6); web and Wayland clipboards only read asynchronously. The seam must hand out that handle, not
+a `Send + Sync` provider trait object. The synchronous `Clipboard` trait cannot be implemented
+honestly on those two platforms, and keeping it beside an asynchronous twin (as GPUI does) is two
+shapes for one fact.
+
+Reading the references showed what the first design did not yet say:
+
+- Every Rust framework with a typed seam keys it by type and scopes it to the application (GPUI
+  globals, [zed-industries/zed@fae8a35482 crates/gpui/src/global.rs:22](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/global.rs#L22); Bevy resources; Tauri
+  managed state, [tauri-apps/tauri@9318ab84b8 crates/tauri/src/lib.rs:752-771](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/lib.rs#L752-L771)). The defects sit in
+  the designs with a process singleton (Flutter's static `_instance`,
+  [flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:27-41](https://github.com/flutter/packages/blob/1383427519/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart#L27-L41);
+  Capacitor's registry; `ndk-context`'s `static mut ANDROID_CONTEXT`,
+  [rust-mobile/ndk-context@0eb252bf23 ndk-context/src/lib.rs:28](https://github.com/rust-mobile/ndk-context/blob/0eb252bf23/ndk-context/src/lib.rs#L28)).
+- Tauri ships a blocking and an asynchronous twin of each mobile call
+  (`run_mobile_plugin` and `run_mobile_plugin_async`, [tauri-apps/tauri@9318ab84b8
+  crates/tauri/src/plugin/mobile.rs:293-360](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L293-L360)) and fixed deadlocks in the response path, where a
+  lock was held while the response was delivered ([mobile.rs:98-100](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L98-L100), [:121-123](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L121-L123), [:420-422](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/plugin/mobile.rs#L420-L422));
+  FLUI's drafts had a callback clipboard and a boxed-future permission request, so three shapes for
+  "the OS answers later".
+- OS callbacks arrive off the owner thread on every platform the first crates target, and an
+  owner-local handle gives the provider no way back to the owner. Project Robius requires its
+  Apple manager to be created on the main thread and takes a `Send + Sync` handler
+  ([project-robius/robius-location@1974355613 src/lib.rs:28,76](https://github.com/project-robius/robius-location/blob/1974355613/src/lib.rs#L28)).
+- Real permissions have scopes (precise or coarse, when-in-use or always) and reduced grants
+  (limited, provisional, approximate); a three-way state cannot say what was granted. Tauri's
+  geolocation status is `{ location, coarse_location }`
+  ([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/src/models.rs:12-27](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/src/models.rs#L12-L27)), the
+  permission handler for Flutter splits `locationWhenInUse` from `locationAlways`
+  ([Baseflow/flutter-permission-handler@0684469188
+  permission_handler_platform_interface/lib/src/permissions.dart:64-78](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler_platform_interface/lib/src/permissions.dart#L64-L78)) and its statuses include
+  `limited` and `provisional` ([.../permission_status.dart:4-60](https://github.com/Baseflow/flutter-permission-handler/blob/0684469188/permission_handler_platform_interface/lib/src/permission_status.dart#L4-L60)).
+- Tauri's geolocation plugin shipped the bug that acquisition in lifecycle hooks and a handle that
+  ends its subscription on drop rule out: its 2.5.0 release fixed `watchPosition` stopping updates
+  for every other active watch and `clearWatch` leaving location updates running until the last
+  watch was cleared ([tauri-apps/plugins-workspace@11211c30e7 plugins/geolocation/CHANGELOG.md](https://github.com/tauri-apps/plugins-workspace/blob/11211c30e7/plugins/geolocation/CHANGELOG.md)).
+
+The question this record answers: how does a platform capability reach a widget so that the
+framework, a capability crate and a package built on `flui-sdk` add one through the same seam,
+without editing `flui-runtime`, `flui-view` and `flui-app` and without process-global state?
+
+## Decision drivers
+
+- The frame path is synchronous: no `async` in build, layout or paint, so "the OS answers later" is
+  a value consumed by callback or poll, with a `Future` adapter only outside the frame path.
+- A package built on `flui-sdk` must be able to add a capability, and `LifecycleContext` is sealed
+  with a closed method set (ADR-0078).
+- No process-global state: providers live per UI runtime, and a native-to-Rust trampoline carries
+  its state in the native object (ADR-0097).
+- OS callbacks arrive off the owner thread on every platform the first crates target, and an
+  owner-local handle gives the provider no way back to the owner.
+- The one existing handle, `ClipboardHandle`, is owner-local (`!Send`) and reads through a callback,
+  because web and Wayland clipboards only read asynchronously.
+- "The OS answers later" has one shape; re-entry with guards or borrows held is the first of the
+  recurring defects (AGENTS.md).
+- A handle that holds an OS subscription needs an owner that ends it: acquisition in lifecycle
+  hooks, no cache, and the subscription ends when the last clone drops.
+- Real permissions have scopes and reduced grants, which a three-way state cannot express.
+- Substituting an implementation must not mean replacing the plugin.
+- A capability crate depends on one small surface, so the seam names `WindowRef` and not
+  `PlatformWindow`, which keeps the semver surface narrow (ADR-0153).
+- Rules are types: `capability` on a `BuildContext` must not compile, and an owner-local handle
+  must not be `Send`.
+- The seam merges together with its first consumer; no part of it reaches `main` unwired.
+
+## Considered options
+
+1. The revised seam decided below: capability markers keyed by type, providers per UI runtime,
+   handles acquired in lifecycle hooks, `Completion<T>`, `Unsupported` and `Plugin` in the contract
+   crate.
+2. Accept ADR-0084 unchanged, amend later.
+3. A synchronous `Clipboard` trait object as the handle, with an asynchronous twin (GPUI).
+4. A process singleton per service (Flutter's static instance, Capacitor's registry).
+5. The handle type as the key (Tauri's `state::<T>()`).
+6. Twin blocking and asynchronous APIs (Tauri).
+7. `async fn` in handle traits as the base.
+8. Callbacks only.
+9. Effects as data (Crux; [redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12](https://github.com/redbadger/crux/blob/1ef0f547e6/crux_core/src/testing.rs#L8-L12)).
+10. The whole `PlatformWindow` in `ProviderContext`.
+11. One `LifecycleContext` method per capability.
+12. Capabilities as inherited views, readable anywhere (Compose, GPUI).
+13. Tauri-style permission files in the seam.
 
 ## Decision
+
+Chosen option: 1, because it keeps what ADR-0084 got right (an open seam, a per-UI-runtime
+registry, no `inventory`) and fixes what reading ten frameworks showed it lacked: one owner-thread
+result type for "the OS answers later", providers that need no window, handles that end their
+subscriptions on drop, a `Plugin` that leaf crates can reach, and absence and permissions as typed
+values.
 
 ### 1. What carries over from ADR-0084
 
 - A *framework* capability (rebuild, focus, post-frame, close guard, lifecycle handle,
   text-input route, flush registry) stays a method on `LifecycleContext`. A *platform*
   capability is reached only through `cx.capability::<C>()`.
-- Providers are registered in a per-UI runtime registry passed to the UI runtime's constructor; never a
-  static or thread-local. The registry is an owner-thread value: UI runtimes live on the owner thread
-  whether or not the owner-thread flip lands.
+- Providers are registered in a per-UI runtime registry passed to the UI runtime's constructor;
+  never a static or thread-local. The registry is an owner-thread value: UI runtimes live on the
+  owner thread whether or not the owner-thread flip lands.
 - Precedence: application override, then built-in, then a single plugin. Two plugins for one
   capability, or two capabilities sharing a `NAME`, fail `Application::run` with
   `AppRunError::CapabilityConflict` before any window opens, in a deterministic order.
@@ -50,53 +157,170 @@ not the `Send + Sync` backend trait object.
   hidden and object-safe; the generic `capability::<C>()` is a blanket `LifecycleContextExt`
   method, so calling it on a `BuildContext` does not compile.
 
-### 2. What changes
+ADR-0084 also rested on a premise that no longer holds: that Flutter's federated plugins give an
+application no way to replace an endorsed implementation
+([flutter/flutter#80374](https://github.com/flutter/flutter/issues/80374)). The issue closed on
+2024-07-11, and the Flutter tool now resolves a direct dependency over the default package
+([flutter/flutter@6597889f57 packages/flutter_tools/lib/src/flutter_plugins.dart:1950-1993](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter_tools/lib/src/flutter_plugins.dart#L1950-L1993)). Nothing
+in this ADR depends on that claim. Substitution in FLUI is a provider override because the registry
+is keyed by the marker, not by the implementation.
+
+### 2. What the seam is
 
 1. **A capability is a marker type owned by the crate that owns its handle.** The clipboard's is
    `flui_interaction::ClipboardCapability` with `Handle = ClipboardHandle`; the handle stays
-   owner-local and callback-shaped.
-2. **Providers receive a context, not a window.** `provide(&ProviderContext<'_>)`;
-   `ProviderContext::window()` is an `Option`. A capability that needs a window answers
-   `NoWindow` itself; one that does not (storage, notifications, push) works before the first
-   window. `ProviderContext` grows by methods (the host bridge of a later ADR), never by public
-   fields.
+   owner-local and `!Send`. The same rule decides where a capability's marker lives when framework
+   widgets name its handle (item 10).
+2. **Providers live per UI runtime, and a handle is acquired only in a lifecycle hook.**
+   `cx.capability::<C>()` exists on `LifecycleContext`, whose hooks are `init_state` and
+   `did_change_dependencies`; on a `BuildContext` it does not compile (ADR-0078). A handle that
+   holds an OS subscription then has an owner, the widget's state.
 3. **No cache.** The registry calls the provider on each acquisition; a provider may share state
    internally. A handle that holds an OS subscription ends it when the last clone drops, so a
-   widget's `dispose` ends it.
-4. **`Unsupported` is constructed, not written as a literal.** It is `#[non_exhaustive]` with
-   private fields, `Unsupported::of::<C>(reason)`, and accessors; `UnsupportedReason`
-   (`NotRegistered`, `NoWindow`, `NotOnThisPlatform`) is `#[non_exhaustive]` with a written
-   `Display`. The registry answers `NotRegistered`; the provider answers the other two.
-5. **Permissions belong to the handle.** A handle method that needs an OS permission reports a
-   `Denial` (`ByUser`, `Permanently`, `Restricted`, `#[non_exhaustive]`); `PermissionState` is
-   `Granted`, `NotDetermined` or `Denied(Denial)`, so an error cannot carry `Granted`. A request
-   returns a boxed future so handle traits stay dyn-compatible. Whether an OS service is switched
-   on is a separate state. Android and iOS usually terminate a process whose permission is
-   revoked, so revocation events are best-effort. These types land with the first capability
-   that needs them, not before.
-6. **Classification of the later methods.** `storage` becomes a built-in capability once
-   persistence lands, and `LifecycleContext::storage` is removed. `close_guard`,
-   `lifecycle_handle` and `flush_registry_in_crate` are framework capabilities and stay methods.
-   `clipboard_handle` is removed when the clipboard moves to the seam.
-7. **Not inherited from ADR-0084:** its §5 obligation for out-of-tree backends to implement
-   `PlatformAccessibility` (the core host's list is closed by ADR-0151 §3), and its haptics
-   plan (haptics leaves the Stable crate and returns as a capability crate under ADR-0154).
+   widget's `dispose` ends it. Work that must outlive the widget that started it (background
+   location, push delivery) is not a widget-held handle: it is a service of the application
+   (ADR-0049).
+4. **`Plugin` and `CapabilityRegistrar` live in the contract crate; the registry stays in
+   `flui-runtime`.** The registrar is a list of boxed providers and needs nothing from the runtime.
+   A leaf capability crate (ADR-0154) registers its providers and therefore needs `Plugin`; with
+   `Plugin` in the runtime every capability crate would depend on `flui-sdk` or `flui-runtime` just
+   to register. `CapabilityRegistry`, conflict detection and the run loop stay in `flui-runtime`;
+   `flui-sdk` re-exports `Plugin` and the registrar for packages.
+5. **One result type for "the OS answers later": `Completion<T>`.** It is owner-thread (`!Send`)
+   and resolves at an owner turn boundary: never inline in the call that created it, never from
+   an OS callback, and never with a guard or borrow held. It is consumed by callback or by poll,
+   and has a `Future` adapter for code outside the frame path (services, tasks); the frame path
+   stays synchronous. An OS callback only posts to the owner; everything else runs there. Handle
+   methods that finish later return it: `ClipboardHandle`'s reads move from a bare callback to it,
+   and a permission request returns `Completion<PermissionState>` rather than a boxed future.
+   Handle traits stay dyn-compatible because `Completion<T>` is a concrete type.
+
+   What happens when the owner retires before the result arrives is stated, not left to chance:
+   the `on_complete` closures of every pending completion are dropped without running, `poll`
+   answers `None` from then on, and a post that arrives after retirement is refused by the poster
+   (item 6), so the provider learns that its subscription has lost its owner and ends it. A
+   completion that was resolved before retirement is delivered: a result the owner accepted is
+   never dropped once accepted, and retirement is the one boundary at which an unresolved one
+   ends.
+6. **Providers receive a context, not a window.** `provide(&ProviderContext<'_>)`. Its first two
+   methods are:
+   - `owner()` returns a cloneable `Send + Sync` poster that runs a closure on the owner thread.
+     It is what a provider's OS-callback trampoline uses to get back. Its `post` answers
+     `Err(OwnerRetired)` once the owner has retired, so a trampoline can end the OS subscription
+     it serves instead of posting into nothing; a post the owner accepted runs at its next turn.
+   - `window()` returns `Option<WindowRef>`: the window's id, its scale and its raw window and
+     display handles, and no other method of `PlatformWindow`. Portals need a raw handle, Win32
+     and AppKit dialogs need an owner handle, and every `PlatformWindow` method a capability crate
+     names would be semver surface for all of them (ADR-0153). The handles are exposed through
+     `HasWindowHandle` and `HasDisplayHandle`, the one upstream exception ADR-0089 §2 allows in a
+     stable signature.
+
+   A capability that needs a window answers `NoWindow` itself; one that does not (storage,
+   notifications, push) works before the first window. `ProviderContext` grows by methods (the
+   host bridge of ADR-0154), never by public fields.
+7. **Absence is one value, `Unsupported { reason }`.** It is constructed, not written as a
+   literal: `#[non_exhaustive]` with private fields, built by `Unsupported::new(reason)` or, when
+   a capability names it, by `Unsupported::of::<C>(reason)`, and read through accessors.
+   It is defined once in the contract crate and shared with the window contract (ADR-0254), which
+   embeds it in its errors in place of separate unit variants. `UnsupportedReason` is
+   `#[non_exhaustive]` with a written `Display`. No reason names a version of the OS, so no
+   application branches on one:
+
+   | Reason | Meaning |
+   |---|---|
+   | `NotOnThisPlatform` | This platform never has it. |
+   | `NotOnThisDevice` | This platform has it, but the OS build or the hardware of this device lacks it (ADR-0244's gate refused, or the sensor is absent). The value carries no version number; the number stays inside the gate. |
+   | `NotDeclared { what }` | The application's manifest lacks something the capability needs (a permission, a usage string, a background mode); `what` names it. The declarations of ADR-0154 make this detectable before the OS refuses or ends the process. |
+   | `Unavailable` | Temporary: the capability can work here but not now, and the caller may try again. Not the user's refusal (a permission state) and not an OS service switched off (service state). |
+   | `NotRegistered` | The UI runtime has no provider. Answered by the registry. |
+   | `NoWindow` | The capability needs a window and the context has none. Answered by the provider. |
+
+8. **Permissions belong to the handle.** A handle method that needs an OS permission reports
+   `PermissionState`:
+   - `Granted(Grant)`, `NotDetermined` or `Denied(Denial)`, so an error cannot carry `Granted`.
+     `Grant` is `Full`, `Reduced` (less than asked: limited photos, approximate location) or
+     `Provisional` (delivered without asking, pending the user's choice). `Denial` is `ByUser`,
+     `Permanently` or `Restricted`. All three are `#[non_exhaustive]`.
+   - A capability that has scopes names them in a `Scope` associated type (precise or coarse,
+     when-in-use or always); its handle answers `permission(scope)` and requests with
+     `request(scope)`, which returns `Completion<PermissionState>`.
+   - Whether an OS service is switched on is a separate state on the handle, not a permission:
+     "no permission" and "location services off" are different facts to a widget.
+   - A permission *check* on Android never returns `Denied(Permanently)`: the platform reveals it
+     only as the result of a request. The Android provider's tests hold it.
+   - Android and iOS usually end a process whose permission is revoked, so revocation events are
+     best effort.
+
+   The shape of these types is decided here. The types themselves are added with the first
+   capability that needs a permission, notifications or location, and not before: `flui-system`,
+   the first capability crate (ADR-0154), has no permission consumer.
+9. **Providers keep no process-global state.** A native-to-Rust trampoline carries its state in
+   the native object: a handle field on the Java object bound with `RegisterNatives` (ADR-0247), an
+   `objc2` instance variable, a captured closure. ADR-0097's single trampoline cell stays the only
+   one. This is a conformance requirement of every provider (ADR-0154).
+10. **When framework or package widgets name a handle, its marker and handle stay in the lowest
+    crate that names it, and only the OS provider lives elsewhere** (in `flui-app` for a service
+    on the core host's closed list, in a capability crate for the rest). The clipboard
+    (`flui-interaction`) is the model, and opening links (a `Link` widget) is the other case.
+    Haptics is not one: it is a facet of the window (ADR-0210, ADR-0254), reached through the
+    window, and does not travel through the seam. This is item 1 applied, not an exception to it:
+    Flutter's `Link` and `LinkDelegate` sit in the platform-interface package
+    ([flutter/packages@1383427519 packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart:9,44](https://github.com/flutter/packages/blob/1383427519/packages/url_launcher/url_launcher_platform_interface/lib/src/url_launcher_platform.dart#L9))
+    and Compose keeps its clipboard and URI locals in `ui`
+    ([JetBrains/compose-multiplatform-core@13b7599795
+    compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt:74-269](https://github.com/JetBrains/compose-multiplatform-core/blob/13b7599795/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt#L74-L269))
+    for the same reason. ADR-0154 states the matching rule for capability crates.
+
+    The clipboard and storage are services the framework needs before any capability crate exists,
+    so `flui-app`, the composition root, supplies their providers as built-ins. The providers
+    cannot sit in the core host: the marker `ClipboardCapability` is in `flui-interaction`, which
+    the core host cannot depend on. The core host exposes the OS objects the providers wrap, an
+    owner-local clipboard that reads through a callback and `FileStore`. **The synchronous
+    `Clipboard` trait is deleted** when the seam lands with the clipboard as its first consumer;
+    the clipboard methods of `Platform` go with it.
+11. **Classification of the later methods.** `storage` becomes a built-in capability once
+    persistence lands, and `LifecycleContext::storage` is removed. `close_guard`,
+    `lifecycle_handle` and `flush_registry_in_crate` are framework capabilities and stay methods.
+    `clipboard_handle` is removed when the clipboard moves to the seam.
+12. **Not inherited from ADR-0084:** its obligation for out-of-tree hosts to implement
+    `PlatformAccessibility` (the core host's list is closed by ADR-0151), and its haptics plan
+    (haptics is a facet of the window, ADR-0210 and ADR-0254; its vocabulary stays in the contract
+    with its OS paths in the core host, and it does not travel through the seam).
 
 ### 3. Shape
 
-Built and run in a scratch workspace on rustc 1.99.0 (the transcript is in the pull request).
+The 2026-10-06 shape (marker, provider, the dyn-compatibility pin, `Unsupported` as a constructed
+value and the three checked compile failures below) was built and run in a scratch workspace on
+rustc 1.99.0. The additions of this revision have not been built yet; the first landing builds
+them, and the spelling of a new name below may change in detail while the properties above hold.
 
 ```rust
+// flui-platform (the contract crate)
 pub trait Capability: 'static {
     type Handle: Clone + 'static;
     const NAME: &'static str;
 }
 
 #[non_exhaustive]
-pub struct ProviderContext<'a> { /* window: Option<&'a Arc<dyn PlatformWindow>> */ }
+pub struct ProviderContext<'a> { /* private */ }
 impl<'a> ProviderContext<'a> {
-    pub fn window(&self) -> Option<&'a Arc<dyn PlatformWindow>>;
+    /// A poster that runs a closure on the owner thread; callable from any thread.
+    pub fn owner(&self) -> &OwnerPoster;
+    /// The window the acquiring widget belongs to, if any.
+    pub fn window(&self) -> Option<WindowRef>;
 }
+// OwnerPoster: Clone + Send + Sync
+impl OwnerPoster {
+    /// Runs `f` at the owner's next turn.
+    /// # Errors
+    /// [`OwnerRetired`] once the owner has retired; `f` is dropped unrun.
+    pub fn post(&self, f: impl FnOnce() + Send + 'static) -> Result<(), OwnerRetired>;
+}
+
+/// Id, scale and raw handles of a window; no `PlatformWindow` method is reachable.
+pub struct WindowRef { /* private */ }
+impl HasWindowHandle for WindowRef { /* .. */ }
+impl HasDisplayHandle for WindowRef { /* .. */ }
 
 pub trait CapabilityProvider<C: Capability>: 'static {
     /// # Errors
@@ -105,20 +329,47 @@ pub trait CapabilityProvider<C: Capability>: 'static {
 }
 const _: fn(&dyn CapabilityProvider<Probe>) = |_| {}; // dyn-compatibility pin
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{capability} is unavailable: {reason}")]
+/// The result of an operation the OS finishes later. Owner-thread only.
+#[must_use]
+pub struct Completion<T> { /* private; !Send */ }
+impl<T: 'static> Completion<T> {
+    /// Runs `f` with the result at an owner turn boundary.
+    pub fn on_complete(self, f: impl FnOnce(T) + 'static);
+    /// Takes the result if it has arrived.
+    pub fn poll(&mut self) -> Option<T>;
+    /// For code outside the frame path; polled on the owner thread.
+    pub fn into_future(self) -> impl Future<Output = T>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct Unsupported { capability: &'static str, reason: UnsupportedReason }
+pub struct Unsupported { /* private: the capability's NAME when there is one, the reason */ }
 impl Unsupported {
-    pub const fn of<C: Capability>(reason: UnsupportedReason) -> Self;
-    pub const fn capability(&self) -> &'static str;
+    pub const fn new(reason: UnsupportedReason) -> Self;
+    pub const fn of<C: Capability>(reason: UnsupportedReason) -> Self; // names the capability
     pub const fn reason(&self) -> UnsupportedReason;
 }
+// impl Display and Error — written by hand; the message names the capability when there is one
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum UnsupportedReason { NotRegistered, NoWindow, NotOnThisPlatform }
+pub enum UnsupportedReason {
+    NotOnThisPlatform,
+    NotOnThisDevice,
+    NotDeclared { what: &'static str },
+    Unavailable,
+    NotRegistered,
+    NoWindow,
+}
 // impl Display for UnsupportedReason — written by hand
+
+// The permission types below are the decided shape. They enter the contract with the first
+// capability that needs a permission (notifications or location), not with the clipboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PermissionState { Granted(Grant), NotDetermined, Denied(Denial) }
+#[non_exhaustive] pub enum Grant { Full, Reduced, Provisional }
+#[non_exhaustive] pub enum Denial { ByUser, Permanently, Restricted }
 
 // flui-interaction
 pub enum ClipboardCapability {}
@@ -128,43 +379,183 @@ impl Capability for ClipboardCapability {
 }
 ```
 
+How a provider resolves a `Completion` from an OS callback is internal to the contract crate: the
+callback's only act is to post through the owner poster.
+
 Checked failures: `cx.capability::<ClipboardCapability>()` on `&dyn BuildContext` is E0599;
 `ClipboardHandle: Send` is E0277; a struct literal of `Unsupported` outside its crate is E0639.
-
-`CapabilityRegistry`, `CapabilityRegistrar` and `Plugin` live in `flui-runtime` and are
-re-exported by `flui-sdk`. `flui-testing` provides a headless provider for every built-in
-capability.
+The landing adds `Completion<T>: Send` as E0277.
 
 ### 4. Landing rule and first consumer
 
 The seam merges together with its first consumer, the clipboard; no part of it reaches `main`
-unwired. The landing contains the contract types, the registry, the built-in provider in
-`flui-app`, the headless provider in `flui-testing`, `EditableText` acquiring the clipboard
-through the seam, and the removal of `clipboard_handle`. Tests:
+unwired. Storage follows as the second built-in capability, and `flui-system` (ADR-0154) as the
+first capability crate. The clipboard landing contains the contract types, the registry in
+`flui-runtime`, the built-in clipboard provider in `flui-app` (the composition root; the marker
+sits above the core host) over the core host's owner-local clipboard, the headless host's
+clipboard (`pub(crate)` in the core host), a scripted double in `flui-testing` built on the
+contract's `scripted` feature, `EditableText` acquiring the clipboard through the seam, and the
+removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contract's
+`InMemoryClipboard`. The permission types are not part of it. Tests:
 
-- copy and paste through the headless provider;
+- copy and paste through the headless clipboard;
 - a UI runtime with no provider answers `NotRegistered`, not a panic;
 - a provider answering `NotOnThisPlatform` reaches the widget unchanged;
 - two plugins for the clipboard, and two capabilities with one `NAME`, fail before a window
   opens;
-- trybuild: `capability` on a `BuildContext` (E0599) and `ClipboardHandle: Send` (E0277);
+- a result the OS delivers on a thread other than the owner's reaches the widget at an owner turn
+  boundary, through the poster;
+- a post after the owner retired answers `OwnerRetired` and runs nothing, a completion pending at
+  retirement drops its closure unrun and polls `None`, and a completion resolved before retirement
+  is delivered;
+- trybuild: `capability` on a `BuildContext` (E0599), `ClipboardHandle: Send` and
+  `Completion<T>: Send` (E0277);
 - a package fixture that depends only on `flui-sdk` and the contract declares, registers and
-  acquires its own capability.
+  acquires its own capability, and so does a leaf-crate fixture that depends on the contract alone.
 
-## Alternatives considered
+### Consequences
 
-| Alternative | Why not |
-|---|---|
-| Accept ADR-0084 unchanged, amend later | Its provider needs a window, it caches handles (a cached location handle keeps GPS on), it hands out the backend trait object, and it leaves three methods unclassified |
-| `impl Capability for dyn Clipboard` with `Handle = Arc<dyn Clipboard>` | Loses the owner-local, asynchronous-ready `ClipboardHandle`; breaks on web and Wayland |
-| One `LifecycleContext` method per capability | Packages can never add one |
-| Capabilities as inherited views | Readable in `build`, which ADR-0078 forbids for capabilities |
-| Tauri-style permission files in the seam | They gate a webview's IPC at build time; FLUI has no untrusted code inside the app, and OS permission is per capability and per run |
+- Good, because one generic entry point replaces a growing method list; packages and capability
+  crates get the same seam as the framework, and a leaf capability crate registers with the
+  contract alone.
+- Neutral, because `clipboard_handle` and, later, `storage` are removed in the pull requests that
+  move them, and the platform-capability row of `docs/extending.md` changes in the clipboard
+  landing.
+- Good, because the seam names only contract types, a `WindowRef` and not `PlatformWindow`, which
+  keeps the surface capability crates depend on small; that is what makes the independent
+  versioning of ADR-0153 reachable.
+- Good, because every call the OS answers later has one shape, so a test can script it
+  (ADR-0154), and an OS callback has one job: post.
+- Bad, because a widget still cannot take a capability in `build`; long-lived OS work therefore
+  belongs to an application service, not to a handle held by a widget.
 
-## Consequences
+### Confirmation
 
-- One generic entry point replaces a growing method list; packages and capability crates get
-  the same seam as the framework.
-- `clipboard_handle` and, later, `storage` are removed in the pull requests that move them.
-- The landing touches files the owner-thread and persistence work are changing; the transition
-  plan gives the window and the path if the owner-thread work does not land in 0.2.0.
+- The compiler, through the checked failures of §3: `cx.capability::<ClipboardCapability>()`
+  on `&dyn BuildContext` is E0599, `ClipboardHandle: Send` is E0277, a struct literal of
+  `Unsupported` outside its crate is E0639, and the landing adds `Completion<T>: Send` as E0277.
+  The dyn-compatibility pin `const _: fn(&dyn CapabilityProvider<Probe>) = |_| {};` stops
+  compiling if the provider trait stops being dyn-compatible.
+- The tests of the clipboard landing, listed in §4: copy and paste through the headless
+  clipboard; a UI runtime with no provider answers `NotRegistered`, not a panic; a provider
+  answering `NotOnThisPlatform` reaches the widget unchanged; two plugins for the clipboard, and
+  two capabilities with one `NAME`, fail before a window opens; a result the OS delivers on a
+  thread other than the owner's reaches the widget at an owner turn boundary, through the poster;
+  the trybuild fixtures above; and a package fixture that depends only on `flui-sdk` and the
+  contract, and a leaf-crate fixture that depends on the contract alone, each declaring,
+  registering and acquiring its own capability.
+- The Android provider's tests hold the rule that a permission check never returns
+  `Denied(Permanently)` (§2, item 8).
+- ADR-0097's gate (`cargo heli xtask globals`) keeps the single trampoline cell the only
+  process-global entry of a provider in the repository (§2, item 9); every provider meets
+  the rule as a conformance requirement (ADR-0154).
+- `a_dropped_handle_ends_its_subscription`: the scripted provider records the subscription ending
+  when the last clone of a handle drops (§2, item 3). That long-lived OS work is an application
+  service and not a widget-held handle is a row of each capability conformance table (ADR-0154),
+  not of the seam.
+
+## Pros and cons of the options
+
+### 1. The revised seam decided above
+
+- Good, because one generic entry point, `cx.capability::<C>()`, lets the framework, a capability
+  crate and a package add a capability the same way (§1 and §2).
+- Good, because providers live per UI runtime and a handle is acquired only in a lifecycle hook,
+  so a handle that holds an OS subscription has an owner and ends it on drop, with no process
+  singleton and no static at the OS-callback boundary (§2, items 2, 3 and 9).
+- Good, because `Completion<T>` is the one owner-thread result type for "the OS answers later",
+  and an OS callback only posts to the owner (§2, items 5 and 6).
+- Good, because `Plugin` and the registrar sit in the contract crate, so a leaf capability crate
+  registers without depending on `flui-sdk` or `flui-runtime` (§2, item 4).
+- Good, because `ProviderContext` hands out a `WindowRef`, not `PlatformWindow`, so no
+  window-trait method becomes semver surface for capability crates (§2, item 6).
+- Good, because absence is one constructed value, `Unsupported { reason }`, shared with the window
+  contract, and permissions say what was granted (§2, items 7 and 8).
+- Good, because the registry is keyed by the marker and not by the implementation, so substitution
+  is a provider override (§1).
+- Good, because the rules are checked by the compiler: E0599, E0277 and E0639 (§3).
+- Bad, because a widget still cannot take a capability in `build`, so long-lived OS work becomes
+  an application service.
+- Bad, because the additions of this revision have not been built yet, and the permission types
+  wait for the first capability that needs a permission (§3).
+- Bad, because the clipboard landing removes `clipboard_handle`, the synchronous `Clipboard` trait
+  and the contract's `InMemoryClipboard`, and later removes `LifecycleContext::storage`
+  (§2, items 10 and 11).
+
+### 2. Accept ADR-0084 unchanged, amend later
+
+- Good, because its open seam, per-runtime registry, precedence and refusal of `inventory` carry
+  over (§1).
+- Bad, because its provider needs a window.
+- Bad, because it caches handles, and a cached location handle keeps GPS on.
+- Bad, because it hands out the provider trait object.
+- Bad, because it leaves three methods unclassified.
+- Bad, because its `Plugin` placement forces every capability crate onto `flui-sdk`.
+
+### 3. A synchronous `Clipboard` trait object as the handle, with an asynchronous twin (GPUI)
+
+- Bad, because `read_text` cannot be implemented honestly on web and Wayland.
+- Bad, because it is two shapes for one fact.
+
+### 4. A process singleton per service (Flutter's static instance, Capacitor's registry)
+
+- Bad, because it cannot serve several UI runtimes.
+- Bad, because it invites statics at the OS-callback boundary, which is where the references'
+  defects are.
+
+### 5. The handle type as the key (Tauri's `state::<T>()`)
+
+- Bad, because it names the one concrete implementation, so substitution means replacing the
+  plugin.
+
+### 6. Twin blocking and asynchronous APIs (Tauri)
+
+- Bad, because it is two shapes for one call, and the response path deadlocks; AGENTS.md lists
+  re-entry with guards held first among the recurring defects.
+
+### 7. `async fn` in handle traits as the base
+
+- Good, because it is right as the adapter outside the frame path (`Completion::into_future`).
+- Bad, because it needs an executor on the owner thread and is not dyn-compatible without boxing,
+  which makes it wrong as the base.
+
+### 8. Callbacks only
+
+- Bad, because they are poor for the multi-step permission flow.
+
+### 9. Effects as data (Crux; [redbadger/crux@1ef0f547e6 crux_core/src/testing.rs:8-12](https://github.com/redbadger/crux/blob/1ef0f547e6/crux_core/src/testing.rs#L8-L12))
+
+- Bad, because it needs the application to be a pure function.
+
+### 10. The whole `PlatformWindow` in `ProviderContext`
+
+- Bad, because every method a capability crate names becomes semver surface for all of them.
+- Bad, because portals need only a raw handle.
+
+### 11. One `LifecycleContext` method per capability
+
+- Bad, because packages can never add one.
+
+### 12. Capabilities as inherited views, readable anywhere (Compose, GPUI)
+
+- Bad, because they are readable in `build`, which ADR-0078 forbids for capabilities.
+- Bad, because an OS subscription would lose its owner.
+
+### 13. Tauri-style permission files in the seam
+
+- Bad, because they isolate access to a webview's IPC layer
+  ([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/src/acl/capability.rs:77](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-utils/src/acl/capability.rs#L77)), FLUI has no
+  untrusted code inside the app, and OS permission is per capability and per run.
+
+## More information
+
+- **Not implemented.** The seam merges together with its first consumer, the clipboard; no part of
+  it reaches `main` unwired (§4). Storage follows as the second built-in capability and
+  `flui-system` (ADR-0154) as the first capability crate. The permission types enter the contract
+  with the first capability that needs a permission, notifications or location, and not with the
+  clipboard (§2 and §3). The additions of the 2026-10-20 revision have not been built; the
+  first landing builds them (§3).
+- **Revisit when.** The idea of Tauri-style permission files may return for the agent protocol
+  (ADR-0095), not for the seam. The spelling of a new name in §3 may change in detail at
+  the first landing while the properties of §2 hold.
+- **Prototype.** The shape of 2026-10-06 was built and run in a scratch workspace on rustc 1.99.0.

@@ -9,10 +9,12 @@ mod util;
 #[cfg(test)]
 mod table_test;
 
-mod device;
 mod tasks;
 
+mod source_tree;
+
 mod android_dex;
+mod api_closure;
 mod bench;
 mod change_scope;
 mod changelog;
@@ -26,6 +28,7 @@ mod globals;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
+mod panic_boundary;
 mod perf;
 mod platform_floor;
 mod ratchet;
@@ -82,18 +85,12 @@ enum Command {
     WasmLink(tasks::WasmLinkArgs),
     /// Run the wasm32 tests under wasm-bindgen-test-runner.
     WasmTest(tasks::WasmTestArgs),
-    /// Real-window smoke test under X11 (or Wayland).
-    LiveSmoke(tasks::LiveSmokeArgs),
     /// The GPU readback suites.
     GpuTest(tasks::GpuTestArgs),
     /// The unsafe-code paths under Miri.
     Miri(tasks::MiriArgs),
-    /// The demo layer snapshot suite.
-    DemoSnapshots(tasks::DemoSnapshotsArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Run a macOS, iOS or Windows device check (drivers in tools/device-checks).
-    Device(device::DeviceArgs),
     /// Check crate layers, manifests, test reachability and ADR numbers.
     Workspace(workspace::WorkspaceArgs),
     /// Check that no crate reaches what its tier forbids (ADR-0081 §2).
@@ -112,6 +109,8 @@ enum Command {
     Wgsl(wgsl::WgslArgs),
     /// Check that every process-global has a reviewed entry (ADR-0097).
     Globals(globals::GlobalsArgs),
+    /// Check that every OS entry into flui-native goes through the panic boundary (ADR-0151 §16).
+    PanicBoundary(panic_boundary::PanicBoundaryArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -140,6 +139,8 @@ enum Command {
     AndroidDex(android_dex::AndroidDexArgs),
     /// Check (or --write) the floors generated from platform-support.toml (ADR-0244).
     PlatformFloor(platform_floor::PlatformFloorArgs),
+    /// Check what Stable crates' public API names from upstream crates (ADR-0089).
+    ApiClosure(api_closure::ApiClosureArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -175,12 +176,9 @@ fn main() -> ExitCode {
         Command::WasmCheck(args) => tasks::wasm_check(&args),
         Command::WasmLink(args) => tasks::wasm_link(&args),
         Command::WasmTest(args) => tasks::wasm_test(&args),
-        Command::LiveSmoke(args) => tasks::live_smoke(&args),
         Command::GpuTest(args) => tasks::gpu_test(&args),
         Command::Miri(args) => tasks::miri(&args),
-        Command::DemoSnapshots(args) => tasks::demo_snapshots(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
-        Command::Device(args) => device::device(&args),
         Command::Workspace(args) => workspace::workspace(&args),
         Command::Reach(args) => workspace::reach(&args),
         Command::ModuleDag(args) => module_dag::module_dag(&args),
@@ -190,6 +188,7 @@ fn main() -> ExitCode {
         Command::Toolchain(args) => toolchain::toolchain(&args),
         Command::Wgsl(args) => wgsl::wgsl(&args),
         Command::Globals(args) => globals::globals(&args),
+        Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
@@ -204,6 +203,7 @@ fn main() -> ExitCode {
         Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
         Command::AndroidDex(args) => android_dex::android_dex(&args),
         Command::PlatformFloor(args) => platform_floor::platform_floor(&args),
+        Command::ApiClosure(args) => api_closure::api_closure(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),

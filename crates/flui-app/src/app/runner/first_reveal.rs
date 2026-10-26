@@ -2,7 +2,7 @@
 //!
 //! A backend that defers the physical reveal of a window opened visible
 //! (`WindowOptions::visible`) waits for the embedder to say when — see
-//! [`flui_platform::traits::PlatformWindow::reveal_after_first_frame`]. This
+//! [`flui_platform::PlatformWindow::reveal_after_first_frame`]. This
 //! module is the embedder's half of that contract: the decision of *which*
 //! frame outcome earns the reveal, kept pure so it is host-tested while the
 //! desktop frame closure that consults it stays glue.

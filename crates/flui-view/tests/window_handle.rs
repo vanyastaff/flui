@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
-use flui_platform_api::{
+use flui_platform::{
     HostNotice, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
     WindowGeometry, WindowMode, WindowState,
 };

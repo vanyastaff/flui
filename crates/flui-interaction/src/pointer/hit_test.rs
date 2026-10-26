@@ -11,7 +11,7 @@
 
 pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     ButtonChange, PanZoomEvent, PointerMove, PointerPosition, PointerSample, ScrollDelta,
     ScrollEvent, ScrollUnit,
 };

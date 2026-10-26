@@ -14,7 +14,6 @@ Crate-local guides for the render pipeline, protocols, and test harness.
 | Document | Topic |
 |----------|-------|
 | **[TESTING.md](./TESTING.md)** | `RenderTester` harness — API, multi-frame animation, examples |
-| [render_inspector example](../examples/render_inspector.rs) | Runnable headless inspector |
 | [render_object_harness.rs](../../flui-objects/tests/render_object_harness.rs) | CI catalog of all render types |
 
 ## Related harness docs

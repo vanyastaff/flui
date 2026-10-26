@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
-use flui_platform_api::{Storage, StorageError, StorageName, StoredVersion, WriteMode};
+use flui_platform::{Storage, StorageError, StorageName, StoredVersion, WriteMode};
 use parking_lot::Mutex;
 
 use crate::owner_notify::OwnerNotify;
@@ -336,7 +336,7 @@ mod tests {
     use std::task::{Context, Waker};
     use std::time::{Duration, Instant};
 
-    use flui_platform_api::{StorageError, StorageName, StoredVersion, WriteMode};
+    use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
     use flui_scheduler::AppLifecycleState;
     use flui_testing::storage::MemoryStorage;
     use parking_lot::Mutex;

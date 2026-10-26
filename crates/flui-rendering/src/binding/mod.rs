@@ -264,16 +264,6 @@ pub trait RendererBinding {
             self.request_visual_update();
         }
     }
-
-    /// Called when platform text scale factor changes.
-    fn handle_text_scale_factor_changed(&self) {
-        // Default: no-op. Override to handle text scale changes.
-    }
-
-    /// Called when platform brightness changes.
-    fn handle_platform_brightness_changed(&self) {
-        // Default: no-op. Override to handle brightness changes.
-    }
 }
 
 // ============================================================================

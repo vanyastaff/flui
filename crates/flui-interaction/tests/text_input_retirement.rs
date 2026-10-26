@@ -10,8 +10,8 @@ use flui_foundation::geometry::Bounds;
 use flui_interaction::{
     ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
-use flui_platform_api::PlatformTextInput;
-use flui_platform_api::text_store::{
+use flui_platform::PlatformTextInput;
+use flui_platform::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
     TextStoreObserver, TextStoreStatus,
 };
@@ -72,7 +72,7 @@ fn replacement_destructor_may_replace_the_new_client() {
     let superseded = handle.attach(client()).expect("replacement");
     assert!(!owner.is_attached(superseded));
     assert!(owner.is_attached(installed.get().expect("destructor ran")));
-    owner.dispatch(&flui_platform_api::ImeEvent::Commit("ok".into()));
+    owner.dispatch(&flui_platform::ImeEvent::Commit("ok".into()));
     assert_eq!(*platform.allowed.lock(), [true]);
 }
 
@@ -233,7 +233,7 @@ fn store_failure_wins_callback_failure_and_the_owner_recovers() {
     );
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
-    owner.dispatch(&flui_platform_api::ImeEvent::Commit("recovered".into()));
+    owner.dispatch(&flui_platform::ImeEvent::Commit("recovered".into()));
     assert_eq!(*platform.allowed.lock(), [true, false, true]);
 }
 
@@ -653,7 +653,7 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
 #[derive(Default)]
 struct PullHost(RefCell<Vec<bool>>);
 
-impl flui_platform_api::text_store::TextStoreHost for PullHost {
+impl flui_platform::text_store::TextStoreHost for PullHost {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         self.0.borrow_mut().push(store.is_some());
     }
@@ -662,10 +662,10 @@ impl flui_platform_api::text_store::TextStoreHost for PullHost {
         &self,
         _: &Rc<dyn TextStore>,
     ) -> Result<
-        flui_platform_api::text_store::CompositionEnd,
-        flui_platform_api::text_store::TextStoreHostError,
+        flui_platform::text_store::CompositionEnd,
+        flui_platform::text_store::TextStoreHostError,
     > {
-        Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+        Ok(flui_platform::text_store::CompositionEnd::Committed)
     }
 }
 
@@ -816,7 +816,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
             "valid outer client remains admitted"
         );
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            owner.dispatch(&flui_platform_api::ImeEvent::Commit("first".into()));
+            owner.dispatch(&flui_platform::ImeEvent::Commit("first".into()));
         }))
         .expect_err("owner reports contained gate failure on its next turn");
         assert_eq!(
@@ -825,7 +825,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
             "failed nested installation precedes competing outgoing retirement"
         );
         assert!(owner.is_attached(token));
-        owner.dispatch(&flui_platform_api::ImeEvent::Commit("healthy".into()));
+        owner.dispatch(&flui_platform::ImeEvent::Commit("healthy".into()));
         let text = Rc::new(RefCell::new(String::new()));
         let read = Rc::clone(&text);
         let outcome = incoming
@@ -833,8 +833,8 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
                 LockGrant::read(move |session| {
                     *read.borrow_mut() = session
                         .text(
-                            flui_platform_api::text_store::Utf16Range::new(
-                                flui_platform_api::text_store::Utf16Offset::ZERO,
+                            flui_platform::text_store::Utf16Range::new(
+                                flui_platform::text_store::Utf16Offset::ZERO,
                                 session.document_len(),
                             )
                             .expect("document range"),
@@ -876,7 +876,7 @@ fn commit_reentry_preserves_the_newer_attachment() {
     }));
     assert_eq!(handle.attach(client()), Err(TextInputError::Superseded));
     assert!(owner.is_attached(nested.get().expect("nested token")));
-    owner.dispatch(&flui_platform_api::ImeEvent::Commit("!".into()));
+    owner.dispatch(&flui_platform::ImeEvent::Commit("!".into()));
     let text = Rc::new(RefCell::new(String::new()));
     let read = text.clone();
     let _ = nested_store
@@ -884,8 +884,8 @@ fn commit_reentry_preserves_the_newer_attachment() {
             LockGrant::read(move |session| {
                 *read.borrow_mut() = session
                     .text(
-                        flui_platform_api::text_store::Utf16Range::new(
-                            flui_platform_api::text_store::Utf16Offset::ZERO,
+                        flui_platform::text_store::Utf16Range::new(
+                            flui_platform::text_store::Utf16Offset::ZERO,
                             session.document_len(),
                         )
                         .expect("ordered range"),

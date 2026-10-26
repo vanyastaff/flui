@@ -1,17 +1,7 @@
 # Themes
 
-Both widget-catalog demos set up a theme explicitly before building their tree:
-
-```bash
-cargo run --example material_demo --features material    # ThemeData / ColorScheme
-cargo run --example cupertino_demo --features cupertino   # CupertinoTheme
-```
-
-Source: [`examples/material_demo/tree.rs`](https://github.com/vanyastaff/flui/blob/main/examples/material_demo/tree.rs),
-[`examples/cupertino_demo/tree.rs`](https://github.com/vanyastaff/flui/blob/main/examples/cupertino_demo/tree.rs).
-
-The minimal shape — wrap the root view in a theme, then call `run_app` — is also what
-`examples/form.rs` does with `Theme::new(ThemeData::light(), ...)`. An application that also wants
-light/dark switching, a navigator and a `ScaffoldMessenger` roots itself in `MaterialApp`
+An application wraps its root view in a theme, then calls `run_app`: `Theme::new(ThemeData::light(), ...)`
+for Material, `CupertinoTheme` for Cupertino. An application that also wants light/dark switching,
+a navigator and a `ScaffoldMessenger` roots itself in `MaterialApp`
 (`packages/flui-material/src/app.rs`) instead, which resolves `ThemeMode` and publishes the
 `ThemeData` through `Theme` itself; see the [Flutter → FLUI mapping](../mapping.md) notes.

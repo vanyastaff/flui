@@ -1,0 +1,2 @@
+### Added
+- `InteractionDispatchHandle::declare_scroll_contact_feed` marks a pointer target as feeding a drag-family recognizer. A phased, precise touchpad scroll that begins over such a target opens an arena contact of kind `Trackpad` for it and delivers the pan as `Down`, `Move`, `Up` and `Cancel`; the platform's momentum after a fed pan reaches no scroll consumer. Nothing declares a feed yet: `GestureDetector` does in a follow-up.

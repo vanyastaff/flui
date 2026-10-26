@@ -7,7 +7,7 @@ use std::rc::Rc;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
-use flui_platform_api::text_store::TextInputPurpose;
+use flui_platform::text_store::TextInputPurpose;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 

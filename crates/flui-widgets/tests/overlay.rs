@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
+use flui_testing::widgets::StateCreations;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{OverlayEntryProbe as _, OverlayProbe as _};
 use flui_widgets::{InsertPosition, Overlay, OverlayEntry, OverlayHandle, SizedBox};
@@ -58,46 +59,11 @@ fn counting_entry(calls: &Calls) -> OverlayEntry {
     })
 }
 
-/// A stateful leaf whose `create_state` is counted: if the element is reused
-/// across a reorder, its state is **not** recreated.
-#[derive(Clone)]
-struct Probe {
-    creations: Arc<AtomicUsize>,
-}
-
-impl View for Probe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-impl StatefulView for Probe {
-    type State = ProbeState;
-
-    fn create_state(&self) -> Self::State {
-        self.creations.fetch_add(1, Ordering::Relaxed);
-        ProbeState
-    }
-}
-
-struct ProbeState;
-
-impl ViewState<Probe> for ProbeState {
-    fn build(&self, _view: &Probe, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::new(10.0, 10.0)
-    }
-}
-
-/// An entry whose subtree is a state-creation-counting [`Probe`].
+/// An entry whose subtree is a state-creation-counting [`StateCreations`]: if
+/// the element is reused across a reorder, its state is **not** recreated.
 fn probe_entry(creations: &Arc<AtomicUsize>) -> OverlayEntry {
     let creations = Arc::clone(creations);
-    OverlayEntry::new(move |_ctx| {
-        Probe {
-            creations: Arc::clone(&creations),
-        }
-        .into_view()
-        .boxed()
-    })
+    OverlayEntry::new(move |_ctx| StateCreations::counting(&creations).into_view().boxed())
 }
 
 /// The `Theater` element the overlay builds, inside the anchor that names

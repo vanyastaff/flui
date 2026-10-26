@@ -1,6 +1,6 @@
 ### Changed
 
-- **`flui_platform_api::text_store::commit_composition_in_place`** returns the store's answer to
+- **`flui_platform::text_store::commit_composition_in_place`** returns the store's answer to
   its lock request (`Result<LockOutcome, TextStoreError>`): a `Deferred` commit is queued in the
   store and owed a later run.
 

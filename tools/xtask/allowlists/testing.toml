@@ -126,42 +126,42 @@ kind = "double"
 names = ["ScriptedAnimation"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/linux/display/source/tests.rs"
+path = "crates/flui-native/src/display/linux/source/tests.rs"
 kind = "double"
 names = ["ScriptedSession"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/direct_manipulation/tests.rs"
+path = "crates/flui-native/src/input/windows/direct_manipulation/tests.rs"
 kind = "pump"
 names = ["pump"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/drag/tests.rs"
+path = "crates/flui-native/src/drag/windows/tests.rs"
 kind = "double"
 names = ["Scripted"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/text/windows/tsf/probe.rs"
 kind = "pump"
 names = ["pump", "tick"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/text/windows/tsf/probe.rs"
 kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-platform/src/shared/android_ndk.rs"
+path = "crates/flui-native/src/owner/android/ndk.rs"
 kind = "double"
 names = ["FakeSymbols"]
 
 [[allow]]
-path = "crates/flui-platform/tests/wasm32.rs"
+path = "crates/flui-native/tests/wasm32.rs"
 kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-platform/tests/wasm32/display.rs"
+path = "crates/flui-native/tests/wasm32/display.rs"
 kind = "double"
 names = ["Probe"]
 
@@ -241,11 +241,6 @@ kind = "double"
 names = ["ProbeItem", "ProbeItemState"]
 
 [[allow]]
-path = "crates/flui-widgets/tests/modal_route.rs"
-kind = "double"
-names = ["Probe", "ProbeState"]
-
-[[allow]]
 path = "crates/flui-widgets/tests/nested_scroll.rs"
 kind = "pump"
 names = ["tick"]
@@ -254,16 +249,6 @@ names = ["tick"]
 path = "crates/flui-widgets/tests/nested_scroll.rs"
 kind = "double"
 names = ["Probe"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/overlay.rs"
-kind = "double"
-names = ["Probe", "ProbeState"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/perf.rs"
-kind = "pump"
-names = ["pump"]
 
 [[allow]]
 path = "crates/flui-widgets/tests/router.rs"
@@ -282,11 +267,6 @@ names = ["RecordingDelegate"]
 
 [[allow]]
 path = "crates/flui-widgets/tests/text_store_kit.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/transitions.rs"
 kind = "pump"
 names = ["pump"]
 
@@ -324,18 +304,3 @@ names = ["Probe"]
 path = "packages/flui-material/tests/tab_bar_view.rs"
 kind = "double"
 names = ["Probe", "ProbeState"]
-
-[[allow]]
-path = "tests/cupertino_demo.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "tests/material_demo.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "tests/vertical_slice_demo.rs"
-kind = "pump"
-names = ["pump"]

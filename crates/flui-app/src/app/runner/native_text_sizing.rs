@@ -8,6 +8,8 @@ use std::{
 };
 
 use flui_foundation::PresentationAddress;
+use flui_native::HostWindow;
+use flui_native::{CapturedTextSizing, OwnerPlatform, TextSizingCaptureState};
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -15,8 +17,6 @@ use flui_foundation::PresentationAddress;
 ))]
 use flui_painting::TextSizingSource;
 use flui_painting::{TextSizing, TextSizingAdmission};
-use flui_platform::traits::HostWindow;
-use flui_platform::{CapturedTextSizing, OwnerPlatform, TextSizingCaptureState};
 use flui_runtime::owner::{OwnerEffects, PresentationDispatcher, TextSizingFrontier};
 use flui_runtime::ui_runtime::TextSizingSettlement;
 
@@ -46,7 +46,7 @@ fn retry_delay(failures: u32) -> Duration {
 
 #[cfg(test)]
 type CaptureSampler =
-    Box<dyn FnMut() -> Result<TextSizingCaptureState, flui_platform::TextSizingCaptureError>>;
+    Box<dyn FnMut() -> Result<TextSizingCaptureState, flui_native::TextSizingCaptureError>>;
 
 pub(super) struct NativeTextSizing {
     address: PresentationAddress,
@@ -226,7 +226,7 @@ impl NativeTextSizing {
                 }
             }
             Ok(TextSizingCaptureState::Ready(_)) => {}
-            Err(flui_platform::TextSizingCaptureError::Unavailable) => {
+            Err(flui_native::TextSizingCaptureError::Unavailable) => {
                 self.park_until_available(dispatcher, effects, &current);
             }
             Err(error) => {
@@ -305,7 +305,7 @@ impl NativeTextSizing {
         }
     }
 
-    fn capture(&self) -> Result<TextSizingCaptureState, flui_platform::TextSizingCaptureError> {
+    fn capture(&self) -> Result<TextSizingCaptureState, flui_native::TextSizingCaptureError> {
         #[cfg(test)]
         {
             let sampler = self.capture_sampler.borrow_mut().take();
@@ -315,7 +315,7 @@ impl NativeTextSizing {
                 return result;
             }
         }
-        self.owner.capture_text_sizing(&self.window)
+        flui_native::capture_text_sizing(&self.owner, &self.window)
     }
 
     pub(super) fn resolve(
@@ -392,8 +392,8 @@ impl NativeTextSizing {
         let mut outcome = TextSizingSettlement::Ready;
         if let Some(error) = &failure {
             outcome = match error {
-                flui_platform::TextSizingCaptureError::InvalidSize(_)
-                | flui_platform::TextSizingCaptureError::UnsupportedProfile => {
+                flui_native::TextSizingCaptureError::InvalidSize(_)
+                | flui_native::TextSizingCaptureError::UnsupportedProfile => {
                     TextSizingSettlement::Unavailable
                 }
                 _ => {

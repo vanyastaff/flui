@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use flui_platform_api::Locale;
+use flui_platform::Locale;
 
 /// Composite lookup keys, built once per `supported_locales` entry so the
 /// resolution loop below is a hash lookup per preferred locale rather than a

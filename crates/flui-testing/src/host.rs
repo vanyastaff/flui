@@ -36,13 +36,11 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Size};
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform_api::TextStoreHost;
-use flui_platform_api::data_transfer::{RepresentationDescriptor, TransferActions};
-use flui_platform_api::drag::{
-    DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource,
-};
-use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
-use flui_platform_api::{
+use flui_platform::TextStoreHost;
+use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
+use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
+use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
     PlatformWindow, WindowId,
 };
@@ -85,10 +83,10 @@ pub struct HeadlessWindow {
     display: Mutex<Option<DisplayId>>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
     /// every change this double makes to it.
-    revision: Mutex<flui_platform_api::WindowRevision>,
+    revision: Mutex<flui_platform::WindowRevision>,
     input_regions: Mutex<ProjectedInputRegions>,
     input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
-    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::haptics::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
 }
 
@@ -114,10 +112,10 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
             display: Mutex::new(None),
-            revision: Mutex::new(flui_platform_api::WindowRevision::ZERO),
+            revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
             input_region_updates: Mutex::default(),
-            haptics: Arc::new(flui_platform_api::haptics::FakeHaptics::new()),
+            haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
         }
     }
@@ -132,7 +130,7 @@ impl HeadlessWindow {
     /// The recording actuator this window plays haptics on: every request the
     /// UI runtime handed the platform, with the outcome it returned.
     #[must_use]
-    pub fn haptic_actuator(&self) -> &flui_platform_api::haptics::FakeHaptics {
+    pub fn haptic_actuator(&self) -> &flui_platform::haptics::FakeHaptics {
         &self.haptics
     }
 
@@ -255,8 +253,8 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform_api::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
@@ -284,31 +282,25 @@ impl PlatformWindow for HeadlessWindow {
     /// No position (as on Wayland), the display it was
     /// [moved to](HeadlessHost::move_to_display), and a revision each move
     /// advances.
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        let mut state = flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
-        .with_display(*self.display.lock());
+        let mut state =
+            flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+                .with_display(*self.display.lock());
         state.revision = *self.revision.lock();
         state
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -597,7 +589,7 @@ impl HeadlessHost {
     /// `LifecycleContext::storage`.
     pub(crate) fn with_storage(
         window: HeadlessWindow,
-        storage: Option<Arc<dyn flui_platform_api::Storage>>,
+        storage: Option<Arc<dyn flui_platform::Storage>>,
     ) -> Self {
         #[expect(
             clippy::cast_possible_truncation,
@@ -624,7 +616,7 @@ impl HeadlessHost {
         let mut host = RuntimeHostServices::new(
             Arc::new(move || wake_flag.store(true, Ordering::Relaxed)),
             needs_redraw,
-            Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+            Arc::clone(&clipboard) as Arc<dyn flui_platform::Clipboard>,
             &fonts,
             ClockSource::Manual(clock.clone()),
         );
@@ -1135,7 +1127,7 @@ impl HeadlessHost {
     /// Apply `values` as the next system-preference revision, as a host's
     /// preference source delivers one (ADR-0172): gesture timing, motion and
     /// text values reach the windows' new sequences from now on.
-    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+    pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
         self.ui_runtime
             .enter(|ui_runtime| ui_runtime.apply_system_preferences_for_test(values));
     }
@@ -1147,7 +1139,7 @@ impl HeadlessHost {
         self.ui_runtime.enter(|ui_runtime| {
             ui_runtime.synchronize_window_snapshot(
                 id,
-                flui_platform_api::WindowExecutionState::Running,
+                flui_platform::WindowExecutionState::Running,
                 true,
                 visible,
             );
@@ -1482,14 +1474,14 @@ impl HeadlessHost {
     }
 
     /// Advance the clock to `time` on the event timeline, if it is ahead.
-    fn advance_to(&self, time: flui_platform_api::EventTime) {
+    fn advance_to(&self, time: flui_platform::EventTime) {
         let now = self.event_now();
         self.clock.advance(time.saturating_duration_since(now));
     }
 
     /// The clock's reading on the event timeline.
-    fn event_now(&self) -> flui_platform_api::EventTime {
-        flui_platform_api::EventTime::from_nanos(
+    fn event_now(&self) -> flui_platform::EventTime {
+        flui_platform::EventTime::from_nanos(
             u64::try_from(self.clock.elapsed().as_nanos())
                 .expect("BUG: a headless test's virtual time fits the event timeline"),
         )
@@ -1542,20 +1534,20 @@ pub struct HeadlessWindowId(PresentationId);
 /// for each window it opens. The double honours no window command.
 struct HeadlessWindowControl(Arc<HeadlessWindow>);
 
-impl flui_platform_api::WindowControl for HeadlessWindowControl {
-    fn state(&self) -> flui_platform_api::WindowState {
+impl flui_platform::WindowControl for HeadlessWindowControl {
+    fn state(&self) -> flui_platform::WindowState {
         self.0.state()
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn submit(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 

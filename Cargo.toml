@@ -12,8 +12,8 @@ members = [
     "crates/flui-foundation", # IDs, keys, diagnostics, the f64 geometry values (ADR-0098)
 
     # C: contracts
-    "crates/flui-platform-api", # Platform capability traits, window and input vocabulary (ADR-0082)
-    "crates/flui-protocol",     # Semantics roles and actions, agent-protocol vocabulary (ADR-0095)
+    "crates/flui-platform", # Platform capability traits, window and input vocabulary (ADR-0082)
+    "crates/flui-protocol", # Semantics roles and actions, agent-protocol vocabulary (ADR-0095)
 
     # S: substrate
     "crates/flui-log",         # Tracing backend; only composition roots link it
@@ -38,9 +38,9 @@ members = [
     "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
 
     # H: hosts
-    "crates/flui-platform", # Platform backends: windows, input, IME, clipboard
-    "crates/flui-app",      # Per-window UiRuntimes and the run loop
-    "crates/flui-cli",      # `flui` CLI: create, run, build, doctor, devices
+    "crates/flui-native", # The core host: native, headless and winit hosts
+    "crates/flui-app",    # Per-window UiRuntimes and the run loop
+    "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
     "packages/flui-material",  # Material Design theming and the M3 widget catalog
@@ -56,9 +56,6 @@ members = [
     "examples/hot_reload_lifecycle_fixture", # app_plugin! fixture flui-hot-reload's reload-lifecycle test loads
     "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
     "examples/painting_demo",
-    "examples/web_counter",
-    "examples/interaction_gallery",          # One screen per interaction widget: desktop, Android, web
-    "tools/live-smoke",                      # Live end-to-end harness: real window, X11 input, teardown
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
@@ -81,7 +78,7 @@ members = [
 # flui-sdk and the contract crates (ADR-0081 §3, ADR-0088 §2).
 tiers = [
     "V",   # values: macros, foundation
-    "C",   # contracts: flui-platform-api, flui-protocol
+    "C",   # contracts: flui-platform, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
     "K",   # spine and runtime: view, testing, widgets, runtime, sdk
@@ -132,7 +129,7 @@ generic-ffi = [
 
 [workspace.metadata.flui.reach.tier.K]
 forbid = [
-    "flui-platform",
+    "flui-native",
     "winit",
     "android-activity",
     "ndk",
@@ -185,9 +182,8 @@ repository = "https://github.com/vanyastaff/flui"
 tokio = { version = "1.43" }
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 # Structured cancellation for the runtime-owned execution services
-# (`CancellationToken`; adoption sanctioned by
-# docs/research/2026-08-01-runtime-dependency-adoption-guide.md with the
-# unified-executor work, issue #557). `default-features = false` and no
+# (`CancellationToken`; adopted with the unified execution services,
+# ADR-0047, issue #557). `default-features = false` and no
 # optional features requested: `CancellationToken` lives in the
 # always-compiled `sync` module, and the explicit opt-out keeps a future
 # tokio-util default from arriving silently. In particular no `rt`
@@ -227,16 +223,16 @@ windows-sys = { version = "0.61", default-features = false }
 web-time = "1.1"
 
 # ACCESSIBILITY - the cross-platform a11y tree model. Data model only here;
-# the per-OS `accesskit_*` platform adapters are feature-gated in flui-platform,
-# and the `PlatformAccessibility` trait they implement is flui-semantics'.
+# the per-OS `accesskit_*` platform adapters are flui-native's target-specific
+# dependencies, and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25.1"
 # The tree model every AccessKit adapter reads through: flui-semantics' agent
 # read projects the published tree with the adapters' own predicates.
 accesskit_consumer = "0.39.1"
 
-# Win32 bindings: the Windows platform backend, hot-reload's library loader,
-# and xtask's UI Automation client. Each member names the API families it uses.
+# Win32 bindings: the Windows platform backend and hot-reload's library loader.
+# Each member names the API families it uses.
 windows = "0.62"
 # The COM runtime under `windows`, named directly because `#[implement]`
 # expands to `::windows_core` paths (the Win32 text services implement
@@ -260,7 +256,7 @@ sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 
-# APPLE BINDINGS - the versions wgpu-hal already pins; flui-platform's macOS
+# APPLE BINDINGS - the versions wgpu-hal already pins; flui-native's macOS
 # backend and the facade's lifecycle probe both take them from here, with
 # their own feature lists, so the pin cannot drift between the two.
 objc2 = { version = "0.6.4", features = ["std"] }
@@ -271,7 +267,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false }
 objc2-core-haptics = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 block2 = "0.6.2"
-# ANDROID - the NativeActivity glue flui-platform and flui-app share.
+# ANDROID - the NativeActivity glue flui-native and flui-app share.
 android-activity = { version = "0.6", features = ["native-activity"] }
 jni = "0.22.4"
 # Android's dynamic loader: the NDK functions newer than minSdk are looked up by name.
@@ -284,7 +280,7 @@ core-graphics = "0.25"
 tempfile = "3" # scratch dirs/files (build staging and tests)
 which = "8"    # locate toolchain executables (build/cli)
 
-# PERSISTENCE — the per-user data directories `flui-platform`'s `storage`
+# PERSISTENCE — the per-user data directories `flui-native`'s `storage`
 # feature writes documents under (roaming and machine-local roots, which follow
 # a redirected AppData or OneDrive folder).
 dirs = "6"
@@ -315,8 +311,8 @@ flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
 # with no OS backend (ADR-0082). Framework crates that name a platform
-# contract depend on this; only composition roots depend on flui-platform.
-flui-platform-api = { path = "crates/flui-platform-api", version = "=0.2.0-dev" }
+# contract depend on this; only composition roots depend on flui-native.
+flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
@@ -358,7 +354,7 @@ wgpu-profiler = { version = "0.28", default-features = false }
 # Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
 naga_oil = { version = "0.23", default-features = false }
 winit = "0.30.12"
-# Linux display source (flui-platform `wayland` / `x11` features): the output
+# Linux display source (flui-native `wayland` / `x11` features): the output
 # list and refresh rate from the compositor, on a connection of its own next to
 # winit's. The X11 and Wayland client versions are the ones winit already pulls
 # into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
@@ -399,7 +395,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
 # flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
 # floating-point types with std math; each crate adds its own integrations.
-glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
+glam = { version = "0.34", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
@@ -427,15 +423,9 @@ syn = "3"
 # Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.
 pulldown-cmark = { version = "0.13", default-features = false }
 
-# BROWSER DRIVER - `cargo xtask device web-input`: fetching the ChromeDriver
-# that matches the installed Chrome (Chrome for Testing archives), the
-# WebDriver BiDi socket, and the localhost page the session loads.
-ureq = { version = "3.3", default-features = false, features = ["rustls"] }
-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
-tiny_http = { version = "0.12", default-features = false }
+# ZIP archives: `flui-cli`'s Android package.
 zip = { version = "9.0.4", default-features = false }
-# `cargo xtask device web-gallery`: the page captures BiDi returns as base64.
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - etagere (glyph atlas packing)
@@ -565,7 +555,7 @@ unwrap_used = "warn"
 # cli-macos. Confirmed real, annotatable sites (each job aborts on its
 # first error, so this is a floor, not the true total — appkit/android
 # were never even reached before windows/ios aborted the job that would
-# have checked them): flui-platform/src/window.rs:328,332;
+# have checked them): flui-native/src/window.rs:328,332;
 # platforms/{windows/{accessibility.rs:96, platform.rs:382,1998,
 # owner_control.rs:109, window.rs:117}, web/{clipboard.rs:26,
 # display.rs:13-14, executor.rs:15, platform.rs:49, window.rs:40},
@@ -696,16 +686,10 @@ edge-exceptions = [
     { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
 ]
 
-# cargo-shear reports these as unlinked; tools/device-checks' iOS safe-area and
-# resident-reopen checks copy them into a scratch project as its `src/main.rs`;
-# `tests/thread_boundary_ui.rs` hands the trybuild inputs to rustc by glob.
+# cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
+# trybuild inputs to rustc by glob.
 [package.metadata.cargo-shear]
-ignored-paths = [
-    "tests/fixtures/ios_safe_area.rs",
-    "tests/fixtures/resident_app.rs",
-    "tests/ui/thread_boundary/*.rs",
-    "tests/ui/unstable_input/*.rs",
-]
+ignored-paths = ["tests/ui/thread_boundary/*.rs", "tests/ui/unstable_input/*.rs"]
 
 [lints]
 workspace = true
@@ -723,7 +707,7 @@ workspace = true
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
@@ -746,65 +730,38 @@ toml.workspace = true
 cargo_metadata.workspace = true
 # === Core Layer ===
 flui-layer = { path = "crates/flui-layer", version = "=0.2.0-dev" }
-# === Rendering Layer (colored_box_app / animated_box_app examples; "testing"
-# for the vertical_slice_demo acceptance test's render-tree inspection) ===
+# === Rendering Layer ("testing" for the layer readback test's render-tree inspection) ===
 flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
-# === Interaction Layer ("testing" for the vertical_slice_demo acceptance
-# test's synthetic pointer events) ===
-flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev", features = [
-    "testing",
-] }
+flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 
 # === Platform Layer (for examples) ===
-flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
 
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
-# === Test support (the vertical_slice_demo acceptance test, and the widget
-# harness `flui_testing::widgets` that tests/agent_workflow.rs drives) ===
+# === Test support (the widget harness `flui_testing::widgets` that
+# tests/agent_workflow.rs drives) ===
 flui-testing = { workspace = true }
-# Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
-insta = { workspace = true }
 # tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
 serde = { workspace = true }
 serde_json = { workspace = true }
-parking_lot.workspace = true
 # tests/thread_boundary_ui.rs: the compile-fail suite for UI runtime-bound handles.
 trybuild = { workspace = true }
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
-# === Engine Layer (for GPU examples) ===
+# === Engine Layer (for GPU examples and the readback test) ===
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
-wgpu = { workspace = true }
-winit.workspace = true
-reqwest = { workspace = true, features = ["json"] }
-tokio = { workspace = true, features = ["sync", "time"] }
-
-# === Error Handling (for examples) ===
-anyhow.workspace = true
-
-# === Image decoding (image_demo example) ===
+# === Image encoding (scene_render example) ===
 image.workspace = true
 
 # === Logging ===
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-# === macOS lifecycle probe (examples/lifecycle_probe.rs drives AppKit's
-# miniaturize/hide/setFrame against the running application; the versions
-# are the ones crates/flui-platform already pins) ===
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-# examples/lifecycle_probe.rs drives AppKit's miniaturize/hide/setFrame
-# against the running application; pins come from [workspace.dependencies].
-objc2.workspace = true
-objc2-foundation = { workspace = true, features = ["std", "NSObject", "NSArray", "NSGeometry"] }
-objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", "NSWindow"] }
-dispatch2.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-rendering/testing"]
@@ -830,8 +787,8 @@ localizations = []
 
 # === GPU readback tests ===
 # Opt-in, and OFF by default on purpose. `tests/composited_layer_update_readback.rs`
-# needs a real wgpu adapter; the workspace `test` job has none — only `live-smoke`
-# installs a Vulkan driver, and `gpu-test` runs WARP on Windows. Ungated, that test
+# needs a real wgpu adapter; the workspace `test` job has none, and `gpu-test`
+# runs WARP on Windows. Ungated, that test
 # fails there with `AdapterRequest(NotFound { active_backends: Backends(0x0) })`, an
 # ENVIRONMENT failure that looks nothing like the pixel mismatch it appears to be.
 # It is not skipped when no adapter is found: a test that quietly passes on a machine
@@ -861,11 +818,6 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-rel
 # normal application graph excludes flui-devtools.
 dev-agent = ["dep:flui-devtools", "flui-devtools/agent"]
 
-# Native accessibility: the per-OS AccessKit adapters that hand the semantics
-# tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
-# carries a D-Bus stack); `cargo xtask device macos-a11y` is the executable check.
-a11y = ["flui-app/a11y"]
-
 # === Core Features ===
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and
@@ -873,7 +825,7 @@ a11y = ["flui-app/a11y"]
 # layout enums (rendering, and objects through widgets) and curves (animation).
 serde = [
     "flui-painting/serde",
-    "flui-platform-api/serde",
+    "flui-platform/serde",
     "flui-interaction/serde",
     "flui-rendering/serde",
     "flui-animation/serde",
@@ -890,114 +842,10 @@ serde = [
 # Feature-gated targets
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Examples and tests are otherwise auto-discovered; these entries exist only to
-# attach `required-features`. Without them a `--no-default-features` build would
-# still try to compile the Material demo and fail — the exact false signal the
-# isolated feature builds exist to catch.
-
-[[example]]
-name = "material_demo"
-path = "examples/material_demo/main.rs"
-required-features = ["material"]
-
-[[example]]
-name = "motion_lab"
-path = "examples/motion_lab.rs"
-required-features = ["material"]
-
-[[example]]
-name = "counter"
-path = "examples/counter.rs"
-
-[[example]]
-name = "todo"
-path = "examples/todo.rs"
-
-[[example]]
-name = "two_screens"
-path = "examples/two_screens.rs"
-required-features = ["material"]
-
-# Notes with a fault injected by mode, for the native teardown checks. With no
-# mode it runs Notes; a mode it does not know exits with code 2.
-[[example]]
-name = "notes_faults"
-path = "examples/notes_faults.rs"
-required-features = ["material"]
-
-# `cargo xtask facade-combos` builds every isolated feature combination, and
-# `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
-# catalog, so an isolated non-material build fails with E0433 without this.
-[[example]]
-name = "form"
-path = "examples/form.rs"
-required-features = ["material"]
-
-[[example]]
-name = "cupertino_demo"
-path = "examples/cupertino_demo/main.rs"
-required-features = ["cupertino"]
-
-# The iOS simulator demo: the same Material tree as `material_demo`, run on the
-# native UIKit backend. Only meaningful on the `aarch64-apple-ios-sim` target —
-# every other target compiles a no-op `main` — but it is declared unconditionally
-# so `cargo xtask device ios-sim` can build it by name.
-[[example]]
-name = "ios_demo"
-path = "examples/ios_demo.rs"
-required-features = ["material"]
-
-# Renders any demo tree offscreen to a PNG; it `#[path]`-includes both catalog
-# demos, so it needs both.
-[[example]]
-name = "sliver_demo"
-path = "examples/sliver_demo.rs"
-required-features = ["material"]
-
-[[example]]
-name = "screenshot"
-path = "examples/screenshot.rs"
-required-features = ["material", "cupertino"]
-
-# Secondary window opened from a Material button; see the example's own doc.
-[[example]]
-name = "multi_window_demo"
-path = "examples/multi_window_demo.rs"
-required-features = ["material"]
-
-# Self-driving representative-workload probe for docs/BETA.md's "Performance
-# and resilience" row (`cargo xtask device macos-workload`); see the example's own doc.
-[[example]]
-name = "workload_probe"
-path = "examples/workload_probe.rs"
-required-features = ["material"]
-
-# The generated counter run for an assistive technology (`cargo xtask device macos-a11y`
-# reads its NSAccessibility tree and presses the button through AXPress);
-# see the example's own doc.
-[[example]]
-name = "a11y_probe"
-path = "examples/a11y_probe.rs"
-required-features = ["material", "a11y"]
-
-# Self-driving window-lifecycle probe for docs/BETA.md's lifecycle rows
-# (`cargo xtask device macos-lifecycle`): minimize/restore, hide/unhide, resize, with the
-# frame production observed through each transition. macOS only; see the
-# example's own doc.
-[[example]]
-name = "lifecycle_probe"
-path = "examples/lifecycle_probe.rs"
-required-features = ["material"]
-
-[[test]]
-name = "material_demo"
-path = "tests/material_demo.rs"
-required-features = ["material"]
-
-[[test]]
-name = "cupertino_demo"
-path = "tests/cupertino_demo.rs"
-required-features = ["cupertino"]
+# Tests are otherwise auto-discovered; these entries exist only to attach
+# `required-features`. Without them a `--no-default-features` build would still
+# try to compile the test and fail — the exact false signal the isolated feature
+# builds exist to catch.
 
 [[test]]
 name = "facade_serde"
@@ -1009,17 +857,7 @@ name = "composited_layer_update_readback"
 path = "tests/composited_layer_update_readback.rs"
 required-features = ["gpu-readback-tests"]
 
-# Structural snapshots of the demo trees' painted layer trees. Needs both
-# catalogs because it snapshots the Material and Cupertino demos; both are
-# named directly rather than through an alias feature, so the target's
-# requirements are readable at the target. `cargo xtask test`'s scope
-# (`flui/material,flui/cupertino`) runs it.
-[[test]]
-name = "demo_layer_snapshots"
-path = "tests/demo_layer_snapshots.rs"
-required-features = ["material", "cupertino"]
-
-# The "Agent workflow" acceptance test (docs/BETA.md): mounts the counter
+# The "Agent workflow" acceptance test: mounts the counter
 # template's tree through `flui::testing`, so it needs both the `testing`
 # feature (for `flui::testing` to exist at all) and `material` (the tree
 # includes an `ElevatedButton`). Without this entry a `--no-default-features

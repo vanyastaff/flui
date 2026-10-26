@@ -28,7 +28,7 @@ use flui_objects::{MainAxisSize, SubtreeAnchor};
 use flui_painting::AlignmentDirectional;
 use flui_painting::styling::Color;
 use flui_painting::typography::{TextDirection, TextStyle};
-use flui_platform_api::keyboard::NamedKey;
+use flui_platform::keyboard::NamedKey;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
 use flui_rendering::hit_testing::HitTestBehavior;

@@ -5,6 +5,12 @@
   (`WindowsWindow::text_store_host`); the other production backends answer `None` (a headless
   window offers one only when a test asks).
 - **Date:** 2026-10-06
+- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+  §10: TSF lives in `crates/flui-native/src/text/windows/tsf/`, §6's geometry is the pure
+  `geometry` module of `text/windows/mod.rs`, and the text feature's hook on FLUI's window class
+  activates a window's connection once its context is installed and tells it the window moved;
+  the teardown stays in the window procedure, between the close callbacks and the context's
+  retirement (§3).
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
 - **Related:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the store contract),
@@ -30,7 +36,7 @@ composition must still end somewhere.
 
 ## Decision
 
-1. **The pull side is `TextStoreHost`** (`flui_platform_api::text_store`): `focus_store(Option<Rc<dyn
+1. **The pull side is `TextStoreHost`** (`flui_platform::text_store`): `focus_store(Option<Rc<dyn
    TextStore>>)` tells the window which field's store takes input, and
    `complete_composition(&Rc<dyn TextStore>)` ends the platform's composition in that store. The
    host compares it by identity (`Rc::ptr_eq`) with the store it was last told to focus, queued
@@ -47,7 +53,7 @@ composition must still end somewhere.
 2. **Only owner-thread proof reaches it.** `OwnerPlatform::text_store_host(&Arc<dyn HostWindow>)`
    reads the window's host through `HostWindow::text_store_host`, whose argument, an
    `OwnerThreadToken`, only `OwnerPlatform` can build: its type is public in a private module, so
-   the method cannot be called outside `flui-platform`. The token proves the platform's owner
+   the method cannot be called outside `flui-native`. The token proves the platform's owner
    thread, not the window's: the Win32 window reads its host through `with_window_context`, which
    refuses a thread other than the one that created the HWND. This is the interim home until ADR-0082
    §4 step 2's owner window exists, when the method moves there. `PlatformWindow` and
@@ -57,7 +63,7 @@ composition must still end somewhere.
 3. **Win32 keeps the text services in the window.** The `ITfThreadMgr`, the empty document and
    the focused field's document (one state: nothing, a field's document, or shut down) live in
    the window's `WindowContext`, on the owner thread, with
-   no `static` or `thread_local!`; no `windows::*` type leaves `flui-platform`. They are
+   no `static` or `thread_local!`; no `windows::*` type leaves `flui-native`. They are
    activated as the window is created, once its `WindowContext` is installed, and the window
    offers them as its host from then on; a window whose activation failed answers `None`, and
    its text input takes the `WM_CHAR` path. `WM_DESTROY` deactivates them after the window's
@@ -97,9 +103,9 @@ composition must still end somewhere.
    explicit `SetFocus`; a document is never closed under its own COM entry. Each COM entry catches
    panics; a `BUG:` panic inside the adapter poisons the document, and after three the window
    falls back to `WM_CHAR`.
-6. **Geometry and lock translation are pure functions** in `flui_platform::shared`, with no
-   `windows` type, tested on every host: `text_geometry::range_rect_to_screen` with outward
-   rounding, and, once written, the ACP flag and error translation beside it.
+6. **Geometry and lock translation are pure functions** in `text::windows::geometry`, with no
+   `windows` type, tested on every host: `range_rect_to_screen` with outward rounding, and, once
+   written, the ACP flag and error translation beside it.
 7. **No IMM32.**
 
 ## Alternatives considered
@@ -134,7 +140,7 @@ composition must still end somewhere.
 
 ## Verification
 
-- `flui-platform` `traits::owner::tests::the_owner_platform_reads_a_window_s_text_store_host`
+- `flui-native` `traits::owner::tests::the_owner_platform_reads_a_window_s_text_store_host`
   and the `compile_fail` examples on `HostWindow::text_store_host` (§2).
 - `flui-interaction` `the_owner_drives_its_text_store_host` (focus follows attach, frame and
   reentry queueing, the answers, a completion that outlives its detach, close, a close that
@@ -155,7 +161,7 @@ composition must still end somewhere.
   `runner_bootstrap_matrix`'s
   `presentation_window_hands_a_pull_window_s_host_to_its_presentation` and `flui-widgets`
   `focus_gain_and_loss_reach_the_store_host` (§2, §4).
-- `flui-platform` `text_services::tests::the_text_services_answer_a_completion_for_its_store`,
+- `flui-native` `text::windows::tsf::tests::the_text_services_answer_a_completion_for_its_store`,
   Windows only, against the real TSF in a hidden window: a completion queued behind a COM entry
   commits its store in place after a shutdown or without a document, and a store the host does
   not serve, or any store after shutdown, is refused (§1, §3); a teardown whose observer
@@ -165,11 +171,11 @@ composition must still end somewhere.
   protection change reaches TSF as a new context, ending a composition TSF holds in the old one
   first (committing it in place when TSF refuses) (§4, §5); a window destroyed inside a TSF
   call shuts its text services down when that call returns (§3).
-- `flui-platform` `text_services::tests::a_window_offers_its_text_services_as_its_host`,
+- `flui-native` `text::windows::tsf::tests::a_window_offers_its_text_services_as_its_host`,
   Windows only: a real `WindowsWindow` offers its own text services as its host, a focused store
   gets a TSF document of the window, and after `WM_DESTROY` the host answers `Unavailable` (§3).
 - The Win32 text services' opt-in probe,
-  `cargo test -p flui-platform --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
+  `cargo test -p flui-native --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
   Microsoft IME ja-JP at 100 %: activation, `toukyou` → 東京, `TS_S_ASYNC` behind a shut gate,
   candidate placement with both negative controls, `TS_E_NOLAYOUT` retries, and `Committed` /
   `Abandoned` with the gate open and shut (§3, §5, §6). Run again 2026-10-06 at 100 % through

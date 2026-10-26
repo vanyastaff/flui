@@ -13,7 +13,7 @@ use std::cell::Cell;
 
 use flui_foundation::geometry::Point;
 use flui_layer::LayerTree;
-use flui_platform_api::{PlatformWindow, SystemUiOverlayStyle};
+use flui_platform::{PlatformWindow, SystemUiOverlayStyle};
 
 /// Coalesces per-frame overlay-style probes into changes for the platform.
 #[derive(Debug, Default)]

@@ -6,6 +6,10 @@
   capability check style only; the Android refresh-rate hint it describes remains in force.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 7's Android
   idle poll only: the Android loop blocks until woken.
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), decision 5's delivery shape only: the
+  window's display is a field of the window state snapshot and "your display may have changed"
+  arrives through the window handler's state-changed obligation, not through `display_id()` and a
+  callback. The snapshot, its keys and the refresh period stand.
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
   the fallback period comes from. The fallback deadline, its 0.95 factor and the rest of the
   decision are unchanged.
@@ -15,7 +19,7 @@
   [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the per-window
   observation shape), [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md).
-- **Spec:** [display-pacing](../plans/specs/display-pacing/design.md)
+- **Spec:** [display-pacing](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/display-pacing/design.md)
 
 ## Context
 
@@ -117,7 +121,7 @@ resume. No backend delivered a display change.
    `FrameRateHint` (`Default` or `High`) passed to `PlatformWindow::set_frame_rate_hint`, whose
    default is a no-op: a backend without the capability needs no code, and the system may decline
    the request.
-10. **One cache serves every native source.** `flui-platform` keeps a `DisplaySource` per platform
+10. **One cache serves every native source.** `flui-native` keeps a `DisplaySource` per platform
     instance: the id registry, the last published snapshot and a stale flag that any thread may
     set. `display_snapshot` runs on every owner wake, so a backend with change notifications
     invalidates the source and reads the OS again only when it is stale; the flag is cleared before

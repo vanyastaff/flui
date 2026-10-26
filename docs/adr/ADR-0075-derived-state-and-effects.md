@@ -98,5 +98,5 @@ reverted design, not as a promise.
 
 ## References
 
-ADR-0074 §5, §8.1; PR #1242; `docs/research/state-model-2026.md`
+ADR-0074 §5, §8.1; PR #1242; [`docs/research/state-model-2026.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/state-model-2026.md)
 §2 (Leptos three-state), §6 (Compose `derivedStateOf`), §7 (Solid memos).

@@ -20,7 +20,7 @@ use flui_interaction::gesture::{
     GestureContest, GestureObservation, ObservedMember, ObserverHandle,
 };
 use flui_interaction::{GestureDisposition, InputSurface};
-use flui_platform_api::{EventTime, WindowId};
+use flui_platform::{EventTime, WindowId};
 
 use super::UiRuntime;
 use crate::input_record::{
@@ -281,7 +281,7 @@ impl UiRuntime {
         event: &flui_interaction::PointerEvent,
     ) -> HeldInputRow {
         let arrival = self.event_now();
-        let input = HostInput::Platform(flui_platform_api::PlatformInput::Pointer(event.clone()));
+        let input = HostInput::Platform(flui_platform::PlatformInput::Pointer(event.clone()));
         let t = input_time(&input).unwrap_or(arrival);
         HeldInputRow::new(
             self.input_taps.clone(),
@@ -300,7 +300,7 @@ impl UiRuntime {
     pub(crate) fn record_preferences(
         &self,
         revision: u64,
-        values: std::sync::Arc<flui_platform_api::SystemPreferences>,
+        values: std::sync::Arc<flui_platform::SystemPreferences>,
     ) {
         self.input_taps
             .admit(InputRecord::Preferences(PreferencesRow::new(

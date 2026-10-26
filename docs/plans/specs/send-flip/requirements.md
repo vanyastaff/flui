@@ -4,9 +4,9 @@
 - **Дата:** 2026-10-05
 - **База:** `main` @ `4915054c8`
 - **Уровень 0:** [../release/requirements.md](../release/requirements.md) R2, D3 уровня 0
-- **Связанные:** [migration plan](../../2026-09-25-architecture-migration-plan.md) W5-A1..W5-A5;
+- **Связанные:** [migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) W5-A1..W5-A5;
   ADR-0027 §2, §9; ADR-0074; ADR-0075; ADR-0083; ADR-0086; ADR-0089; ADR-0091 §1;
-  `design/decisions.md` D9, O7, A1, A3; `design/open-questions.md` №4, №8.
+  [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md) D9, O7, A1, A3; [`design/open-questions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md) №4, №8.
 
 ## Зачем
 
@@ -70,7 +70,7 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 | `LocalHistoryEntry::on_remove(impl Fn() + 'static)` | `crates/flui-widgets/src/navigator/local_history.rs:102` | путь записи (R7) |
 
 `ScrollPhysics`, `ViewKey` и `BuildDuringLayoutCell` к flip относит и
-`docs/research/2026-09-25-architecture-review/designs/performance_first.md:376`. **`Send` по замыслу (keep):** `SignalSender<T>` (`crates/flui-foundation/src/read_scope.rs:665`),
+[`docs/research/2026-09-25-architecture-review/designs/performance_first.md:376`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/designs/performance_first.md#L376). **`Send` по замыслу (keep):** `SignalSender<T>` (`crates/flui-foundation/src/read_scope.rs:665`),
 `RebuildHandle` (`crates/flui-view/src/owner/rebuild_handle.rs:90`, ADR-0018), `IoFuture`
 (`crates/flui-runtime/src/execution.rs:69`), wakes кадров и build, platform hooks (ADR-0082),
 платформенный шов accessibility.
@@ -82,8 +82,8 @@ Pilot прошёл (ADR-0086 §9); ADR-0086 — Proposed. Gesture arena уже `
 **Расхождения документации.** `crates/flui-rendering/ARCHITECTURE.md:854` пишет, что trait
 `RenderObject` требует `Send + Sync` (в коде такого bound нет, `render_object.rs:176`), и что
 `RenderTree` автоматически `Send + Sync` (это противоречит `tree.rs:23`). На устаревшую строку
-`render.rs:451` (сейчас `:511`) ссылаются ADR-0091, `design/decisions.md:297`,
-`design/architecture.md:666` и `design/open-questions.md:136`.
+`render.rs:451` (сейчас `:511`) ссылаются ADR-0091, [`design/decisions.md:297`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md#L297),
+[`design/architecture.md:666`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md#L666) и [`design/open-questions.md:136`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md#L136).
 
 ## Решения спеки
 

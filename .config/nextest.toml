@@ -66,7 +66,7 @@ leak-timeout = "1s"
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform-api::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }
 priority = 100
 test-group = 'trybuild'
@@ -115,15 +115,15 @@ filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-en
 test-group = 'gpu-readback'
 priority = 90
 
-# flui-platform's clipboard tests write the one system clipboard and read it
+# flui-native's clipboard tests write the one system clipboard and read it
 # back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match
 # the filter too and are cheap to serialize). nextest runs each test in its own
 # process, so the in-process lock every clipboard session takes (`SessionLock`
-# in `src/shared/clipboard_lock.rs`, which covers plain `cargo test`) cannot
+# in `src/clipboard/lock.rs`, which covers plain `cargo test`) cannot
 # keep two of them apart here: one test's write would land between another's
 # write and read. The group runs them one at a time; everything else stays parallel.
 [[profile.default.overrides]]
-filter = 'package(flui-platform) & test(/clipboard/)'
+filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
 
 # `cargo xtask` itself, spawned as a binary (see `xtask-binary`).

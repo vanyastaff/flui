@@ -25,7 +25,7 @@ Three stacks drive FLUI apps and none of them composes with the others:
 - `tools/desktop-mcp` observes any Windows app from outside, through MCP;
 - the devtools agent serves one app's semantics from inside it (`windows`, `read`, `act`,
   `motion`);
-- the xtask device drivers each hand-roll their input, their result channel and their verdict
+- the [xtask device drivers](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) each hand-roll their input, their result channel and their verdict
   format, together with Python and Swift scripts.
 
 Rust tests use a fourth shape again, `flui-testing`'s AccessKit queries. ADR-0080 made MCP the wire
@@ -87,9 +87,9 @@ API, a CLI and MCP.
    unsettled causes. Retrying assertions are waits, not client polls (default timeout 5 s).
 8. **The crate.** `flui-driver` is a new published crate in tier H, between `flui-app` and
    `flui-cli`, versioned `0.N` (Evolving). It depends on `flui-protocol`, on `flui-testing` behind
-   `headless`, and on OS crates for its lanes. It never depends on `flui-platform` or `flui-app`.
+   `headless`, and on OS crates for its lanes. It never depends on `flui-native` or `flui-app`.
    Its `allowed-dependents` are `flui-cli`, tools and dev-dependencies, so no framework crate can
-   link it. ADR-0082's rule, that OS types stay inside `flui-platform`, governs framework crates;
+   link it. ADR-0082's rule, that OS types stay inside `flui-native`, governs framework crates;
    `flui-driver` is a client that is never linked into an app, which is why its OS code is allowed.
    If `cargo xtask workspace` refuses an Evolving crate in tier H, the implementing PR amends
    ADR-0081's kind table here rather than reshaping the crate.
@@ -143,7 +143,7 @@ API, a CLI and MCP.
   the app (`flui-semantics::agent`), not re-implemented per client.
 - Schema `0.5` renames the agent ops (`semantics.read`, `semantics.act`, `motion.set`,
   `windows.list`); pre-1.0 the rename is a `version::BREAKING` entry citing this ADR.
-- The xtask device drivers and the scripts under `tools/device-checks/` are deleted once their
+- The xtask device drivers and the scripts under [`tools/device-checks/`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/device-checks) are deleted once their
   scenarios run on `flui-driver`.
 - A coordinate in a public call is the exception: points exist (`Target::Point`) but are never
   produced by codegen from a locator-based trace.

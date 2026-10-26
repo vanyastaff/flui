@@ -169,7 +169,7 @@ pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
 pub(crate) fn raw_button_activates_from_the_keyboard() {
     use std::cell::Cell;
 
-    use flui_platform_api::keyboard::{Key, NamedKey};
+    use flui_platform::keyboard::{Key, NamedKey};
     use flui_widgets::interaction::{ButtonActivateIntent, Shortcuts, SingleActivator};
     use flui_widgets::{Row, SizedBox};
 

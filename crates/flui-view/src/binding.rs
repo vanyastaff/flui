@@ -225,9 +225,9 @@ pub trait WidgetsBindingObserver {
     // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. These four trait
     // methods + the matching `WidgetsBinding::handle_*_back_gesture`
     // impls + the `back_gesture_observers` storage are Android-13+
-    // infrastructure waiting on the `flui-platform` Android wire-up. No
+    // infrastructure waiting on the `flui-native` Android wire-up. No
     // in-workspace `impl WidgetsBindingObserver` overrides them today.
-    // Still deferred: the `flui-platform` Android backend is compiled
+    // Still deferred: the `flui-native` Android backend is compiled
     // and linted in CI but dispatches no back-gesture events — nothing
     // in the workspace constructs a `PredictiveBackEvent` outside this
     // crate — so there is still nothing to wire this surface to. By
@@ -263,17 +263,12 @@ pub trait WidgetsBindingObserver {
     // Metrics and Display
     // ========================================================================
 
-    /// Called when the system locale changes.
-    fn did_change_locales(&self) {}
-
     /// Called when window metrics change (size, DPI, etc).
+    ///
+    /// System preferences (locales, text scale, contrast, motion) and the
+    /// presentation's brightness reach widgets through `MediaQuery` and its
+    /// field-specific dependencies (ADR-0172), not through this observer.
     fn did_change_metrics(&self) {}
-
-    /// Called when text scale factor changes.
-    fn did_change_text_scale_factor(&self) {}
-
-    /// Called when platform brightness changes (light/dark mode).
-    fn did_change_platform_brightness(&self) {}
 
     // ========================================================================
     // App Lifecycle
@@ -284,9 +279,6 @@ pub trait WidgetsBindingObserver {
 
     /// Called when the view focus changes.
     fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
-
-    /// Called when accessibility features change.
-    fn did_change_accessibility_features(&self) {}
 }
 
 /// Application lifecycle states.
@@ -472,7 +464,7 @@ struct WidgetsBindingInner {
     // back-gesture surface (`handle_*_back_gesture` trait methods +
     // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
     // back_gesture` impls) is Android-13+ infrastructure waiting on the
-    // `flui-platform` Android side, which still dispatches no such
+    // `flui-native` Android side, which still dispatches no such
     // events — see the matching marker on the trait surface above for
     // the verified detail. By this date either delete this surface (no
     // consumer materialized) OR wire the platform side and drop this
@@ -1396,50 +1388,17 @@ impl WidgetsBinding {
             .retain(|o| !Arc::ptr_eq(o.as_arc(), observer));
     }
 
-    /// Notify all observers of locale change.
+    /// Notify all observers of metrics change.
     ///
     /// Snapshots the observer list under the read lock and releases the
     /// lock before invoking callbacks. An observer callback
     /// that re-enters the binding (e.g., adds or removes an observer,
     /// reads `observer_count`, or schedules a build) would deadlock if
     /// the iteration held the lock across the dispatch.
-    pub fn handle_locale_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_locales();
-        }
-    }
-
-    /// Notify all observers of metrics change.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
     pub fn handle_metrics_changed(&self) {
         let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_metrics();
-        }
-    }
-
-    /// Notify all observers of text scale factor change.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
-    pub fn handle_text_scale_factor_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_text_scale_factor();
-        }
-    }
-
-    /// Notify all observers of platform brightness change.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
-    pub fn handle_platform_brightness_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_platform_brightness();
         }
     }
 
@@ -1466,16 +1425,6 @@ impl WidgetsBinding {
         );
         if let Some(payload) = first {
             std::panic::resume_unwind(payload);
-        }
-    }
-    /// Notify all observers of accessibility features change.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
-    pub fn handle_accessibility_features_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_accessibility_features();
         }
     }
 
@@ -1641,7 +1590,7 @@ impl WidgetsBinding {
     ///
     /// Snapshots the observer list under the read lock and releases the
     /// lock before invoking callbacks. See
-    /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
+    /// [`Self::handle_metrics_changed`] for the deadlock-safety rationale.
     pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
         let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {

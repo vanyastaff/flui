@@ -233,10 +233,8 @@ pub(super) fn plans(
             {
                 features.insert(format!("{name}/{feature}"));
             }
-            for feature in ["testing", "a11y"] {
-                if package.features.contains_key(feature) {
-                    features.insert(format!("{name}/{feature}"));
-                }
+            if package.features.contains_key("testing") {
+                features.insert(format!("{name}/testing"));
             }
         }
         cmd = cmd.args(["--all-targets", "--locked", "--target", target]);

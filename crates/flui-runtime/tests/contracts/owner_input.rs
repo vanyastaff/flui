@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
 use flui_interaction::{events::Code, testing::input::KeyEventBuilder};
-use flui_platform_api::{PlatformInput, WindowExecutionState};
+use flui_platform::{PlatformInput, WindowExecutionState};
 use flui_runtime::owner::{
     Delivery, InputOutcome, OwnerEffects, OwnerHost, PresentationDispatcher,
 };
@@ -23,7 +23,7 @@ fn key(code: Code) -> PlatformInput {
 /// HTML creates no replay obligation when the canvas owns the next press.
 fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     use flui_interaction::FocusNode;
-    use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers};
+    use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers};
     use flui_runtime::owner::WindowObservation;
     use flui_widgets::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator, SizedBox,
@@ -97,7 +97,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
                 state,
                 Key::character("s"),
                 Code::KeyS,
-                flui_platform_api::EventTime::from_nanos(0),
+                flui_platform::EventTime::from_nanos(0),
             )
             .with_modifiers(Modifiers::CONTROL)
             .with_repeat(repeat),
@@ -379,7 +379,7 @@ fn non_keyboard_input_reports_deferred_delivery_when_carried_work_uses_the_budge
     }
     assert_eq!(
         effects.input.input(
-            PlatformInput::Ime(flui_platform_api::ImeEvent::Enabled),
+            PlatformInput::Ime(flui_platform::ImeEvent::Enabled),
             &effects
         ),
         Ok(InputOutcome::Queued)
@@ -387,7 +387,7 @@ fn non_keyboard_input_reports_deferred_delivery_when_carried_work_uses_the_budge
     owner.continue_work(&effects);
     assert_eq!(
         effects.input.input(
-            PlatformInput::Ime(flui_platform_api::ImeEvent::Disabled),
+            PlatformInput::Ime(flui_platform::ImeEvent::Disabled),
             &effects
         ),
         Ok(InputOutcome::Handled)
@@ -470,7 +470,7 @@ fn pending_metrics_do_not_cross_ordered_operations() {
                         .presentation_dispatcher(other)
                         .expect("other window")
                         .observe(
-                            WindowObservation::Brightness(flui_platform_api::Brightness::Dark),
+                            WindowObservation::Brightness(flui_platform::Brightness::Dark),
                             &effects,
                         )
                         .expect("other window barrier");
@@ -628,7 +628,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let bridge = std::sync::Arc::new(RecordingBridge::default());
-    let window = flui_platform::headless_platform()
+    let window = flui_native::headless_platform()
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless window");
     let wakes = std::sync::Arc::new(AtomicUsize::new(0));
@@ -646,7 +646,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
                 })
             },
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

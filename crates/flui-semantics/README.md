@@ -20,7 +20,7 @@ RenderObject (flui-rendering)
 SemanticsNode (this crate)  —  SemanticsTree (slab storage, 1-based SemanticsId)
     │  flush() publishes an accesskit::TreeUpdate keyed by stable AccessibilityNodeId
     ▼
-Platform accessibility API (via flui-platform backends)
+Platform accessibility API (via flui-native backends)
 ```
 
 - `SemanticsTree::remove` cascades to descendants, children before their
@@ -34,7 +34,7 @@ Platform accessibility API (via flui-platform backends)
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
 `cargo doc -p flui-semantics --open`. Architecture context lives in
-[`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md).
+[`docs/architecture.md`](../../docs/architecture.md).
 
 ## License
 

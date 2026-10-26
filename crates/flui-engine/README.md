@@ -25,7 +25,7 @@ so the library does not choose a blocking strategy on the caller's behalf:
 
 - `Renderer::new(window)` — windowed; owns its surface, recovers from device loss.
 - `HeadlessRenderer::new()` — rasterizes a `LayerTree` to RGBA8 without a
-  window (the `flui --example screenshot` path).
+  window.
 
 - `RasterBackend` — the frame-driver trait `flui-app`'s runners call;
   `Renderer` implements it, and a GPU-free test double can stand in for it.

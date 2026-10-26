@@ -1,6 +1,7 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_engine::Renderer;
-use flui_platform::traits::{HostWindow, PlatformWindow};
+use flui_native::HostWindow;
+use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;

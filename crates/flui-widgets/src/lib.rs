@@ -150,7 +150,7 @@ pub use media_query::{MediaQuery, MediaQueryData};
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
 // `use flui_widgets::Brightness`.
-pub use flui_platform_api::Brightness;
+pub use flui_platform::Brightness;
 // Ambient direction + localized-resource infrastructure — see
 // `localization`'s module docs for the sync-only-v1 limits.
 pub use localization::{
@@ -195,12 +195,12 @@ pub use image::{
     MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
-    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
-    Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,
-    ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance, CommandHandle,
-    CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec, ContactAdmission,
-    ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent, CrossFadeState,
-    DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
+    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
+    ActivationPressIntent, Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState,
+    BackIntent, ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance,
+    CommandHandle, CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec,
+    ContactAdmission, ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent,
+    CrossFadeState, DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
     Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
     Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
@@ -369,9 +369,9 @@ pub use flui_interaction::{
     PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
-    ActionCall, Assertiveness, HeadingLevel, NumericRange, NumericRangeError, Reveal,
+    ActionCall, Assertiveness, CellPosition, HeadingLevel, NumericRange, NumericRangeError, Reveal,
     ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    TextDirection as SemanticsTextDirection, Toggled,
+    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, Toggled,
 };
 
 // ============================================================================
@@ -460,7 +460,7 @@ pub mod prelude {
     pub use flui_painting::paint::Clip;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::TextBaseline;
-    pub use flui_platform_api::{InvalidLocale, Locale};
+    pub use flui_platform::{InvalidLocale, Locale};
     pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{

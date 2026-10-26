@@ -17,15 +17,14 @@ use flui_interaction::drag::{
     DragSession, DragStage, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome,
     ProcessNonce,
 };
+use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_objects::RenderMetaData;
-use flui_platform::{
-    HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform, WindowOptions,
-};
-use flui_platform_api::data_transfer::{
+use flui_platform::WindowOptions;
+use flui_platform::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform_api::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
-use flui_platform_api::{DispatchEventResult, PlatformInput, PlatformWindow, WindowExecutionState};
+use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::{DispatchEventResult, PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
@@ -233,7 +232,7 @@ fn runtime_over(
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )
@@ -886,7 +885,7 @@ struct WithDragSource {
 }
 
 impl PlatformWindow for WithDragSource {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.window.id()
     }
     fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
@@ -909,27 +908,24 @@ impl PlatformWindow for WithDragSource {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.window.set_cursor(cursor)
     }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.source))
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         self.window.state()
     }
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
         self.window.capabilities()
     }
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
         self.window.apply(command)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

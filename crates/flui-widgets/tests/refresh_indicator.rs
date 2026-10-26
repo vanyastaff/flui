@@ -13,8 +13,8 @@ use std::time::Duration;
 use flui_animation::Vsync;
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::{GestureSettingsSource, RemainderHandoff};
-use flui_platform_api::EventTime;
-use flui_platform_api::keyboard::{Code, KeyEvent, KeyState, NamedKey};
+use flui_platform::EventTime;
+use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 use flui_testing::{
     AlternativesSubject, GestureAlternativesCheck, MouseScript, PointerScript, TouchScript,

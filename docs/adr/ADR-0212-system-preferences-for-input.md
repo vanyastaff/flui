@@ -24,7 +24,7 @@ from shortening a long-press or double-click time the user lengthened for access
 the fallback values come from six ad hoc constructors (`for_platform`, `for_device`,
 `android_defaults`, `ios_defaults`, `touch_defaults`, `mouse_defaults`) plus `Default`, whose
 numbers differ from the platforms' own: Flutter's Android touch slop is 18 against AOSP's 8 dp
-([best practices §2.4](../research/2026-10-12-interaction-input-best-practices.md)).
+([best practices §2.4](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md)).
 
 ## Decision
 
@@ -94,7 +94,7 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
   snapshot); `haptics_preference_suppresses_both_tiers`.
 - CI executes all of these on the headless backend with synthetic observations. Reading the
   haptics setting and per-display geometry from a real OS runs on a native host only, as
-  `preferences_contract` rows on Windows and through `cargo xtask device <os>-input` elsewhere;
+  `preferences_contract` rows on Windows and through [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) elsewhere;
   a backend that cannot read the haptics setting reports `None`.
 - A changed preset number is a behavior change and needs its cited source in the same PR.
 

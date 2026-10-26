@@ -46,7 +46,7 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The text-store contract `text_store_kit` certifies stores against, and
 # `InMemoryTextStore`, the reference store its own fixture drives.
-flui-platform-api = { workspace = true }
+flui-platform = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
@@ -108,7 +108,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 static_assertions.workspace = true
 # The headless backend whose windows the conformance checks run against.
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
 # Enable flui-view's `testing` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out

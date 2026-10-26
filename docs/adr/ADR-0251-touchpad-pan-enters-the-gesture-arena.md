@@ -48,8 +48,11 @@ neither: no backend sends a pan there.
    a scroll target, so the sequence runs through `ScrollRoute` exactly as before this ADR.
    Touchpad scrolling inside a plain list pays nothing.
 
-4. **The contact.** With two or more members the binding opens an arena contact keyed by the
-   latch's `InputSequenceId`, of kind `Trackpad`, at the `Began` focal point. Each `Changed` delta
+4. **The contact.** With two or more members the binding opens an arena contact of kind
+   `Trackpad`, at the `Began` focal point, under a pointer id of its own: the latch's
+   `InputSequenceId` with the top bit set, a range the binding reserves for the contacts it
+   mints itself. The contact takes the sequence identity the pointer path mints at its `Down`,
+   as any contact does. Each `Changed` delta
    moves its position by the finger displacement (the negated scroll delta: positive scroll
    offset grows as the fingers move up), in root logical pixels. Recognizers see ordinary
    `Down`, `Move` and `Up` samples, so slop, the ownership table, velocity tracking and

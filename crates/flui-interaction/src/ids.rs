@@ -1,7 +1,7 @@
 //! Type-safe identifiers used by the gesture/interaction subsystem.
 //!
 //! [`PointerId`] and [`DeviceId`] are the exact owned contract identities from
-//! `flui-platform-api` (ADR-0143). Pointer identity names a contact; device
+//! `flui-platform` (ADR-0143). Pointer identity names a contact; device
 //! identity names connected hardware. Neither is a truncated hash or a signed
 //! compatibility label. Primary contact status lives in `PointerInfo`, not an ID.
 //!
@@ -32,8 +32,8 @@ use std::{fmt, num::NonZeroU64};
 
 /// Unique identifier for a pointer device (mouse, touch, stylus).
 ///
-/// Re-exported from [`flui_platform_api::pointer::PointerId`].
-pub use flui_platform_api::pointer::PointerId;
+/// Re-exported from [`flui_platform::pointer::PointerId`].
+pub use flui_platform::pointer::PointerId;
 
 // ============================================================================
 // FocusNodeId - Identifier for focusable UI elements
@@ -95,8 +95,8 @@ impl From<FocusNodeId> for NonZeroU64 {
 
 /// Unique identifier for an input device.
 ///
-/// Re-exported from [`flui_platform_api::pointer::DeviceId`].
-pub use flui_platform_api::pointer::DeviceId;
+/// Re-exported from [`flui_platform::pointer::DeviceId`].
+pub use flui_platform::pointer::DeviceId;
 
 // ============================================================================
 // InputSurface - the routing root of an input stream

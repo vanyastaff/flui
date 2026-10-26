@@ -4,7 +4,7 @@
 //! the widget pipeline. It exports an `init` entry point that registers reloadable
 //! `build()` implementations while the host binary retains element tree state.
 //!
-//! See `docs/designs/2026-06-28-hot-reload-runtime-protocol.md`.
+//! See `docs/hot-reload.md`.
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;

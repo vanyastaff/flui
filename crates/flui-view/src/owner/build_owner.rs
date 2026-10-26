@@ -602,7 +602,7 @@ pub struct BuildOwner {
 
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
-    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
 
     /// The host's flush registry, which `Persisted` publishes into through
     /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
@@ -993,7 +993,7 @@ impl BuildOwner {
 
     /// The UI runtime's byte storage, if one was installed.
     #[must_use]
-    pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform_api::Storage>> {
+    pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform::Storage>> {
         self.storage.as_ref()
     }
 

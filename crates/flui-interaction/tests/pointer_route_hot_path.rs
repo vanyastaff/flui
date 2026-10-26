@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
-use flui_platform_api::pointer::{
+use flui_platform::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
 };
-use flui_platform_api::{EventTime, Modifiers};
+use flui_platform::{EventTime, Modifiers};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -139,10 +139,10 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
 /// copying it, and keep a bounded tail however many arrive before the frame.
 fn binding_frame_coalescing_moves_bounded_history() {
     use flui_interaction::{GestureBinding, HitTestResult, InputSurface};
-    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress};
+    use flui_platform::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress};
     let binding = GestureBinding::new();
     let pointer = PointerInfo::new(
-        flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Touch,
     );
     let buttons = PointerButtons::only(PointerButton::PRIMARY);
@@ -260,11 +260,11 @@ fn empty_hit_test_result_allocates_nothing() {
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
-    use flui_platform_api::pointer::{
+    use flui_platform::pointer::{
         PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease,
     };
     let pointer = PointerInfo::new(
-        flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Mouse,
     )
     .with_device(DeviceId::try_from(7_u64).expect("source device"))
@@ -369,7 +369,7 @@ fn resampler_raised_timestamp_keeps_checked_history_policy() {
 
 fn saturated_resampler_admission_reuses_bounded_history_storage() {
     use flui_interaction::pointer::PointerEventResampler;
-    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerRelease};
+    use flui_platform::pointer::{PointerButton, PointerButtons, PointerRelease};
     use web_time::{Duration, Instant};
     let [down, PointerEvent::Move(base_move), _] = resampler_packets(0) else {
         panic!("measured Move fixture")

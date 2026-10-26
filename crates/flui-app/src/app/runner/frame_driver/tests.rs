@@ -231,11 +231,12 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
 struct ReentrantCapture(Arc<AtomicUsize>);
 
 fn native_terminal_callbacks_refuse_late_publication() {
-    use flui_platform::{Platform, traits::PlatformWindow};
+    use flui_native::Platform;
+    use flui_platform::PlatformWindow;
 
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let owner = Rc::new(owner);
                 let window: Arc<dyn PlatformWindow> = owner
@@ -292,10 +293,11 @@ impl Drop for ReentrantCapture {
 }
 
 fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
-    use flui_platform::{Platform, traits::PlatformWindow};
+    use flui_native::Platform;
+    use flui_platform::PlatformWindow;
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window: Arc<dyn PlatformWindow> = owner
                     .open_window(flui_platform::WindowOptions::default())?
@@ -335,6 +337,63 @@ fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
                 Ok(())
             }))
             .expect("headless preparation");
+    }
+}
+
+/// Android's Back: `Destroy` fires the window's native close, which retires its
+/// sole presentation and with it the UI runtime; the loop then exits and runs
+/// the quit hook. A `quit()` with no `Destroy` before it leaves the close to
+/// the hook.
+fn a_quit_after_the_native_close_dispatches_no_second_close() {
+    use flui_native::Platform;
+    use flui_platform::PlatformWindow;
+
+    for native_close in [true, false] {
+        let _clear = OwnerHostClearGuard::arm();
+        Box::new(flui_native::HeadlessPlatform::new())
+            .run(Box::new(move |owner| {
+                let window: Arc<dyn PlatformWindow> = owner
+                    .open_window(flui_platform::WindowOptions::default())?
+                    .try_ready()?;
+                owner.shared().set_exit_policy_hook(Box::new(|| false));
+                let runtime = UiRuntime::for_test();
+                runtime.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))?;
+                let installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+                installation.terminal_callbacks(&owner.shared());
+                installation
+                    .submit()
+                    .outcome()
+                    .expect("fresh host completes inline")
+                    .expect("installed");
+                let runtimes = || {
+                    super::super::host::APP_RUNTIME
+                        .with(|slot| slot.borrow().installed_host.logical().runtime_count())
+                };
+                if native_close {
+                    window.close();
+                    assert_eq!(runtimes(), 0, "the native close retired the runtime");
+                }
+                let ((), log) = flui_testing::log_capture::capture(|| owner.quit());
+                assert!(
+                    log.contains("Quitting headless platform"),
+                    "vacuous-pass guard: the quit ran inside the capture\n{log}"
+                );
+                let complaints = log
+                    .records()
+                    .iter()
+                    .filter(|record| record.level <= tracing::Level::WARN)
+                    .count();
+                assert_eq!(
+                    complaints,
+                    0,
+                    "native_close={native_close}\n{}",
+                    log.render_at_least(tracing::Level::WARN)
+                );
+                assert_eq!(runtimes(), 0, "native_close={native_close}");
+                teardown_platform_ui_runtime();
+                Ok(())
+            }))
+            .expect("headless terminal callbacks");
     }
 }
 
@@ -833,6 +892,10 @@ fn installed_frame_driver_contract() {
                 a_prepared_single_window_rejects_close_and_quit_before_publication as fn(),
             ),
             (
+                "a_quit_after_the_native_close_dispatches_no_second_close",
+                a_quit_after_the_native_close_dispatches_no_second_close as fn(),
+            ),
+            (
                 "a_leased_driver_is_retired_after_reentrant_teardown",
                 a_leased_driver_is_retired_after_reentrant_teardown as fn(),
             ),
@@ -1120,7 +1183,7 @@ fn unfinished_installation_closes_its_native_window() {
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn agent_notification_follows_live_native_initialization() {
-    use flui_platform::traits::PlatformWindow;
+    use flui_platform::PlatformWindow;
     use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
     #[derive(Clone, Copy, Debug)]

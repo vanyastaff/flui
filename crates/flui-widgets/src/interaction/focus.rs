@@ -43,7 +43,7 @@ use flui_interaction::focus::{
     TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
-use flui_platform_api::keyboard::KeyEvent;
+use flui_platform::keyboard::KeyEvent;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
@@ -275,6 +275,7 @@ pub struct Focus {
     debug_label: Option<&'static str>,
     include_semantics: bool,
     traversal_overrides: Option<FocusTraversalOverrides>,
+    rect_provider: Option<RectProvider>,
 }
 
 impl Focus {
@@ -292,7 +293,18 @@ impl Focus {
             debug_label: None,
             include_semantics: true,
             traversal_overrides: None,
+            rect_provider: None,
         }
+    }
+
+    /// Measure the node with `provider` instead of the child's box: for a
+    /// focusable part of a render object, such as a link in a paragraph.
+    /// Traversal order and the reveal on focus read it. Taken when the
+    /// widget mounts; a later view's provider is not installed.
+    #[must_use]
+    pub(crate) fn rect_provider(mut self, provider: RectProvider) -> Self {
+        self.rect_provider = Some(provider);
+        self
     }
 
     /// Install weak explicit links; unavailable targets fall back to traversal policy.
@@ -578,7 +590,7 @@ impl StatefulView for Focus {
             attachment: None,
             parent: None,
             anchor: SubtreeAnchor::new(),
-            rect_provider: None,
+            rect_provider: self.rect_provider.clone(),
             rect_provider_registration: None,
             action_chain: None,
             context_registration: None,
@@ -662,7 +674,8 @@ pub struct FocusState {
     /// reading-order traversal sorts by this geometry (ADR-0026).
     anchor: SubtreeAnchor,
     /// The live geometry source, retained so a replacement node receives the
-    /// same mounted anchor without reacquiring build-only context.
+    /// same mounted anchor without reacquiring build-only context. Before
+    /// `init_state`, the view's own provider if it named one.
     rect_provider: Option<RectProvider>,
     /// Generation-checked ownership of the geometry source installed on the
     /// current node.
@@ -855,8 +868,13 @@ impl ViewState<Focus> for FocusState {
         self.rebuild_handle = Some(ctx.rebuild_handle());
         let parent = enclosing_focus_parent(ctx);
         self.install_focus_listener();
-        let (rect_provider, rect_provider_registration) =
-            install_rect_provider(&self.node, &self.anchor, ctx);
+        let (rect_provider, rect_provider_registration) = match self.rect_provider.take() {
+            Some(provider) => {
+                let registration = self.node.register_rect_provider(Rc::clone(&provider));
+                (provider, registration)
+            }
+            None => install_rect_provider(&self.node, &self.anchor, ctx),
+        };
         *self.reveal.rect.borrow_mut() = Some(Rc::clone(&rect_provider));
         *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
         self.rect_provider = Some(rect_provider);

@@ -1,7 +1,14 @@
-//! One crate's module tree read with syn: its top-level modules, every
-//! `crate`-relative path its non-test code names, and the `use` items that
-//! relay a name from one module to another. Conditional bindings retain every
-//! source, so every possible owning module contributes an edge.
+//! One crate's module tree read with syn: its modules at every depth, every
+//! `crate`-relative path its non-test code names with the module that names
+//! it, and the `use` items that relay a name from one module to another.
+//! Conditional bindings retain every source, so every possible owning module
+//! contributes an edge.
+//!
+//! A path resolves to the module that owns the item it names, and how far the
+//! resolution reads into the tree is the caller's choice ([`Reach`]): through
+//! the crate root and the transparent top-level modules only, so any other
+//! top-level module owns what is named in it, or through every module, so the
+//! answer is the deepest module that defines the item.
 //!
 //! Everything here is pure over [`Sources`], so the tests and the self-test
 //! run it on crates that exist only in memory.
@@ -70,11 +77,12 @@ impl std::fmt::Display for Site {
     }
 }
 
-/// A path named by the non-test code of the top-level module `from`, made
-/// absolute: its segments from the crate root.
+/// A path named by the non-test code of the module `from` (its segments from
+/// the crate root; the first is the top-level module), made absolute: its
+/// segments from the crate root.
 #[derive(Debug, Clone)]
 pub(super) struct Reference {
-    pub(super) from: String,
+    pub(super) from: Vec<String>,
     pub(super) path: Vec<String>,
     pub(super) site: Site,
 }
@@ -104,14 +112,19 @@ struct UseTable {
 /// What an absolute path resolves to.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Resolved {
-    /// An item of this top-level module.
-    Module(String),
+    /// An item of this module, as a path of module names from the crate root:
+    /// one name when the resolution stopped at a top-level module.
+    Module(Vec<String>),
     /// An item defined in the crate root itself (`lib.rs`), not in a module.
     Root(String),
     /// Something outside the crate.
     External,
     /// Nothing the scan can attribute; the text says why.
     Unattributed(String),
+    /// The name is in no child module, `use` item, item or glob re-export of
+    /// the module it was looked up in. A glob re-export that supplies the name
+    /// outranks it; the owner of a name nothing supplies is unattributed.
+    Missing(String),
 }
 
 /// One crate's module tree, as the direction rule reads it.
@@ -119,17 +132,25 @@ pub(super) enum Resolved {
 pub(super) struct Scan {
     /// The top-level modules compiled outside tests, with the file of each.
     pub(super) modules: BTreeMap<String, String>,
-    /// Every `crate`-relative path the non-test code of a top-level module names.
+    /// Every module compiled outside tests, nested ones included, by its
+    /// path from the root, with the file it lives in (an inline module's is
+    /// the file around it).
+    pub(super) tree: BTreeMap<Vec<String>, String>,
+    /// Every `crate`-relative path the non-test code of a module names.
     pub(super) references: Vec<Reference>,
     /// The first item other than a `use` directly in each top-level module.
     pub(super) first_item: BTreeMap<String, Site>,
-    root_uses: UseTable,
-    module_uses: BTreeMap<String, UseTable>,
+    /// The non-test `use` items of each module; the root is `[]`.
+    uses: BTreeMap<Vec<String>, UseTable>,
+    /// The names of the non-test items each module defines.
+    defined: BTreeMap<Vec<String>, BTreeSet<String>>,
+    /// Modules holding an item whose expansion or declaration the scan cannot
+    /// read (a macro invocation, an `extern` block): any name may be defined
+    /// there.
+    opaque: BTreeSet<Vec<String>>,
     /// `#[macro_export]` macros (which live at the crate root) and the
-    /// top-level module that defines each; `""` for the root itself.
-    macro_exports: BTreeMap<String, String>,
-    /// Items defined in the crate root itself.
-    root_items: BTreeSet<String>,
+    /// module that defines each; `[]` for the root itself.
+    macro_exports: BTreeMap<String, Vec<String>>,
 }
 
 /// Reads the crate whose root file is `lib` (repository-relative), following
@@ -152,7 +173,7 @@ pub(super) fn scan(sources: &Sources, lib: &str) -> anyhow::Result<Scan> {
         aliases,
         scan: Scan::default(),
     };
-    loader.items(&[], &file.items, lib, &parent(lib), false)?;
+    loader.items(&[], &file.items, lib, &parent(lib), false, false)?;
     Ok(loader.scan)
 }
 
@@ -184,19 +205,21 @@ struct Loader<'a> {
 
 impl Loader<'_> {
     /// Walks the items of `module` (its path from the root), which live in
-    /// `file`; a `mod x;` among them lives under `dir`.
+    /// `file`; a `mod x;` among them lives under `dir`. `inline`: the items
+    /// are those of an inline `mod x { .. }` block, not of the file itself.
     fn items(
         &mut self,
         module: &[String],
         items: &[Item],
         file: &str,
         dir: &str,
+        inline: bool,
         test_only: bool,
     ) -> anyhow::Result<()> {
         for item in items {
             let test_only = test_only || implies_test(item_attrs(item));
             let test_only = if let Item::Mod(child) = item {
-                !self.module(module, child, file, dir, test_only)?
+                !self.module(module, child, file, dir, inline, test_only)?
             } else {
                 test_only
             };
@@ -215,11 +238,8 @@ impl Loader<'_> {
             }
             match item {
                 Item::Mod(_) => continue,
-                Item::Use(item_use) if !test_only && module.len() <= 1 => {
-                    let table = match module.first() {
-                        None => &mut self.scan.root_uses,
-                        Some(top) => self.scan.module_uses.entry(top.clone()).or_default(),
-                    };
+                Item::Use(item_use) if !test_only => {
+                    let table = self.scan.uses.entry(module.to_vec()).or_default();
                     for leaf in use_leaves(&item_use.tree) {
                         let target = if other_crate(
                             item_use.leading_colon.is_some(),
@@ -250,18 +270,23 @@ impl Loader<'_> {
                             .any(|attr| attr.path().is_ident("macro_export")) =>
                 {
                     let name = mac.ident.as_ref().map_or_default(ToString::to_string);
-                    let owner = module.first().cloned().unwrap_or_default();
-                    self.scan.macro_exports.insert(name, owner);
+                    self.scan.macro_exports.insert(name, module.to_vec());
                 }
                 _ => {}
             }
             if test_only {
                 continue;
             }
+            if let Some(name) = defined_name(item) {
+                self.scan
+                    .defined
+                    .entry(module.to_vec())
+                    .or_default()
+                    .insert(name);
+            } else if hides_names(item) {
+                self.scan.opaque.insert(module.to_vec());
+            }
             if module.is_empty() {
-                if let Some(name) = defined_name(item) {
-                    self.scan.root_items.insert(name);
-                }
                 continue;
             }
             let mut collector = Collector {
@@ -280,32 +305,39 @@ impl Loader<'_> {
     }
 
     /// A `mod` item inside `module`, whose own items live in `file` and
-    /// whose `mod x;` children live under `dir`. Returns whether the module
-    /// is compiled outside tests after both outer and file-level cfgs.
+    /// whose `mod x;` children live under `dir`; `inline` as for
+    /// [`Self::items`]. Returns whether the module is compiled outside tests
+    /// after both outer and file-level cfgs.
     fn module(
         &mut self,
         module: &[String],
         child: &syn::ItemMod,
         file: &str,
         dir: &str,
+        inline: bool,
         mut test_only: bool,
     ) -> anyhow::Result<bool> {
         let name = child.ident.to_string();
         let path: Vec<String> = module.iter().cloned().chain([name.clone()]).collect();
         let line = child.mod_token.span.start().line;
         let child_file = if let Some((_, items)) = &child.content {
-            self.items(&path, items, file, &format!("{dir}{name}/"), test_only)?;
+            self.items(
+                &path,
+                items,
+                file,
+                &format!("{dir}{name}/"),
+                true,
+                test_only,
+            )?;
             file.to_owned()
         } else {
             let custom = path_attr(&child.attrs)?;
-            let candidates = match (&custom, module.is_empty()) {
-                (Some(custom), true) => vec![format!("{dir}{custom}")],
-                (Some(_), false) => bail!(
-                    "{file}:{line}: `#[path]` on the nested module `{}` is not supported; \
-                     module-dag honours it only on a top-level `mod`",
-                    path.join("::")
-                ),
-                (None, _) => vec![format!("{dir}{name}.rs"), format!("{dir}{name}/mod.rs")],
+            let candidates = match &custom {
+                // Relative to the directory of the file that declares the
+                // module; inside an inline block, to the block's directory.
+                Some(custom) if inline => vec![format!("{dir}{custom}")],
+                Some(custom) => vec![format!("{}{custom}", parent(file))],
+                None => vec![format!("{dir}{name}.rs"), format!("{dir}{name}/mod.rs")],
             };
             let mut found = None;
             for candidate in &candidates {
@@ -329,11 +361,21 @@ impl Loader<'_> {
             };
             // `#![cfg(test)]` at the top of the file gates the whole module.
             test_only = test_only || implies_test(&parsed.attrs);
-            self.items(&path, &parsed.items, &child_file, &child_dir, test_only)?;
+            self.items(
+                &path,
+                &parsed.items,
+                &child_file,
+                &child_dir,
+                false,
+                test_only,
+            )?;
             child_file
         };
-        if module.is_empty() && !test_only {
-            self.scan.modules.insert(name, child_file);
+        if !test_only {
+            if module.is_empty() {
+                self.scan.modules.insert(name, child_file.clone());
+            }
+            self.scan.tree.insert(path, child_file);
         }
         Ok(!test_only)
     }
@@ -447,7 +489,18 @@ fn item_kind(item: &Item) -> &'static str {
     }
 }
 
-/// The name an item defines in the root module, for items a path can name.
+/// Whether the item may define names the scan cannot read: a macro
+/// invocation at item position (not a `macro_rules!` definition), the items of
+/// an `extern` block, an `extern crate` or tokens syn did not parse.
+fn hides_names(item: &Item) -> bool {
+    match item {
+        Item::Macro(mac) => mac.ident.is_none(),
+        Item::ForeignMod(_) | Item::ExternCrate(_) | Item::Verbatim(_) => true,
+        _ => false,
+    }
+}
+
+/// The name an item defines in its module, for items a path can name.
 fn defined_name(item: &Item) -> Option<String> {
     let ident = match item {
         Item::Const(item) => &item.ident,
@@ -577,7 +630,7 @@ fn other_crate(leading_colon: bool, first: Option<&String>, aliases: &[String]) 
     leading_colon && !first.is_some_and(|first| aliases.contains(first))
 }
 
-/// Collects the references of one item of a top-level module.
+/// Collects the references of one item of a module.
 struct Collector<'a> {
     module: &'a [String],
     file: &'a str,
@@ -590,7 +643,7 @@ impl Collector<'_> {
     fn record(&mut self, path: Vec<String>, line: usize) {
         match absolute(self.module, &path, self.aliases) {
             Ok(Some(absolute)) => self.references.push(Reference {
-                from: self.module[0].clone(),
+                from: self.module.to_vec(),
                 path: absolute,
                 site: Site {
                     file: self.file.to_owned(),
@@ -641,6 +694,25 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
     }
 
+    /// A `let`, macro statement or expression under `cfg(test)` is test code.
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if !implies_test(&local.attrs) {
+            visit::visit_local(self, local);
+        }
+    }
+
+    fn visit_stmt_macro(&mut self, mac: &'ast syn::StmtMacro) {
+        if !implies_test(&mac.attrs) {
+            visit::visit_stmt_macro(self, mac);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if !implies_test(expr_attrs(expr)) {
+            visit::visit_expr(self, expr);
+        }
+    }
+
     /// Each import of the tree once; a glob names the module it reads.
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         for leaf in use_leaves(&item.tree) {
@@ -683,6 +755,53 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         for (path, span) in found {
             self.record(path, span.start().line);
         }
+    }
+}
+
+/// The outer attributes of an expression; `syn` keeps them on each variant.
+fn expr_attrs(expr: &syn::Expr) -> &[Attribute] {
+    use syn::Expr;
+    match expr {
+        Expr::Array(e) => &e.attrs,
+        Expr::Assign(e) => &e.attrs,
+        Expr::Async(e) => &e.attrs,
+        Expr::Await(e) => &e.attrs,
+        Expr::Binary(e) => &e.attrs,
+        Expr::Block(e) => &e.attrs,
+        Expr::Break(e) => &e.attrs,
+        Expr::Call(e) => &e.attrs,
+        Expr::Cast(e) => &e.attrs,
+        Expr::Closure(e) => &e.attrs,
+        Expr::Const(e) => &e.attrs,
+        Expr::Continue(e) => &e.attrs,
+        Expr::Field(e) => &e.attrs,
+        Expr::ForLoop(e) => &e.attrs,
+        Expr::Group(e) => &e.attrs,
+        Expr::If(e) => &e.attrs,
+        Expr::Index(e) => &e.attrs,
+        Expr::Infer(e) => &e.attrs,
+        Expr::Let(e) => &e.attrs,
+        Expr::Lit(e) => &e.attrs,
+        Expr::Loop(e) => &e.attrs,
+        Expr::Macro(e) => &e.attrs,
+        Expr::Match(e) => &e.attrs,
+        Expr::MethodCall(e) => &e.attrs,
+        Expr::Paren(e) => &e.attrs,
+        Expr::Path(e) => &e.attrs,
+        Expr::Range(e) => &e.attrs,
+        Expr::RawAddr(e) => &e.attrs,
+        Expr::Reference(e) => &e.attrs,
+        Expr::Repeat(e) => &e.attrs,
+        Expr::Return(e) => &e.attrs,
+        Expr::Struct(e) => &e.attrs,
+        Expr::Try(e) => &e.attrs,
+        Expr::TryBlock(e) => &e.attrs,
+        Expr::Tuple(e) => &e.attrs,
+        Expr::Unary(e) => &e.attrs,
+        Expr::Unsafe(e) => &e.attrs,
+        Expr::While(e) => &e.attrs,
+        Expr::Yield(e) => &e.attrs,
+        _ => &[],
     }
 }
 
@@ -735,156 +854,303 @@ fn token_paths(tokens: TokenStream, aliases: &[String], out: &mut Vec<(Vec<Strin
     }
 }
 
+/// How far [`Scan::resolve`] reads into the module tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Depth {
+    /// The crate root and the transparent top-level modules: any other
+    /// top-level module owns whatever is named in it.
+    Top,
+    /// Every module: a path ends in the deepest module that owns the item.
+    Full,
+}
+
+/// What [`Scan::resolve`] follows a path through.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Reach<'a> {
+    pub(super) depth: Depth,
+    /// The top-level modules of `use` items only: a path through one counts as
+    /// a path to what it re-exports, and naming one itself is unattributed.
+    pub(super) transparent: &'a BTreeSet<String>,
+}
+
+impl Reach<'_> {
+    /// Whether a path that reaches `module` is read further inside it.
+    fn opens(&self, module: &[String]) -> bool {
+        match (self.depth, module) {
+            (_, []) | (Depth::Full, _) => true,
+            (Depth::Top, [top]) => self.transparent.contains(top),
+            (Depth::Top, _) => false,
+        }
+    }
+
+    /// Whether the child modules of `module` are looked up by name.
+    fn descends(&self, module: &[String]) -> bool {
+        module.is_empty() || self.depth == Depth::Full
+    }
+
+    /// `owner` as far as this reach attributes: a top-level module under
+    /// [`Depth::Top`].
+    fn clip(&self, owner: &[String]) -> Vec<String> {
+        match self.depth {
+            Depth::Top => owner.iter().take(1).cloned().collect(),
+            Depth::Full => owner.to_vec(),
+        }
+    }
+}
+
+/// The lookups under way, as `module ++ segments`.
+type Seen = BTreeSet<Vec<String>>;
+
+/// What a lookup answers when it comes back to one already under way.
+#[derive(Debug, Clone, Copy)]
+enum Cycle {
+    /// Named re-exports that lead to each other: nothing owns the name.
+    Unattributed,
+    /// Glob re-exports that read each other: that branch supplies nothing.
+    Missing,
+}
+
 impl Scan {
-    /// Every owner an absolute path can name. A path through a `transparent`
-    /// module, a root re-export, a glob re-export or a `#[macro_export]`
-    /// macro counts as a path to what it relays.
-    pub(super) fn resolve(
-        &self,
-        path: &[String],
-        transparent: &BTreeSet<String>,
-    ) -> BTreeSet<Resolved> {
-        self.resolve_in(path.to_vec(), false, transparent, &mut BTreeSet::new())
+    /// Every owner an absolute path can name. A path through a root
+    /// re-export, a glob re-export, a `#[macro_export]` macro or, as far as
+    /// `reach` reads, a module's `use` items counts as a path to what it
+    /// relays.
+    pub(super) fn resolve(&self, path: &[String], reach: Reach<'_>) -> BTreeSet<Resolved> {
+        Resolver { scan: self, reach }.enter(
+            &[],
+            path.to_vec(),
+            false,
+            Cycle::Unattributed,
+            &mut BTreeSet::new(),
+        )
     }
+}
 
-    /// `plain`: `path` came from a root `use` whose first segment was a plain
-    /// name, which may name another crate.
-    fn resolve_in(
+/// [`Scan::resolve`] for one `reach`.
+struct Resolver<'a> {
+    scan: &'a Scan,
+    reach: Reach<'a>,
+}
+
+/// A module path for a finding: `crate` for the root.
+fn label(module: &[String]) -> String {
+    if module.is_empty() {
+        "crate".to_owned()
+    } else {
+        module.join("::")
+    }
+}
+
+impl Resolver<'_> {
+    /// Looks `segments` up from `module`. `plain`: `segments` came from a
+    /// `use` whose first segment was a plain name, which may name another
+    /// crate.
+    fn enter(
         &self,
-        path: Vec<String>,
+        module: &[String],
+        segments: Vec<String>,
         plain: bool,
-        transparent: &BTreeSet<String>,
-        seen: &mut BTreeSet<Vec<String>>,
+        cycle: Cycle,
+        seen: &mut Seen,
     ) -> BTreeSet<Resolved> {
-        if !seen.insert(path.clone()) {
-            return BTreeSet::from([Resolved::Unattributed(
-                "its re-exports form a loop".to_owned(),
-            )]);
+        let key: Vec<String> = module.iter().chain(&segments).cloned().collect();
+        if !seen.insert(key) {
+            return BTreeSet::from([match cycle {
+                Cycle::Unattributed => {
+                    Resolved::Unattributed("its re-exports form a loop".to_owned())
+                }
+                Cycle::Missing => {
+                    Resolved::Missing("its glob re-exports read each other".to_owned())
+                }
+            }]);
         }
-        let Some(first) = path.first() else {
-            return BTreeSet::from([Resolved::Unattributed(
-                "it names the crate root itself".to_owned(),
-            )]);
-        };
-        if !self.modules.contains_key(first) {
-            return self.through(None, first, &path[1..], plain, transparent, seen);
-        }
-        if !transparent.contains(first) {
-            return BTreeSet::from([Resolved::Module(first.clone())]);
-        }
-        let Some(name) = path.get(1) else {
-            return BTreeSet::from([Resolved::Unattributed(format!(
-                "it names the transparent module `{first}` itself"
-            ))]);
-        };
-        self.through(Some(first), name, &path[2..], false, transparent, seen)
+        self.walk(module, &segments, plain, seen)
     }
 
-    /// `name` looked up in the `use` table of `module` (the root when
-    /// `None`), followed by `rest`.
+    /// Descends from `start` through the child modules `segments` names, as
+    /// far as the reach reads, then looks the next name up in the module it
+    /// stopped in.
+    fn walk(
+        &self,
+        start: &[String],
+        segments: &[String],
+        mut plain: bool,
+        seen: &mut Seen,
+    ) -> BTreeSet<Resolved> {
+        let mut module = start.to_vec();
+        let mut at = 0;
+        while self.reach.opens(&module) {
+            let Some(name) = segments.get(at) else {
+                return BTreeSet::from([self.names_module(module)]);
+            };
+            if self.reach.descends(&module) {
+                let child: Vec<String> = module.iter().cloned().chain([name.clone()]).collect();
+                if self.scan.tree.contains_key(&child) {
+                    module = child;
+                    at += 1;
+                    plain = false;
+                    continue;
+                }
+            }
+            return self.through(&module, name, &segments[at + 1..], plain, seen);
+        }
+        BTreeSet::from([Resolved::Module(module)])
+    }
+
+    /// A path that ends at `module` itself.
+    fn names_module(&self, module: Vec<String>) -> Resolved {
+        match module.as_slice() {
+            [] => Resolved::Unattributed("it names the crate root itself".to_owned()),
+            [top] if self.reach.transparent.contains(top) => {
+                Resolved::Unattributed(format!("it names the transparent module `{top}` itself"))
+            }
+            _ => Resolved::Module(module),
+        }
+    }
+
+    /// `target`, a `use` of `module`, followed by `tail`. A plain path is
+    /// relative to `module`: in the root a top-level item, a name another
+    /// `use` binds or an external crate; in a relay module, which holds no
+    /// items of its own, a name another `use` of the relay binds or another
+    /// crate.
+    fn follow(
+        &self,
+        module: &[String],
+        target: &Target,
+        tail: Vec<String>,
+        cycle: Cycle,
+        seen: &mut Seen,
+    ) -> BTreeSet<Resolved> {
+        match target {
+            Target::Absolute(path) => self.enter(
+                &[],
+                path.iter().cloned().chain(tail).collect(),
+                false,
+                cycle,
+                seen,
+            ),
+            Target::Plain(path) => self.enter(
+                module,
+                path.iter().cloned().chain(tail).collect(),
+                true,
+                cycle,
+                seen,
+            ),
+            Target::External => BTreeSet::from([Resolved::External]),
+        }
+    }
+
+    /// `name` looked up in `module`, followed by `rest`.
     fn through(
         &self,
-        module: Option<&String>,
+        module: &[String],
         name: &str,
         rest: &[String],
         plain: bool,
-        transparent: &BTreeSet<String>,
-        seen: &mut BTreeSet<Vec<String>>,
+        seen: &mut Seen,
     ) -> BTreeSet<Resolved> {
         let empty = UseTable::default();
-        let table = match module {
-            None => &self.root_uses,
-            Some(module) => self.module_uses.get(module).unwrap_or(&empty),
-        };
-        // A plain path relayed by the root starts at the root. In a relay
-        // module, which holds no items of its own, its first segment is a name
-        // another `use` of the relay binds, or another crate.
-        let follow =
-            |target: &Target, tail: Vec<String>, seen: &mut BTreeSet<Vec<String>>| match target {
-                Target::Absolute(path) => self.resolve_in(
-                    path.iter().cloned().chain(tail).collect(),
-                    false,
-                    transparent,
-                    seen,
-                ),
-                Target::Plain(path) => match (module, path.split_first()) {
-                    (None, _) => self.resolve_in(
-                        path.iter().cloned().chain(tail).collect(),
-                        true,
-                        transparent,
-                        seen,
-                    ),
-                    (Some(relay), Some((first, rest))) => {
-                        let key = std::iter::once(relay)
-                            .chain(path)
-                            .chain(&tail)
-                            .cloned()
-                            .collect();
-                        if !seen.insert(key) {
-                            return BTreeSet::from([Resolved::Unattributed(
-                                "its re-exports form a loop".to_owned(),
-                            )]);
-                        }
-                        let rest: Vec<String> = rest.iter().cloned().chain(tail).collect();
-                        self.through(Some(relay), first, &rest, true, transparent, seen)
-                    }
-                    (Some(_), None) => BTreeSet::from([Resolved::External]),
-                },
-                Target::External => BTreeSet::from([Resolved::External]),
-            };
-        if let Some(targets) = table.names.get(name) {
+        let table = self.scan.uses.get(module).unwrap_or(&empty);
+        if let Some(all) = table.names.get(name) {
+            // `use name;` beside a `macro_rules! name` re-exports the macro
+            // the module defines. It is no source to follow: the name keeps
+            // its owner.
+            let defined = self.defines(module, name);
+            let (rebinds, targets): (Vec<&Target>, Vec<&Target>) = all.iter().partition(|target| {
+                defined.is_some() && matches!(target, Target::Plain(path) if path == &[name])
+            });
             let Some((first, alternatives)) = targets.split_first() else {
-                return BTreeSet::from([Resolved::Unattributed(format!(
-                    "re-export `{name}` has no source"
-                ))]);
+                return BTreeSet::from([defined.unwrap_or_else(|| {
+                    Resolved::Unattributed(format!("re-export `{name}` has no source"))
+                })]);
             };
-            if alternatives.is_empty() {
-                return follow(first, rest.to_vec(), seen);
+            if alternatives.is_empty() && rebinds.is_empty() {
+                return self.follow(module, first, rest.to_vec(), Cycle::Unattributed, seen);
             }
             // A sibling alternative must not inherit paths visited by another
             // branch. Retain errors alongside every known owning module.
-            let mut owners = follow(first, rest.to_vec(), &mut seen.clone());
+            let mut owners = self.follow(
+                module,
+                first,
+                rest.to_vec(),
+                Cycle::Unattributed,
+                &mut seen.clone(),
+            );
             for target in alternatives {
-                owners.extend(follow(target, rest.to_vec(), &mut seen.clone()));
+                owners.extend(self.follow(
+                    module,
+                    target,
+                    rest.to_vec(),
+                    Cycle::Unattributed,
+                    &mut seen.clone(),
+                ));
             }
+            owners.extend(defined.filter(|_| !rebinds.is_empty()));
             return owners;
         }
-        if module.is_none() {
-            if let Some(owner) = self.macro_exports.get(name) {
-                return BTreeSet::from([if owner.is_empty() {
-                    Resolved::Root(name.to_owned())
-                } else {
-                    Resolved::Module(owner.clone())
-                }]);
-            }
-            if self.root_items.contains(name) {
-                return BTreeSet::from([Resolved::Root(name.to_owned())]);
-            }
+        if let Some(defined) = self.defines(module, name) {
+            return BTreeSet::from([defined]);
         }
         if plain {
             // A plain first segment nothing here binds is another crate's name.
             return BTreeSet::from([Resolved::External]);
         }
+        let tail: Vec<String> = std::iter::once(name.to_owned())
+            .chain(rest.iter().cloned())
+            .collect();
+        match self.reach.depth {
+            Depth::Top => self.top_globs(module, name, table, tail, seen),
+            Depth::Full => self.full_globs(module, name, table, tail, seen),
+        }
+    }
+
+    /// The owner of `name` when `module` defines it: an exported macro or an
+    /// item of the root, an item of any other module the reach reads into.
+    fn defines(&self, module: &[String], name: &str) -> Option<Resolved> {
+        let defined = self
+            .scan
+            .defined
+            .get(module)
+            .is_some_and(|names| names.contains(name));
+        if module.is_empty() {
+            if let Some(owner) = self.scan.macro_exports.get(name) {
+                return Some(if owner.is_empty() {
+                    Resolved::Root(name.to_owned())
+                } else {
+                    Resolved::Module(self.reach.clip(owner))
+                });
+            }
+            return defined.then(|| Resolved::Root(name.to_owned()));
+        }
+        (self.reach.depth == Depth::Full && defined).then(|| Resolved::Module(module.to_vec()))
+    }
+
+    /// The glob re-exports of the root or of a transparent module, which
+    /// name one module at most: the one glob supplies `name`, or nothing
+    /// does.
+    fn top_globs(
+        &self,
+        module: &[String],
+        name: &str,
+        table: &UseTable,
+        tail: Vec<String>,
+        seen: &mut Seen,
+    ) -> BTreeSet<Resolved> {
         let internal: Vec<&Target> = table
             .globs
             .iter()
             .filter(|glob| match glob {
                 Target::Absolute(_) => true,
-                Target::Plain(_) => module.is_none(),
+                Target::Plain(_) => module.is_empty(),
                 Target::External => false,
             })
             .collect();
-        let tail = || {
-            std::iter::once(name.to_owned())
-                .chain(rest.iter().cloned())
-                .collect()
-        };
         match internal.as_slice() {
-            [glob] => return follow(glob, tail(), seen),
+            [glob] => return self.follow(module, glob, tail, Cycle::Unattributed, seen),
             [_, _, ..] => {
                 return BTreeSet::from([Resolved::Unattributed(format!(
                     "more than one glob re-export in `{}` could supply `{name}`",
-                    module.map_or("crate", String::as_str)
+                    label(module)
                 ))]);
             }
             [] => {}
@@ -898,7 +1164,46 @@ impl Scan {
         }
         BTreeSet::from([Resolved::Unattributed(format!(
             "`{}` has no module, re-export or item `{name}`",
-            module.map_or("crate", String::as_str)
+            label(module)
+        ))])
+    }
+
+    /// The glob re-exports of any module: each is tried, and the ones that
+    /// supply `name` own it (a glob of another crate supplies it as external).
+    /// A module nothing supplies `name` to owns it when it holds items the
+    /// scan cannot read.
+    fn full_globs(
+        &self,
+        module: &[String],
+        name: &str,
+        table: &UseTable,
+        tail: Vec<String>,
+        seen: &mut Seen,
+    ) -> BTreeSet<Resolved> {
+        let mut owners = BTreeSet::new();
+        for glob in &table.globs {
+            let supplied = self.follow(
+                module,
+                glob,
+                tail.clone(),
+                Cycle::Missing,
+                &mut seen.clone(),
+            );
+            owners.extend(
+                supplied
+                    .into_iter()
+                    .filter(|resolved| !matches!(resolved, Resolved::Missing(_))),
+            );
+        }
+        if !owners.is_empty() {
+            return owners;
+        }
+        if !module.is_empty() && self.scan.opaque.contains(module) {
+            return BTreeSet::from([Resolved::Module(module.to_vec())]);
+        }
+        BTreeSet::from([Resolved::Missing(format!(
+            "`{}` has no module, re-export or item `{name}`",
+            label(module)
         ))])
     }
 }

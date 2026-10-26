@@ -6,10 +6,10 @@
   the session may reach beyond it. A `DropReceiver` found by hit test answers enters and moves
   with drop feedback, receives one leave or one drop, and redeems the Rust value only for drags
   from its own runtime ([ADR-0211](/docs/adr/ADR-0211-unified-drag-and-drop.md)).
-- **`flui-platform-api`**: the `drag` module: `PlatformDragSource` behind
+- **`flui-platform`**: the `drag` module: `PlatformDragSource` behind
   `PlatformWindow::drag_source`, `OsDragRequest`, `DragSessionKey` and its private identity
   representation, `DragError`, and the shared `plan_os_session` decision.
-- **`flui-platform`**: `HeadlessPlatform::with_os_drag` and `HeadlessDragAndDrop`, which play the
+- **`flui-native`**: `HeadlessPlatform::with_os_drag` and `HeadlessDragAndDrop`, which play the
   OS side of a drag, between windows or from another application, in tests.
 - **`flui-foundation`**: `DragSessionId`, minted by `IdMint` and refused permanently once exhausted.
 

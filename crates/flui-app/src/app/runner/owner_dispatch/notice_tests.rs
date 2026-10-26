@@ -9,10 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use flui_platform::traits::PlatformWindow;
+use flui_native::{HeadlessHostEvents, HeadlessPlatform, Platform as _};
+use flui_platform::PlatformWindow;
 use flui_platform::{
-    HeadlessHostEvents, HeadlessPlatform, HostNotice, Platform as _, SessionEndAnswer,
-    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SystemNotice,
+    HostNotice, SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase,
+    SystemNotice,
 };
 use flui_view::__runtime::BindingRuntime as _;
 use flui_view::LifecycleHandle;
@@ -61,7 +62,7 @@ fn open_window() -> Win {
     let host_window =
         with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
     let window: Arc<dyn PlatformWindow> = host_window;
     let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");

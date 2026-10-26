@@ -337,7 +337,7 @@ fn capture_release_keeps_another_pointers_committed_frame_motion() {
                 }
             }
             PointerEvent::Cancel(cancel) => {
-                assert_eq!(cancel.reason, flui_platform_api::pointer::CancelReason::CaptureLost);
+                assert_eq!(cancel.reason, flui_platform::pointer::CancelReason::CaptureLost);
                 observed.borrow_mut().push((cancel.pointer.id, "lost", 0.0));
             }
             _ => {}
@@ -416,9 +416,9 @@ fn capture_release_refuses_only_its_own_device_tail() {
             };
             motion.pointer = motion.pointer.with_device(device);
             if device == other {
-                *motion = flui_platform_api::pointer::PointerMove::new(
+                *motion = flui_platform::pointer::PointerMove::new(
                     motion.pointer,
-                    flui_platform_api::pointer::PointerButtons::NONE,
+                    flui_platform::pointer::PointerButtons::NONE,
                     *motion.current(),
                 );
             }
@@ -438,9 +438,9 @@ fn capture_release_refuses_only_its_own_device_tail() {
 
 struct CaptureWakeWindow(std::sync::atomic::AtomicUsize);
 
-impl flui_platform_api::PlatformWindow for CaptureWakeWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
-        flui_platform_api::WindowId::new(21)
+impl flui_platform::PlatformWindow for CaptureWakeWindow {
+    fn id(&self) -> flui_platform::WindowId {
+        flui_platform::WindowId::new(21)
     }
     fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
         flui_foundation::geometry::Size::new(80, 80)
@@ -461,34 +461,24 @@ impl flui_platform_api::PlatformWindow for CaptureWakeWindow {
     fn is_visible(&self) -> bool {
         true
     }
-    fn set_cursor(
-        &self,
-        _: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -516,7 +506,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
     let lane = InteractionLane::try_new().expect("lane");
     let binding = GestureBinding::new();
     let window = Arc::new(CaptureWakeWindow(AtomicUsize::new(0)));
-    let capability: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
+    let capability: Arc<dyn flui_platform::PlatformWindow> = window.clone();
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&capability));
     let held = Rc::new(RefCell::new(None::<PointerCapture>));
     let store = held.clone();
@@ -532,7 +522,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
                 PointerEvent::Cancel(cancel) => {
                     assert_eq!(
                         cancel.reason,
-                        flui_platform_api::pointer::CancelReason::CaptureLost
+                        flui_platform::pointer::CancelReason::CaptureLost
                     );
                     callbacks.set(callbacks.get() + 1);
                 }
@@ -592,7 +582,7 @@ fn assert_capture_route(case: CaptureCase) {
     use flui_interaction::{
         GestureBinding, HitTestResult, PointerCapture, PointerCaptureError, PointerDispatch,
     };
-    use flui_platform_api::pointer::CancelReason;
+    use flui_platform::pointer::CancelReason;
     use std::{cell::RefCell, rc::Rc};
 
     let lane = InteractionLane::try_new().expect("lane");
@@ -601,7 +591,7 @@ fn assert_capture_route(case: CaptureCase) {
     let tokens = Rc::new(RefCell::new(Vec::<PointerCapture>::new()));
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
-    let device = flui_platform_api::pointer::DeviceId::try_from(17_u64).expect("nonzero device");
+    let device = flui_platform::pointer::DeviceId::try_from(17_u64).expect("nonzero device");
     if case == CaptureCase::DeviceRemoval {
         let PointerEvent::Down(press) = &mut down else {
             unreachable!()
@@ -728,13 +718,12 @@ fn assert_capture_route(case: CaptureCase) {
                     flui_interaction::__runtime::CloseMode::Ordinary,
                 );
             } else {
-                let removed = PointerEvent::DeviceRemoved(
-                    flui_platform_api::pointer::PointerDeviceChange::new(
+                let removed =
+                    PointerEvent::DeviceRemoved(flui_platform::pointer::PointerDeviceChange::new(
                         device,
                         PointerKind::Touch,
-                        flui_platform_api::EventTime::from_nanos(1),
-                    ),
-                );
+                        flui_platform::EventTime::from_nanos(1),
+                    ));
                 binding
                     .handle_pointer_event(&removed, |_| panic!("device removal does not hit-test"));
             }
@@ -855,9 +844,9 @@ fn assert_capture_route(case: CaptureCase) {
             let PointerEvent::Down(press) = &down else {
                 unreachable!()
             };
-            PointerEvent::Cancel(flui_platform_api::pointer::PointerCancel::new(
+            PointerEvent::Cancel(flui_platform::pointer::PointerCancel::new(
                 press.pointer,
-                flui_platform_api::EventTime::from_nanos(1),
+                flui_platform::EventTime::from_nanos(1),
                 CancelReason::CaptureLost,
             ))
         } else {
@@ -1280,9 +1269,9 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
     let PointerEvent::Move(motion) = movement else {
         unreachable!()
     };
-    let movement = PointerEvent::Move(flui_platform_api::pointer::PointerMove::new(
+    let movement = PointerEvent::Move(flui_platform::pointer::PointerMove::new(
         motion.pointer,
-        flui_platform_api::pointer::PointerButtons::NONE,
+        flui_platform::pointer::PointerButtons::NONE,
         *motion.current(),
     ));
     lane.enter(|| {
@@ -1304,9 +1293,9 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
         let PointerEvent::Move(peer_motion) = peer_movement else {
             unreachable!()
         };
-        let peer_movement = PointerEvent::Move(flui_platform_api::pointer::PointerMove::new(
+        let peer_movement = PointerEvent::Move(flui_platform::pointer::PointerMove::new(
             peer_motion.pointer,
-            flui_platform_api::pointer::PointerButtons::NONE,
+            flui_platform::pointer::PointerButtons::NONE,
             *peer_motion.current(),
         ));
         binding.handle_pointer_event(&peer_movement, |_| HitTestResult::new());
@@ -1420,7 +1409,7 @@ fn assert_isolated_hover_metadata_retirement(mode: &str) {
 fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
     use flui_interaction::events::{PointerEvent, PointerKind, make_move_event};
     use flui_interaction::{GestureBinding, HitTestResult, Offset};
-    use flui_platform_api::pointer::{PointerButtons, PointerMove, PointerRole};
+    use flui_platform::pointer::{PointerButtons, PointerMove, PointerRole};
     use std::{
         cell::{Cell, RefCell},
         panic::{AssertUnwindSafe, catch_unwind},
@@ -1569,7 +1558,7 @@ fn mismatched_hover_competing_retirement() {
 fn window_leave_drops_queued_hover_moves() {
     use flui_interaction::events::{DeviceId, PointerEvent, PointerKind, make_move_event};
     use flui_interaction::{GestureBinding, HitTestResult, Offset};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{PointerDeviceChange, PointerSignal},
     };
@@ -1705,7 +1694,7 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
         DeviceId, PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id,
     };
     use flui_interaction::{GestureBinding, HitTestResult, PointerId};
-    use flui_platform_api::{EventTime, pointer::PointerDeviceChange};
+    use flui_platform::{EventTime, pointer::PointerDeviceChange};
     use std::{
         cell::Cell,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -1767,7 +1756,7 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
             PointerEvent::Cancel(data)
                 if data.pointer.id == second
                     && did_replace.get()
-                    && data.reason != flui_platform_api::pointer::CancelReason::Superseded =>
+                    && data.reason != flui_platform::pointer::CancelReason::Superseded =>
             {
                 cancels.set(cancels.get() + 1);
             }
@@ -2042,14 +2031,14 @@ fn hardware_trace_event(
     use flui_interaction::events::PointerEvent;
     match &mut event {
         PointerEvent::Down(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            data.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            data.sample.time = flui_platform::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(data) => {
             let mut sample = *data.current();
-            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            sample.time = flui_platform::EventTime::from_nanos(nanos);
             *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
                 .with_modifiers(data.modifiers)
                 .with_coalesced(data.coalesced().to_vec())
@@ -2924,7 +2913,7 @@ fn assert_signal_owner_batch(device_removal: bool, native: bool) {
         PointerEvent, PointerKind, make_down_event_for_id, make_scroll_event,
     };
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerDeviceChange, PointerId,
@@ -3073,7 +3062,7 @@ fn scroll_first_terminal_delta_remains_deliverable() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::pointer::ScrollPhase;
+    use flui_platform::pointer::ScrollPhase;
     use std::{cell::Cell, rc::Rc};
 
     let packet = |phase| {
@@ -3152,7 +3141,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
@@ -3336,7 +3325,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -3443,7 +3432,7 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
     use flui_interaction::events::make_down_event;
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             CancelReason, PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo,
@@ -3571,7 +3560,7 @@ fn native_claim_prior_observation_failure_preserves_captures() {
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -3746,7 +3735,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -3852,7 +3841,7 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -3963,7 +3952,7 @@ fn native_close_preserves_retirement_ownership() {
     use flui_interaction::events::make_down_event_for_id;
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo, PointerKind,
@@ -4066,7 +4055,7 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -4148,7 +4137,7 @@ fn native_staged_owner_cleanup_is_exact() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo, PointerKind,
@@ -4232,7 +4221,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::{EventPropagation, PointerDispatch};
     use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
@@ -4361,7 +4350,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::{
+    use flui_platform::{
         EventTime,
         pointer::{
             PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
@@ -4403,11 +4392,11 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
         if phase == ScrollPhase::Changed {
             if case == ScrollLeaseCase::KindMetadata {
                 scroll.pointer.kind = PointerKind::Pen {
-                    tool: flui_platform_api::pointer::PenTool::Eraser,
+                    tool: flui_platform::pointer::PenTool::Eraser,
                 };
             }
             if case == ScrollLeaseCase::RoleMetadata {
-                scroll.pointer.role = flui_platform_api::pointer::PointerRole::Primary;
+                scroll.pointer.role = flui_platform::pointer::PointerRole::Primary;
             }
         }
         PointerEvent::Scroll(scroll)
@@ -6336,7 +6325,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                             PointerId::try_from(1).expect("nonzero pointer id"),
                             PointerKind::Trackpad,
                         ),
-                        flui_platform_api::EventTime::from_nanos(0),
+                        flui_platform::EventTime::from_nanos(0),
                         PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
                             .expect("finite position"),
                         PanZoomPhase::Start,

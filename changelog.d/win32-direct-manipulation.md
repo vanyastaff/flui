@@ -1,6 +1,6 @@
 ### Added
 
-- **Precision touchpad on Windows** (`flui-platform`): each Win32 window owns a DirectManipulation
+- **Precision touchpad on Windows** (`flui-native`): each Win32 window owns a DirectManipulation
   viewport, so a two-finger pan arrives as phased `Scroll` with `Momentum*` inertia and a pinch as
   `PanZoom`. The window pumps its viewport itself (before each frame, and on a pacing timer that
   also runs inside menu and drag loops), requests its own frames while a manipulation runs or

@@ -6,6 +6,9 @@
   ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), and
   the field's commit on blur, on a pointer-down on it and on a paste are in the code.
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md), for the placement
+  of `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate only (they move
+  to `flui-interaction::text_input`); every decision of this ADR stands.
 - **Supersedes:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md), in part: §1's rule that
   a read-write session is one change notification to the widget (the owner now hears only of a
   change to the committed text, after the lock is released, items 1 and 2); §2's reporting of a
@@ -95,7 +98,7 @@ framework does not control is contained.
    text service re-reads the document. There is no merge: nothing gives a base for a three-way
    comparison. The count never wraps: a store that exhausts it drops every later session, so
    no session can find its count again after the application moved past it. The controller and
-   the in-memory store share the count's type, `flui_platform_api::text_store::EditGeneration`.
+   the in-memory store share the count's type, `flui_platform::text_store::EditGeneration`.
 4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
    presentation (inside the composing field too), an accepted close request, the end of the
    session, blur, paste and undo, and unmount commit the visible composition before the event's
@@ -187,7 +190,7 @@ framework does not control is contained.
 
 In place:
 
-- Items 1–3: `flui-platform-api` `tests/lock_gate.rs`'s
+- Items 1–3: `flui-platform` `tests/lock_gate.rs`'s
   `settling_runs_owner_code_outside_the_lock` (settle after each release and before the next
   grant, a panicking settle reaching the gate while the queue drains, and resuming when no owner
   installed a gate); `the_ledger_follows_the_reference`, which checks the ledger against a
@@ -208,7 +211,7 @@ In place:
   told before the next grant) and `a_text_form_field_validates_and_saves_the_committed_text`.
 - Item 8: `flui-widgets` `owner_code_is_contained_at_every_point`, one row per point and failure
   shape, each in a child process, each followed by the next operation on the same owner.
-- Item 7: `flui-platform` `text_services::tests::a_window_offers_its_text_services_as_its_host`
+- Item 7: `flui-native` `text::windows::tsf::tests::a_window_offers_its_text_services_as_its_host`
   (ADR-0135 §3).
 - Item 4, the field's part: `flui-widgets` `owner_code_is_contained_at_every_point`'s
   `editable: a blur during preedit …` rows (push and pull: the commit precedes the detach, and

@@ -1,8 +1,3 @@
-### Added
-
-- `examples/interaction_gallery`: one app with a screen per interaction widget (swipe actions, dismissible rows, pull to refresh, a collapsing header, a pager, a bottom sheet, zoom and pan, drag and drop, a context menu, a gesture pad, keyboard focus), from one widget tree on the desktop, Android and the web.
-- `cargo xtask device windows-gallery`: drives every gallery screen on a real Windows window with mouse, keyboard and synthetic touch input, and checks each outcome through UI Automation and the window's pixels.
-
 ### Fixed
 
 - A `LayoutBuilder` mounted in a list or a column no longer fails the layout of its ancestors for its first frame: before its builder runs it takes its smallest size, not an infinite one.

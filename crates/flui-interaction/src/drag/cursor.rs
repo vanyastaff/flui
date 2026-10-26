@@ -8,9 +8,9 @@
 
 use std::cell::RefCell;
 
-use flui_platform_api::CursorIcon;
-use flui_platform_api::data_transfer::TransferActions;
-use flui_platform_api::pointer::PointerInfo;
+use flui_platform::CursorIcon;
+use flui_platform::data_transfer::TransferActions;
+use flui_platform::pointer::PointerInfo;
 
 use crate::events::PointerKind;
 use crate::pointer::mouse_tracker::{CursorOverride, WeakMouseTracker};

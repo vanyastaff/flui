@@ -53,3 +53,4 @@ mod gesture_observer;
 mod haptics;
 mod input_sequences;
 mod replay_determinism;
+mod scroll_contact;

@@ -10,7 +10,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::GestureDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+use flui_platform::{GesturePreferences, PlatformInput, SystemPreferences};
 use flui_runtime::owner::InputOutcome;
 use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow};
 use flui_testing::recording::{
@@ -149,7 +149,7 @@ fn a_recording_replays_to_the_decisions_it_recorded() {
 /// a `Metrics` row at its position, and the replay applies it there.
 #[test]
 fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
-    use flui_platform_api::PlatformWindow as _;
+    use flui_platform::PlatformWindow as _;
     use flui_runtime::owner::WindowObservation;
 
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
@@ -198,9 +198,9 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
 fn a_move_through_the_window_state_records_the_move() {
     use flui_runtime::owner::WindowObservation;
 
-    let registry = flui_platform_api::DisplayRegistry::new();
+    let registry = flui_platform::DisplayRegistry::new();
     let display = registry
-        .mint(&flui_platform_api::DisplayKey::Injected(1))
+        .mint(&flui_platform::DisplayKey::Injected(1))
         .expect("display id");
     let (bytes, _) = recorded(Privacy::Redact, |host| {
         let window = host.primary_window();
@@ -232,7 +232,7 @@ fn a_move_through_the_window_state_records_the_move() {
 /// that scale before the first row, as the header says it started.
 #[test]
 fn a_replay_starts_at_the_recorded_scale() {
-    use flui_platform_api::PlatformWindow as _;
+    use flui_platform::PlatformWindow as _;
 
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut recorder = host(&log);
@@ -278,7 +278,7 @@ fn a_decision_row_carries_its_commit_time() {
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     touch(&host, 1, true);
     host.clock().advance(Duration::from_millis(30));
-    let committed = flui_platform_api::EventTime::from_nanos(
+    let committed = flui_platform::EventTime::from_nanos(
         u64::try_from(host.clock().elapsed().as_nanos()).expect("small"),
     );
     touch(&host, 1, false);
@@ -423,8 +423,8 @@ fn a_truncated_recording_dispatches_nothing() {
 
 /// Rows carrying text in each place a recording redacts it.
 fn text_rows() -> Vec<InputRecord> {
-    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
-    use flui_platform_api::{EventTime, ImeEvent, WindowId};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::{EventTime, ImeEvent, WindowId};
 
     let at = EventTime::from_nanos(1_000);
     let request = |action, text: &str| accesskit::ActionRequest {
@@ -473,8 +473,8 @@ const SECRETS: [&str; 7] = [
 ];
 
 fn written(privacy: Privacy) -> Vec<u8> {
-    use flui_platform_api::WindowId;
-    use flui_platform_api::pointer::{DeviceId, PenTool};
+    use flui_platform::WindowId;
+    use flui_platform::pointer::{DeviceId, PenTool};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
@@ -883,8 +883,8 @@ fn focused_beside(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 /// row says where the key went, and a replay delivers it there again.
 fn a_key_records_the_window_focus_dispatched_it_to() {
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform_api::WindowId;
-    use flui_platform_api::keyboard::Code;
+    use flui_platform::WindowId;
+    use flui_platform::keyboard::Code;
     use flui_runtime::RecordedSurface;
 
     let (bytes, fired) = recorded_on(focused_beside, Privacy::KeepText, |host| {
@@ -1165,7 +1165,7 @@ fn a_recording_replays_under_its_recorded_gesture_values() {
 fn header_gesture_values_read_back_exactly() {
     use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
     use flui_interaction::{GestureProfiles, GestureSettings, RemainderHandoff};
-    use flui_platform_api::{TargetPlatform, WindowId};
+    use flui_platform::{TargetPlatform, WindowId};
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let estimators = [

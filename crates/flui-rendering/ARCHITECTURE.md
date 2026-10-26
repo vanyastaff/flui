@@ -330,6 +330,25 @@ empty/repopulate, separators, composition, independent and nested sets, explicit
 index precedence and authored collections. The isolated render-object row
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 continues to cover direct index replacement.
+
+A stamped item whose own node forms none (a `Padding` over a `Column`) hands
+its position to the fragments it forwards. One logical item is one member: only
+the first fragment carries it, so a row that forms two controls does not
+announce both as "item 1", and a position declared anywhere in the item, a
+descendant boundary included, is that member's and suppresses the stamp.
+
+The same post-assembly pass (`reconcile_collections`) holds every place to the
+set and table it actually sits in once the tree is built, so a node the clip
+dropped imposes no scope. A position past its known set's size, and a cell, its
+spans or a row outside its known table, is not published: the consumer would
+read "item 8 of 3" or "row 5 of 3". A set is any node that declares a size, a
+lazy host, an authored `SemanticsCollection` or a `Semantics` with
+`size_of_set`; a role-less one publishes as a List.
+
+`collection_semantics` in `crates/flui-widgets/tests` reads tables, trees,
+levels, sorted headers, hand-built lists and these limits the way an adapter
+does.
+
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
@@ -1063,7 +1082,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 **Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code.
 ### `unsafe impl Send + Sync for RenderTree` removed
 
-**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
+**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-native`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 
 **Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `Option<T>` fields for geometry/constraints; `NodeLinks` is POD.
 
@@ -1265,7 +1284,7 @@ with a `flui_rendering::input_regions` warning, never clamped from infinity; so 
 with a corner at or behind the perspective horizon (`w <= 1e-9`), whose corner quotients
 can be finite yet describe a mirrored or unbounded shape. An unmappable clip refuses
 coverage. Device-pixel projection, `i32` checks and the OS diff are the backend's
-(`flui_platform_api::input_regions::ProjectedInputRegions`).
+(`flui_platform::input_regions::ProjectedInputRegions`).
 
 **Delivery.** The runtime collects the set when it builds a scene and hands it to
 `PlatformWindow::set_input_regions` when the sink accepts that scene, and again on a scale

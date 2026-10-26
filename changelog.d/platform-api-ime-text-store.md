@@ -1,6 +1,6 @@
 ### Added
 
-- **The IME text-store contract** (`flui_platform_api::text_store`,
+- **The IME text-store contract** (`flui_platform::text_store`,
   [ADR-0090](/docs/adr/ADR-0090-ime-pull-text-store-contract.md)): a text field is a
   `TextStore` an input method locks, reads and edits in UTF-16 offsets, the shape of TSF's
   `ITextStoreACP`. A lock is a closure (`LockGrant::Read`/`ReadWrite`, so an edit under a read
@@ -9,7 +9,7 @@
   transaction through a `CommitGate` the presentation installs into every store it attaches
   (`TextStore::set_commit_gate`), which the arbiter reads, so a store cannot miss it. `text_store::utf16` is the one UTF-8/UTF-16 offset converter, and
   `project_ime_event` applies a push-model `ImeEvent` to a store as edits.
-- **`InMemoryTextStore`** (`flui-platform-api`): a complete store over a `String` with a fixed
+- **`InMemoryTextStore`** (`flui-platform`): a complete store over a `String` with a fixed
   cell geometry, for tests and backends.
 - **The text-store conformance kit** (`flui_testing::text_store_kit`, version 1): a field
   supplies a `TextStoreFixture` and calls `assert_conforms`; `InMemoryFixture` is the worked

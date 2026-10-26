@@ -6,9 +6,9 @@ use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
-use flui_platform_api::keyboard::KeyState;
-use flui_platform_api::pointer::{ButtonChange, PointerButton};
-use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
+use flui_platform::keyboard::KeyState;
+use flui_platform::pointer::{ButtonChange, PointerButton};
+use flui_platform::{DragDropEvent, EventTime, PlatformInput};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -176,8 +176,8 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 
 /// Whether `event` is the press of Escape that cancels a drag: its first
 /// press, while no input method composes.
-fn is_escape_press(event: &flui_platform_api::keyboard::KeyEvent) -> bool {
-    use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
+fn is_escape_press(event: &flui_platform::keyboard::KeyEvent) -> bool {
+    use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
     event.state() == KeyState::Down
         && event.repeat() == KeyRepeat::First
         && event.composition == ImeComposition::Inactive

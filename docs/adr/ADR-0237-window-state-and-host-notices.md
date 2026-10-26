@@ -5,6 +5,15 @@
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
   images belong to the application's asset registry, reclaimed once registered
   ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
+- **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window-scoped getters
+  and per-fact callbacks that sit beside the snapshot (decision 1 keeps `PlatformWindow` as the
+  one window trait, but it no longer carries them); decision 3's refusal inside `apply` (it moves
+  to `WindowCommand::admit`, which yields the only value `apply` takes; "refused exactly when the
+  capability is false" stays); and the registrations that deliver decisions 7 and 8's notices
+  (`Platform::on_host_notice`, `Platform::on_session_end`), which become `AppHandler` methods. The
+  snapshot with its revision, the command and capability triad, owner-turn application and
+  `WindowHandle` (decision 4), placement, and the notices and the session-end hold themselves
+  stay; the payload-free state notification stays as a handler method instead of a registration.
 - **Related:** [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the
   payload-free observation shape this follows),
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) (display snapshot and ids; this ADR
@@ -22,7 +31,7 @@ and mode were configurable only through `AppConfig`, and part of that was lost c
 `WindowOptions`. `PlatformWindow` carried a dozen per-feature methods whose defaults looked like
 answers (`false`, `Bounds::default()`, an empty title), so "unsupported" and "done" were
 indistinguishable and state readback was fiction on macOS and Linux. A second window trait
-(`flui_platform::window::Window`) with its own builder and manager existed beside it, reachable from
+(`flui_native::window::Window`) with its own builder and manager existed beside it, reachable from
 nothing. Windows ignored the size constraints and `resizable`, and both Windows and X11 showed the
 window before its first frame.
 

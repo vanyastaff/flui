@@ -163,15 +163,15 @@ pub mod drag {
         DragSession, DragStart, DragTrigger, DragView, DropReceiver, DropReceiverSlot, LazyPayload,
         MoveOutcome, SpringLoading,
     };
-    pub use flui_platform_api::data_transfer::TransferActions;
+    pub use flui_platform::data_transfer::TransferActions;
 }
 /// A widget's haptics capability, from `LifecycleContext::haptics`
 /// (ADR-0210); unstable, under the `unstable-input` feature.
 #[cfg(feature = "unstable-input")]
 pub use flui_interaction::{HapticObserver, HapticsHandle};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
-pub use flui_platform_api::EventTime;
-pub use flui_platform_api::pointer::{
+pub use flui_platform::EventTime;
+pub use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
     PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,

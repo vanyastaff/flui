@@ -1,0 +1,1222 @@
+//! The headless window: [`MockWindow`], the window double every
+//! [`HeadlessPlatform`](crate::HeadlessPlatform) opens, its system chrome
+//! ([`FakeSystemChrome`]), what the headless "operating system" refuses or
+//! clamps ([`HeadlessWindowPolicy`]), so a test can see a window snapshot
+//! report the outcome rather than the request, and [`HeadlessWindows`], the
+//! windows the platform tracks.
+
+use std::{
+    rc::Rc,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+};
+
+use cursor_icon::CursorIcon;
+use flui_foundation::geometry::{Bounds, Point, Size};
+pub use flui_platform::haptics::FakeHaptics;
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
+use flui_platform::text_store::TextStoreHost;
+use flui_platform::{
+    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
+    PlatformWindow, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowState,
+};
+use parking_lot::Mutex;
+
+use crate::accessibility::headless::FakeAccessibility;
+use crate::display::headless::{DisplayChangeError, LaidOutDisplays};
+use crate::host::{self, Host};
+use crate::host_window::HostWindow;
+use crate::owner::OpenWindowError;
+use crate::owner::call_point::{Field, install};
+use crate::owner::handlers::{OpenWindows, WindowCallbacks};
+use crate::owner::headless::TextStoreHostFactory;
+use crate::owner::headless::{
+    HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
+};
+use crate::platform::HostPlatform;
+use crate::text::headless::FakeTextInput;
+use crate::window::state::WindowStateCell;
+
+/// What the headless host imposes on its windows.
+///
+/// A window command is a request (ADR-0237): the host may clamp a size or
+/// decline a mode, and the window's snapshot shows what happened. The default
+/// limits impose nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct HeadlessWindowPolicy {
+    /// The largest window the host allows, in logical pixels. A larger
+    /// resize request ends at this size.
+    pub max_window_size: Option<Size<f64>>,
+    /// Whether the host declines to maximize a window: the maximize request
+    /// is accepted and the window stays as it was.
+    pub refuses_maximize: bool,
+}
+
+impl HeadlessWindowPolicy {
+    /// Cap windows at `size`.
+    #[must_use]
+    pub const fn with_max_window_size(mut self, size: Size<f64>) -> Self {
+        self.max_window_size = Some(size);
+        self
+    }
+
+    /// Make the host decline to maximize windows.
+    #[must_use]
+    pub const fn refusing_maximize(mut self) -> Self {
+        self.refuses_maximize = true;
+        self
+    }
+}
+
+/// Process-wide identity source for mock windows.
+///
+/// A headless test may construct several independent [`HeadlessPlatform`](crate::HeadlessPlatform)
+/// values whose windows later meet in one application registry. Scoping the
+/// counter to a platform instance lets those windows alias even though real
+/// backend handles are process-unique.
+static NEXT_HEADLESS_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_headless_window_id() -> WindowId {
+    let raw = NEXT_HEADLESS_WINDOW_ID
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("BUG: exhausted the process-wide headless WindowId space");
+    WindowId(raw)
+}
+
+/// The windows the headless platform tracks, and what the simulated OS gives
+/// every window opened from now on.
+///
+/// The host builds it and hands it to the loop, which holds it as
+/// [`TrackedWindows`]; each window keeps it to leave it when it closes.
+/// Public where it is defined, as the host's table names it, and nameable only
+/// inside the crate.
+pub struct HeadlessWindows {
+    tracked: Mutex<Tracked>,
+}
+
+impl std::fmt::Debug for HeadlessWindows {
+    // `try_lock`, as `parking_lot::Mutex<T>: Debug` does: formatting while the
+    // same thread holds the set would otherwise deadlock.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("HeadlessWindows");
+        match self.tracked.try_lock() {
+            Some(tracked) => out.field("windows", &tracked.windows.len()),
+            None => out.field("windows", &format_args!("<locked>")),
+        };
+        out.finish_non_exhaustive()
+    }
+}
+
+struct Tracked {
+    /// The open windows, in the order they opened: the last is topmost.
+    windows: Vec<MockWindow>,
+    active: Option<WindowId>,
+    /// Whether the windows sit on one desktop and answer
+    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
+    placement: bool,
+    /// What every window opened from now on honours
+    /// ([`HeadlessPlatform::with_window_capabilities`](crate::HeadlessPlatform::with_window_capabilities)).
+    capabilities: WindowCapabilities,
+    /// What the host clamps or declines for every window opened from now on
+    /// ([`HeadlessPlatform::with_window_policy`](crate::HeadlessPlatform::with_window_policy)).
+    policy: HeadlessWindowPolicy,
+}
+
+impl Default for HeadlessWindows {
+    fn default() -> Self {
+        Self {
+            tracked: Mutex::new(Tracked {
+                windows: Vec::new(),
+                active: None,
+                placement: false,
+                capabilities: WindowCapabilities::ALL,
+                policy: HeadlessWindowPolicy::default(),
+            }),
+        }
+    }
+}
+
+impl HeadlessWindows {
+    /// Stops tracking window `id`; another becomes active if it was.
+    fn forget(&self, id: WindowId) {
+        let mut tracked = self.tracked.lock();
+        tracked.windows.retain(|window| window.id != id);
+        if tracked.active == Some(id) {
+            tracked.active = tracked.windows.first().map(|window| window.id);
+        }
+    }
+}
+
+impl OpenWindows for HeadlessWindows {
+    fn is_empty(&self) -> bool {
+        self.tracked.lock().windows.is_empty()
+    }
+}
+
+impl TrackedWindows for HeadlessWindows {
+    /// Builds a fresh mock window under an already-locked `state`, threading
+    /// it through the same register/activate bookkeeping for the synchronous
+    /// `Platform::open_window` and the deferred-open resolution
+    /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::HeadlessDeferredWindowOpens::resolve_next)),
+    /// so the two stay byte-for-byte consistent.
+    fn open(
+        self: Arc<Self>,
+        state: &mut HeadlessState,
+        platform: Weak<Mutex<HeadlessState>>,
+        options: WindowOptions,
+    ) -> Arc<dyn HostWindow> {
+        let window_id = next_headless_window_id();
+        let display = state.displays.default_window_display();
+        let (capabilities, limits) = {
+            let tracked = self.tracked.lock();
+            (tracked.capabilities, tracked.policy)
+        };
+        let mut window = MockWindow::new(
+            window_id,
+            options,
+            platform,
+            Arc::downgrade(&self),
+            MockWindowHost {
+                text_store_host: state.text_store_host.clone(),
+                display,
+                display_bounds: display.and_then(|id| state.displays.logical_bounds(id)),
+                capabilities,
+                limits,
+            },
+        );
+
+        window.drag = crate::drag::headless::HeadlessDragSource::of(state);
+        // The initial snapshot reflects the devices already attached (ADR-0213 §3).
+        window.callbacks.set_input_capabilities(
+            state
+                .input_availability
+                .with_present(state.devices.present()),
+        );
+        if let Some(signal) = state.owner_signal.upgrade() {
+            window
+                .callbacks
+                .set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
+                    &signal,
+                    &window.callbacks,
+                ));
+            let callbacks = Arc::downgrade(&window.callbacks);
+            window.owner_redraw = Some(OwnerRedraw {
+                signal: Arc::downgrade(&signal),
+                wake: crate::owner::signal::OwnerSignal::input_wake(&signal, move || {
+                    if let Some(callbacks) = callbacks.upgrade() {
+                        callbacks.dispatch_request_frame();
+                    }
+                }),
+            });
+        }
+        state.notices.mark_stale_on_wake(&window.window_state);
+
+        {
+            let mut tracked = self.tracked.lock();
+            tracked.windows.push(window.clone());
+            tracked.active = Some(window_id);
+        }
+
+        Arc::new(window) as Arc<dyn HostWindow>
+    }
+
+    fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>> {
+        self.tracked
+            .lock()
+            .windows
+            .iter()
+            .map(|window| Arc::clone(&window.callbacks))
+            .collect()
+    }
+
+    fn callbacks_of(&self, id: WindowId) -> Option<Arc<WindowCallbacks>> {
+        self.tracked
+            .lock()
+            .windows
+            .iter()
+            .find(|window| window.id == id)
+            .map(|window| Arc::clone(&window.callbacks))
+    }
+}
+
+/// The headless windows' test controls: builders taken before
+/// [`Platform::run`](crate::Platform::run) consumes the platform.
+impl<H: Host<Loop = HeadlessLoop, Window = MockWindow>> HostPlatform<H> {
+    /// Place this backend's windows on one desktop, as Win32 and AppKit place
+    /// theirs: each window's content starts at the position its published
+    /// [`WindowState`] reports (this host draws no frame; a window opens where
+    /// its options place it or at the desktop origin, and
+    /// [`MockWindow::simulate_move`], a move command or a mode change moves
+    /// it), the window opened last is topmost, and [`PlatformWindow::window_at`] answers from
+    /// that layout. Without it `window_at` answers
+    /// [`WindowAt::Unknown`](flui_platform::WindowAt::Unknown), as on Wayland.
+    #[must_use]
+    pub fn with_window_placement(self) -> Self {
+        self.window_shared().tracked.lock().placement = true;
+        self
+    }
+
+    /// Make every window this platform opens from now on honour exactly
+    /// `capabilities`, to test a caller against a host that cannot do
+    /// everything. The default is [`WindowCapabilities::ALL`]. A command whose
+    /// capability is `false` is refused as unsupported and changes nothing.
+    #[must_use]
+    pub fn with_window_capabilities(self, capabilities: WindowCapabilities) -> Self {
+        self.window_shared().tracked.lock().capabilities = capabilities;
+        self
+    }
+
+    /// Make the host clamp or decline what windows opened from now on ask
+    /// for, to test that a snapshot reports the outcome and not the request.
+    /// The default imposes nothing.
+    #[must_use]
+    pub fn with_window_policy(self, limits: HeadlessWindowPolicy) -> Self {
+        self.window_shared().tracked.lock().policy = limits;
+        self
+    }
+}
+
+impl host::Window<HeadlessLoop> for MockWindow {
+    type Shared = HeadlessWindows;
+
+    fn open(
+        owner: &HeadlessLoop,
+        windows: &Arc<HeadlessWindows>,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        tracing::info!(?options, "Creating mock window");
+
+        let platform_state = Arc::downgrade(&owner.state);
+        let window = owner.with_state(|state| {
+            TrackedWindows::open(Arc::clone(windows), state, platform_state, options)
+        });
+        // Announced once the state lock is released: the handler may open
+        // another window, install a handler or quit.
+        emit_window_event(&owner.state, WindowEvent::Created(window.id()));
+        Ok(window)
+    }
+
+    fn active(_: &HeadlessLoop, windows: &HeadlessWindows) -> Option<WindowId> {
+        windows.tracked.lock().active
+    }
+
+    fn capabilities(_: &HeadlessLoop, windows: &HeadlessWindows) -> WindowCapabilities {
+        windows.tracked.lock().capabilities
+    }
+
+    fn frame_inset(_: &HeadlessLoop, _: &HeadlessWindows, _: f64) -> Size<f64> {
+        // A headless window draws no frame.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &HeadlessLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        install(
+            &Field::new(&*owner.state, |state| &mut state.handlers.window_event),
+            callback,
+        );
+    }
+}
+
+// ==================== Mock Implementations ====================
+
+/// The canonical test/headless window double.
+///
+/// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `MockWindow`: a fully
+/// functional [`PlatformWindow`] that needs no
+/// display server. Beyond the trait surface it offers what a test harness
+/// needs to drive a window from the outside:
+///
+/// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
+///   delivered through the resize path exactly like the winit backend);
+/// - `request_redraw` dispatching through the registered callbacks on the
+///   owner thread, a request from another thread in the owner's next turn
+///   ([`WindowCallbacks`]), like a real backend's frame wire;
+/// - programmatic event injection ([`Self::inject_event`]) and lifecycle
+///   simulation (`simulate_resize` / `simulate_focus` /
+///   `simulate_visibility` / `simulate_close`), each firing the same
+///   registered callback a real platform would.
+///
+/// There is no public constructor: obtain one by opening a window on a
+/// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
+/// `Arc<dyn PlatformWindow>` via its `as_any()` to `&MockWindow`.
+#[derive(Clone)]
+pub struct MockWindow {
+    id: WindowId,
+    state: Arc<Mutex<MockWindowState>>,
+    /// The published snapshot, shared by every clone of this window.
+    window_state: Arc<WindowStateCell>,
+    capabilities: WindowCapabilities,
+    limits: HeadlessWindowPolicy,
+    callbacks: Arc<WindowCallbacks>,
+    text_input: Arc<FakeTextInput>,
+    haptics: Arc<FakeHaptics>,
+    system_chrome: Arc<FakeSystemChrome>,
+    accessibility: Arc<FakeAccessibility>,
+    /// Builds this window's text-store host, when the platform was made
+    /// pull-model.
+    text_store_host: Option<TextStoreHostFactory>,
+    /// The input regions last handed to the simulated OS, and every change in order.
+    input_regions: Arc<Mutex<RecordedInputRegions>>,
+    /// Back-reference to the platform this window was opened on, so closing
+    /// it can — only once every tracked window is gone — consult the
+    /// exit-policy hook exactly like the winit backend's `CloseRequested`
+    /// handling does (see `notify_closed`). `Weak`: a window must never
+    /// keep the platform state alive past the platform's own lifetime.
+    platform_state: Weak<Mutex<HeadlessState>>,
+    /// The windows the platform tracks, which this one leaves when it closes
+    /// and whose layout [`PlatformWindow::window_at`] reads. `Weak`, as above.
+    windows: Weak<HeadlessWindows>,
+    /// The OS drag session this window can start, when the platform was given one.
+    drag: Option<Arc<dyn flui_platform::drag::PlatformDragSource>>,
+    /// Carries a frame request made off the owner thread to the owner's next
+    /// turn; `None` for a window opened with no owner signal.
+    owner_redraw: Option<OwnerRedraw>,
+}
+
+/// How a [`MockWindow`] asks its owner for a frame from another thread: the
+/// frame callback is owner code, so it runs in an owner turn, coalesced with
+/// any request already queued, as a native backend posts its redraw.
+#[derive(Clone)]
+struct OwnerRedraw {
+    signal: Weak<crate::owner::signal::OwnerSignal>,
+    wake: crate::owner::handlers::InputWake,
+}
+
+impl std::fmt::Debug for MockWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("MockWindow")
+            .field("id", &self.id)
+            .field("title", &state.title)
+            .field("position", &state.position)
+            .field("size", &state.size)
+            .field("mode", &state.mode)
+            .field("scale_factor", &state.scale_factor)
+            .field("focused", &state.focused)
+            .field("visible", &state.visible)
+            .field("callbacks", &self.callbacks)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a [`MockWindow`] handed its simulated OS as input regions.
+#[derive(Debug, Default)]
+struct RecordedInputRegions {
+    projection: ProjectedInputRegions,
+    updates: Vec<Vec<DeviceInputRegion>>,
+}
+/// What the platform hands a window it opens.
+struct MockWindowHost {
+    text_store_host: Option<TextStoreHostFactory>,
+    /// The display the window opens on; `None` when the platform has none.
+    display: Option<DisplayId>,
+    /// That display's bounds in logical pixels, for a window that opens
+    /// maximized or fullscreen.
+    display_bounds: Option<Bounds<f64>>,
+    capabilities: WindowCapabilities,
+    limits: HeadlessWindowPolicy,
+}
+
+/// Mutable state for headless MockWindow
+struct MockWindowState {
+    /// How many times [`PlatformWindow::pre_present_notify`] was called —
+    /// the oracle for "the frame pump arms the compositor frame callback
+    /// once per presented frame, before the present".
+    pre_present_notifies: u64,
+    /// Every [`PlatformWindow::set_frame_rate_hint`] the window received, in order.
+    frame_rate_hints: Vec<flui_platform::FrameRateHint>,
+    title: String,
+    /// The outer top-left corner. This host draws no frame, so the outer
+    /// rectangle and the content area are the same.
+    position: Point<f64>,
+    size: Size<f64>,
+    mode: WindowMode,
+    /// The rectangle the window returns to from a mode other than normal.
+    normal_geometry: Option<WindowGeometry>,
+    constraints: SizeConstraints,
+    resizable: bool,
+    decorated: bool,
+    scale_factor: f64,
+    focused: bool,
+    visible: bool,
+    execution: flui_platform::WindowExecutionState,
+    safe_area: flui_foundation::geometry::EdgeInsets,
+    closed: bool,
+    hovered: bool,
+    modifiers: flui_platform::keyboard::Modifiers,
+    appearance: WindowAppearance,
+    cursor: CursorIcon,
+    /// The display this window is on; `None` when the platform has no displays.
+    display: Option<DisplayId>,
+}
+
+impl MockWindowState {
+    fn geometry(&self) -> WindowGeometry {
+        WindowGeometry::new(Some(self.position), self.size)
+    }
+
+    /// `size` as the host ends up with it: raised to the window's minimum,
+    /// lowered to its maximum and to the largest window the host allows.
+    fn clamp_size(&self, size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
+        let mut size = size;
+        if let Some(min) = self.constraints.min {
+            size.width = size.width.max(min.width);
+            size.height = size.height.max(min.height);
+        }
+        if let Some(max) = self.constraints.max {
+            size.width = size.width.min(max.width);
+            size.height = size.height.min(max.height);
+        }
+        Self::clamp_to_host(size, limits)
+    }
+
+    fn clamp_to_host(size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
+        match limits.max_window_size {
+            Some(max) => Size::new(size.width.min(max.width), size.height.min(max.height)),
+            None => size,
+        }
+    }
+
+    fn remember_normal(&mut self) {
+        if self.mode == WindowMode::Normal {
+            self.normal_geometry = Some(self.geometry());
+        }
+    }
+
+    /// Enter `mode` the way the host does: maximized and fullscreen fill the
+    /// window's display (as far as the host allows), minimized keeps the
+    /// bounds, and normal returns to the remembered rectangle. A host that
+    /// declines maximizing leaves the window as it was.
+    fn enter_mode(
+        &mut self,
+        mode: WindowMode,
+        limits: &HeadlessWindowPolicy,
+        display_bounds: Option<Bounds<f64>>,
+    ) {
+        match mode {
+            WindowMode::Normal => {
+                if let Some(normal) = self.normal_geometry.take() {
+                    if let Some(position) = normal.position {
+                        self.position = position;
+                    }
+                    self.size = normal.size;
+                }
+                self.mode = WindowMode::Normal;
+            }
+            WindowMode::Minimized => {
+                self.remember_normal();
+                self.mode = WindowMode::Minimized;
+                self.focused = false;
+            }
+            WindowMode::Maximized if limits.refuses_maximize => {}
+            WindowMode::Maximized | WindowMode::Fullscreen => {
+                self.remember_normal();
+                if let Some(bounds) = display_bounds {
+                    self.position = bounds.origin;
+                    self.size = Self::clamp_to_host(bounds.size, limits);
+                }
+                self.mode = mode;
+            }
+            // `WindowMode` grows; a mode this host does not know changes nothing.
+            _ => {}
+        }
+    }
+}
+
+/// The snapshot the model describes, as this window's capabilities let the
+/// host observe it: no position without `observes_position`, no minimized
+/// mode without `observes_minimized`, and no frame while fullscreen.
+fn sample_window_state(model: &MockWindowState, capabilities: &WindowCapabilities) -> WindowState {
+    let observed = |geometry: WindowGeometry| {
+        WindowGeometry::new(
+            geometry.position.filter(|_| capabilities.observes_position),
+            geometry.size,
+        )
+    };
+    let mode = match model.mode {
+        WindowMode::Minimized if !capabilities.observes_minimized => WindowMode::Normal,
+        mode => mode,
+    };
+    WindowState::new(observed(model.geometry()), model.size)
+        .with_mode(mode)
+        .with_normal_geometry(model.normal_geometry.map(observed))
+        .with_visible(model.visible && !model.closed)
+        .with_focused(model.focused)
+        .with_title(Some(model.title.clone()))
+        .with_constraints(model.constraints)
+        .with_resizable(model.resizable)
+        .with_decorated(model.decorated && model.mode != WindowMode::Fullscreen)
+        .with_display(model.display)
+}
+
+impl MockWindow {
+    fn new(
+        id: WindowId,
+        options: WindowOptions,
+        platform_state: Weak<Mutex<HeadlessState>>,
+        windows: Weak<HeadlessWindows>,
+        host: MockWindowHost,
+    ) -> Self {
+        let MockWindowHost {
+            text_store_host,
+            display,
+            display_bounds,
+            capabilities,
+            limits,
+        } = host;
+        let mut model = MockWindowState {
+            pre_present_notifies: 0,
+            frame_rate_hints: Vec::new(),
+            title: options.title.clone(),
+            position: options
+                .position
+                .filter(|_| capabilities.places_at_open)
+                .unwrap_or_default(),
+            size: options.size,
+            mode: WindowMode::Normal,
+            normal_geometry: None,
+            constraints: SizeConstraints::new(options.min_size, options.max_size),
+            resizable: options.resizable,
+            decorated: options.decorated,
+            scale_factor: 1.0,
+            focused: true,
+            execution: flui_platform::WindowExecutionState::Running,
+            safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+            visible: options.visible,
+            closed: false,
+            hovered: false,
+            modifiers: flui_platform::keyboard::Modifiers::NONE,
+            appearance: WindowAppearance::default(),
+            cursor: CursorIcon::default(),
+            display,
+        };
+        model.size = model.clamp_size(options.size, &limits);
+        if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
+            model.enter_mode(options.mode, &limits, display_bounds);
+        }
+        // A window that opens maximized or fullscreen returns to the rectangle
+        // it had before, which only its opener knows.
+        if model.mode != WindowMode::Normal && options.normal_geometry.is_some() {
+            model.normal_geometry = options.normal_geometry;
+        }
+        let initial = sample_window_state(&model, &capabilities);
+        Self {
+            id,
+            state: Arc::new(Mutex::new(model)),
+            window_state: Arc::new(WindowStateCell::new(initial)),
+            capabilities,
+            limits,
+            callbacks: Arc::new(WindowCallbacks::new()),
+            text_input: Arc::new(FakeTextInput::new()),
+            haptics: Arc::new(FakeHaptics::new()),
+            system_chrome: Arc::new(FakeSystemChrome::default()),
+            accessibility: Arc::new(FakeAccessibility::new()),
+            text_store_host,
+            input_regions: Arc::default(),
+            platform_state,
+            windows,
+            drag: None,
+            owner_redraw: None,
+        }
+    }
+
+    /// The window's display bounds in logical pixels, from the platform's
+    /// current displays; `None` when the platform is gone or knows none.
+    fn display_bounds(&self) -> Option<Bounds<f64>> {
+        let display = self.state.lock().display?;
+        self.platform_state
+            .upgrade()?
+            .lock()
+            .displays
+            .logical_bounds(display)
+    }
+
+    /// Publish what the model says now: read it into a snapshot, and raise
+    /// `on_state_changed` after the cell's lock is released when the revision
+    /// grew.
+    fn publish_state(&self) -> WindowState {
+        self.window_state.invalidate();
+        let published = self.window_state.state_with(|| {
+            let model = self.state.lock();
+            sample_window_state(&model, &self.capabilities)
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The whole close teardown, in the order both production backends run it:
+    /// hide, fire `on_close`, drop the window from tracking, clear its
+    /// callbacks, emit the global `Closed`, and consult the exit policy only
+    /// once nothing is tracked any more.
+    ///
+    /// Mirrors `WinitAppHandler::complete_window_close`. Two of its steps have
+    /// no analogue here and are deliberately absent rather than forgotten:
+    /// there is no native handle to hide beyond the state flag, and
+    /// `forget_window` has nothing to forget because this backend's data
+    /// transfer is the null source.
+    ///
+    /// Reached from both routes — [`flui_platform::PlatformWindow::close`] and
+    /// [`Self::simulate_close`] — so the two cannot drift apart.
+    fn complete_close(&self) {
+        {
+            let mut state = self.state.lock();
+            state.visible = false;
+            state.closed = true;
+        }
+        self.callbacks.dispatch_close();
+        self.notify_closed();
+        // After the global `Closed`, never before: a handler that inspects the
+        // window it was just told about must not find its callbacks already
+        // gone.
+        self.callbacks.clear();
+    }
+
+    /// Removes this window from the platform's own tracking, announces
+    /// `Closed`, and, only once every window this platform knows about is
+    /// gone, consults the exit-policy hook (see
+    /// [`crate::owner::handlers::PlatformHandlers::exit_policy`]) exactly as
+    /// the winit backend's `CloseRequested` handling does. A caller that never
+    /// installed a hook sees no behavior change: this is a no-op unless
+    /// [`crate::Platform::set_exit_policy_hook`] was called first, matching
+    /// every other headless test/consumer that predates this mechanism.
+    ///
+    /// Every application handler (the window-event handler, the hook, and
+    /// `on_quit`) runs through the call point with the state lock released
+    /// (ADR-0039): the hook's body (`flui-app`'s `AppRuntime::should_exit`)
+    /// drops removed UI runtime state, whose destructors may call back into
+    /// this platform (a dispose hook opening another window, say).
+    fn notify_closed(&self) {
+        let Some(platform_state) = self.platform_state.upgrade() else {
+            return;
+        };
+        if let Some(windows) = self.windows.upgrade() {
+            windows.forget(self.id);
+        }
+
+        // Emitted for EVERY close, not only the last one: `Closed` is the
+        // event a consumer tracks windows by, so skipping it while other
+        // windows remain would leave that consumer believing a closed window
+        // is still open — the multi-window case these events exist for.
+        emit_window_event(&platform_state, WindowEvent::Closed(self.id));
+
+        // Emptiness is read after the event, not carried down from the lock
+        // above: the handler that ran in between is exactly the code that
+        // opens windows (a close handler showing the next one), and the
+        // policy re-checks it again before quitting.
+        consult_exit_policy(&platform_state);
+    }
+
+    /// How many times the frame pump has called
+    /// [`PlatformWindow::pre_present_notify`] on this window — one per
+    /// presented frame, before the present, is the contract.
+    #[must_use]
+    pub fn pre_present_notifies(&self) -> u64 {
+        self.state.lock().pre_present_notifies
+    }
+
+    /// Every input-region set this window handed its simulated OS, in device pixels and
+    /// delivery order: one entry per change of the projection, scale or display.
+    #[must_use]
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
+        self.input_regions.lock().updates.clone()
+    }
+    /// Every frame-rate hint the window was given, oldest first.
+    #[must_use]
+    pub fn frame_rate_hints(&self) -> Vec<flui_platform::FrameRateHint> {
+        self.state.lock().frame_rate_hints.clone()
+    }
+
+    /// Inject a platform input event for testing.
+    /// Fires the registered `on_input` callback.
+    pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
+        self.callbacks.dispatch_input(event)
+    }
+
+    /// Simulate a resize for testing.
+    /// Fires `on_state_changed` when the snapshot differs, then the
+    /// registered `on_resize` callback.
+    pub fn simulate_resize(&self, width: f64, height: f64) {
+        let size = Size::new(width, height);
+        let scale = {
+            let mut state = self.state.lock();
+            state.size = size;
+            state.scale_factor
+        };
+        self.publish_state();
+        self.callbacks.dispatch_logical_resize(size, scale);
+    }
+
+    /// Simulate the user (or the OS) moving the window to `position`, outer
+    /// top-left in global logical pixels. This host draws no frame, so that is
+    /// also where its content starts: [`PlatformWindow::window_at`] answers
+    /// from it. Fires `on_state_changed` when the snapshot differs.
+    pub fn simulate_move(&self, position: Point<f64>) {
+        self.state.lock().position = position;
+        self.publish_state();
+    }
+
+    /// Simulate a monitor DPI change for testing: the scale factor moves
+    /// with NO size change, and — matching the winit backend — the new
+    /// scale is delivered through the resize path with the current logical
+    /// size, because that path is the only one the UI runtime learns its
+    /// device-pixel ratio from.
+    pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
+        let size = {
+            let mut state = self.state.lock();
+            state.scale_factor = scale_factor;
+            state.size
+        };
+        self.callbacks.dispatch_logical_resize(size, scale_factor);
+    }
+
+    /// Simulate focus change for testing.
+    /// Fires the registered `on_active_status_change` callback.
+    pub fn simulate_focus(&self, focused: bool) {
+        self.state.lock().focused = focused;
+        self.publish_state();
+        self.callbacks.dispatch_active_status_change(focused);
+    }
+
+    /// Simulate an owner-thread safe-area report; the callback fires without
+    /// holding window state. Closed and detached windows ignore the report.
+    pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
+        {
+            let mut state = self.state.lock();
+            if state.closed
+                || state.execution == flui_platform::WindowExecutionState::Detached
+                || state.safe_area == insets
+            {
+                return;
+            }
+            state.safe_area = insets;
+        }
+        self.callbacks.dispatch_safe_area_change(insets);
+    }
+
+    /// Simulate reversible native execution eligibility; terminal close stays terminal.
+    pub fn simulate_execution_state(&self, execution: flui_platform::WindowExecutionState) {
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return;
+            }
+            state.execution = execution;
+        }
+        self.callbacks.dispatch_execution_state_change(execution);
+    }
+
+    /// Simulate a visibility/occlusion change for testing.
+    /// Fires the registered `on_visibility_status_change` callback.
+    pub fn simulate_visibility(&self, visible: bool) {
+        self.state.lock().visible = visible;
+        self.publish_state();
+        self.callbacks.dispatch_visibility_status_change(visible);
+    }
+
+    /// Simulate the system light/dark appearance this window observes.
+    /// Fires `on_appearance_changed` only when the value changes, as the
+    /// native backends do; closed windows ignore the report.
+    pub fn simulate_appearance(&self, appearance: WindowAppearance) {
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.appearance == appearance {
+                return;
+            }
+            state.appearance = appearance;
+        }
+        self.callbacks.dispatch_appearance_changed();
+    }
+
+    /// Move this window to display `id`, as the user dragging it onto another
+    /// monitor does. Fires `on_display_changed` only when the display really
+    /// changes; a closed window ignores the report.
+    ///
+    /// # Errors
+    /// [`DisplayChangeError::UnknownDisplay`] when the platform holds no
+    /// display with this id (or is gone); the window stays where it was.
+    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), DisplayChangeError> {
+        let known = self
+            .platform_state
+            .upgrade()
+            .is_some_and(|platform| platform.lock().displays.contains(id));
+        if !known {
+            return Err(DisplayChangeError::UnknownDisplay);
+        }
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.display == Some(id) {
+                return Ok(());
+            }
+            state.display = Some(id);
+        }
+        self.publish_state();
+        self.callbacks.dispatch_display_changed();
+        Ok(())
+    }
+
+    /// Simulate a GPU-surface availability change for testing.
+    /// Fires the registered `on_surface_status_change` callback.
+    ///
+    /// No backend in this workspace emits this signal but Android, so this is
+    /// the only way a host-run test can drive the seam the released-surface
+    /// path hangs off: `false` asks the callback to release its surface,
+    /// `true` asks it to rebuild one.
+    pub fn simulate_surface_status(&self, has_surface: bool) {
+        self.callbacks.dispatch_surface_status_change(has_surface);
+    }
+
+    /// Simulate close request for testing.
+    /// Fires `on_should_close`, then `on_close` if allowed, then (real,
+    /// production behavior — not a test-only shortcut) removes this window
+    /// from the platform's tracking and consults the exit-policy hook if
+    /// every tracked window is now gone. See `Self::notify_closed`.
+    pub fn simulate_close(&self) -> bool {
+        let should = self.callbacks.dispatch_should_close();
+        if should {
+            // The user asked and nothing vetoed. This global event belongs to
+            // the user route: on winit only a compositor `CloseRequested`
+            // produces it, and on Win32 only the `WM_CLOSE` arm does. A veto
+            // must produce neither event, which is why this sits inside the
+            // `should` branch and not above it.
+            if let Some(platform_state) = self.platform_state.upgrade() {
+                emit_window_event(
+                    &platform_state,
+                    WindowEvent::CloseRequested { window_id: self.id },
+                );
+            }
+            self.complete_close();
+        }
+        should
+    }
+}
+
+impl PlatformWindow for MockWindow {
+    fn id(&self) -> WindowId {
+        self.id
+    }
+
+    fn physical_size(&self) -> Size<i32> {
+        let state = self.state.lock();
+        flui_foundation::geometry::DevicePixelRatio::new(state.scale_factor)
+            .map_or(Size::new(0, 0), |ratio| {
+                flui_foundation::geometry::device_size(state.size, ratio)
+            })
+    }
+
+    fn logical_size(&self) -> Size<f64> {
+        self.state.lock().size
+    }
+
+    fn scale_factor(&self) -> f64 {
+        self.state.lock().scale_factor
+    }
+
+    fn request_redraw(&self) {
+        // Any thread may ask, but the frame callback is owner code: a request
+        // from another thread waits for the owner's next turn.
+        if let Some(redraw) = &self.owner_redraw
+            && let Some(signal) = redraw.signal.upgrade()
+            && signal.owner() != thread::current().id()
+        {
+            (redraw.wake)();
+            return;
+        }
+        self.callbacks.dispatch_request_frame();
+    }
+
+    fn pre_present_notify(&self) {
+        self.state.lock().pre_present_notifies += 1;
+    }
+
+    fn is_focused(&self) -> bool {
+        self.state.lock().focused
+    }
+
+    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
+        self.state.lock().safe_area
+    }
+
+    fn execution_state(&self) -> flui_platform::WindowExecutionState {
+        let state = self.state.lock();
+        if state.closed {
+            flui_platform::WindowExecutionState::Detached
+        } else {
+            state.execution
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.state.lock().visible
+    }
+
+    // ==================== State and commands (ADR-0237) ====================
+
+    fn state(&self) -> WindowState {
+        self.publish_state()
+    }
+
+    fn capabilities(&self) -> WindowCapabilities {
+        self.capabilities
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.state.lock().closed {
+            return Err(WindowCommandError::Closed);
+        }
+        command.admit(&self.capabilities)?;
+        let display_bounds = match command {
+            WindowCommand::SetMode(WindowMode::Maximized | WindowMode::Fullscreen) => {
+                self.display_bounds()
+            }
+            _ => None,
+        };
+        let resized = {
+            let mut state = self.state.lock();
+            let before = state.size;
+            match command {
+                WindowCommand::SetTitle(title) => state.title = title,
+                WindowCommand::SetPosition(at) => {
+                    if state.mode == WindowMode::Normal {
+                        state.position = at;
+                    } else if let Some(normal) = state.normal_geometry.as_mut() {
+                        normal.position = Some(at);
+                    }
+                }
+                WindowCommand::SetSize(size) => {
+                    let size = state.clamp_size(size, &self.limits);
+                    if state.mode == WindowMode::Normal {
+                        state.size = size;
+                    } else if let Some(normal) = state.normal_geometry.as_mut() {
+                        normal.size = size;
+                    }
+                }
+                WindowCommand::SetConstraints(constraints) => {
+                    state.constraints = constraints;
+                    if state.mode == WindowMode::Normal {
+                        state.size = state.clamp_size(state.size, &self.limits);
+                    }
+                }
+                WindowCommand::SetResizable(resizable) => state.resizable = resizable,
+                WindowCommand::SetDecorated(decorated) => state.decorated = decorated,
+                WindowCommand::SetMode(mode) => {
+                    state.enter_mode(mode, &self.limits, display_bounds);
+                }
+                WindowCommand::Show => {
+                    if state.mode == WindowMode::Minimized {
+                        state.enter_mode(WindowMode::Normal, &self.limits, None);
+                    }
+                    state.visible = true;
+                }
+                WindowCommand::Hide => state.visible = false,
+                WindowCommand::Activate => state.focused = true,
+                // A command this host does not know is refused by `admit`
+                // through its capability, so none reaches here.
+                _ => {}
+            }
+            (state.size != before).then_some((state.size, state.scale_factor))
+        };
+        self.publish_state();
+        if let Some((size, scale)) = resized {
+            self.callbacks.dispatch_logical_resize(size, scale);
+        }
+        Ok(())
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.lock().focused
+    }
+
+    fn is_hovered(&self) -> bool {
+        self.state.lock().hovered
+    }
+
+    fn mouse_position(&self) -> Point<f64> {
+        Point::default()
+    }
+
+    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
+        self.state.lock().modifiers
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        self.state.lock().appearance
+    }
+
+    fn display_id(&self) -> Option<DisplayId> {
+        self.state.lock().display
+    }
+
+    fn set_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) {
+        self.state.lock().frame_rate_hints.push(hint);
+    }
+
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        let (scale, display) = {
+            let state = self.state.lock();
+            (state.scale_factor, state.display)
+        };
+        let mut recorded = self.input_regions.lock();
+        let RecordedInputRegions {
+            projection,
+            updates,
+        } = &mut *recorded;
+        if let Some(sent) = projection.update(regions, scale, display) {
+            updates.push(sent.to_vec());
+        }
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        use crate::text::{TextInput as _, WindowTextInput};
+        self.text_input
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+        self.drag.clone()
+    }
+
+    fn window_at(&self, position: Point<f64>) -> flui_platform::WindowAt {
+        use flui_platform::WindowAt;
+        let Some(tracked) = self.windows.upgrade() else {
+            return WindowAt::Unknown;
+        };
+        // The set's lock is released before any window's is taken.
+        let windows = {
+            let tracked = tracked.tracked.lock();
+            if !tracked.placement {
+                return WindowAt::Unknown;
+            }
+            tracked.windows.clone()
+        };
+        // No frame: a window's outer top-left is where its content starts.
+        let origin = self.state.lock().position;
+        let desktop = Point::new(origin.x + position.x, origin.y + position.y);
+        if !(desktop.x.is_finite() && desktop.y.is_finite()) {
+            return WindowAt::Outside;
+        }
+        windows
+            .iter()
+            .rev()
+            .find_map(|window| {
+                let state = window.state.lock();
+                let (origin, size) = (state.position, state.size);
+                let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
+                let inside =
+                    (0.0..size.width).contains(&local.x) && (0.0..size.height).contains(&local.y);
+                let shown = state.visible && !state.closed && state.mode != WindowMode::Minimized;
+                (shown && inside).then_some(WindowAt::Window {
+                    window: window.id,
+                    position: local,
+                })
+            })
+            .unwrap_or(WindowAt::Outside)
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform::PlatformSystemChrome>)
+    }
+
+    // ==================== Control Methods ====================
+
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return Err(flui_platform::WindowShowError::Closed);
+            }
+            if state.mode == WindowMode::Minimized {
+                state.enter_mode(WindowMode::Normal, &self.limits, None);
+            }
+            state.visible = true;
+            state.focused = true;
+        }
+        self.publish_state();
+        Ok(())
+    }
+
+    fn activate(&self) {
+        self.state.lock().focused = true;
+        self.publish_state();
+    }
+
+    fn close(&self) {
+        self.complete_close();
+    }
+
+    fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
+        // No-op in headless mode
+    }
+
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.state.lock().cursor = cursor;
+        Ok(())
+    }
+
+    // ==================== Callbacks ====================
+
+    crate::owner::handlers::impl_window_callback_setters!(callbacks);
+}
+
+impl crate::host_window::CoreHostWindow for MockWindow {}
+
+impl HostWindow for MockWindow {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility)
+            as Arc<dyn flui_semantics::platform::PlatformAccessibility>)
+    }
+
+    fn text_store_host(
+        &self,
+        _owner: crate::host_window::OwnerThreadToken,
+    ) -> Option<Rc<dyn TextStoreHost>> {
+        self.text_store_host.as_ref().map(|factory| factory())
+    }
+}
+
+/// Records the overlay styles delivered through
+/// [`PlatformWindow::system_chrome`], in delivery order.
+#[derive(Default)]
+pub struct FakeSystemChrome {
+    styles: Mutex<Vec<flui_platform::SystemUiOverlayStyle>>,
+}
+
+impl FakeSystemChrome {
+    /// Every delivered overlay style, in delivery order.
+    #[must_use]
+    pub fn styles(&self) -> Vec<flui_platform::SystemUiOverlayStyle> {
+        self.styles.lock().clone()
+    }
+}
+
+impl std::fmt::Debug for FakeSystemChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeSystemChrome")
+            .field("styles", &*self.styles.lock())
+            .finish()
+    }
+}
+
+impl flui_platform::PlatformSystemChrome for FakeSystemChrome {
+    fn set_overlay_style(&self, style: flui_platform::SystemUiOverlayStyle) {
+        self.styles.lock().push(style);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

@@ -54,13 +54,13 @@ ignore = [
 
     # RUSTSEC-2026-0370 / -0371 / -0372: zvariant, zbus_names and
     # zvariant_derive are unmaintained, merged into zbus 6 as its `wire` and
-    # `names` modules and derives. Source: zbus 5 ← flui-platform (the winit
+    # `names` modules and derives. Source: zbus 5 ← flui-native (the winit
     # backend reads desktop preferences over D-Bus) and zbus 5 ← atspi ←
-    # accesskit_unix ← flui-platform
+    # accesskit_unix ← flui-native
     # (Linux accessibility). No safe upgrade exists while atspi pins zbus 5,
     # and the crates are D-Bus marshalling of local session-bus messages.
     # Revisit all three when accesskit_unix moves to zbus 6, together with
-    # flui-platform's own zbus.
+    # flui-native's own zbus.
     { id = "RUSTSEC-2026-0370" },
     { id = "RUSTSEC-2026-0371" },
     { id = "RUSTSEC-2026-0372" },
@@ -105,18 +105,7 @@ allow = [
 #   CDLA-Permissive-2.0, a permissive license written for data rather than
 #   code. It comes in through flui-assets' `network` feature (reqwest →
 #   rustls-platform-verifier).
-# - webpki-roots is the same Mozilla store as Rust constants, under the same
-#   license. It comes in through xtask alone (ureq's rustls roots, for
-#   `cargo xtask device web-input` fetching ChromeDriver), never a shipped
-#   crate.
-exceptions = [
-    { crate = "webpki-root-certs", allow = [
-        "CDLA-Permissive-2.0",
-    ] },
-    { crate = "webpki-roots", allow = [
-        "CDLA-Permissive-2.0",
-    ] },
-]
+exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Bans - Crate restrictions and duplicate detection

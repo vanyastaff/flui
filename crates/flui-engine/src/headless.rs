@@ -876,8 +876,8 @@ mod target_size_tests {
     ///
     /// wgpu rejects a zero-byte `MAP_READ` buffer by panicking inside
     /// `wgpu-core` (`BufferSize::new(..).unwrap()`), so without this guard a
-    /// caller that took the size from user input — `cargo run -p flui
-    /// --example screenshot -- material 0 0` — aborts the process. The guard
+    /// caller that took the size from user input — a zero-sized screenshot
+    /// request — aborts the process. The guard
     /// runs before any GPU work, so this needs no device: the assertions below
     /// are reached even where `HeadlessRenderer::new` would fail.
     pub(super) fn zero_sized_capture_is_a_typed_error() {

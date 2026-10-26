@@ -1,5 +1,6 @@
 mod absorb_pointer;
 mod content_shape;
+mod focus_ring;
 mod hit_slop;
 mod ignore_pointer;
 mod input_region;
@@ -10,6 +11,7 @@ mod offstage;
 
 pub use absorb_pointer::*;
 pub use content_shape::*;
+pub use focus_ring::FocusRingStyle;
 pub use hit_slop::*;
 pub use ignore_pointer::*;
 pub use input_region::*;

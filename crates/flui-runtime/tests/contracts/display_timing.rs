@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::PresentationAddress;
 use flui_interaction::pointer::DEFAULT_SAMPLE_PERIOD;
-use flui_platform_api::{
+use flui_platform::{
     DisplayKey, DisplayRegistry, GestureGeometry, PlatformWindow, PreferenceQueryError,
     RefreshPeriod, WindowDisplay,
 };
@@ -89,7 +89,7 @@ struct CountingWindow {
 }
 
 impl PlatformWindow for CountingWindow {
-    fn id(&self) -> flui_platform_api::WindowId {
+    fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
     fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
@@ -112,33 +112,27 @@ impl PlatformWindow for CountingWindow {
     }
     fn set_cursor(
         &self,
-        cursor: flui_platform_api::CursorIcon,
-    ) -> Result<(), flui_platform_api::CursorError> {
+        cursor: flui_platform::CursorIcon,
+    ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
-    fn state(&self) -> flui_platform_api::WindowState {
+    fn state(&self) -> flui_platform::WindowState {
         let size = self.logical_size();
-        flui_platform_api::WindowState::new(
-            flui_platform_api::WindowGeometry::new(None, size),
-            size,
-        )
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
     }
 
-    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        flui_platform_api::WindowCapabilities::NONE
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
         &self,
-        command: flui_platform_api::WindowCommand,
-    ) -> Result<(), flui_platform_api::WindowCommandError> {
-        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        command: flui_platform::WindowCommand,
+    ) -> Result<(), flui_platform::WindowCommandError> {
+        command.admit(&flui_platform::WindowCapabilities::NONE)?;
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -153,7 +147,7 @@ fn runtime_on(window: PresentationWindow) -> UiRuntime {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -381,8 +375,8 @@ fn unknown_refresh_period_uses_the_60_hz_fallback() {
 /// runtime's next wake is the earliest of its deadlines, so a request moves
 /// it only when its own deadline is the earliest.
 fn haptic_frame_deadline_follows_the_display() {
-    use flui_platform_api::HapticFeedback;
-    use flui_platform_api::haptics::{HapticOutcome, HapticRequest, HapticTiming};
+    use flui_platform::HapticFeedback;
+    use flui_platform::haptics::{HapticOutcome, HapticRequest, HapticTiming};
 
     // Two periods of a one-second display end after 900 ms, so that request
     // never wakes the runtime before its other wakes or that bound; two
@@ -436,7 +430,7 @@ fn haptic_frame_deadline_follows_the_display() {
 fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
-        inner: flui_platform::headless_platform()
+        inner: flui_native::headless_platform()
             .open_window(flui_platform::WindowOptions::default())
             .expect("headless window"),
         geometry_reads: Arc::clone(&reads),

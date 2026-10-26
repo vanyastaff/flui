@@ -15,7 +15,7 @@
 //! application encodes with whatever it depends on.
 //!
 //! ```
-//! use flui_platform_api::StorageName;
+//! use flui_platform::StorageName;
 //! use flui_view::persist::{DecodeError, Document};
 //!
 //! struct Counter(u64);
@@ -44,13 +44,13 @@
 //! assert_eq!(Counter::decode(1, b"7").map(|c| c.0), Ok(7));
 //! ```
 //!
-//! [`Storage`]: flui_platform_api::Storage
+//! [`Storage`]: flui_platform::Storage
 
 mod persisted;
 
 pub use persisted::Persisted;
 
-use flui_platform_api::{StorageError, StorageName};
+use flui_platform::{StorageError, StorageName};
 
 /// Application data that [`Persisted`] keeps across runs.
 ///

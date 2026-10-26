@@ -20,8 +20,10 @@
 pub mod harness;
 mod host;
 mod signal_probe;
+mod state_creations;
 
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
+pub use state_creations::{StateCreations, StateCreationsState};
 
 use std::any::TypeId;
 use std::cell::Cell;
@@ -49,7 +51,7 @@ use flui_objects::{
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
-use flui_platform_api::{EventTime, InMemoryClipboard};
+use flui_platform::{EventTime, InMemoryClipboard};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::storage::IntrinsicDimension;
@@ -342,7 +344,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 pub fn lay_out_with_storage(
     root: impl View,
     constraints: BoxConstraints,
-    storage: impl flui_platform_api::Storage,
+    storage: impl flui_platform::Storage,
 ) -> LaidOut {
     mount_laid_out(root, constraints, Some(Arc::new(storage)))
 }
@@ -350,7 +352,7 @@ pub fn lay_out_with_storage(
 fn mount_laid_out(
     root: impl View,
     constraints: BoxConstraints,
-    storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    storage: Option<Arc<dyn flui_platform::Storage>>,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);
@@ -501,7 +503,7 @@ impl LaidOut {
 
     /// Apply `values` as the host's next system-preference revision; see
     /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
-    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+    pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
         self.host.ui_runtime().set_system_preferences(values);
     }
 
@@ -567,7 +569,7 @@ impl LaidOut {
 
     /// The last cursor the UI runtime set on its window, from the hovered
     /// region's cursor through the presentation's mouse tracker.
-    pub fn cursor(&self) -> flui_platform_api::CursorIcon {
+    pub fn cursor(&self) -> flui_platform::CursorIcon {
         self.host.ui_runtime().window().cursor()
     }
 
@@ -589,7 +591,7 @@ impl LaidOut {
     /// Move the window to `display` at its current scale; see
     /// [`HeadlessHost::move_to_display`](crate::HeadlessHost::move_to_display). No frame
     /// runs.
-    pub fn move_to_display(&mut self, display: Option<flui_platform_api::DisplayId>) {
+    pub fn move_to_display(&mut self, display: Option<flui_platform::DisplayId>) {
         let host = self.host.ui_runtime_mut();
         let window = host.primary_window();
         host.move_to_display(window, display);
@@ -1666,9 +1668,8 @@ impl LaidOut {
         for (index, step) in script.steps().iter().enumerate() {
             self.pump_for(step.at().saturating_sub(previous));
             previous = step.at();
-            if let flui_runtime::HostInput::Platform(flui_platform_api::PlatformInput::Pointer(
-                event,
-            )) = step.to_input(EventTime::from_nanos(0))
+            if let flui_runtime::HostInput::Platform(flui_platform::PlatformInput::Pointer(event)) =
+                step.to_input(EventTime::from_nanos(0))
             {
                 dispatch_synthetic_pointer(&self.host, event);
             }
@@ -1684,7 +1685,7 @@ impl LaidOut {
 
     /// Dispatch a key event through the UI runtime's input path, as platform
     /// input arrives: the runtime sees it before focus does.
-    pub fn dispatch_key(&self, event: flui_platform_api::keyboard::KeyEvent) {
+    pub fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
         self.host.dispatch_key(event);
     }
 

@@ -352,7 +352,7 @@ fn gestures_follow_the_named_preset_on_every_host() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{PlatformInput, TargetPlatform};
+    use flui_platform::{PlatformInput, TargetPlatform};
 
     for (preset, taps) in [
         (Some(TargetPlatform::Android), 0),
@@ -402,7 +402,7 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
             PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
         },
     };
-    use flui_platform_api::{PlatformInput, TargetPlatform};
+    use flui_platform::{PlatformInput, TargetPlatform};
 
     let window = HeadlessWindow::new(200, 200)
         .with_gesture_preset(GestureProfiles::preset(TargetPlatform::Windows));

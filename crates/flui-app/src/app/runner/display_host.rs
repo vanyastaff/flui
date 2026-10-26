@@ -14,8 +14,8 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
-use flui_platform::traits::PlatformWindow;
-use flui_platform_api::{DisplaySnapshot, FrameRateHint};
+use flui_platform::PlatformWindow;
+use flui_platform::{DisplaySnapshot, FrameRateHint};
 use flui_runtime::frame_rate_demand::FrameRateDemand;
 use flui_runtime::owner::DisplayUpdate;
 

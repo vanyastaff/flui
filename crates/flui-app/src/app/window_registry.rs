@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use flui_foundation::PresentationAddress;
-use flui_platform::traits::{PlatformWindow, WindowId};
+use flui_platform::{PlatformWindow, WindowId};
 
 /// A native identity sampled before entering a registry publication interval.
 /// The registration stores only identity; the installation separately retains

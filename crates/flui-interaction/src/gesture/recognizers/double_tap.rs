@@ -17,14 +17,14 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::input_capabilities::PointerKindSet;
-use flui_platform_api::pointer::DeviceId;
+use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::pointer::DeviceId;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
 
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 /// Callback carrying the contact in local and root coordinates.
 pub type DoubleTapCallback = Rc<dyn Fn(DoubleTapDetails)>;

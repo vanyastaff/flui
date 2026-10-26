@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
-use flui_platform_api::pointer::PointerInfo;
+use flui_platform::pointer::PointerInfo;
 use flui_rendering::hit_testing::{
     CursorIcon, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,

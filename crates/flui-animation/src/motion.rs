@@ -234,7 +234,7 @@ pub struct MotionClock {
     /// The latest animation time produced.
     now: AnimationTime,
     preference: MotionOverride,
-    system: flui_platform_api::MotionPreference,
+    system: flui_platform::MotionPreference,
     normal_epoch: AnimationTime,
     normal_epoch_time: Duration,
     normal: AnimationTime,
@@ -249,7 +249,7 @@ impl Default for MotionClock {
             last_raw: Duration::ZERO,
             now: AnimationTime::ZERO,
             preference: MotionOverride::FollowSystem,
-            system: flui_platform_api::MotionPreference::NoPreference,
+            system: flui_platform::MotionPreference::NoPreference,
             normal_epoch: AnimationTime::ZERO,
             normal_epoch_time: Duration::ZERO,
             normal: AnimationTime::ZERO,
@@ -304,7 +304,7 @@ impl MotionClock {
 
     /// Apply the existing host preference after runtime projection.
     /// No controller is sampled here.
-    pub fn set_system_motion(&mut self, system: flui_platform_api::MotionPreference) {
+    pub fn set_system_motion(&mut self, system: flui_platform::MotionPreference) {
         if self.system != system {
             self.rebase_normal();
             self.system = system;
@@ -318,7 +318,7 @@ impl MotionClock {
             MotionOverride::Reduce => MotionPolicy::Reduce,
             MotionOverride::Full => MotionPolicy::Full,
             MotionOverride::FollowSystem => match self.system {
-                flui_platform_api::MotionPreference::Reduce => MotionPolicy::Reduce,
+                flui_platform::MotionPreference::Reduce => MotionPolicy::Reduce,
                 _ => MotionPolicy::Full,
             },
         }
@@ -335,7 +335,7 @@ impl MotionClock {
         }
         let span = self.now.saturating_duration_since(self.normal_epoch);
         let span = match (self.preference, self.system) {
-            (MotionOverride::FollowSystem, flui_platform_api::MotionPreference::Scaled(scale)) => {
+            (MotionOverride::FollowSystem, flui_platform::MotionPreference::Scaled(scale)) => {
                 Duration::try_from_secs_f64(span.as_secs_f64() / scale.get())
                     .unwrap_or(Duration::MAX)
             }

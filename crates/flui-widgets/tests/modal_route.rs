@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationStatus};
+use flui_testing::widgets::StateCreations;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::{
@@ -38,35 +39,8 @@ const FRAME: Duration = Duration::from_millis(300);
 #[derive(Clone, Default)]
 struct Built(Arc<AtomicUsize>);
 
-/// Counts `create_state` on a leaf, so "was this route's subtree destroyed and
-/// rebuilt?" is observable — the whole point of `maintain_state == false`.
-#[derive(Clone)]
-struct Probe(Arc<AtomicUsize>);
-
-impl View for Probe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-impl StatefulView for Probe {
-    type State = ProbeState;
-
-    fn create_state(&self) -> Self::State {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        ProbeState
-    }
-}
-
-struct ProbeState;
-
-impl ViewState<Probe> for ProbeState {
-    fn build(&self, _view: &Probe, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::new(10.0, 10.0)
-    }
-}
-
-/// A modal whose page is a state-counting [`Probe`].
+/// A modal whose page is a state-counting [`StateCreations`]: "was this
+/// route's subtree destroyed and rebuilt?" is what `maintain_state == false` changes.
 fn modal(built: &Built, creations: &Arc<AtomicUsize>) -> ModalRoute<i32> {
     let (built, creations) = (built.clone(), Arc::clone(creations));
     ModalRoute::new(
@@ -74,7 +48,7 @@ fn modal(built: &Built, creations: &Arc<AtomicUsize>) -> ModalRoute<i32> {
         Rc::new(
             move |_ctx: &dyn BuildContext, _animation: &_, _secondary: &_| {
                 built.0.fetch_add(1, Ordering::Relaxed);
-                Probe(Arc::clone(&creations)).into_view().boxed()
+                StateCreations::counting(&creations).into_view().boxed()
             },
         ),
     )

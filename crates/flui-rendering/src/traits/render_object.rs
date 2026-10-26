@@ -50,7 +50,7 @@ use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
-    hit_testing::{CursorRequest, MouseTrackerAnnotation},
+    hit_testing::{CursorRequest, MouseTrackerAnnotation, PointerTarget},
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
     traits::PaintEffects,
@@ -71,44 +71,47 @@ pub struct HitTestOutcome {
     /// Whether the parent should treat this subtree as having consumed the hit
     /// and stop testing siblings visually behind it.
     pub blocks_below: bool,
+
+    /// The pointer target this hit routes to, in place of the node-wide
+    /// [`RenderObject::pointer_target`]: the part of the node under the
+    /// position decides it. `None` keeps the node-wide target.
+    pub pointer_target: Option<PointerTarget>,
+
+    /// The cursor this hit asks for, in place of the node-wide
+    /// [`RenderObject::mouse_cursor`]. `None` keeps the node-wide request.
+    pub cursor: Option<CursorRequest>,
 }
 
 impl HitTestOutcome {
     /// A complete miss: no entry and no sibling blocking.
     #[must_use]
     pub const fn miss() -> Self {
-        Self {
-            add_self: false,
-            blocks_below: false,
-        }
+        Self::new(false, false)
     }
 
     /// The legacy/default behavior where adding self and blocking siblings are
     /// coupled to the same boolean.
     #[must_use]
     pub const fn from_hit(hit: bool) -> Self {
-        Self {
-            add_self: hit,
-            blocks_below: hit,
-        }
+        Self::new(hit, hit)
     }
 
     /// Add the current render object to the hit path without blocking lower
     /// siblings. This is the translucent side effect.
     #[must_use]
     pub const fn add_self_without_blocking() -> Self {
-        Self {
-            add_self: true,
-            blocks_below: false,
-        }
+        Self::new(true, false)
     }
 
-    /// Builds an outcome from explicit entry/blocking bits.
+    /// Builds an outcome from explicit entry/blocking bits, with the
+    /// node-wide pointer target and cursor.
     #[must_use]
     pub const fn new(add_self: bool, blocks_below: bool) -> Self {
         Self {
             add_self,
             blocks_below,
+            pointer_target: None,
+            cursor: None,
         }
     }
 }

@@ -48,7 +48,7 @@ use crate::app::runtime::WindowPolicy;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-fn native_error(source: flui_platform::OpenWindowError) -> AppWindowError {
+fn native_error(source: flui_native::OpenWindowError) -> AppWindowError {
     AppWindowError::Native {
         source: Arc::new(source),
     }
@@ -243,7 +243,7 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     reply: Option<Arc<crate::app::application_control::Reply>>,
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_platform::traits::HostWindow>,
+    window: Arc<dyn flui_native::HostWindow>,
     stage: CompletionStage,
 }
 
@@ -268,7 +268,7 @@ enum CompletionStage {
 ))]
 pub(super) type OpenedWindow = (
     PresentationDispatcher,
-    Arc<dyn flui_platform::traits::PlatformWindow>,
+    Arc<dyn flui_platform::PlatformWindow>,
 );
 
 /// Owns the generic root until preparation and returns its publication receipt.
@@ -279,7 +279,7 @@ pub(super) type OpenedWindow = (
 ))]
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
-        Arc<dyn flui_platform::traits::HostWindow>,
+        Arc<dyn flui_native::HostWindow>,
     ) -> Result<super::installed_host::Installation, AppWindowError>,
 >;
 
@@ -358,7 +358,7 @@ enum PendingPhase {
 struct PendingRequestState {
     state: parking_lot::Mutex<(PendingPhase, bool)>,
     count: Arc<std::sync::atomic::AtomicUsize>,
-    platform: flui_platform::SharedPlatform,
+    platform: flui_native::SharedPlatform,
 }
 #[cfg(all(
     not(target_os = "android"),
@@ -445,7 +445,7 @@ impl Drop for WindowReservation {
     not(target_arch = "wasm32")
 ))]
 fn reserve_window() -> Result<WindowReservation, AppWindowError> {
-    let platform = with_owner_platform(flui_platform::OwnerPlatform::shared)
+    let platform = with_owner_platform(flui_native::OwnerPlatform::shared)
         .ok_or(AppWindowError::NoOwnerLoop)?;
     let count = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
     count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -463,7 +463,7 @@ fn reserve_window() -> Result<WindowReservation, AppWindowError> {
 struct PendingOpen {
     request_id: Arc<()>,
     config: SecondaryWindowInstallConfig,
-    pending: flui_platform::PendingWindow,
+    pending: flui_native::PendingWindow,
     waker: std::task::Waker,
 }
 #[cfg(all(
@@ -472,7 +472,7 @@ struct PendingOpen {
     not(target_arch = "wasm32")
 ))]
 struct PendingOpenWake {
-    proxy: flui_platform::PlatformProxy,
+    proxy: flui_native::PlatformProxy,
     request: Arc<PendingRequestState>,
 }
 #[cfg(all(
@@ -491,8 +491,8 @@ impl std::task::Wake for PendingOpenWake {
         if let Err(error) = self.proxy.wake() {
             let report = matches!(
                 &error,
-                flui_platform::ProxySendError::WakeFailed { .. }
-                    | flui_platform::ProxySendError::Unsupported { .. }
+                flui_native::ProxySendError::WakeFailed { .. }
+                    | flui_native::ProxySendError::Unsupported { .. }
             );
             if self.request.fail() && report {
                 tracing::error!(%error, "pending window wake failed; request cancelled, native cleanup awaits an owner turn or shutdown");
@@ -823,7 +823,8 @@ pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    use flui_platform::{WindowOpen, WindowOptions};
+    use flui_native::WindowOpen;
+    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
@@ -902,7 +903,8 @@ pub(super) fn open_window_with_content_impl<V>(
 where
     V: View + Clone + 'static,
 {
-    use flui_platform::{WindowOpen, WindowOptions};
+    use flui_native::WindowOpen;
+    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
@@ -996,9 +998,9 @@ where
 ))]
 fn spawn_pending_secondary_window_completion(
     config: SecondaryWindowInstallConfig,
-    pending: flui_platform::PendingWindow,
+    pending: flui_native::PendingWindow,
 ) -> Result<(), AppWindowError> {
-    let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy)
+    let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
         .ok_or(AppWindowError::NoOwnerLoop)?;
     let waker = std::task::Waker::from(Arc::new(PendingOpenWake {
         proxy: proxy.clone(),
@@ -1043,9 +1045,9 @@ fn spawn_pending_secondary_window_completion(
 ))]
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
-    host: Arc<dyn flui_platform::traits::HostWindow>,
+    host: Arc<dyn flui_native::HostWindow>,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    let window: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::clone(&host) as _;
+    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::clone(&host) as _;
     struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
@@ -1237,7 +1239,7 @@ fn warn_window_storage_dir(config: &AppConfig) {
 ))]
 mod tests {
     use super::*;
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_native::{HeadlessPlatform, Platform};
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
     use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
@@ -1284,7 +1286,7 @@ mod tests {
                 let window = owner
                     .open_window(flui_platform::WindowOptions::default())
                     .expect("native window");
-                let flui_platform::WindowOpen::Ready(window) = window else {
+                let flui_native::WindowOpen::Ready(window) = window else {
                     panic!("headless ready window")
                 };
                 super::super::host::install_owner_platform(owner).expect("install owner");
@@ -1337,7 +1339,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
-                            let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
                             let closing_window = Arc::clone(&window);
                             let mut prepared =
                                 super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1649,7 +1651,7 @@ mod tests {
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
                             UiRuntime::for_test(),
-                            Arc::clone(&window) as Arc<dyn flui_platform::traits::PlatformWindow>,
+                            Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
                         )
                         .submit();
                         assert!(matches!(receipt.outcome(), Some(Ok(()))));

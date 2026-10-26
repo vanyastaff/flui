@@ -26,7 +26,7 @@ use std::sync::Arc;
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId};
 use flui_interaction::PointerEvent;
-use flui_platform_api::PlatformInput;
+use flui_platform::PlatformInput;
 
 use crate::HostInput;
 use crate::input_record::{InputRecord, InputRow, RecordedSequence, RecordingStart};

@@ -100,13 +100,11 @@ For application logs, set `RUST_LOG=flui_app=debug,flui_engine=debug` before
 PowerShell: `$env:RUST_LOG = "flui_app=debug,flui_engine=debug"`). CLI diagnostics
 use `flui -v run`; they are separate from application logs. A successful compile
 does not verify your window system or GPU: consult the
-[platform evidence](https://github.com/vanyastaff/flui/blob/main/docs/BETA.md#platform-evidence)
+[platform status](https://github.com/vanyastaff/flui/blob/main/docs/platform-parity.md)
 before choosing a deployment target.
 
 ## Next steps
 
-- [Tutorial: counter → todo](tutorial-todo.md) — the same shape one step further, a list instead
-  of a single number.
 - [Concepts](../concepts/overview.md) — the mental model behind `View`/`Element`/`RenderObject`.
 - [Flutter → FLUI mapping](../mapping.md) — if you already know Flutter's vocabulary.
 - [Cookbook](../cookbook/overview.md) — task-oriented examples.

@@ -5,7 +5,7 @@
 //! [`TextEditingController`] and the laid-out `RenderEditable` — until the
 //! per-UI runtime editing state of ADR-0092 replaces them behind the same trait.
 //! The controller's UTF-8 offsets are converted at this boundary with
-//! `flui_platform_api::text_store::utf16`, and nowhere else.
+//! `flui_platform::text_store::utf16`, and nowhere else.
 //!
 //! # Sessions
 //!
@@ -57,7 +57,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
-use flui_platform_api::text_store::{
+use flui_platform::text_store::{
     CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
     LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
     TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
@@ -507,7 +507,12 @@ impl EditableTextStore {
             return;
         }
         let reported = (doc.text.clone(), doc.selection());
-        let committed_after = doc.committed();
+        // A session that moved only the selection leaves the committed text
+        // as it was; building it twice is the cost of a long field.
+        let committed_after = (doc.text != original.text
+            || doc.composing != original.composing
+            || doc.origin != original.origin)
+            .then(|| doc.committed());
         let applied = controller.with_inner_silent(|inner| {
             if !inner.generation.admits(generation) {
                 return false;
@@ -532,13 +537,9 @@ impl EditableTextStore {
         // The `on_changed` owed is the one installed now, when the session is
         // accepted, as for a key edit: owner code that runs before settle
         // (an earlier obligation's listeners) may rebuild the field.
-        let change = (committed_after != original.committed())
-            .then(|| {
-                self.edits
-                    .accept()
-                    .map(|on_changed| (committed_after, on_changed))
-            })
-            .flatten();
+        let change = committed_after
+            .filter(|after| *after != original.committed())
+            .and_then(|after| self.edits.accept().map(|on_changed| (after, on_changed)));
         self.owed.borrow_mut().push(Owed {
             controller: controller.clone(),
             change,

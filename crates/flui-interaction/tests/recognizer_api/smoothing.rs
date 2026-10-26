@@ -20,7 +20,7 @@ use flui_interaction::{
     gesture::{OneEuroTuning, ScaleGestureRecognizer, Velocity},
     pointer::PointerDispatch,
 };
-use flui_platform_api::EventTime;
+use flui_platform::EventTime;
 
 /// Sampling period of the traces: a 125 Hz digitizer.
 const PERIOD_NANOS: u64 = 8_000_000;
@@ -447,7 +447,7 @@ struct ContactLog {
 
 /// Stamp `event` at `step` with a sensor `pressure`.
 fn pressed(mut event: PointerEvent, step: usize, pressure: f32) -> PointerEvent {
-    let pressure = flui_platform_api::pointer::Pressure::try_new(pressure).expect("unit pressure");
+    let pressure = flui_platform::pointer::Pressure::try_new(pressure).expect("unit pressure");
     match &mut event {
         PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
         PointerEvent::Up(data) => data.sample.pressure = Some(pressure),

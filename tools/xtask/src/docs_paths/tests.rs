@@ -864,7 +864,6 @@ fn the_docs_are_live_markdown_and_llms_txt() {
             "changelog.d/x.md",
             "docs/plans/x.md",
             "docs/plans.md",
-            "docs/research/x.md",
             "crates/flui-view/specs/x.md",
         ]
         .map(str::to_owned),

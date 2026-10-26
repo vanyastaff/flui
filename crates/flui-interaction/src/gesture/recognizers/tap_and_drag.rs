@@ -38,7 +38,7 @@
 //!     .build();
 //! ```
 
-use flui_platform_api::input_capabilities::PointerKindSet;
+use flui_platform::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -67,7 +67,7 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
-use flui_platform_api::pointer::DeviceId;
+use flui_platform::pointer::DeviceId;
 
 // ============================================================================
 // Details types

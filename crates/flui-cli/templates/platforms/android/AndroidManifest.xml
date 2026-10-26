@@ -8,10 +8,18 @@
     <application
         android:label="{{app_name}}"
         android:hasCode="false">
+        <!-- Android recreates the Activity for a configuration change the app
+             does not declare, which restarts `android_main` and loses the
+             app's state. FLUI follows these in place: `ConfigChanged` reads the
+             window, the displays, night mode, text sizing and preferences
+             again, and a keyboard or navigation device only delivers input.
+             A language change still recreates it: the host does not follow
+             the locale yet. `fontWeightAdjustment` needs an API 31 or later
+             platform to link. -->
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation"
             android:label="{{app_name}}">
             <meta-data
                 android:name="android.app.lib_name"

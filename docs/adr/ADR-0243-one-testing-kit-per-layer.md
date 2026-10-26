@@ -16,7 +16,7 @@ exposes a crate's test support is `testing` in eight crates, `test-support` in `
 `pump` or `advance` in `flui-widgets`, `flui-runtime`, `flui-interaction` and `flui-animation`. A view
 that counts its builds is written again in more than ten test files while `flui-testing` ships
 `ProbeRoot`, two crates each define a `RecordingTextInput`, and `flui-app` and `flui-engine` keep
-local doubles beside the headless fakes in `flui-platform`. A fix to the shared kit does not reach
+local doubles beside the headless fakes in `flui-native`. A fix to the shared kit does not reach
 the copies, a reader cannot tell which helper is supported, and a tool that wants to run an existing
 test elsewhere has nothing uniform to adopt.
 

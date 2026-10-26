@@ -17,8 +17,8 @@
 //! before the gate sit in [`ALLOWLIST`] as exact counts per file and class;
 //! the file names one reason and one exit for all of them. A count above the
 //! tree ("grew"), below it ("lower it"), a class with no markers left, a path
-//! that is gone and an unknown class are findings. The allowlists' `exit`
-//! values are references ([`crate::ratchet`]) and are not scanned.
+//! that is gone, an unknown class and an exit that names no ADR
+//! ([`crate::ratchet`]) are findings.
 //!
 //! Exit 1 with one line per finding. `--self-test` scans the planted fixtures
 //! and fails unless exactly the planted findings come back; `--seed` prints
@@ -37,7 +37,6 @@ mod tokens;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
-use std::ops::Range;
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context, bail};
@@ -49,13 +48,6 @@ use crate::util::repo_root;
 
 /// The allowlist, relative to the repository root.
 pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/markers.toml";
-
-/// The allowlists whose `exit` values are references, not prose.
-const EXIT_LISTS: [&str; 3] = [
-    ALLOWLIST,
-    crate::file_length::ALLOWLIST,
-    crate::testing::ALLOWLIST,
-];
 
 /// The extensions the scan reads.
 const EXTENSIONS: [&str; 6] = ["rs", "md", "toml", "yml", "yaml", "wgsl"];
@@ -83,7 +75,7 @@ pub(crate) fn markers(args: &MarkersArgs) -> anyhow::Result<ExitCode> {
         let full = root.join(path);
         let text = std::fs::read_to_string(&full)
             .with_context(|| format!("reading {}", full.display()))?;
-        found.extend(find(path, &text, EXIT_LISTS.contains(&path.as_str())));
+        found.extend(find(path, &text));
     }
     if args.seed {
         print!("{}", seed(&found));
@@ -208,16 +200,8 @@ impl fmt::Display for Marker {
     }
 }
 
-/// Every marker in `text`, the file at `path`. With `exits_are_references`,
-/// `text` is an allowlist and its `exit` values are not read.
-fn find(path: &str, text: &str, exits_are_references: bool) -> Vec<Marker> {
-    let masked;
-    let text = if exits_are_references {
-        masked = lex::blank(text, &exit_spans(text));
-        masked.as_str()
-    } else {
-        text
-    };
+/// Every marker in `text`, the file at `path`.
+fn find(path: &str, text: &str) -> Vec<Marker> {
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(at, _)| at + 1))
         .collect();
@@ -239,29 +223,6 @@ fn find(path: &str, text: &str, exits_are_references: bool) -> Vec<Marker> {
     found
 }
 
-/// The byte ranges of the `exit` values of an allowlist, top-level and per entry.
-fn exit_spans(text: &str) -> Vec<Range<usize>> {
-    #[derive(Deserialize)]
-    struct File {
-        exit: Option<toml::Spanned<String>>,
-        #[serde(default)]
-        allow: Vec<Entry>,
-    }
-    #[derive(Deserialize)]
-    struct Entry {
-        exit: Option<toml::Spanned<String>>,
-    }
-    // an allowlist that does not parse is its own gate's finding; read it all
-    let Ok(file) = toml::from_str::<File>(text) else {
-        return Vec::new();
-    };
-    file.exit
-        .iter()
-        .chain(file.allow.iter().filter_map(|entry| entry.exit.as_ref()))
-        .map(toml::Spanned::span)
-        .collect()
-}
-
 /// The allowlist file.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -269,7 +230,7 @@ struct Allowlist {
     /// Why the markers are there; one reason for every entry.
     #[serde(default)]
     reason: String,
-    /// The ADR or plan step whose change removes every entry.
+    /// The ADR whose change removes every entry.
     #[serde(default)]
     exit: String,
     #[serde(default)]
@@ -497,30 +458,25 @@ fn seed(found: &[Marker]) -> String {
     out
 }
 
-/// The planted files: a virtual path, the text, and whether it is an allowlist.
-const PLANTED: [(&str, &str, bool); 4] = [
+/// The planted files: a virtual path and the text.
+const PLANTED: [(&str, &str); 4] = [
     (
         "planted.rs",
         include_str!("../fixtures/markers/planted.rs.txt"),
-        false,
     ),
     (
         "planted.md",
         include_str!("../fixtures/markers/planted.md.txt"),
-        false,
     ),
     (
         "planted.toml",
         include_str!("../fixtures/markers/planted.toml.txt"),
-        false,
     ),
-    ("allowlist.toml", PLANTED_ALLOWLIST, true),
+    ("allowlist.toml", PLANTED_ALLOWLIST),
 ];
 
 /// The allowlist the self-test judges the planted markers against.
 const PLANTED_ALLOWLIST: &str = include_str!("../fixtures/markers/allowlist.toml.txt");
-/// The plan the planted allowlist's exit resolves against.
-const PLANTED_PLAN: &str = include_str!("../fixtures/ratchet/plan.md.txt");
 
 /// What the planted allowlist does to the planted markers (its comments say why).
 const RATCHET_EXPECTED: [(&str, &str); 6] = [
@@ -556,7 +512,7 @@ fn annotated(path: &str, text: &str) -> BTreeSet<Identity> {
 fn planted_markers() -> Vec<Marker> {
     PLANTED
         .iter()
-        .flat_map(|&(path, text, allowlist)| find(path, text, allowlist))
+        .flat_map(|&(path, text)| find(path, text))
         .collect()
 }
 
@@ -565,7 +521,7 @@ fn self_test_diff() -> anyhow::Result<(Vec<Identity>, Vec<Identity>)> {
     let found = planted_markers();
     let expected: BTreeSet<Identity> = PLANTED
         .iter()
-        .flat_map(|&(path, text, _)| annotated(path, text))
+        .flat_map(|&(path, text)| annotated(path, text))
         .collect();
     let seen: BTreeSet<Identity> = found
         .iter()
@@ -575,7 +531,7 @@ fn self_test_diff() -> anyhow::Result<(Vec<Identity>, Vec<Identity>)> {
     let mut extra: Vec<Identity> = seen.difference(&expected).cloned().collect();
 
     let allow = Allowlist::parse(PLANTED_ALLOWLIST).context("parsing the planted allowlist")?;
-    let exits = Exits::from_parts(Vec::new(), PLANTED_PLAN);
+    let exits = Exits::from_adrs(["0081".to_owned()]);
     let scanned: BTreeSet<String> = PLANTED.iter().map(|&(path, ..)| path.to_owned()).collect();
     let entries: BTreeSet<(&str, &str)> = allow
         .allow
