@@ -3,8 +3,8 @@
 //! This module provides efficient storage and tree operations for render
 //! objects.
 
+use super::node_slab::{NodeSlab, SlabLease};
 use flui_foundation::RenderId;
-use slab::Slab;
 
 use super::node::RenderNode;
 use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
@@ -39,7 +39,7 @@ use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 #[derive(Debug)]
 pub struct RenderTree {
     /// Slab storage for nodes (0-based indexing internally).
-    nodes: Slab<RenderNode>,
+    nodes: NodeSlab,
 
     /// Per-slot generation counters, parallel to `nodes` (indexed by slot).
     ///
@@ -76,7 +76,7 @@ pub struct RenderTree {
 /// early break once all N slots are found, plus an O(N) `HashMap`
 /// build for the index→position lookup.
 fn collect_disjoint_mut<'a>(
-    nodes: &'a mut slab::Slab<RenderNode>,
+    nodes: &'a mut NodeSlab,
     indices: &[usize],
 ) -> Option<Vec<&'a mut RenderNode>> {
     // slab index → output position. Duplicate indices collapse the map;
@@ -125,6 +125,55 @@ pub struct ChildrenUpdate {
     pub donors: Vec<RenderId>,
 }
 
+/// A layout walk's access to a [`RenderTree`]: resolves ids (generation-checked) and hands out
+/// nodes one at a time, with no per-walk collection of the subtree. See [`SlabLease`] for the
+/// invariants; this adds the id check.
+pub(crate) struct TreeLease<'a> {
+    slab: SlabLease<'a>,
+    generations: &'a [core::num::NonZeroU32],
+}
+
+impl TreeLease<'_> {
+    /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so it is
+    /// sound while `parent`'s node is borrowed by the walk.
+    pub(crate) fn is_child_of(&self, child: RenderId, parent: RenderId) -> bool {
+        // A stale child has no header worth trusting, so the generation check comes first.
+        self.generations.get(child.index() as usize).copied() == Some(child.generation())
+            && self.slab.parent(child.index() as usize) == Some(parent)
+    }
+
+    pub(crate) fn is_in_flight(&self, id: RenderId) -> bool {
+        self.generations.get(id.index() as usize).copied() == Some(id.generation())
+            && self.slab.is_in_flight(id.index() as usize)
+    }
+
+    /// Sets the in-flight bit; `false` if the id is stale or the bit was already set.
+    pub(crate) fn try_enter(&self, id: RenderId) -> bool {
+        self.generations.get(id.index() as usize).copied() == Some(id.generation())
+            && self.slab.try_enter(id.index() as usize)
+    }
+
+    pub(crate) fn leave(&self, id: RenderId) {
+        if self.generations.get(id.index() as usize).copied() == Some(id.generation()) {
+            self.slab.leave(id.index() as usize);
+        }
+    }
+
+    /// The node `id` names. The caller holds no live `&mut` for it: it is not in flight, or the
+    /// caller is its walk frame.
+    pub(crate) fn node(&self, id: RenderId) -> Option<*mut RenderNode> {
+        if self.generations.get(id.index() as usize).copied() != Some(id.generation()) {
+            return None;
+        }
+        self.slab.node(id.index() as usize)
+    }
+
+    /// Slots in the slab: an upper bound on how many nodes a walk can reach.
+    pub(crate) fn capacity(&self) -> usize {
+        self.generations.len()
+    }
+}
+
 impl Default for RenderTree {
     fn default() -> Self {
         Self::new()
@@ -135,7 +184,7 @@ impl RenderTree {
     /// Creates a new empty RenderTree.
     pub fn new() -> Self {
         Self {
-            nodes: Slab::new(),
+            nodes: NodeSlab::new(),
             generations: Vec::new(),
             root: None,
         }
@@ -144,7 +193,7 @@ impl RenderTree {
     /// Creates a RenderTree with pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            nodes: Slab::with_capacity(capacity),
+            nodes: NodeSlab::with_capacity(capacity),
             generations: Vec::with_capacity(capacity),
             root: None,
         }
@@ -183,6 +232,27 @@ impl RenderTree {
         let index = u32::try_from(slab_index)
             .expect("render tree exceeds u32::MAX slots; RenderId index field is 32 bits");
         RenderId::new_gen(index, self.generations[slab_index])
+    }
+
+    /// Writes `child_id`'s parent link: the node's own copy and the slot header the layout lease
+    /// reads. The one writer of both, so they cannot disagree.
+    fn set_parent_link(&mut self, child_id: RenderId, parent: Option<RenderId>) {
+        let Some(index) = self.resolve(child_id) else {
+            return;
+        };
+        if let Some(child) = self.nodes.get_mut(index) {
+            child.set_parent(parent);
+        }
+        self.nodes.set_parent(index, parent);
+    }
+
+    /// Takes the exclusive borrow of the tree for a layout walk, which then acquires nodes one at
+    /// a time as it reaches them. See [`TreeLease`].
+    pub(crate) fn lease(&mut self) -> TreeLease<'_> {
+        TreeLease {
+            slab: self.nodes.lease(),
+            generations: &self.generations,
+        }
     }
 
     /// The id currently identifying `slab_index` (read-only mint for
@@ -423,6 +493,7 @@ impl RenderTree {
         let child_node = RenderNode::new_box_with_parent(render_object, parent_id, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
+        self.nodes.set_parent(child_slab_index, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -445,6 +516,7 @@ impl RenderTree {
         let child_node = RenderNode::new_sliver_with_parent(render_object, parent_id, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
+        self.nodes.set_parent(child_slab_index, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -518,9 +590,7 @@ impl RenderTree {
              close a cycle"
         );
 
-        if let Some(child) = self.get_mut(child_id) {
-            child.set_parent(Some(parent_id));
-        }
+        self.set_parent_link(child_id, Some(parent_id));
         let parent_depth = self.get_mut(parent_id).map(|parent| {
             parent.add_child(child_id);
             parent.depth()
@@ -575,9 +645,7 @@ impl RenderTree {
         if let Some(parent) = self.get_mut(parent_id) {
             parent.remove_child(child_id);
         }
-        if let Some(child) = self.get_mut(child_id) {
-            child.set_parent(None);
-        }
+        self.set_parent_link(child_id, None);
         self.redepth_subtree(child_id, 0);
     }
 
@@ -623,7 +691,7 @@ impl RenderTree {
                 continue;
             };
             if child.parent() == Some(parent_id) {
-                child.set_parent(None);
+                self.set_parent_link(child_id, None);
                 self.redepth_subtree(child_id, 0);
                 update.membership_changed = true;
             }
@@ -650,9 +718,7 @@ impl RenderTree {
                 donor_node.remove_child(child_id);
                 update.donors.push(donor);
             }
-            if let Some(child) = self.get_mut(child_id) {
-                child.set_parent(Some(parent_id));
-            }
+            self.set_parent_link(child_id, Some(parent_id));
             self.redepth_subtree(child_id, child_depth(parent_depth));
             update.membership_changed = true;
         }
@@ -1112,6 +1178,70 @@ mod tests {
     // `RenderTree` (and the `!Send` objects inside it) cross threads under
     // this crate's own nose. Pinned `!Send + !Sync`.
     assert_not_impl_any!(RenderTree: Send, Sync);
+
+    #[test]
+    fn a_lease_refuses_a_double_enter_and_a_non_child_edge() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(root, make_leaf()).expect("child");
+        let grandchild = tree
+            .insert_box_child(child, make_leaf())
+            .expect("grandchild");
+        let stranger = tree.insert_box(make_leaf());
+
+        let lease = tree.lease();
+        assert!(lease.is_child_of(child, root));
+        assert!(
+            !lease.is_child_of(grandchild, root),
+            "a grandchild is not a child"
+        );
+        assert!(!lease.is_child_of(stranger, root));
+        assert!(
+            !lease.is_child_of(root, child),
+            "a parent is not its child's child"
+        );
+
+        assert!(lease.try_enter(child));
+        assert!(!lease.try_enter(child), "a second enter is refused");
+        assert!(lease.is_in_flight(child));
+        assert!(
+            lease.is_child_of(grandchild, child),
+            "headers read while the node is entered"
+        );
+        lease.leave(child);
+        assert!(!lease.is_in_flight(child));
+    }
+
+    #[test]
+    fn a_reparented_node_moves_its_header_edge() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let a = tree.insert_box_child(root, make_leaf()).expect("a");
+        let b = tree.insert_box_child(root, make_leaf()).expect("b");
+        let moved = tree.insert_box_child(a, make_leaf()).expect("moved");
+        let _ = tree.set_children(b, &[moved]);
+
+        let lease = tree.lease();
+        assert!(lease.is_child_of(moved, b));
+        assert!(!lease.is_child_of(moved, a));
+    }
+
+    #[test]
+    fn a_removed_node_leaves_no_resolvable_id() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(root, make_leaf()).expect("child");
+        tree.remove_shallow(child).expect("removed");
+        let reused = tree
+            .insert_box_child(root, make_leaf())
+            .expect("reused slot");
+
+        let lease = tree.lease();
+        assert!(lease.node(child).is_none(), "the old id fails resolution");
+        assert!(!lease.is_child_of(child, root));
+        assert!(lease.node(reused).is_some());
+        assert!(lease.is_child_of(reused, root));
+    }
 
     /// Minimal leaf stub — concrete objects live in `flui_objects`.
     /// This test only needs "something with RenderObject<BoxProtocol>" to

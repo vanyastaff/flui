@@ -30,8 +30,10 @@ parent can hand a clean boundary new constraints.
    `{ in_flight: Cell<bool>, parent: Cell<Option<RenderId>>, state: UnsafeCell<SlotState> }` with
    `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. The header
    fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live. The
-   parent link lives in the header only (`RenderNode` no longer stores it; `RenderTree::parent`
-   and `adopt_child` read and write the header), so there is one copy to keep right.
+   parent link has two copies with one writer: `RenderNode` keeps its `NodeLinks` parent for the
+   35 ordinary readers, and the slot header mirrors it. `RenderTree::set_parent_link` (and
+   `insert_*_child`) write both, so they cannot disagree. Removing the node-side copy would touch
+   every caller of `RenderNode::parent` and is left for a later change.
 
    Inserting and removing go through `&mut NodeSlab` only, never during a lease. `remove` commits
    in this order, so unwinding out of the last step leaves a consistent slab: (a) move the node
@@ -60,11 +62,13 @@ parent can hand a clean boundary new constraints.
    the walk is not possible: structure changes through `&mut RenderTree`, which the lease holds.
 
 4. **`SubtreeArena` becomes a thin walker over the lease.** Its sinks (`laid_out`, failures,
-   poison retries, child requests) stay as they are; `by_id`, `parent_data_seeds` collection and
-   `from_tree` go. The test-only parent-data seed lookup becomes a lookup by id on demand.
+   poison retries, child requests) stay as they are; `by_id` and the per-walk copy of the parent-data seeds go, and
+   `from_tree` takes the lease. The test-only seed lookup reads the owner's map directly.
 
-5. **Dead code goes.** `collect_subtree_ids` (one remaining caller in `accessors.rs`, which takes
-   a plain iterator walk instead), `get_subtree_mut` and `collect_disjoint_mut` are deleted.
+5. **Dead code goes.** `SubtreeArena::new(ids, refs)`, its id map and the per-walk seed copy are
+   deleted. `collect_subtree_ids` and `get_subtree_mut` stay for the dry intrinsic-query walk
+   (`query.rs`), which has the same O(subtree) preparation and moves to the lease in a follow-up;
+   `remove_recursive` also uses `collect_subtree_ids`.
 
 ## Diagram
 

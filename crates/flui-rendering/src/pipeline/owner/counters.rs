@@ -37,6 +37,9 @@ pub struct PipelineCounters {
     /// short-circuit that serves a cached geometry. Intrinsic queries do not
     /// count.
     pub nodes_laid_out: u64,
+    /// Render nodes the layout walks acquired: every node a walk entered, including each one it
+    /// served from a cache. Bounded by the nodes reached, not the size of the dirty subtree.
+    pub nodes_acquired: u64,
     /// Render nodes whose `paint_raw` ran. A repaint boundary grafted from
     /// its retained layers is not a paint.
     pub nodes_painted: u64,
@@ -68,6 +71,7 @@ impl PipelineCounters {
                 .layout_mark_steps
                 .saturating_sub(earlier.layout_mark_steps),
             nodes_laid_out: self.nodes_laid_out.saturating_sub(earlier.nodes_laid_out),
+            nodes_acquired: self.nodes_acquired.saturating_sub(earlier.nodes_acquired),
             nodes_painted: self.nodes_painted.saturating_sub(earlier.nodes_painted),
             layers_produced: self.layers_produced.saturating_sub(earlier.layers_produced),
             layers_reused: self.layers_reused.saturating_sub(earlier.layers_reused),
@@ -94,6 +98,7 @@ impl AddAssign for PipelineCounters {
         self.layout_roots = self.layout_roots.saturating_add(rhs.layout_roots);
         self.layout_mark_steps = self.layout_mark_steps.saturating_add(rhs.layout_mark_steps);
         self.nodes_laid_out = self.nodes_laid_out.saturating_add(rhs.nodes_laid_out);
+        self.nodes_acquired = self.nodes_acquired.saturating_add(rhs.nodes_acquired);
         self.nodes_painted = self.nodes_painted.saturating_add(rhs.nodes_painted);
         self.layers_produced = self.layers_produced.saturating_add(rhs.layers_produced);
         self.layers_reused = self.layers_reused.saturating_add(rhs.layers_reused);
