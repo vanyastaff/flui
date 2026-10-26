@@ -2789,12 +2789,10 @@ mod tests {
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
         for pairs in [
             vec![],
-            vec![(Format::Bgra8UnormSrgb, Spaces::SRGB)],
-            vec![(Format::Rgba8UnormSrgb, Spaces::SRGB)],
             vec![(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)],
             vec![(Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR)],
         ] {
-            let error = crate::surface_color::select_sdr_pair(&surface_caps(&pairs))
+            let error = crate::surface_color::select_sdr(&surface_caps(&pairs))
                 .expect_err("unsupported color contract");
             assert_eq!(
                 error.recoverability(),
@@ -2809,9 +2807,9 @@ mod tests {
             (Format::Rgba8Unorm, Spaces::SRGB),
         ]);
         assert_eq!(
-            crate::surface_color::select_sdr_pair(&caps)
+            crate::surface_color::select_sdr(&caps)
                 .expect("RGBA alternative")
-                .0,
+                .format,
             Format::Rgba8Unorm
         );
     }
@@ -2829,8 +2827,9 @@ mod tests {
                 (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
                 (alternative, Spaces::SRGB),
             ]);
-            let (format, space) = crate::surface_color::select_sdr_pair(&caps).expect("SDR pair");
-            assert_eq!(space, wgpu::SurfaceColorSpace::Srgb);
+            let choice = crate::surface_color::select_sdr(&caps).expect("SDR pair");
+            let format = choice.format;
+            assert_eq!(choice.output, OutputEncoding::Identity);
             let size = 64;
             let (target, view) = crate::test_support::create_target(
                 &device,

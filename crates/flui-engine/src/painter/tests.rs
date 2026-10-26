@@ -488,7 +488,7 @@ fn shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget() {
 
 /// Format used for all color-readback tests: plain UNorm so the stored bytes
 /// equal the sRGB-encoded bytes the shader emits 1:1 (no OETF on store),
-/// matching the production surface format chosen by `select_sdr_pair`
+/// matching the production surface format chosen by `select_sdr`
 /// and the usual onscreen convention.
 const READBACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
