@@ -277,6 +277,8 @@ impl DirtyTracker {
             // we can release before stepping to the parent in the next
             // iteration.
             let step = {
+                // Read before `node` borrows the tree mutably.
+                let parent = tree.parent(current);
                 let Some(node) = tree.get_mut(current) else {
                     // Stale reference (e.g. node removed mid-frame). Stop.
                     return false;
@@ -304,7 +306,6 @@ impl DirtyTracker {
                 if epoch != 0 {
                     node.links_mut().set_layout_walk(epoch);
                 }
-                let parent = node.links().parent();
                 let is_boundary =
                     (node.is_relayout_boundary() && !had_cached_queries) || parent.is_none();
                 let depth = node.depth() as usize;
@@ -338,7 +339,7 @@ impl DirtyTracker {
                 "layout walk stopped at {from:?}, but {current:?} on its stamped path no longer \
                  needs layout: a NEEDS_LAYOUT clearer did not forget the layout-walk epoch"
             );
-            let Some(parent) = node.parent().filter(|&parent| {
+            let Some(parent) = tree.parent(current).filter(|&parent| {
                 tree.get(parent)
                     .is_some_and(|p| p.links().layout_walk() == epoch)
             }) else {
@@ -401,7 +402,7 @@ impl DirtyTracker {
                 return false;
             }
             node.mark_paint_flag();
-            let parent = node.links().parent();
+            let parent = tree.parent(current);
             let owns_retained_layer =
                 node.is_repaint_boundary_flag() && node.was_repaint_boundary();
 
@@ -588,7 +589,7 @@ impl DirtyTracker {
             // degrades to a paint mark, which is what actually happens.
             if node.is_repaint_boundary_flag()
                 && node.was_repaint_boundary()
-                && node.links().parent().is_some()
+                && tree.parent(current).is_some()
             {
                 // The requester is recorded in the entry, not just the fact
                 // that the boundary has work. A node whose effect layers did
@@ -605,7 +606,7 @@ impl DirtyTracker {
                 let depth = node.depth() as usize;
                 return self.enqueue_paint(current, depth, PaintKind::LayerUpdate(smallvec![id]));
             }
-            let Some(parent) = node.links().parent() else {
+            let Some(parent) = tree.parent(current) else {
                 // The paint root itself. There is no enclosing boundary to
                 // patch, so this can only be served by repainting.
                 return self.commit_needs_paint(tree, id);
@@ -646,7 +647,7 @@ impl DirtyTracker {
             }
             node.mark_needs_compositing_bits_update();
 
-            let Some(parent_id) = node.links().parent() else {
+            let Some(parent_id) = tree.parent(current) else {
                 return self.schedule_compositing_root(current, node.depth() as usize);
             };
             let Some(parent) = tree.get(parent_id) else {

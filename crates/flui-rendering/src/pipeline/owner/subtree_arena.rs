@@ -1109,7 +1109,11 @@ unsafe fn layout_subtree_borrowed_impl(
 
             // Leaf path: delegate to layout_leaf_only.
             if is_leaf {
-                return entry.layout_leaf_only(constraints, arena.text.source(id));
+                return entry.layout_leaf_only(
+                    constraints,
+                    arena.text.source(id),
+                    arena.lease.parent(id).is_some(),
+                );
             }
 
             // Descendant-error tracking flag.  Closure flips to `true` on any
@@ -1408,7 +1412,7 @@ unsafe fn layout_subtree_borrowed_impl(
             entry.state_mut().set_constraints(constraints);
 
             // Bootstrap the relayout boundary now that constraints are populated.
-            let has_parent = entry.links().parent().is_some();
+            let has_parent = arena.lease.parent(id).is_some();
             let sized_by_parent = entry.render_object().sized_by_parent();
             <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
                 entry.state(),
@@ -2093,7 +2097,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         entry.state_mut().set_geometry(geometry);
         entry.state_mut().set_constraints(constraints);
 
-        let has_parent = entry.links().parent().is_some();
+        let has_parent = arena.lease.parent(id).is_some();
         let sized_by_parent = entry.render_object().sized_by_parent();
         <SliverProtocol as Protocol>::bootstrap_relayout_boundary(
             entry.state(),
