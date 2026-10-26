@@ -833,12 +833,8 @@ impl RenderTree {
     ///
     /// # Use case
     ///
-    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
-    /// passes the result into
-    /// [`Self::get_subtree_mut`] to pre-acquire every subtree node's
-    /// `&mut RenderNode` borrow in one stack frame, eliminating the
-    /// recursive raw-pointer reborrow pattern (latent Stacked / Tree
-    /// Borrows UB) the prior implementation used.
+    /// `PipelineOwner::reassemble` and subtree removal walk the
+    /// result; neither needs the nodes borrowed, only their ids.
     ///
     /// # Implementation
     ///
@@ -857,12 +853,12 @@ impl RenderTree {
     /// nodes onto `stack` while `out` grows unbounded → hang / OOM. The
     /// visited-set short-circuit terminates the walk on the first
     /// repeated id and produces a deduplicated `Vec<RenderId>` suitable
-    /// for [`Self::get_subtree_mut`] (which requires pairwise
+    /// for callers that need each id once (pairwise
     /// uniqueness). The cyclic edge itself is silently dropped; full
     /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle)
     /// reporting happens elsewhere, in the pipeline's layout-cycle
     /// guard — this fix is the minimum-disruption termination guard
-    /// so the pre-acquired-subtree walk does not regress on cycles vs
+    /// so the walk does not regress on cycles vs
     /// the prior stack-overflow failure mode.
     ///
     /// # Complexity
