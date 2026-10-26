@@ -639,12 +639,19 @@ impl<'tree> QueryWalk<'tree> {
 
     /// Enters `id`: sets its in-flight bit and lends its node until the entry drops.
     pub(super) fn enter(&self, id: RenderId) -> Result<QueryEntry<'_, 'tree>, QueryRefusal> {
+        // Claim the slot first: `node` projects a `&mut` to the payload, which is only sound once no
+        // other entry can hold one (a cyclic child link would re-enter an ancestor's node).
+        if !self.lease.try_enter(id) {
+            return Err(if self.lease.is_in_flight(id) {
+                QueryRefusal::InFlight
+            } else {
+                QueryRefusal::Missing
+            });
+        }
         let Some(node) = self.lease.node(id) else {
+            self.lease.leave(id);
             return Err(QueryRefusal::Missing);
         };
-        if !self.lease.try_enter(id) {
-            return Err(QueryRefusal::InFlight);
-        }
         Ok(QueryEntry {
             walk: self,
             id,
