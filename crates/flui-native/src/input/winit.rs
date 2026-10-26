@@ -251,8 +251,24 @@ pub(crate) struct WinitInput {
     /// The OS session, once a window told it.
     session: Option<WinitSession>,
     held: Option<HeldMove>,
+    /// Touch events of the loop turn so far, on a Wayland session. winit
+    /// reports `wl_touch.frame` to no one, so the events one dispatch of the
+    /// compositor's socket delivered, which hold whole frames, are the frame.
+    touch_frame: Vec<(flui_platform::WindowId, owned::PointerEvent)>,
 }
 
+/// Whether `event` starts, moves or ends a touch contact: what a frame groups.
+fn is_touch_contact(event: &owned::PointerEvent) -> bool {
+    use owned::PointerEvent::{Cancel, Down, Move, Up};
+    let pointer = match event {
+        Down(press) => &press.pointer,
+        Up(release) => &release.pointer,
+        Move(movement) => &movement.pointer,
+        Cancel(cancel) => &cancel.pointer,
+        _ => return false,
+    };
+    pointer.kind == owned::PointerKind::Touch
+}
 impl Default for WinitInput {
     fn default() -> Self {
         Self::with_registry(ContactRegistry::new(NativeClock::epoch_only()))
@@ -269,6 +285,7 @@ impl WinitInput {
             present: flui_platform::input_capabilities::PointerKindSet::empty(),
             session: None,
             held: None,
+            touch_frame: Vec::new(),
         }
     }
 
@@ -277,10 +294,65 @@ impl WinitInput {
         self.session = Some(session);
     }
 
-    /// Deliver the held move: the loop turn ended, or an event other than
-    /// pointer input is about to be delivered after it.
+    /// Deliver the held move and the touch frame of the loop turn: the turn
+    /// ended, or an event other than pointer input is about to be delivered
+    /// after them.
     pub(crate) fn flush(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
-        self.settle(None)
+        let settled = self.settle(None);
+        let mut output = self.frame_touches(settled);
+        output.extend(self.take_touch_frame());
+        output
+    }
+
+    /// Hold the touch events of `inputs` as the loop turn's frame; anything
+    /// else ends the frame in front of it.
+    fn frame_touches(
+        &mut self,
+        inputs: Vec<(flui_platform::WindowId, PlatformInput)>,
+    ) -> Vec<(flui_platform::WindowId, PlatformInput)> {
+        if self.session != Some(WinitSession::Wayland) {
+            return inputs;
+        }
+        let mut output = Vec::new();
+        for (window, input) in inputs {
+            match input {
+                PlatformInput::Pointer(event) if is_touch_contact(&event) => {
+                    if self
+                        .touch_frame
+                        .first()
+                        .is_some_and(|(held, _)| *held != window)
+                    {
+                        output.extend(self.take_touch_frame());
+                    }
+                    self.touch_frame.push((window, event));
+                }
+                input => {
+                    output.extend(self.take_touch_frame());
+                    output.push((window, input));
+                }
+            }
+        }
+        output
+    }
+
+    /// The held touch events as one input: a frame, or the lone event.
+    fn take_touch_frame(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
+        let Some(&(window, _)) = self.touch_frame.first() else {
+            return Vec::new();
+        };
+        let mut events: Vec<_> = std::mem::take(&mut self.touch_frame)
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect();
+        let input = if events.len() == 1 {
+            PlatformInput::Pointer(events.remove(0))
+        } else {
+            match flui_platform::PointerFrame::new(events) {
+                Ok(frame) => PlatformInput::PointerFrame(frame),
+                Err(empty) => unreachable!("BUG: a taken touch frame is not empty: {empty}"),
+            }
+        };
+        vec![(window, input)]
     }
 
     /// Settle the held move before `next` on `window` is translated: keep it
@@ -378,9 +450,21 @@ impl WinitInput {
         scale: f64,
         modifiers: KeyboardModifiers,
     ) -> Option<Vec<(flui_platform::WindowId, PlatformInput)>> {
-        let mut output = self.settle(Some((window, event)));
-        let inputs = self.translate(window, event, scale, modifiers)?;
-        output.extend(inputs.into_iter().map(|input| (window, input)));
+        let settled = self.settle(Some((window, event)));
+        let translated = self.translate(window, event, scale, modifiers);
+        let mut output = self.frame_touches(settled);
+        // Whatever is not a touch ends the frame in front of its own input.
+        if !matches!(event, winit::event::WindowEvent::Touch(_)) {
+            output.extend(self.take_touch_frame());
+        }
+        let Some(translated) = translated else {
+            return (!output.is_empty()).then_some(output);
+        };
+        let translated = translated
+            .into_iter()
+            .map(|input| (window, input))
+            .collect();
+        output.extend(self.frame_touches(translated));
         Some(output)
     }
 
@@ -585,6 +669,7 @@ impl WinitInput {
         reason: NativeCancel,
     ) -> Vec<PlatformInput> {
         // The sequence a held move belongs to ends here; the move goes with it.
+        self.touch_frame.retain(|(held, _)| *held != window);
         if self.held.is_some_and(|held| held.window == window) {
             self.held = None;
         }
@@ -917,6 +1002,107 @@ mod pointer_translation_tests {
     }
 
     /// What each OS session's winit makes of the same input, row by row:
+    /// The touches one Wayland loop turn delivered are one frame; the turn's
+    /// end delivers them, and a session that frames nothing delivers each.
+    #[test]
+    fn wayland_touches_of_one_loop_turn_are_one_frame() {
+        use winit::event::TouchPhase;
+        let id = winit::event::DeviceId::dummy();
+        let window = flui_platform::WindowId(1);
+        let down = |state: &mut WinitInput, contact: u64, x: f64| {
+            state
+                .window_event(
+                    window,
+                    &touched(id, contact, TouchPhase::Started, x, 10.0),
+                    1.0,
+                    KeyboardModifiers::empty(),
+                )
+                .expect("translated")
+        };
+        let frames = |inputs: &[(flui_platform::WindowId, PlatformInput)]| {
+            inputs
+                .iter()
+                .filter(|(_, input)| {
+                    !matches!(input, PlatformInput::Pointer(PointerEvent::DeviceAdded(_)))
+                })
+                .map(|(_, input)| match input {
+                    PlatformInput::PointerFrame(frame) => frame.len(),
+                    PlatformInput::Pointer(_) => 1,
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut wayland = WinitInput::default();
+        wayland.observe_session(WinitSession::Wayland);
+        let mut delivered = down(&mut wayland, 1, 100.0);
+        delivered.extend(down(&mut wayland, 2, 300.0));
+        assert!(
+            frames(&delivered).is_empty(),
+            "nothing is delivered before the turn ends: {delivered:?}"
+        );
+        assert_eq!(frames(&wayland.flush()), [2], "one frame of both touches");
+        assert!(wayland.flush().is_empty(), "a frame is delivered once");
+
+        let mut x11 = WinitInput::default();
+        x11.observe_session(WinitSession::X11);
+        let mut delivered = down(&mut x11, 1, 100.0);
+        delivered.extend(down(&mut x11, 2, 300.0));
+        assert_eq!(frames(&delivered), [1, 1], "X11 reports each touch alone");
+    }
+
+    /// Input that is not a touch ends the frame in front of it, so order
+    /// holds, and a lone touch stays a plain event.
+    #[test]
+    fn a_non_touch_event_ends_the_touch_frame_before_it() {
+        use winit::event::TouchPhase;
+        let id = winit::event::DeviceId::dummy();
+        let window = flui_platform::WindowId(1);
+        let mut wayland = WinitInput::default();
+        wayland.observe_session(WinitSession::Wayland);
+        let touch = wayland
+            .window_event(
+                window,
+                &touched(id, 1, TouchPhase::Started, 100.0, 10.0),
+                1.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("translated");
+        assert!(
+            touch.iter().all(|(_, input)| matches!(
+                input,
+                PlatformInput::Pointer(PointerEvent::DeviceAdded(_))
+            )),
+            "held for the turn: {touch:?}"
+        );
+        let after = wayland
+            .window_event(
+                window,
+                &moved(id, 5.0, 5.0),
+                1.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("translated");
+        let order = after
+            .iter()
+            .filter(|(_, input)| {
+                !matches!(input, PlatformInput::Pointer(PointerEvent::DeviceAdded(_)))
+            })
+            .map(|(_, input)| match input {
+                PlatformInput::Pointer(PointerEvent::Down(press)) => {
+                    format!("{:?} down", press.pointer.kind)
+                }
+                PlatformInput::Pointer(_) => "pointer".to_owned(),
+                other => format!("{other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order.first().map(String::as_str), Some("Touch down"));
+        assert!(
+            order.iter().all(|entry| !entry.contains("Frame")),
+            "a lone touch is not a frame: {order:?}"
+        );
+    }
+
     /// device ids shared across kinds, runs of moves, X11's synthetic first
     /// touch cursor and fractional line deltas, and a Wayland leave mid-press.
     #[test]
