@@ -498,13 +498,16 @@ never whether the frame is correct.
    **Asserted by:** `retained_frames_match_a_full_repaint_over_random_trees_and_marks`
    (`tests/nested_boundary_capture.rs`), which updates alphas under nested
    boundaries between frames.
-3. **The root boundary is never retained, so an effect whose only enclosing
-   boundary is the root gets no fast path.** `run_paint` enters through
-   `paint_subtree(root)` directly rather than the boundary-child arm that
-   creates captures, so `RenderView` — which declares itself a boundary — has
-   none. The mark still degrades correctly (the frame repaints), it is simply
-   not accelerated. A tree with any `RepaintBoundary` above the effect, which
-   includes every per-item boundary in a list, is unaffected.
+3. **A root that is a repaint boundary is retained like any other; a root
+   that is not one repaints every frame it is dirty.** `run_paint` serves the
+   root through `serve_boundary` when `RenderView`-style roots declare
+   themselves boundaries, so a nested mark replays the root's capture and a
+   layer update under it patches that capture. A pixel-ratio change evicts
+   every capture, since the recorded output was made for the old ratio.
+   **Asserted by:** `a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints`,
+   `a_layer_update_under_the_root_boundary_patches_the_retained_root` and
+   `a_pixel_ratio_change_drops_the_retained_output`
+   (`tests/nested_boundary_capture.rs`).
 
 **Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`
 and `a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update`
