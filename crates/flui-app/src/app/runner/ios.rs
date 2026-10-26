@@ -316,7 +316,10 @@ where
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
     // strong `Arc` of the window as the surface target (issue #1043).
     let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
+    let renderer = pollster::block_on(Renderer::with_surface_color(
+        Arc::clone(&window),
+        config.surface_color,
+    ));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
