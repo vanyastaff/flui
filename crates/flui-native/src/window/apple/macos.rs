@@ -72,7 +72,7 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use crate::host::{self, WindowAccessibility, WindowPositions};
+use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::apple::MacOSLoop;
 use crate::owner::apple::macos::content_view::{self, ViewHooks};
@@ -82,7 +82,6 @@ use crate::owner::apple::macos::{
 };
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
-use crate::text::TextInput;
 use crate::{
     owner::OpenWindowError,
     owner::handlers::WindowCallbacks,
@@ -144,22 +143,11 @@ pub struct MacOSWindow {
     /// [`crate::owner::apple::macos::exec_on_owner`].
     owner_is_main: bool,
 
-    /// The accessibility bridge the table's position made for this window,
-    /// subclassed onto the content view where there is one. A `OnceLock`
-    /// slot rather than a plain field because the window value is constructed
-    /// *before* its content view is installed; the constructor fills it
-    /// immediately after installing the view.
-    accessibility: std::sync::OnceLock<Arc<dyn WindowAccessibility>>,
-
-    /// The IME capability the table's text position made for this window:
-    /// the `NSTextInputClient` conformance its content view carries.
-    text: Arc<dyn TextInput>,
-
-    /// The actuator the table's haptics position made for this window.
-    haptics: Arc<dyn flui_platform::PlatformHaptics>,
-
-    /// The system chrome the table's chrome position made for this window.
-    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+    /// What the table's positions made for this window once its content view
+    /// was installed: the accessibility bridge, subclassed onto that view;
+    /// the IME capability, the `NSTextInputClient` conformance the view
+    /// carries; the actuator; and the system chrome.
+    facets: WindowFacets,
 
     /// The platform's wake pump, armed from [`PlatformWindow::request_redraw`].
     ///
@@ -615,7 +603,12 @@ impl MacOSWindow {
                 owner,
                 owner_is_main,
             };
-            let positions = windows.positions;
+            let _: () = msg_send![ns_window, setContentView: content_view];
+
+            // Made once the content view is installed: the bridge subclasses
+            // it for VoiceOver, on the main thread, and the window's teardown
+            // detaches it before releasing the window and with it the view.
+            let facets = windows.positions.for_window(&this);
 
             let window = Arc::new(Self {
                 ns_window,
@@ -640,10 +633,7 @@ impl MacOSWindow {
                 config: windows.config.clone(),
                 owner,
                 owner_is_main,
-                accessibility: std::sync::OnceLock::new(),
-                text: positions.text(&this),
-                haptics: positions.haptics(&this),
-                chrome: positions.chrome(&this),
+                facets,
                 wake_pump: std::sync::OnceLock::new(),
                 displays: std::sync::OnceLock::new(),
                 snapshot: Arc::new(WindowStateCell::new(
@@ -654,20 +644,6 @@ impl MacOSWindow {
                         .with_decorated(options.decorated),
                 )),
             });
-
-            let _: () = msg_send![ns_window, setContentView: content_view];
-
-            // The bridge subclasses the freshly installed content view for
-            // VoiceOver, on the main thread; the window's teardown detaches it
-            // before releasing the window and with it the view.
-            let filled = window
-                .accessibility
-                .set(positions.accessibility(&this))
-                .is_ok();
-            assert!(
-                filled,
-                "BUG: the accessibility slot was created empty in this constructor and nothing else can fill it"
-            );
 
             // Enable mouse tracking for mouse moved events
             content_view::enable_mouse_tracking(content_view);
@@ -1022,16 +998,14 @@ impl crate::host_window::HostWindow for MacOSWindow {
     /// The window's NSAccessibility bridge — the capability the composition
     /// root's accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        self.accessibility
-            .get()
-            .map(|bridge| Arc::clone(bridge) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        self.text.capture_sizing()
+        self.facets.text.capture_sizing()
     }
 }
 
@@ -1266,18 +1240,19 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics))
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.chrome))
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the
     /// content view carries (see `text::apple::macos`). It shares the
     /// window's `closed` flag, so it observes the window's own close.
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        self.text
+        self.facets
+            .text
             .window_text_input()
             .and_then(crate::text::WindowTextInput::ime)
     }
@@ -1696,13 +1671,9 @@ impl Clone for MacOSWindow {
             owner: self.owner,
             owner_is_main: self.owner_is_main,
             // The clone shares the same window, so it shares the same
-            // NSAccessibility bridge — one subclass per content view,
-            // never two (`OnceLock<Arc<_>>` clones the shared handle) — and
-            // the same text input, actuator and chrome.
-            accessibility: self.accessibility.clone(),
-            text: Arc::clone(&self.text),
-            haptics: Arc::clone(&self.haptics),
-            chrome: Arc::clone(&self.chrome),
+            // NSAccessibility bridge (one subclass per content view, never
+            // two) and the same text input, actuator and chrome.
+            facets: self.facets.clone(),
             // A clone shares the window, so it arms the same platform pump —
             // a redraw asked for through any handle must schedule the wake
             // deadline's landing place, or a clone would be a way to redraw
@@ -1782,8 +1753,8 @@ impl Drop for MacOSWindow {
         // retained native tail, never release AppKit objects on a worker.
         let owner = self.owner;
         let ns_window = OwnerLaneId(self.ns_window);
-        let a11y = self.accessibility.get().cloned(); // Option<Arc<...>>, Send
-        let text = Arc::clone(&self.text);
+        let a11y = Arc::clone(&self.facets.accessibility);
+        let text = Arc::clone(&self.facets.text);
         let teardown = move || unsafe {
             // SAFETY: the tail runs on the owner thread, directly or under its
             // queue guard, so
@@ -1791,11 +1762,9 @@ impl Drop for MacOSWindow {
             // owner-affine. `detach()` runs before the release in the same
             // block, preserving accesskit's documented precondition (unhook
             // the dynamic subclass while the content view is still alive).
-            if let Some(a11y) = a11y {
-                // A bridge failure must not skip the native window's balancing
-                // release. Keep it inside its own cleanup boundary.
-                crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
-            }
+            // A bridge failure must not skip the native window's balancing
+            // release. Keep it inside its own cleanup boundary.
+            crate::owner::apple::macos::run_cleanup_guarded(|| a11y.detach());
             crate::owner::apple::macos::run_cleanup_guarded(|| text.detach());
             // SAFETY: `send_release` consumes the whole `OwnerLaneId` (the
             // closure's capture is then that `Send` newtype, never its raw

@@ -24,13 +24,13 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::host::{self, WindowAccessibility, WindowPositions};
+use crate::host::{self, WindowFacets, WindowPositions};
 use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
 use crate::owner::handlers::CallbackWindow;
-use crate::text::{TextInput, WindowTextInput};
+use crate::text::WindowTextInput;
 use crate::{
     input::availability::AndroidInputApis, owner::OpenWindowError,
     owner::handlers::WindowCallbacks, version::gate::android::AndroidApi,
@@ -62,21 +62,16 @@ pub struct AndroidWindow {
     safe_area: Arc<Mutex<safe_area::Capture>>,
     /// The exclusion rectangles last handed to the decor view, as projected.
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
-    /// The actuator the table's haptics position made for the window: the
-    /// decor view and the vibrator (ADR-0210).
-    haptics: Arc<dyn flui_platform::PlatformHaptics>,
+    /// What the table's positions made for the window: its actuator (the
+    /// decor view and the vibrator, ADR-0210), its text input (the field the
+    /// input method edits, and the capture of its text size), its bridge,
+    /// and the system bars it styles.
+    facets: WindowFacets,
     /// `FluiView`: the input method's editor, the drop target and the drag
     /// source (ADR-0247).
     java_view: Arc<JavaView>,
-    /// What the window holds of the text feature: its field, which the
-    /// input method edits, and the capture of its text size.
-    text: Arc<dyn TextInput>,
-    /// The bridge the table's accessibility position made for the window.
-    accessibility: Arc<dyn WindowAccessibility>,
     /// The system drag source the drag transport made for the window.
     drag_source: Arc<dyn ActivityDragSource>,
-    /// The system bars the table's chrome position styles for the window.
-    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
     /// The preference source the loop keeps: the night mode, the density and
     /// the touch geometry the window reports, as it reads them.
     preferences: Arc<dyn ActivityPreferences>,
@@ -135,10 +130,7 @@ impl AndroidWindow {
         )));
         Self {
             id,
-            text: positions.text(window),
-            haptics: positions.haptics(window),
-            accessibility: positions.accessibility(window),
-            chrome: positions.chrome(window),
+            facets: positions.for_window(window),
             appearance: Arc::new(Mutex::new(night_mode(&app, preferences.as_ref()))),
             app,
             callbacks,
@@ -329,24 +321,24 @@ impl ActivityWindow for AndroidWindow {
     }
 
     fn invalidate_text_sizing(&self) {
-        self.text.invalidate_sizing();
+        self.facets.text.invalidate_sizing();
     }
 
     fn fence_text_sizing(&self) {
-        self.text.fence_sizing();
+        self.facets.text.fence_sizing();
     }
 
     /// Replacing the Activity presentation retires this projection capability,
     /// even if an old handle still keeps the shared AndroidApp alive.
     fn revoke_geometry(&self) {
         self.geometry_live.store(false, Ordering::Release);
-        self.text.invalidate_sizing();
+        self.facets.text.invalidate_sizing();
     }
 
     /// The window is going away: its field and its drag are detached.
     fn retire_java_view(&self) {
-        self.text.detach();
-        self.accessibility.detach();
+        self.facets.text.detach();
+        self.facets.accessibility.detach();
         self.drag_source.retire();
     }
 
@@ -441,7 +433,7 @@ impl crate::host_window::CoreHostWindow for AndroidWindow {}
 
 impl crate::host_window::HostWindow for AndroidWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
     fn capture_text_sizing(
@@ -460,7 +452,7 @@ impl crate::host_window::HostWindow for AndroidWindow {
         {
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
-        self.text.capture_sizing()
+        self.facets.text.capture_sizing()
     }
 
     /// The window's input method host (ADR-0090, ADR-0247): `FluiView`'s
@@ -469,7 +461,8 @@ impl crate::host_window::HostWindow for AndroidWindow {
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        self.text
+        self.facets
+            .text
             .window_text_input()
             .and_then(WindowTextInput::store_host)
     }
@@ -652,11 +645,14 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.chrome))
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        self.text.window_text_input().and_then(WindowTextInput::ime)
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     /// Callable from any thread: the first request since the last frame wakes
@@ -698,7 +694,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics))
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:

@@ -41,7 +41,7 @@ use objc2_ui_kit::{
 };
 
 use crate::host;
-use crate::host::{Host, WindowPositions};
+use crate::host::{Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 
 use crate::owner::OpenWindowError;
@@ -696,16 +696,10 @@ pub struct IOSWindow {
         flui_platform::input_regions::ProjectedInputRegions,
         crate::window::apple::geometry::screen_edges::DeferredEdges,
     )>,
-    /// The actuator the table's haptics position made for this window, shared
-    /// so its Core Haptics engine lives as long as the window.
-    haptics: Arc<dyn flui_platform::PlatformHaptics>,
-    /// The system chrome the table's chrome position hands out.
-    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
-    /// The text input the table's text position made for this window.
-    text: Arc<dyn crate::text::TextInput>,
-    /// The accessibility bridge the table's accessibility position made for
-    /// this window.
-    accessibility: Arc<dyn host::WindowAccessibility>,
+    /// What the table's positions made for this window: its actuator, shared
+    /// so its Core Haptics engine lives as long as the window, its system
+    /// chrome, its text input and its bridge.
+    facets: WindowFacets,
     /// The published window state (ADR-0237).
     snapshot: WindowStateCell,
 }
@@ -754,13 +748,10 @@ impl IOSWindow {
             signal,
             chrome: Arc::new(IOSSystemChrome(Arc::clone(&status_bar))),
         };
-        let text = positions.text(&this);
-        let _ = view.ivars().text.set(Arc::clone(&text));
+        let facets = positions.for_window(&this);
+        let _ = view.ivars().text.set(Arc::clone(&facets.text));
         Self {
-            haptics: positions.haptics(&this),
-            chrome: positions.chrome(&this),
-            text,
-            accessibility: positions.accessibility(&this),
+            facets,
             native: NativeOwner::new(
                 NativeWindow {
                     view,
@@ -959,8 +950,8 @@ impl SceneWindow for IOSWindow {
             .dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
-        self.text.detach();
-        self.accessibility.detach();
+        self.facets.text.detach();
+        self.facets.accessibility.detach();
         if let Some(marker) = MainThreadMarker::new() {
             self.detach_native(marker);
         }
@@ -1167,7 +1158,7 @@ impl crate::host_window::CoreHostWindow for IOSWindow {}
 
 impl crate::host_window::HostWindow for IOSWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
     fn capture_text_sizing(
@@ -1247,11 +1238,12 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics))
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        self.text
+        self.facets
+            .text
             .window_text_input()
             .and_then(crate::text::WindowTextInput::ime)
     }
@@ -1288,7 +1280,7 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.chrome))
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     fn appearance(&self) -> WindowAppearance {

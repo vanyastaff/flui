@@ -24,9 +24,9 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::{
-    host, host::WindowAccessibility, host::WindowPositions, host_window::HostWindow,
+    host, host::WindowFacets, host::WindowPositions, host_window::HostWindow,
     owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::signal::OwnerSignal,
-    owner::web::WebLoop, text::TextInput, text::WindowTextInput, window::state::WindowStateCell,
+    owner::web::WebLoop, text::WindowTextInput, window::state::WindowStateCell,
     window::visibility::ReportedVisibility,
 };
 use flui_platform::{
@@ -52,20 +52,12 @@ pub struct WebWindow {
     drag: RefCell<Option<Box<dyn crate::owner::web::CanvasDrag>>>,
     /// What the table's window-level positions made for the window once its
     /// canvas registered; `None` before and once it retired.
-    facets: RefCell<Option<Facets>>,
+    /// Its text input is the editor over the canvas and the field it serves.
+    facets: RefCell<Option<WindowFacets>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<dyn HostDisplays>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
-}
-
-/// What a canvas window holds of the window-level positions.
-struct Facets {
-    /// The text input over the canvas: its editor and the field it serves.
-    text: Arc<dyn TextInput>,
-    haptics: Arc<dyn flui_platform::PlatformHaptics>,
-    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
-    accessibility: Arc<dyn WindowAccessibility>,
 }
 
 /// What the layout, focus and visibility observers need to republish the
@@ -461,12 +453,7 @@ impl WebWindow {
             keys,
             editor: Rc::clone(&focus) as Rc<dyn CanvasEditor>,
         };
-        let facets = Facets {
-            text: positions.text(&canvas),
-            haptics: positions.haptics(&canvas),
-            chrome: positions.chrome(&canvas),
-            accessibility: positions.accessibility(&canvas),
-        };
+        let facets = positions.for_window(&canvas);
         let visibility = Rc::new(self.visibility_sync(Rc::clone(&registration.accepting)));
         let observer = Rc::clone(&visibility);
         registration.listen(

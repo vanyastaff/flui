@@ -26,7 +26,7 @@ use winit::{
     window::{Fullscreen, Window, WindowAttributes},
 };
 
-use crate::host::{self, WindowAccessibility, WindowPositions};
+use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::install;
@@ -36,7 +36,7 @@ use crate::owner::winit::control::{ControlSendError, ControlSender};
 use crate::owner::winit::{
     ACTIVE_EVENT_LOOP, LoopWindow, LoopWindows, OpenWindowStateError, WindowSeed, WinitLoop,
 };
-use crate::text::{TextInput, WindowTextInput};
+use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
 use crate::window::state::{ModeFlags, WindowStateCell, mode_of};
@@ -66,17 +66,12 @@ pub struct WinitWindow {
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
     callbacks: crate::owner::handlers::WindowCallbacks,
-    /// This window's accessibility bridge, made by the table's position with
-    /// the window: on Linux its AT-SPI announcement, so a screen reader that
-    /// attaches at any later point finds it on the bus.
-    accessibility: Arc<dyn WindowAccessibility>,
-    /// This window's haptic actuator, made by the table's position: none on
-    /// desktop winit targets.
-    haptics: Arc<dyn flui_platform::PlatformHaptics>,
-    /// What this window holds of the text feature: winit's IME.
-    text: Arc<dyn TextInput>,
-    /// The system bars this window styles: none on desktop.
-    chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
+    /// What the table's positions made for this window with it: its
+    /// accessibility bridge (on Linux its AT-SPI announcement, so a screen
+    /// reader that attaches at any later point finds it on the bus), its
+    /// actuator and system chrome (none on desktop winit targets), and
+    /// winit's IME as its text input.
+    facets: WindowFacets,
     /// The Settings portal's `color-scheme` as last delivered to this window.
     /// winit reports no theme on X11, nor on Wayland unless the app overrode
     /// it, so the portal is the Linux source.
@@ -192,10 +187,7 @@ impl WinitWindow {
     ) -> Self {
         let positions = &windows.positions;
         let shell = shell_of(&window);
-        let accessibility = positions.accessibility(&window);
-        let haptics = positions.haptics(&window);
-        let text = positions.text(&window);
-        let chrome = positions.chrome(&window);
+        let facets = positions.for_window(&window);
         let capabilities = shell.capabilities();
         let constraints = SizeConstraints::new(options.min_size, options.max_size);
         let title = options.title.clone();
@@ -249,10 +241,7 @@ impl WinitWindow {
             occluded: AtomicBool::new(false),
             reported_visible: parking_lot::Mutex::new(ReportedVisibility::new(options.visible)),
             callbacks: crate::owner::handlers::WindowCallbacks::new(),
-            accessibility,
-            haptics,
-            text,
-            chrome,
+            facets,
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
@@ -820,15 +809,18 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.text.window_text_input().and_then(WindowTextInput::ime)
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics))
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.chrome))
+        Some(Arc::clone(&self.facets.chrome))
     }
 }
 
@@ -838,21 +830,22 @@ impl HostWindow for WinitWindow {
     /// The window's own bridge — the capability the composition root's
     /// accessibility wire discovers.
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        self.text.capture_sizing()
+        self.facets.text.capture_sizing()
     }
 
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
-        self.text
+        self.facets
+            .text
             .window_text_input()
             .and_then(WindowTextInput::store_host)
     }

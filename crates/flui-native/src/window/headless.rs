@@ -26,7 +26,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::host::{self, Host, WindowAccessibility, WindowPositions};
+use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::{Field, install};
@@ -36,7 +36,7 @@ use crate::owner::headless::{
     HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
 };
 use crate::platform::HostPlatform;
-use crate::text::{TextInput, WindowTextInput};
+use crate::text::WindowTextInput;
 use crate::window::state::WindowStateCell;
 
 /// What the headless host imposes on its windows.
@@ -369,10 +369,7 @@ pub struct MockWindow {
     limits: HeadlessWindowPolicy,
     callbacks: Arc<WindowCallbacks>,
     /// What the window holds of the table's window-level positions.
-    text: Arc<dyn TextInput>,
-    haptics: Arc<dyn PlatformHaptics>,
-    system_chrome: Arc<dyn flui_platform::PlatformSystemChrome>,
-    accessibility: Arc<dyn WindowAccessibility>,
+    facets: WindowFacets,
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
     text_store_host: Option<TextStoreHostFactory>,
@@ -631,10 +628,7 @@ impl MockWindow {
             capabilities,
             limits,
             callbacks: Arc::new(WindowCallbacks::new()),
-            text: positions.text(&()),
-            haptics: positions.haptics(&()),
-            system_chrome: positions.chrome(&()),
-            accessibility: positions.accessibility(&()),
+            facets: positions.for_window(&()),
             text_store_host,
             input_regions: Arc::default(),
             platform_state,
@@ -690,8 +684,8 @@ impl MockWindow {
         }
         self.callbacks.dispatch_close();
         // What the window-level positions put on the window goes with it.
-        self.text.detach();
-        self.accessibility.detach();
+        self.facets.text.detach();
+        self.facets.accessibility.detach();
         self.notify_closed();
         // After the global `Closed`, never before: a handler that inspects the
         // window it was just told about must not find its callbacks already
@@ -1094,11 +1088,14 @@ impl PlatformWindow for MockWindow {
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.text.window_text_input().and_then(WindowTextInput::ime)
+        self.facets
+            .text
+            .window_text_input()
+            .and_then(WindowTextInput::ime)
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics))
+        Some(Arc::clone(&self.facets.haptics))
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1143,7 +1140,7 @@ impl PlatformWindow for MockWindow {
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        Some(Arc::clone(&self.system_chrome))
+        Some(Arc::clone(&self.facets.chrome))
     }
 
     // ==================== Control Methods ====================
@@ -1191,14 +1188,14 @@ impl crate::host_window::CoreHostWindow for MockWindow {}
 
 impl HostWindow for MockWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
+        Some(Arc::clone(&self.facets.accessibility) as _)
     }
 
     fn capture_text_sizing(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        self.text.capture_sizing()
+        self.facets.text.capture_sizing()
     }
 
     /// The host a test made the platform pull-model with, else what the text
@@ -1209,7 +1206,8 @@ impl HostWindow for MockWindow {
     ) -> Option<Rc<dyn TextStoreHost>> {
         self.text_store_host.as_ref().map_or_else(
             || {
-                self.text
+                self.facets
+                    .text
                     .window_text_input()
                     .and_then(WindowTextInput::store_host)
             },

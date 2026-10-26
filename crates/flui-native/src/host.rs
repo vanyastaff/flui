@@ -289,24 +289,36 @@ impl<W: ?Sized + 'static> WindowPositions<W> {
         }
     }
 
-    /// The text input `window` holds.
-    pub(crate) fn text(&self, window: &W) -> Arc<dyn TextInput> {
-        (self.text)(window)
+    /// What `window` holds of the positions, made for it together as it
+    /// opens.
+    pub(crate) fn for_window(&self, window: &W) -> WindowFacets {
+        WindowFacets {
+            text: (self.text)(window),
+            accessibility: (self.accessibility)(window),
+            haptics: (self.haptics)(window),
+            chrome: (self.chrome)(window),
+        }
     }
+}
 
-    /// The accessibility bridge `window` holds.
-    pub(crate) fn accessibility(&self, window: &W) -> Arc<dyn WindowAccessibility> {
-        (self.accessibility)(window)
-    }
+/// What one window holds of the window-level positions, made together as it
+/// opens ([`WindowPositions::for_window`]) and handed out by the window as
+/// its own.
+#[derive(Clone)]
+pub(crate) struct WindowFacets {
+    /// Its text input.
+    pub(crate) text: Arc<dyn TextInput>,
+    /// Its accessibility bridge.
+    pub(crate) accessibility: Arc<dyn WindowAccessibility>,
+    /// Its haptic actuator.
+    pub(crate) haptics: Arc<dyn PlatformHaptics>,
+    /// The system chrome it styles.
+    pub(crate) chrome: Arc<dyn PlatformSystemChrome>,
+}
 
-    /// The haptic actuator `window` hands out.
-    pub(crate) fn haptics(&self, window: &W) -> Arc<dyn PlatformHaptics> {
-        (self.haptics)(window)
-    }
-
-    /// The system chrome `window` styles.
-    pub(crate) fn chrome(&self, window: &W) -> Arc<dyn PlatformSystemChrome> {
-        (self.chrome)(window)
+impl std::fmt::Debug for WindowFacets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowFacets").finish_non_exhaustive()
     }
 }
 
