@@ -59,10 +59,10 @@ at `warn` on target `flui.gpu` (`event = "surface_color_downgraded"`) and `is_do
 `ResolvedSurfaceColor::resolve(requested, caps, hdr, working_renderable)` is the one place the pair
 is chosen. For `Hdr`, in order: `Rgba16Float` with `ExtendedDisplayP3`, `ExtendedSrgbLinear`,
 `ExtendedSrgb`, then `Rgb10a2Unorm` with `Bt2100Pq`. `WideGamut` takes an 8-bit format with
-`DisplayP3`. `Srgb8` is the existing pair. Three conditions skip the wider pairs and fall back:
+`DisplayP3`. `Srgb8` takes `Bgra8Unorm`, `Rgba8Unorm` or `Rgb10a2Unorm` and paints into it; a surface that lists only `Bgra8UnormSrgb` or `Rgba8UnormSrgb` is painted through an `Rgba8Unorm` working target and the blit writes the decoded values for the format to encode again. Three conditions skip the wider pairs and fall back:
 the adapter cannot render to and blend `Rgba16Float`; the display reports no headroom over SDR white
 (`DisplayHdrInfo::tone_map_headroom() <= 1.0`, which wgpu derives from a definitively-SDR display);
-the surface lists no such pair. A surface with no 8-bit sRGB pair is refused with
+the surface lists no such pair. A surface with none of those sRGB pairs is refused with
 `EngineError::UnsupportedSurfaceColorConfiguration` whatever was requested, as before. A colour
 space is never chosen by `Auto`: an FP16 surface would otherwise brighten encoded values.
 
@@ -103,7 +103,7 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
 
 ### §6. Failure paths
 
-- A request not met is a downgrade, not an error (§1); only a surface without the 8-bit sRGB pair
+- A request not met is a downgrade, not an error (§1); only a surface without any sRGB pair
   fails.
 - Device recovery and surface recreation resolve the original request again against the new
   capabilities; `surface_color()` follows the surface.

@@ -165,7 +165,7 @@ impl ResolvedSurfaceColor {
         hdr: &wgpu::DisplayHdrInfo,
         working_renderable: bool,
     ) -> EngineResult<Self> {
-        let sdr = select_sdr_pair(caps)?;
+        let sdr = select_sdr(caps)?;
         let headroom = hdr.tone_map_headroom();
         let display_is_hdr = headroom.is_none_or(|h| h > 1.0);
         let offers =
@@ -248,37 +248,69 @@ impl ResolvedSurfaceColor {
                 }
             }
         }
-        let (format, color_space) = sdr;
+        let SdrChoice {
+            format,
+            working_format,
+            output,
+        } = sdr;
         Ok(Self {
             requested,
             granted: SurfaceColor::Srgb8,
             format,
-            color_space,
-            working_format: format,
-            output: OutputEncoding::Identity,
+            color_space: wgpu::SurfaceColorSpace::Srgb,
+            working_format,
+            output,
         })
     }
 }
 
-/// The 8-bit sRGB pair every configuration falls back to.
+/// The standard-dynamic-range sRGB configuration every request falls back to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SdrChoice {
+    pub(crate) format: wgpu::TextureFormat,
+    pub(crate) working_format: wgpu::TextureFormat,
+    pub(crate) output: OutputEncoding,
+}
+
+/// Choose the sRGB configuration, in order of preference:
 ///
-/// `Color::to_rgba_f32_array` and the shaders preserve encoded values. Plain
-/// UNorm stores those bytes without another transfer function; explicit `Srgb`
-/// tells the compositor how to interpret them. An FP16/Auto surface can
-/// instead select `ExtendedSrgbLinear` and brighten the same values, which is
-/// why an HDR surface is only ever chosen on request.
-pub(crate) fn select_sdr_pair(
-    caps: &wgpu::SurfaceCapabilities,
-) -> EngineResult<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
-    for format in [
-        wgpu::TextureFormat::Bgra8Unorm,
-        wgpu::TextureFormat::Rgba8Unorm,
-    ] {
-        if caps
-            .color_spaces(format)
+/// 1. `Bgra8Unorm` / `Rgba8Unorm`: `Color::to_rgba_f32_array` and the shaders
+///    preserve encoded values, and a plain UNorm format stores those bytes
+///    without another transfer function. The renderer paints into it directly.
+/// 2. `Rgb10a2Unorm`, the same way.
+/// 3. `Bgra8UnormSrgb` / `Rgba8UnormSrgb`: the hardware encodes on store, so
+///    the renderer paints into an `Rgba8Unorm` working target and the
+///    presentation blit writes the decoded (linear) values for the format to
+///    encode again. The round trip is exact for 8-bit values.
+///
+/// An FP16/Auto surface can instead select `ExtendedSrgbLinear` and brighten
+/// the same values, which is why an HDR surface is only ever chosen on request.
+pub(crate) fn select_sdr(caps: &wgpu::SurfaceCapabilities) -> EngineResult<SdrChoice> {
+    use wgpu::TextureFormat as Format;
+    let srgb = |format| {
+        caps.color_spaces(format)
             .contains(wgpu::SurfaceColorSpaces::SRGB)
-        {
-            return Ok((format, wgpu::SurfaceColorSpace::Srgb));
+    };
+    for format in [Format::Bgra8Unorm, Format::Rgba8Unorm, Format::Rgb10a2Unorm] {
+        if srgb(format) {
+            return Ok(SdrChoice {
+                format,
+                working_format: format,
+                output: OutputEncoding::Identity,
+            });
+        }
+    }
+    for format in [Format::Bgra8UnormSrgb, Format::Rgba8UnormSrgb] {
+        if srgb(format) {
+            return Ok(SdrChoice {
+                format,
+                working_format: Format::Rgba8Unorm,
+                output: OutputEncoding::Transform(OutputTransform {
+                    gamut: Gamut::Srgb,
+                    transfer: Transfer::Linear,
+                    headroom: 1.0,
+                }),
+            });
         }
     }
     Err(EngineError::UnsupportedSurfaceColorConfiguration {
@@ -571,6 +603,107 @@ mod tests {
         assert_eq!(resolved.granted(), SurfaceColor::Srgb8);
     }
 
+    #[test]
+    fn a_surface_with_only_srgb_formats_is_painted_through_an_unorm_working_target() {
+        for srgb_format in [Format::Bgra8UnormSrgb, Format::Rgba8UnormSrgb] {
+            let resolved = resolve(
+                SurfaceColor::Srgb8,
+                &[(srgb_format, Spaces::SRGB)],
+                &wgpu::DisplayHdrInfo::default(),
+            );
+            assert_eq!(resolved.granted(), SurfaceColor::Srgb8);
+            assert_eq!(resolved.format(), srgb_format);
+            assert_eq!(resolved.color_space(), wgpu::SurfaceColorSpace::Srgb);
+            assert_eq!(resolved.working_format(), Format::Rgba8Unorm);
+            assert!(matches!(resolved.output(), OutputEncoding::Transform(_)));
+        }
+    }
+
+    #[test]
+    fn a_plain_unorm_pair_beats_an_srgb_format_and_ten_bit_beats_neither() {
+        let both = [
+            (Format::Bgra8UnormSrgb, Spaces::SRGB),
+            (Format::Rgb10a2Unorm, Spaces::SRGB),
+            (Format::Rgba8Unorm, Spaces::SRGB),
+        ];
+        let resolved = resolve(SurfaceColor::Srgb8, &both, &wgpu::DisplayHdrInfo::default());
+        assert_eq!(resolved.format(), Format::Rgba8Unorm);
+        let without = &both[..2];
+        let resolved = resolve(
+            SurfaceColor::Srgb8,
+            without,
+            &wgpu::DisplayHdrInfo::default(),
+        );
+        assert_eq!(resolved.format(), Format::Rgb10a2Unorm);
+        assert_eq!(resolved.output(), OutputEncoding::Identity);
+    }
+
+    /// What the painter wrote in sRGB-encoded bytes is what the `*Srgb`
+    /// swapchain stores: the blit writes linear values and the hardware
+    /// encodes them again.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn an_srgb_format_surface_stores_the_bytes_the_painter_wrote() {
+        let Some((device, queue)) =
+            crate::test_support::try_test_device_and_queue("srgb format surface")
+        else {
+            return;
+        };
+        let resolved = resolve(
+            SurfaceColor::Srgb8,
+            &[(Format::Rgba8UnormSrgb, Spaces::SRGB)],
+            &wgpu::DisplayHdrInfo::default(),
+        );
+        let OutputEncoding::Transform(transform) = resolved.output() else {
+            panic!("an sRGB-format surface is converted");
+        };
+        let width = 256u32;
+        let (source, _) = crate::test_support::create_sampleable_target(
+            &device,
+            "working",
+            width,
+            1,
+            resolved.working_format(),
+        );
+        let texels: Vec<u8> = (0..width)
+            .flat_map(|v| [v as u8, 255 - v as u8, (v as u8) / 2, 255])
+            .collect();
+        queue.write_texture(
+            source.as_image_copy(),
+            &texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(1),
+            },
+            source.size(),
+        );
+        let (target, view) = crate::test_support::create_sampleable_target(
+            &device,
+            "surface",
+            width,
+            1,
+            resolved.format(),
+        );
+        crate::offscreen::OffscreenRenderer::new(
+            std::sync::Arc::clone(&device),
+            std::sync::Arc::clone(&queue),
+        )
+        .present_to_surface(
+            &source,
+            &target,
+            &view,
+            OutputEncoding::Transform(transform),
+        )
+        .expect("presentation submits");
+        let stored = crate::test_support::readback_bytes(&device, &queue, &target, width, 1);
+        for (index, (stored, wrote)) in stored.iter().zip(&texels).enumerate() {
+            assert!(
+                stored.abs_diff(*wrote) <= 1,
+                "byte {index}: stored {stored}, painter wrote {wrote}"
+            );
+        }
+    }
     #[test]
     fn a_surface_without_the_sdr_pair_is_refused_whatever_was_asked() {
         let only_hdr = caps(&[(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)]);

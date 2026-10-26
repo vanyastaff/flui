@@ -19,7 +19,7 @@
 //! texel formats: `R8Unorm` for the mask page the fragment shader tints, and
 //! `Rgba8Unorm` for emoji and colour bitmap faces drawn as-is. Both live in
 //! the engine's gamma-space convention (the surface is `Unorm`; see
-//! `surface_color::select_sdr_pair`), so a glyph's colour lands as recorded.
+//! `surface_color::select_sdr`), so a glyph's colour lands as recorded.
 //!
 //! # Lifetime of a slot
 //!
