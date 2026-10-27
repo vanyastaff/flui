@@ -4,13 +4,16 @@
 //! Runs on Node in the wasm lane; nothing here touches a real browser.
 
 use flui_testing::window_commands::AdmitAndApply as _;
+use flui_testing::window_handler::RecordingWindowHandler;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_native::{HostWindow, WindowOpen};
-use flui_platform::WindowOptions;
 use flui_platform::{
     SessionEndAnswer, SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode,
 };
+use flui_platform::{SurfaceChange, WindowOptions};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -92,24 +95,36 @@ extern "C" {
     fn set_fullscreen(on: bool);
 }
 
-fn open(running: &Running) -> Arc<dyn HostWindow> {
+/// The page's window and the handler it was opened with.
+struct PageWindow {
+    window: Arc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
+}
+
+impl std::ops::Deref for PageWindow {
+    type Target = Arc<dyn HostWindow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.window
+    }
+}
+
+fn open(running: &Running) -> PageWindow {
     let owner = running.owner.borrow();
+    let handler = RecordingWindowHandler::new();
     match owner
         .as_ref()
         .expect("owner")
-        .open_window(
-            WindowOptions::default(),
-            flui_testing::window_handler::RecordingWindowHandler::new(),
-        )
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("window")
     {
-        WindowOpen::Ready(window) => window,
+        WindowOpen::Ready(window) => PageWindow { window, handler },
         WindowOpen::Pending(_) => panic!("a Web window opens at once"),
     }
 }
 
 /// Start the fake page and the platform on it, with the window opened.
-async fn page() -> (Probe, Running, Arc<dyn HostWindow>) {
+async fn page() -> (Probe, Running, PageWindow) {
     install_probe("none");
     let probe = Probe;
     watch_page();
@@ -126,20 +141,19 @@ fn recorder<T: Send + 'static>() -> (Arc<Mutex<Vec<T>>>, Arc<Mutex<Vec<T>>>) {
 
 /// Each execution state the window's snapshots carry after this call, once
 /// per change.
-fn record_executions(window: &Arc<dyn HostWindow>) -> Arc<Mutex<Vec<WindowExecutionState>>> {
+fn record_executions(window: &PageWindow) -> Arc<Mutex<Vec<WindowExecutionState>>> {
     let (seen, log) = recorder();
-    let observed = Arc::downgrade(window);
-    let mut last = window.state().execution;
-    window.on_state_changed(Box::new(move || {
+    let observed = Arc::downgrade(&window.window);
+    let last = Cell::new(window.state().execution);
+    window.handler.react_to_state_change(move || {
         let Some(window) = observed.upgrade() else {
             return;
         };
         let execution = window.state().execution;
-        if execution != last {
-            last = execution;
+        if execution != last.replace(execution) {
             log.lock().unwrap().push(execution);
         }
-    }));
+    });
     seen
 }
 
@@ -283,7 +297,9 @@ async fn web_session_end_hook_reenters_the_platform() {
 async fn web_fullscreenchange_republishes_the_window_state() {
     let (_probe, running, window) = page().await;
     let (seen, log) = recorder();
-    window.on_state_changed(Box::new(move || log.lock().unwrap().push(())));
+    window
+        .handler
+        .react_to_state_change(move || log.lock().unwrap().push(()));
     let before = window.state();
     assert_eq!(before.mode, WindowMode::Normal);
     // Another element going fullscreen is not this window going fullscreen.
@@ -325,17 +341,20 @@ async fn web_fullscreenchange_republishes_the_window_state() {
 async fn web_context_loss_is_prevented_and_reported_as_surface_status() {
     let (_probe, running, window) = page().await;
     let (seen, log) = recorder();
-    window.on_surface_status_change(Box::new(move |available| {
-        log.lock().unwrap().push(available)
-    }));
+    window
+        .handler
+        .react_to_surface_change(move |change| log.lock().unwrap().push(change));
 
     assert!(
         fire_on_canvas("webglcontextlost"),
         "without preventDefault the browser never restores the context"
     );
-    assert_eq!(*seen.lock().unwrap(), [false]);
+    assert_eq!(*seen.lock().unwrap(), [SurfaceChange::Release]);
     fire_on_canvas("webglcontextrestored");
-    assert_eq!(*seen.lock().unwrap(), [false, true]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [SurfaceChange::Release, SurfaceChange::Rebuild]
+    );
     running.quit();
     settle().await;
 }
@@ -356,9 +375,9 @@ async fn web_page_events_leave_with_the_window() {
 
     let executions = record_executions(&window);
     let (surfaces, surface_log) = recorder();
-    window.on_surface_status_change(Box::new(move |available| {
-        surface_log.lock().unwrap().push(available);
-    }));
+    window
+        .handler
+        .react_to_surface_change(move |change| surface_log.lock().unwrap().push(change));
 
     // The window hears both while it is open.
     fire_document("freeze");

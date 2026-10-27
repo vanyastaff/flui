@@ -42,7 +42,7 @@
 //! control lane ([`ControlSender::request_close_window`]) that the owner
 //! runs on its next turn. It cannot run in place: the teardown ends the
 //! loop when the last window goes, which needs the live `ActiveEventLoop`
-//! only an owner-turn callback holds, and the `on_close` callback must fire
+//! only an owner-turn callback holds, and the `WindowHandler::closed` callback must fire
 //! on the owner thread whatever thread asked. Before this (issue #919)
 //! `close()` hid the window and never left the tracking map, so the exit
 //! policy — consulted only against that map — never saw the last window
@@ -79,7 +79,7 @@
 //! closes this: on `ResumeTimeReached` it calls `request_redraw()` on
 //! every window this platform currently tracks, which queues a REAL
 //! `WindowEvent::RedrawRequested` for the next iteration — the exact same
-//! `dispatch_request_frame`/`on_request_frame`/`wake_action` path every
+//! `dispatch_request_frame`/`WindowHandler::frame_requested`/`wake_action` path every
 //! other wake in this backend already goes through, so a deadline that
 //! resolves nothing new (nothing was actually due, or the UI runtime has no
 //! other demand) still costs at most one extra `wake_action::Skip`, never
@@ -674,7 +674,7 @@ impl WinitLoop {
     }
 
     /// Read again the windows whose mode the X11 window manager changed, so
-    /// `on_state_changed` follows a minimize or a maximize that winit reports
+    /// `WindowHandler::state_changed` follows a minimize or a maximize that winit reports
     /// no event for. Each window publishes with the state lock released.
     #[cfg(target_os = "linux")]
     fn refresh_unreported(&self) {
@@ -1298,7 +1298,7 @@ impl ApplicationHandler for WinitApp {
     /// bare wake into a pump. Poke every currently tracked window's
     /// `request_redraw()`, which queues a real
     /// `WindowEvent::RedrawRequested` for the very next iteration and so
-    /// re-enters `dispatch_request_frame`/`on_request_frame`/`wake_action`
+    /// re-enters `dispatch_request_frame`/`WindowHandler::frame_requested`/`wake_action`
     /// exactly like any other wake — never a second, parallel produce path
     /// (see the module doc's "Wall-clock wake actuation" section for why an
     /// un-actuated `WaitUntil` degenerates into an unbounded spin instead).
@@ -1848,7 +1848,7 @@ impl WinitApp {
         }
         if window.take_display_change() || forced {
             // The snapshot names the display: a move no other event reported
-            // still reaches `on_state_changed`.
+            // still reaches `WindowHandler::state_changed`.
             window.refresh_state();
         }
     }
@@ -2245,7 +2245,7 @@ impl WinitApp {
     ///    window disappears when its last handle drops) and report it not
     ///    visible; the visible effect should not wait for handle drops an
     ///    embedder may defer;
-    /// 2. the per-window `on_close` callback (an embedder tears down what it
+    /// 2. the per-window `WindowHandler::closed` callback (an embedder tears down what it
     ///    hung on this window — `flui-app` closes the window's presentation
     ///    here, BEFORE the exit policy below reads its UI runtime registry);
     /// 3. removal from the window/cursor maps (and from `active_window`,
@@ -2316,7 +2316,7 @@ impl WinitApp {
     /// by a command in the same wake (a splash's close handler asking for
     /// the main window) is already in the map and vetoes exit by count
     /// alone; and called BEFORE any quit exits the loop — a close posted
-    /// before the quit is a decision already made whose `on_close` the
+    /// before the quit is a decision already made whose `WindowHandler::closed` the
     /// embedder is owed, and a quit that overtook it would strand that
     /// window hidden-but-tracked, the exact shape of the original defect. A
     /// window the map no longer holds (closed by the compositor in between,
@@ -2387,15 +2387,15 @@ impl WinitApp {
     /// `complete_pending_closes` only tears down windows whose `close()` was
     /// actually requested — a window left open when the loop is asked to
     /// quit (`owner.quit()`, or `on_ready` failing after step 6) never runs
-    /// [`Self::complete_window_close`] at all, so its `on_request_frame`
+    /// [`Self::complete_window_close`] at all, so its `WindowHandler::frame_requested`
     /// callback — where production code
     /// (`install_pre_present_hook`, `crates/flui-app/src/app/runner/frame_pacing.rs`)
     /// stores its own `Arc::clone` of the window inside the renderer — was
-    /// never released: window -> callback slot -> frame closure ->
-    /// `Arc<window>` is a strong cycle, and only a callback-clearing call
-    /// breaks it (see [`crate::owner::handlers::WindowCallbacks::clear`]'s own doc).
+    /// never released: window -> handler -> renderer -> `Arc<window>` is a
+    /// strong cycle, and only letting go of the handler breaks it (see
+    /// [`crate::owner::window_delivery::WindowDelivery::clear`]'s own doc).
     /// This does not run the rest of `complete_window_close`'s teardown
-    /// (visibility, `on_close`, the global `Closed` event, the exit-policy
+    /// (visibility, `WindowHandler::closed`, the global `Closed` event, the exit-policy
     /// re-consult) — that body takes a live `&ActiveEventLoop`, and
     /// [`Self::finish_shutdown`] (this method's caller) also runs once more
     /// from `run_event_loop`, after `event_loop.run_app` has returned and

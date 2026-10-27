@@ -395,7 +395,7 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 ///
 /// `request_redraw()` marks the view dirty via `setNeedsDisplay:`; AppKit then
 /// calls this method on the next display pass, which is where the per-window
-/// `on_request_frame` contract fires (the macOS analogue of the Win32
+/// `WindowHandler::frame_requested` contract fires (the macOS analogue of the Win32
 /// window's `WM_PAINT`). The frame runs inside this callback, so a redraw the
 /// frame asks for is asked for while AppKit is displaying this view — the one
 /// moment a `setNeedsDisplay:` is discarded; the display pass marks this

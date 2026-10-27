@@ -1215,7 +1215,7 @@ fn the_snapshots_carry_each_resize(heard: &[Heard], before: WindowMetrics) {
 }
 
 /// A DPI change holds publishing while the window takes its new rectangle:
-/// what `on_state_changed` reads is the whole new window, never the new
+/// what `WindowHandler::state_changed` reads is the whole new window, never the new
 /// rectangle at the old scale.
 fn a_dpi_change_announces_one_whole_snapshot() {
     let platform = platform();

@@ -115,7 +115,7 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 /// on the owner thread, never through an arbitrary cross-thread callback.
 ///
 /// The window facts among them are read from the window's snapshot: its one
-/// `on_state_changed` subscription compares each new snapshot with the one it
+/// `WindowHandler::state_changed` subscription compares each new snapshot with the one it
 /// saw before and delivers what differs ([`Self::of_state_change`]).
 // `pub(in crate::app)` because `RuntimeTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers

@@ -32,7 +32,7 @@
 //! returns, and `MainEvent::Pause` does not touch the window at all. A wgpu
 //! surface built from a handle into that window therefore has to be gone
 //! before the handle is, which is what the `false` edge of
-//! [`PlatformWindow::on_surface_status_change`] asks the presentation to do.
+//! [`WindowHandler::surface_changed`] asks the presentation to do.
 //!
 //! Both ends of the pair carry the signal: `Pause` and `TerminateWindow` emit
 //! `false`, `Resume` and `InitWindow` emit `true`. `Pause` alone would be the
@@ -745,7 +745,7 @@ impl host::Loop for AndroidLoop {
                             // previous surface still released asks for one, and
                             // a `true` that finds a live surface simply
                             // replaces it — see
-                            // `PlatformWindow::on_surface_status_change`.
+                            // `WindowHandler::surface_changed`.
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
                             }

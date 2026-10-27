@@ -9,7 +9,7 @@
 //! features beyond the cross-platform window; and [`backdrop`], the view
 //! behind the content ([`MacOSBackdrop`]: a material or Liquid Glass).
 //!
-//! The loop holds the windows it tracks as `CallbackWindow`s
+//! The loop holds the windows it tracks as `HostWindow`s
 //! (`owner::apple::macos`).
 
 // Direct AppKit objc calls have no safe wrapper: the window is one of the
@@ -1727,7 +1727,7 @@ impl Drop for MacOSWindow {
 
 impl MacOSWindow {
     /// The window's published state, read from AppKit again first when
-    /// something invalidated it; `on_state_changed` is raised when that
+    /// something invalidated it; `WindowHandler::state_changed` is raised when that
     /// produced a new revision.
     fn current_state(&self) -> WindowState {
         let published = self.snapshot.state_with(|| self.sample_state());

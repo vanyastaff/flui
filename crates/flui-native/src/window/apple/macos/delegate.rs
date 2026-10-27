@@ -594,9 +594,9 @@ impl MacOSWindow {
     /// `-[NSWindow close]`, vetoed or not (see [`close`](Self::close)'s own
     /// doc). Order matters: `closed` is set BEFORE `dispatch_close` so that
     /// a frame callback the close dispatch itself triggers observes the
-    /// window as already gone, and `callbacks.clear()` runs AFTER, so the
-    /// `on_close` callback registered above still fires normally before its
-    /// slot — and every other slot — is released.
+    /// window as already gone, and the delivery's `clear()` runs AFTER, so
+    /// the handler's `closed` is still called before the window lets go of
+    /// the handler.
     fn handle_close(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
@@ -625,7 +625,7 @@ impl MacOSWindow {
         // Release every remaining registered callback now, while
         // `ns_window` is still valid (this delegate method runs before
         // AppKit tears the window down further). Without this, the frame
-        // callback registered via `on_request_frame` — which in
+        // the handler's `frame_requested` — which in
         // `flui-app`'s wiring owns this window's GPU renderer, whose
         // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
         // the renderer owns (ADR-0063) — stays pinned forever: window

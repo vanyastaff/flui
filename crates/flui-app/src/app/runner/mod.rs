@@ -360,7 +360,7 @@ mod tests {
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
-    /// `on_request_frame` callback SYNCHRONOUSLY — unlike a real winit window,
+    /// `WindowHandler::frame_requested` callback SYNCHRONOUSLY — unlike a real winit window,
     /// where a queued `RedrawRequested` would not fire until `on_ready` (and
     /// this reordering) has already returned. That is exactly why the ordering
     /// bug was invisible in a real window's actual first frame but is directly
@@ -402,7 +402,7 @@ mod tests {
             .open_routed(flui_platform::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
-        // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
+        // `WindowHandler::frame_requested` requires `Send` on the callback; `AppRuntime` is
         // not `Send` (it holds owner-thread-affine ui_runtime state), so the
         // closure below cannot capture a specific `&AppRuntime`. Resolving
         // `APP_RUNTIME` fresh inside the closure (zero captures for the

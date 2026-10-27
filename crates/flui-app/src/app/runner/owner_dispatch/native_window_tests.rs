@@ -14,6 +14,7 @@ use super::super::host::{
     OwnerHostClearGuard, build_ui_runtime, install_owner_platform, with_owner_platform,
 };
 use super::super::presentation_window;
+use super::super::window_routes::OwnerOpenRouted as _;
 use super::*;
 use crate::native::with_window;
 

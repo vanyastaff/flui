@@ -88,8 +88,8 @@ use flui_view::View;
 /// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
 /// `OwnerPlatform` access constraint: reachable only from inside, or after,
-/// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
-/// callback the FIRST window already registered).
+/// `on_ready` — e.g. from the input or close-request route of the FIRST
+/// window).
 ///
 /// # [`WindowPolicy::Isolated`]
 ///

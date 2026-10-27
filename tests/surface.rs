@@ -59,7 +59,10 @@ mod narrowing {
     #[test]
     fn native_extensions_answer_none_on_a_foreign_host() {
         let window = flui_native::headless_platform()
-            .open_window(hidden())
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a headless window opens");
         let window: &dyn HostWindow = window.as_ref();
         #[cfg(windows)]
@@ -98,6 +101,7 @@ mod narrowing {
                         .with_theme(WindowsTheme::Dark),
                 ),
             ),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window narrows to its view");

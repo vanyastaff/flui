@@ -277,7 +277,7 @@ impl WindowContext {
     }
 
     /// The window's published state, read from the OS again first when
-    /// something invalidated it; `on_state_changed` is raised when that
+    /// something invalidated it; `WindowHandler::state_changed` is raised when that
     /// produced a new revision.
     pub(crate) fn window_state(&self, hwnd: HWND) -> flui_platform::WindowState {
         // While a change takes several steps the window is half-way between two
@@ -291,7 +291,7 @@ impl WindowContext {
         let published = self
             .snapshot
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
-        // `on_state_changed` when the revision grew.
+        // `WindowHandler::state_changed` when the revision grew.
         if published.changed {
             self.delivery.dispatch_state_changed();
         }
@@ -712,14 +712,14 @@ impl WindowProc {
                         let hooks = Rc::clone(&ctx.hooks);
                         window_destroyed(&hooks, WindowRef::new(hwnd, ctx.identity));
 
-                        // Fire per-window on_close callback (FnOnce)
+                        // Fire the handler's `closed`
                         ctx.delivery.dispatch_close();
 
                         // Release every remaining registered callback now,
                         // while the HWND is still valid (Win32 only frees it
                         // after this handler returns, at `WM_NCDESTROY`).
                         // Without this, the frame callback registered via
-                        // `on_request_frame` — which in `flui-app`'s wiring
+                        // `WindowHandler::frame_requested` — which in `flui-app`'s wiring
                         // owns this window's GPU renderer, whose
                         // `wgpu::Surface` is built from the
                         // `Arc<dyn PlatformWindow>` clone the renderer owns
@@ -1466,7 +1466,7 @@ impl WindowsWindow {
     /// - Automatically detects the monitor containing the window and fills it
     ///   completely
     /// - Preserves window state (position, size, style) for proper restoration
-    /// - Publishes the new window state (`on_state_changed`) once the window
+    /// - Publishes the new window state (`WindowHandler::state_changed`) once the window
     ///   has moved
     ///
     /// # Thread Safety

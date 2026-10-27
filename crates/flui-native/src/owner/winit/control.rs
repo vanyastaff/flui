@@ -272,7 +272,7 @@ impl ControlSender {
     /// a second request for a window the owner has not yet torn down
     /// coalesces (one teardown). A request after admission closed is
     /// dropped: the loop has already stopped, so no owner turn will ever
-    /// run the teardown — that window's `on_close` does not fire, its
+    /// run the teardown — that window's `WindowHandler::closed` does not fire, its
     /// callbacks clear when the embedder's last `Arc` drops
     /// (`WinitWindow::drop`), and the loop's own quit callback is the
     /// embedder's signal that everything is over. The owner drains closes

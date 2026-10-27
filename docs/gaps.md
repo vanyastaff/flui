@@ -98,7 +98,7 @@ request.
   - a window moved between two monitors on every host but Windows
   - unplugging a monitor on Windows
   - in a browser, the page moved to another screen changing the window snapshot's `display`, and
-    a `freeze`/`resume` and a canvas focus change each arriving as one `on_state_changed`: the
+    a `freeze`/`resume` and a canvas focus change each arriving as one `WindowHandler::state_changed`: the
     Node suite covers them against a fake page, no browser run yet
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone

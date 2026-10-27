@@ -97,6 +97,7 @@ fn a_capability_change_is_ordered_with_the_input() {
 /// one that lets the platform default run.
 fn a_delivery_raised_inside_a_method_waits_for_it() {
     type Raise = fn(&RecordingWindowHandler, Weak<WindowDelivery>, Rc<Cell<Option<bool>>>);
+    type Trigger = fn(&WindowDelivery);
     fn raise_all(delivery: &WindowDelivery, answers: &Cell<Option<bool>>) {
         let nested = delivery.dispatch_input(ime());
         let nested_key = delivery.dispatch_input(key());
@@ -108,7 +109,7 @@ fn a_delivery_raised_inside_a_method_waits_for_it() {
         delivery.dispatch_state_changed();
         delivery.dispatch_surface_change(SurfaceChange::Rebuild);
     }
-    let rows: [(&str, Raise, fn(&WindowDelivery)); 4] = [
+    let rows: [(&str, Raise, Trigger); 4] = [
         (
             "input",
             |handler, delivery, answers| {

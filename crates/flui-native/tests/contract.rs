@@ -1471,7 +1471,7 @@ mod native_windows {
         let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
         let window = open_shown(&platform);
         let original_weak = Arc::downgrade(&window);
-        let replacement = Arc::new(Mutex::new(None::<Opened>));
+        let replacement = Rc::new(RefCell::new(None::<Opened>));
         let replacement_closes = Arc::new(AtomicUsize::new(0));
         let hwnd = hwnd_of(&window);
         let close_count = Arc::new(AtomicUsize::new(0));
@@ -1493,7 +1493,7 @@ mod native_windows {
             let weak = Arc::downgrade(&window);
             let raw_hwnd = hwnd.0 as isize;
             let callback_platform = Arc::downgrade(&platform);
-            let callback_replacement = Arc::clone(&replacement);
+            let callback_replacement = Rc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
             window.handler.react_to_input(move |event| {
                 if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
@@ -1526,7 +1526,7 @@ mod native_windows {
                     replacement.handler.react_to_close(move || {
                         closes.fetch_add(1, Ordering::SeqCst);
                     });
-                    *callback_replacement.lock().expect("replacement storage") = Some(replacement);
+                    *callback_replacement.borrow_mut() = Some(replacement);
                 }
                 DispatchEventResult::resolved(
                     true,
@@ -1577,7 +1577,7 @@ mod native_windows {
             0,
             "{mode}: native default affected replacement"
         );
-        let replacement = replacement.lock().expect("replacement storage").take();
+        let replacement = replacement.borrow_mut().take();
         if let Some(replacement) = replacement {
             assert!(
                 flui_platform::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),

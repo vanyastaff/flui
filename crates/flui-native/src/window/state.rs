@@ -110,7 +110,7 @@ pub(crate) struct Published {
     /// The snapshot now published.
     pub(crate) state: WindowState,
     /// Whether this call published a higher revision. A backend raises
-    /// `on_state_changed` exactly when this is `true`, after the call returned
+    /// `WindowHandler::state_changed` exactly when this is `true`, after the call returned
     /// and so outside the cell's lock.
     pub(crate) changed: bool,
 }

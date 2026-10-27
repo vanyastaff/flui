@@ -325,7 +325,7 @@ where
         }
     });
 
-    // No `on_should_close` registration here: step 3c1 above installed
+    // No `WindowHandler::close_requested` registration here: step 3c1 above installed
     // it, together with the router entry it consults, so the two can
     // never be wired apart.
 

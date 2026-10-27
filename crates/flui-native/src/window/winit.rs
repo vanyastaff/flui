@@ -146,7 +146,7 @@ pub(crate) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
 
 impl std::fmt::Debug for WinitWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `WindowCallbacks` holds boxed closures that don't implement
+        // The window's delivery holds a handler that need not implement
         // `Debug`; print the focus/visibility flags only.
         f.debug_struct("WinitWindow")
             .field("is_focused", &*self.is_focused.lock())
@@ -156,26 +156,32 @@ impl std::fmt::Debug for WinitWindow {
 }
 
 impl WinitWindow {
-    /// Create a new WinitWindow wrapper, addressed by the platform-minted
-    /// `id` the caller already allocated for it, with the owner lane its
-    /// programmatic `WindowCommand::Close` reports to. Backend-private: only this
-    /// backend's own window creation can supply that lane, so nothing
-    /// outside it can construct a window whose close would go nowhere.
+    /// Create a new WinitWindow wrapper from what the loop's `seed` hands it:
+    /// the platform-minted id the loop already allocated, the owner lane its
+    /// programmatic `WindowCommand::Close` reports to, the displays and the
+    /// handler it delivers to. Backend-private: only this backend's own
+    /// window creation can supply that lane, so nothing outside it can
+    /// construct a window whose close would go nowhere.
     ///
     /// `plan` is what the window was created from, so its snapshot starts from
     /// the mode it opened in and, if it opened maximized, the rectangle it
     /// returns to; `windows` holds the frame inset it reports and the
     /// positions that make what it hands out.
     pub(crate) fn new(
-        id: WindowId,
+        seed: WindowSeed<'_>,
         window: Arc<Window>,
-        close_lane: ControlSender,
-        displays: Arc<dyn HostDisplays>,
         options: &WindowOptions,
         plan: &OpenPlan,
         windows: &WinitWindows,
-        handler: Rc<dyn WindowHandler>,
     ) -> Self {
+        let WindowSeed {
+            id,
+            close_lane,
+            displays,
+            handler,
+            ..
+        } = seed;
+        let displays = Arc::clone(displays);
         let positions = &windows.positions;
         let shell = shell_of(&window);
         let facets = positions.for_window(&window);
@@ -316,7 +322,7 @@ impl WinitWindow {
     }
 
     /// Read the window again for its state publisher, announcing nothing:
-    /// `WindowCallbacks::dispatch_state_changed` delivers `on_state_changed`. A minimize
+    /// `WindowDelivery::dispatch_state_changed` calls `WindowHandler::state_changed`. A minimize
     /// the X11 window manager reports is the snapshot's mode, which
     /// `WindowState::is_seen` reads.
     fn read_state(&self) -> Publication {
@@ -405,8 +411,8 @@ impl WinitWindow {
 
     /// Hide now, from whichever thread this is called on: the visible effect
     /// of a close should not wait for the owner's next turn. The close itself
-    /// — `on_close`, map removal, callback clear, exit policy — is the
-    /// owner's (see `close_lane`): running `on_close` here would fire it on
+    /// — `WindowHandler::closed`, map removal, handler release, exit policy — is the
+    /// owner's (see `close_lane`): running `WindowHandler::closed` here would call it on
     /// the caller's thread, where an embedder's owner-affine close handling
     /// (`flui-app` rejects ui_runtime dispatch off its owner thread) would
     /// silently refuse it, and skipping the map removal is precisely issue
@@ -857,7 +863,7 @@ impl LoopWindow for WinitWindow {
     }
 
     /// The window may differ from its last snapshot: read it again, and raise
-    /// `on_state_changed` when the revision grew.
+    /// `WindowHandler::state_changed` when the revision grew.
     fn refresh_state(&self) {
         self.window_state.invalidate();
         let _ = PlatformWindow::state(self);
@@ -1050,24 +1056,18 @@ impl LoopWindows for WinitWindows {
                 message: format!("winit window creation failed: {error}"),
             }
         })?);
-        let window = Arc::new(WinitWindow::new(
-            seed.id,
-            raw_window,
-            seed.close_lane,
-            Arc::clone(seed.displays),
-            &options,
-            &plan,
-            self,
-            seed.handler,
-        ));
-        seed.notices.mark_stale_on_wake(window.state_cell());
+        let notices = seed.notices;
+        #[cfg(target_os = "linux")]
+        let signal = seed.signal;
+        let window = Arc::new(WinitWindow::new(seed, raw_window, &options, &plan, self));
+        notices.mark_stale_on_wake(window.state_cell());
         window
             .delivery
             .publish_through(Arc::downgrade(&window), WinitWindow::read_state);
         // Before the window is mapped: the window manager reads the mode a
         // window opens in from the properties the view writes.
         #[cfg(target_os = "linux")]
-        window.attach_x11_probe(|| self.window_manager(seed.signal));
+        window.attach_x11_probe(|| self.window_manager(signal));
         Ok(window)
     }
 

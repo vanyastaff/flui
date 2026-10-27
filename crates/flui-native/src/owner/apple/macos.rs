@@ -3,7 +3,7 @@
 //! pump that actuates the registered wake deadline.
 //!
 //! [`MacOSLoop`] is the loop of the macOS host's table. It tracks the open
-//! windows as [`CallbackWindow`]s, the window feature's, without naming them
+//! windows as [`HostWindow`]s, the window feature's, without naming them
 //! ([`WindowRegistry`]); the clipboard and the other features keep their code
 //! in their own directories and reach the owner thread through what this
 //! module re-exports. The loop holds the displays, the preference source, the

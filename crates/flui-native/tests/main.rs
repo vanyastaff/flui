@@ -107,6 +107,7 @@ impl Opened {
 
     /// A window `owner` opens at once with `options`, delivering to a fresh
     /// handler.
+    #[cfg(target_os = "windows")]
     fn ready(owner: &flui_native::OwnerPlatform, options: flui_platform::WindowOptions) -> Self {
         let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner

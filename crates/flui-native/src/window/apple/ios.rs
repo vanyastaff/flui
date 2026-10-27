@@ -1320,7 +1320,7 @@ impl PlatformWindow for IOSWindow {
     }
 
     /// The scene's size, visibility and focus. The metrics and lifecycle live
-    /// apart from this cell, so each call reads them again. `on_state_changed`
+    /// apart from this cell, so each call reads them again. `WindowHandler::state_changed`
     /// is raised where they change: when the view's size or scale does, and on
     /// each lifecycle step. `UIWindow` has no title, frame, position or
     /// commands, so a scene's window honours none and observes nothing.

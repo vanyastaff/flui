@@ -5,7 +5,7 @@
 // The sync surface-lifecycle seam a runner needs when the native window
 // behind its presentation dies and is later replaced. `flui-native` owns
 // the event loop that observes this and reports it as a bare `bool` through
-// `PlatformWindow::on_surface_status_change`; this module is where a runner
+// `WindowHandler::surface_changed`; this module is where a runner
 // turns that bool into an act on its renderer.
 //
 // It follows `device_recovery.rs`: a `pub(super)` trait narrows the concrete
@@ -482,7 +482,7 @@ impl SurfaceRecreationRetry {
 /// lane: drive [`ensure_surface`], mint a fresh surface generation on a
 /// rebuild, and record the outcome with the retry.
 ///
-/// This is the body of both mobile runners' `on_surface_status_change`
+/// This is the body of both mobile runners' `WindowHandler::surface_changed`
 /// callback, pulled out so the two cannot drift: the engine's tracker mark
 /// and the generation mint run together under the caller's lane lock (no
 /// stale in-flight work stays addressed to the destroyed surface — the same

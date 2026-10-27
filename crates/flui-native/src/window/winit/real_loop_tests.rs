@@ -187,20 +187,20 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 /// that map — never saw the last window go. Observed on the pre-fix
 /// body: the worker's bounded wait for map removal times out
 /// (`window_id_map.len() = 1, expected 0`), which aborts the worker
-/// before the later assertions run; by construction `on_close` would
+/// before the later assertions run; by construction `WindowHandler::closed` would
 /// also have fired on the worker thread, and the loop only ended
 /// because the worker's failure-path `request_quit` unparked it.
 ///
 /// Pinned, in one real-event-loop run, from a cross-thread `WindowCommand::Close`:
 /// 1. the window leaves the tracking map and is reported not visible;
-/// 2. `on_close` fires on the OWNER thread, not the calling worker —
+/// 2. `WindowHandler::closed` fires on the OWNER thread, not the calling worker —
 ///    an embedder's owner-affine close handling (`flui-app` rejects
 ///    UI runtime dispatch off its owner thread) would otherwise silently
 ///    refuse it;
 /// 3. the registered callbacks are cleared inside the teardown, while
 ///    the window and loop are alive (the #713 ordering the compositor
 ///    path already pins);
-/// 4. the window's `on_should_close` is never asked — a programmatic
+/// 4. the window's `WindowHandler::close_requested` is never asked — a programmatic
 ///    close was never a request;
 /// 5. the loop exits by the teardown's own exit-policy consult — the
 ///    worker waits for `exiting` BEFORE arming its fallback quit, so a
@@ -451,7 +451,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     assert_eq!(
         *close_thread.lock(),
         Some(owner_thread),
-        "on_close must fire on the event-loop owner thread, never on the thread that \
+        "WindowHandler::closed must run on the event-loop owner thread, never on the thread that \
          called close()"
     );
     assert!(

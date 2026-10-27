@@ -178,15 +178,14 @@ impl WindowHandler for WindowRoutes {
             PlatformInput::Capabilities(capabilities) => Some(*capabilities),
             _ => None,
         };
-        match self.input.call(event) {
-            Some(result) => result,
-            None => {
-                if let Some(capabilities) = capabilities {
-                    self.capabilities.set(Some(capabilities));
-                }
-                DispatchEventResult::default()
-            }
+        if let Some(result) = self.input.call(event) {
+            return result;
         }
+        // No route yet: the capabilities are kept for the route to come.
+        if let Some(capabilities) = capabilities {
+            self.capabilities.set(Some(capabilities));
+        }
+        DispatchEventResult::default()
     }
 
     fn state_changed(&self, _owner: OwnerThread) {

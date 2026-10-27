@@ -308,7 +308,7 @@ fn a_closed_window_refuses_commands() {
 /// window system revised what the window honours answers `Superseded`, not a
 /// failure of the OS, and changes nothing; admitted again it either applies
 /// or is refused by `admit`. The revision of the capabilities moves with the
-/// change, one `on_state_changed` announces it, and a fact apart from the
+/// change, one `WindowHandler::state_changed` announces it, and a fact apart from the
 /// capabilities leaves their revision where it was.
 fn a_command_admitted_before_a_capability_change_is_superseded() {
     let platform = HeadlessPlatform::new();
@@ -480,7 +480,7 @@ fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
 }
 
 /// Each window fact (ADR-0254 §1) arrives only in the snapshot: its change
-/// publishes one revision, announced by exactly one `on_state_changed` that
+/// publishes one revision, announced by exactly one `WindowHandler::state_changed` that
 /// reads it; the same report again publishes nothing; a report that is not a
 /// drawable area publishes nothing.
 fn window_facts_arrive_only_in_the_snapshot() {

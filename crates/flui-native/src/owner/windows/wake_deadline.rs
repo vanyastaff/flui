@@ -74,9 +74,9 @@ impl ModalDelivery {
 /// How many frame callbacks this platform's windows have run. The message
 /// loop compares it across a deadline delivery to tell an answer repeated
 /// after a serviced frame from one nothing has serviced yet. Each window's
-/// [`WindowCallbacks`](crate::owner::handlers::WindowCallbacks) counts into it when its frame callback runs, so a
-/// frame request no callback answered (a window with nothing registered,
-/// or one already cleared) leaves it unchanged.
+/// [`WindowDelivery`](crate::owner::window_delivery::WindowDelivery) counts into it when its
+/// handler's `frame_requested` runs, so a frame request no handler answered
+/// (a window already let go of its handler) leaves it unchanged.
 #[derive(Default)]
 pub(crate) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
 

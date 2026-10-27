@@ -88,7 +88,7 @@ impl StatePublisher {
     }
 
     /// The published state, read from the page again first when something
-    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
     /// revision.
     fn current(&self) -> WindowState {
         let published = self.cell.state_with(|| self.sample());

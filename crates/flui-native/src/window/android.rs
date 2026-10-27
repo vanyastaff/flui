@@ -234,7 +234,7 @@ impl AndroidWindow {
     }
 
     /// The window's published state, read again first when something
-    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
     /// revision.
     fn current_state(&self) -> WindowState {
         let published = self.snapshot.state_with(|| self.sample());
@@ -809,7 +809,7 @@ impl PlatformWindow for AndroidWindow {
         // express that, because `native_window()` keeps answering `Some`
         // through the very callback that precedes the release. `flui-app`'s
         // Android runner discharges it by releasing the wgpu surface built
-        // from this handle inside `on_surface_status_change(false)`, which
+        // from this handle inside `WindowHandler::surface_changed(Release)`, which
         // `MainEvent::Pause` and `MainEvent::TerminateWindow` both deliver —
         // the second one still inside the callback, before the release above.
         #[expect(unsafe_code)]

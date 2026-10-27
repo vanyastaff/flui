@@ -348,7 +348,7 @@ impl WindowDelivery {
     /// returns and the queued clear runs, not when this call returns. A backend
     /// uses it to order a notice after the release of what the handler owns
     /// (a renderer and its surface).
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }
