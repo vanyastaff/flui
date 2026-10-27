@@ -36,7 +36,7 @@
 //! [`WinitApp::complete_window_close`], whichever way it was asked to go:
 //! the compositor's `CloseRequested` (after the should-close veto) runs it
 //! in the event arm, and
-//! [`PlatformWindow::close`](flui_platform::PlatformWindow::close) — a
+//! [`WindowCommand::Close`](flui_platform::WindowCommand::Close) — a
 //! decision the embedder already made, so no veto — posts a per-window
 //! request on the owner
 //! control lane ([`ControlSender::request_close_window`]) that the owner
@@ -1057,7 +1057,7 @@ enum SelfCloseRoute {
     /// veto and all.
     #[default]
     Compositor,
-    /// Call [`PlatformWindow::close`](flui_platform::PlatformWindow::close)
+    /// Call [`WindowCommand::Close`](flui_platform::WindowCommand::Close)
     /// on the tracked window: the programmatic path, exactly as an
     /// application closing its own window does (issue #919).
     Programmatic,
@@ -1175,7 +1175,7 @@ pub(crate) struct WinitApp {
     /// Which close route the armed self-close drives
     /// (`FLUI_SELF_CLOSE_ROUTE`): the synthesized compositor
     /// `CloseRequested` by default, or
-    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on the
+    /// [`WindowCommand::Close`](flui_platform::WindowCommand::Close) on the
     /// tracked window — so a harness can prove the
     /// programmatic route's teardown (issue #919) against a real app, real
     /// GPU surface, and the embedder's real exit-policy hook, which no
@@ -2150,7 +2150,7 @@ impl WinitApp {
             window
         });
         if let Some(window) = window {
-            // Directly, not through `PlatformWindow::close`: that route posts
+            // Directly, not through `WindowCommand::Close`: that route posts
             // a close request for the owner's next turn, and this window is
             // already out of the map it would look in.
             window.inner().set_visible(false);
@@ -2165,7 +2165,7 @@ impl WinitApp {
     /// should-close veto, per-window close callbacks, global handler, map
     /// removal, exit policy — runs exactly as a compositor-delivered close
     /// would; on [`SelfCloseRoute::Programmatic`] it calls
-    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) on
+    /// [`WindowCommand::Close`](flui_platform::WindowCommand::Close) on
     /// that window instead, exactly as an application would. One-shot: the deadline is cleared on fire. If no window exists
     /// yet at the deadline, it stays armed until one does — re-paced a
     /// short interval forward on each check, never left in the past, so the
@@ -2229,7 +2229,7 @@ impl WinitApp {
     /// exactly the two routes being written separately: the compositor's
     /// `CloseRequested` arm (after its should-close veto) did all of this,
     /// while the programmatic
-    /// [`PlatformWindow::close`](flui_platform::PlatformWindow::close) hid
+    /// [`WindowCommand::Close`](flui_platform::WindowCommand::Close) hid
     /// the window and fired its callback but never left the tracking map, so the exit
     /// policy — consulted only against that map — never saw the last
     /// window go, and the process lingered with nothing on screen.

@@ -471,7 +471,7 @@ impl CloseRequestRouter {
     /// [`request_presentation_close`](crate::request_presentation_close)
     /// for the per-backend statement.
     /// Bypassing the handler is the point — every backend's own
-    /// `PlatformWindow::close` bypasses its native close-request path for
+    /// `WindowCommand::Close` bypasses its native close-request path for
     /// the same reason (AppKit's `-close` does not send
     /// `windowShouldClose:`; Win32's `DestroyWindow` does not send
     /// `WM_CLOSE`), because asking again would either loop forever or

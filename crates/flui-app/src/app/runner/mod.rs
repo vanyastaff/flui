@@ -190,7 +190,7 @@ pub fn window_handle(
 /// and then the exit-policy question if this was the last window.
 ///
 /// The handler is deliberately not asked again: every backend's own
-/// `PlatformWindow::close` bypasses its native close-request path for the
+/// `WindowCommand::Close` bypasses its native close-request path for the
 /// same reason (AppKit's `-close` does not send `windowShouldClose:`;
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
@@ -212,7 +212,7 @@ pub fn window_handle(
 /// # Backend behaviour
 ///
 /// This resolves the close fully on the **headless**, **winit**, **Win32**
-/// and **AppKit** backends, whose `PlatformWindow::close` performs a real
+/// and **AppKit** backends, whose `WindowCommand::Close` performs a real
 /// close. Timing differs: on **winit** the teardown (`on_close`, window-map
 /// removal, exit-policy consult) runs on the event-loop owner's next turn,
 /// after this call returns — never synchronously inside it (issue #919's
@@ -238,7 +238,7 @@ pub fn request_presentation_close(
     use crate::app::close_request::CloseRequestError;
 
     // Read the owner thread and the router in ONE visit, then leave the
-    // thread-local: `PlatformWindow::close` fires the window's own
+    // thread-local: `WindowCommand::Close` fires the window's own
     // `on_close`, which re-enters `APP_RUNTIME` through
     // `close_this_window`. A thread that hosts no loop has `owner_thread`
     // unset — that, not an empty router, is what distinguishes "you are on

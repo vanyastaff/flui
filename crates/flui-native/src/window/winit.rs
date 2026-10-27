@@ -76,7 +76,7 @@ pub struct WinitWindow {
     /// it, so the portal is the Linux source.
     #[cfg(target_os = "linux")]
     portal_dark: std::sync::atomic::AtomicBool,
-    /// The route a programmatic [`PlatformWindow::close`] takes to the
+    /// The route a programmatic [`WindowCommand::Close`] takes to the
     /// event-loop owner (issue #919). The close teardown needs the live
     /// `ActiveEventLoop` (to end the loop when this was the last window),
     /// which only an owner-turn callback holds — so `close()` cannot run it
