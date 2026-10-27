@@ -2749,6 +2749,62 @@ graph LR
   Не запускалось: Mac и iPhone — в очереди vanyastaff/flui#1840;
   `cross-typecheck` (нет `zig`); браузер — у координатора: `WindowCommand::Close` холста и
   полноэкранный режим через допуск ведут себя как прежде.
+  **Исправления после ревью (vanyastaff/flui#1914).** (1) Закрытие из `Drop` и уборки не паникует:
+  `AdmitAndApply::close_for_cleanup` пишет отказ в журнал (уже закрытое окно — норма), `close_now`
+  остался там, где отказ — проваленный тест, и его doc отсылает к `close_for_cleanup` и
+  `admit_and_apply`; `ClosePointerTarget` (`contract.rs`), `CanvasWindow` и `HostedCanvas`
+  (`web_browser.rs`, теперь всегда доходит до `owner.quit()`) закрывают через неё, TSF сначала
+  проверяет список упавших случаев, потом закрывает. Тест `window_commands` (`flui-testing`):
+  `a_refused_close_fails_the_test_only_where_asked_to`,
+  `a_cleanup_while_unwinding_keeps_the_first_failure` (охрана, чьё закрытие отказано, в `Drop`
+  при раскрутке; с паникой в `close_for_cleanup` бинарник падает с ABORT),
+  `a_closed_window_is_closed_for_both`. (2) Очередь `flui-app` не теряет работу за отказанным
+  закрытием: `close_with_veto` заканчивает пачку только на `Ok`, `Failed { Closed }` и
+  исчезнувшем окне; `Refused` и прочие `Failed` пишутся в журнал, остальное применяется. Тест
+  `a_refused_close_keeps_the_work_queued_behind_it` (`window_handle_contract`) падает, если
+  `close_with_veto` снова отвечает `true`. (3) Ревизию проверяет conformance хоста: новая
+  проверка `a_command_admitted_before_a_revision_is_superseded` и
+  `WindowFixture::revise_capabilities` (по умолчанию `false` — проверка пропускается; headless
+  переключает `places_at_open` через `simulate_capabilities`). Фикстура
+  `Fault::IgnoresTheToken` (применяет то, что окно допускает сейчас) ловится только ею
+  (`a_window_that_ignores_the_token_is_caught`); если headless сверяет токен со своей
+  константой, падает всё conformance. Без проверки ревизии в `against` (только владелец)
+  падают `a_command_superseded_in_the_queue_is_admitted_again`,
+  `a_command_admitted_before_a_capability_change_is_superseded`,
+  `a_token_opens_only_under_the_capabilities_it_was_admitted_against` и conformance headless.
+  (4) Токен привязан к окну: `CapabilitiesOwner` (`NonZeroU64`) в `WindowCapabilities`,
+  ставится `WindowStateCell::new` из одного счётчика процесса
+  (`window::state::NEXT_CAPABILITIES_OWNER`, `try_update` с `checked_add`, новая запись `globals`
+  по ADR-0097), `successor` его сохраняет; `against` сравнивает владельца и ревизию. Токен
+  другого окна и токен, допущенный против возможностей, собранных руками (`ALL`, `NONE`), —
+  `Superseded`. Тесты `a_token_opens_only_on_the_window_it_was_admitted_for` (`flui-platform`) и
+  `a_command_admitted_for_another_window_is_superseded` (`flui-native`): без сравнения владельца
+  падают оба. `AdmittedCommand::revision` удалён (его не читал ни один путь);
+  `WindowCapabilities::revision` читают тесты трёх крейтов и `against`. (5) Один путь
+  «допустить и применить»: `WindowCommand::admit_and_apply(self, &W) -> Result<(),
+  CommandRefusal>` в `flui-platform` (при `Superseded` допускает ещё раз); `CommandRefusal` один,
+  там же. Им пользуются `request_close`, показ главного окна, `discard_window`, очередь (на
+  `Superseded`), закрытие при выходе AppKit, харнесс winit и `AdmitAndApply` `flui-testing`;
+  `apply_now` и `CommandRefusal` `flui-app` удалены (в `flui-runtime/src/testing.rs` — двойник
+  `apply`, не допуск). (6) Типы ошибок: `ApplyError::Platform(PlatformFailure)`,
+  `PlatformFailure { OutOfRange, Failed { message } }`; Win32 за пределом устройства —
+  `OutOfRange` (с `Failed` падают `geometry_win32_cannot_hold_is_refused` и
+  `a_position_beyond_the_screens_does_not_overflow`); `loop_control.rs` и харнесс winit пишут
+  `CommandRefusal` как есть. (7) Без клона: `ApplyError::Superseded { command }` отдаёт команду
+  назад, очередь допускает её заново (`command.admit_and_apply(window)`). `ApplyError`,
+  `CommandRefusal` и `CloseRequestError` больше не `Eq` (`WindowCommand` несёт `f64`).
+  (8) Контракт `against` — тождество (владелец и ревизия); проверка `permits` удалена: в одном
+  окне одна ревизия — один набор возможностей. `.stderr` `admitted_command_has_one_constructor`
+  перегенерирован (третье закрытое поле `owner`).
+  Проверки после исправлений: `cargo fmt`; clippy `-D warnings` рабочего пространства обычный и с
+  `flui-native/winit-backend,flui/native`; nextest восьми крейтов — 696 из 697, `flui-native` с
+  `winit-backend` и `flui-app` — 361 из 362 (оба раза падает только trybuild
+  `owner_thread_token_has_no_default` с `main`), `flui --features native` — 10; trybuild
+  `flui-platform` — 3 из 3; clippy Android `--all-targets`, macOS `--all-targets` обычный и с
+  `winit-backend`, iOS lib, wasm32 lib; `checks` (`globals` — 57), `doc-strict`, `wasm-check`, `wasm-test` — 51.
+  WSL: clippy без признаков, с `winit-backend` и `--all-features`; nextest под xvfb — 444, 341,
+  296; rustdoc обоих вариантов. Не запускалось: Mac и iPhone
+  (vanyastaff/flui#1840), `cross-typecheck`, браузер.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

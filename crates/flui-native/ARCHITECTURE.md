@@ -787,11 +787,17 @@ trait depends on `flui-platform` instead.
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (winit's X11 minimize
   observation, the headless `simulate_capabilities`) answers
-  `ApplyError::Superseded`; a command no host arm carries out answers
-  `ApplyError::Platform` (`window::state::not_carried_out`), and Win32 numbers
-  beyond its device range are `Platform` too: admission held them finite and
-  positive, the range is the window system's. Showing, activating and closing
-  are commands like the others
+  `ApplyError::Superseded`. `WindowStateCell::new` stamps the window's first
+  snapshot with a `CapabilitiesOwner` from one process-wide counter
+  (`window::state::NEXT_CAPABILITIES_OWNER`, checked, never reissued), so a
+  token admitted for another window, or against capabilities built by hand,
+  never opens on this one. The conformance check
+  `a_command_admitted_before_a_revision_is_superseded` holds a host to it
+  where its fixture can revise capabilities. A command no host arm carries
+  out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
+  Win32 numbers beyond its device range are `PlatformFailure::OutOfRange`:
+  admission held them finite and positive, the range is the window system's.
+  Showing, activating and closing are commands like the others
   (`Show`, `Activate`, `Close`); there is no method twin. The snapshot
   describes what the OS reported, not what a command asked for, and holds
   every fact of the window (ADR-0254 §1): the drawable `WindowMetrics` (a
