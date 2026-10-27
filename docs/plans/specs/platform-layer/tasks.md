@@ -2938,7 +2938,14 @@ graph LR
   ADR-0254 дополнен на месте (строка `Amended: 2026-10-27`, текст и таблица §4). Запрос закрытия
   до маршрута теперь не забывается: один флаг, маршрут спрашивается ровно один раз при установке,
   `Close` закрывает окно командой (`a_close_request_before_its_route_is_asked_once` в
-  `window_routes_contract`; без флага падает).
+  `window_routes_contract`; без флага падает). Доставка с чужого потока теперь будит владельца на
+  всех хостах: Win32 — `DELIVER_QUEUED` окну по его идентичности, AppKit, UIKit, Android — сигнал
+  владельца их цикла (`WindowDelivery::resume_through_signal`, им же пользуется headless).
+  Тест Win32 `a_delivery_raised_on_another_thread_reaches_the_handler_with_no_other_input`
+  (`window/windows/delivery_tests.rs`; без пробуждения падает: «the state change never reached
+  the idle window's handler»); AppKit, UIKit, Android только типизированы. Один прогон
+  `flui-native` уронил `native_window_commands` (Win32, фокус), три повтора и полный перезапуск
+  зелёные.
 - [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
   (`origin/platform/snapshot-consumers` @ `87977afc3`), после слияния vanyastaff/flui#1912 перенесена
   на `main` @ `c50202c7a` (дерево то же). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`

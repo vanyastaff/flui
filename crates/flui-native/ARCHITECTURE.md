@@ -3465,7 +3465,8 @@ a granted one closing the window by the host's deferred close (Win32 posts
 `CLOSE_WINDOW`, winit and headless close by command, AppKit sends `close`).
 A delivery raised on another thread (a command applied from a worker
 publishes the window's state there) is queued and delivered in an owner turn
-the window asks for (`WindowDelivery::resume_through`; winit and headless).
+the window asks for (`WindowDelivery::resume_through`: a posted `DELIVER_QUEUED` on
+Win32, the loop's owner signal on winit, headless, AppKit, UIKit and Android).
 The host keeps no input for a handler still to come: a handler that cannot
 take its input yet keeps it itself (`flui-app`'s `WindowRoutes` holds what
 arrives before the window's presentation exists and hands it over in order).
