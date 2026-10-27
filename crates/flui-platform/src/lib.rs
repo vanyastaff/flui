@@ -183,7 +183,7 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
-pub use unsupported::{Availability, Unsupported, UnsupportedReason};
+pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
     WindowOptions, WindowReveal,

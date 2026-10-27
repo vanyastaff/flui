@@ -33,7 +33,7 @@ use std::num::NonZeroU64;
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 
 use crate::{
-    Availability, DisplayId, Unsupported, UnsupportedReason, WindowAppearance, WindowExecutionState,
+    Availability, CapabilityAbsence, DisplayId, Unsupported, WindowAppearance, WindowExecutionState,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -387,19 +387,26 @@ impl WindowState {
 /// [`AdmissionError::Unsupported`]; a boolean could not say "only
 /// approximately". A command the capabilities admit can still fail in the
 /// operating system, which [`ApplyError::Platform`] reports: that is a
-/// failure, not a missing capability. The one verb a window takes outside
-/// the command queue, [`frame_rate_hint`](Self::frame_rate_hint), answers
-/// [`Unsupported`] exactly when it is `Unavailable`. Fields are public so a
-/// backend can start from [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set
-/// the difference.
+/// failure, not a missing capability. Fields are public so a backend can
+/// start from [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set the
+/// difference.
 ///
-/// A capability this device lacks where its platform has it (an operating
-/// system build below the feature's), or one the operating system has and
-/// the host does not implement yet, is set with
-/// [`unavailable`](Self::unavailable) and its reason, and admission then
-/// refuses its command with [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice)
-/// or [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) instead of
-/// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
+/// A command's capability this device lacks where its platform has it (an
+/// operating system build below the feature's), or one the operating system
+/// has and the host does not implement yet, is set with
+/// [`unavailable`](Self::unavailable) and its [`CapabilityAbsence`], and
+/// admission then refuses the command with
+/// [`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice) or
+/// [`NotYetOnThisHost`](crate::UnsupportedReason::NotYetOnThisHost) instead of
+/// [`NotOnThisPlatform`](crate::UnsupportedReason::NotOnThisPlatform).
+///
+/// The one verb a window takes outside the command queue,
+/// [`frame_rate_hint`](Self::frame_rate_hint), answers [`Unsupported`]
+/// exactly when it is `Unavailable`, and its reason is the verb's own answer,
+/// not a field here: nothing admits a verb against the capabilities, so a
+/// reason kept here would be a second copy of what the host's verb already
+/// says. The same holds for the input regions, whose capability lives in the
+/// input capabilities.
 ///
 /// The capabilities in a published snapshot also carry their
 /// [`revision`](Self::revision): the snapshot revision at which what the
@@ -451,9 +458,9 @@ pub struct WindowCapabilities {
     /// [`WindowCommand::SetMaterial`]: the window system draws every
     /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
     pub material: Availability,
-    /// Why each command's capability is `Unavailable`, indexed by
-    /// [`WindowCapabilities::slot`]; read only when it is.
-    reasons: [&'static UnsupportedReason; COMMAND_CAPABILITIES],
+    /// Why each command's capability is `Unavailable`, indexed by [`Slot`];
+    /// read only while it is.
+    absences: [CapabilityAbsence; Slot::COUNT],
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -482,7 +489,7 @@ impl CapabilitiesOwner {
 
 impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
-        self.honoured() == other.honoured() && self.reasons == other.reasons
+        self.honoured() == other.honoured() && self.absences_in_force() == other.absences_in_force()
     }
 }
 
@@ -491,17 +498,68 @@ impl Eq for WindowCapabilities {}
 impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.honoured().hash(state);
-        self.reasons.hash(state);
+        self.absences_in_force().hash(state);
     }
 }
 
-/// The capabilities a [`WindowCommand`] is admitted against, one per
-/// [`WindowCapabilities::slot`].
-const COMMAND_CAPABILITIES: usize = 14;
+/// Declares the capabilities a [`WindowCommand`] is admitted against, once:
+/// the [`Slot`] of each, how many there are, and the field each one reads.
+/// [`WindowCapabilities::slot`] maps every command to one with an exhaustive
+/// match, so a new command does not compile until it names a slot here.
+macro_rules! command_capabilities {
+    ($($slot:ident => $field:ident),+ $(,)?) => {
+        /// A capability a [`WindowCommand`] is admitted against: the index of
+        /// its absence in [`WindowCapabilities`].
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Slot {
+            $($slot),+
+        }
 
-/// The reason of a capability nothing marked: the platform's.
-const NOT_ON_THIS_PLATFORM: [&UnsupportedReason; COMMAND_CAPABILITIES] =
-    [&UnsupportedReason::NotOnThisPlatform; COMMAND_CAPABILITIES];
+        impl Slot {
+            /// Every slot, in declaration order, which is their index order.
+            const ALL: [Self; [$(Self::$slot),+].len()] = [$(Self::$slot),+];
+            /// How many there are: the length of the absences.
+            const COUNT: usize = Self::ALL.len();
+        }
+
+        impl WindowCapabilities {
+            /// The field `slot` reads.
+            const fn field(&self, slot: Slot) -> Availability {
+                match slot {
+                    $(Slot::$slot => self.$field),+
+                }
+            }
+
+            /// The field `slot` reads, to set.
+            const fn field_mut(&mut self, slot: Slot) -> &mut Availability {
+                match slot {
+                    $(Slot::$slot => &mut self.$field),+
+                }
+            }
+        }
+    };
+}
+
+command_capabilities! {
+    SetTitle => sets_title,
+    SetPosition => sets_position,
+    SetSize => sets_size,
+    SetConstraints => sets_constraints,
+    SetResizable => sets_resizable,
+    SetDecorated => sets_decorated,
+    Minimize => minimizes,
+    Maximize => maximizes,
+    EnterFullscreen => enters_fullscreen,
+    Hide => hides,
+    Show => shows,
+    Activate => activates,
+    Close => closes,
+    SetMaterial => material,
+}
+
+/// The absence of a capability nothing marked: the platform's.
+const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
+    [CapabilityAbsence::NotOnThisPlatform; Slot::COUNT];
 
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
@@ -526,7 +584,7 @@ impl WindowCapabilities {
             places_at_open,
             frame_rate_hint,
             material,
-            reasons: _,
+            absences: _,
             owner: _,
             revision: _,
         } = *self;
@@ -574,7 +632,7 @@ impl WindowCapabilities {
         places_at_open: Availability::Unavailable,
         frame_rate_hint: Availability::Unavailable,
         material: Availability::Unavailable,
-        reasons: NOT_ON_THIS_PLATFORM,
+        absences: NOT_ON_THIS_PLATFORM,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -600,7 +658,7 @@ impl WindowCapabilities {
         places_at_open: Availability::Native,
         frame_rate_hint: Availability::Native,
         material: Availability::Native,
-        reasons: NOT_ON_THIS_PLATFORM,
+        absences: NOT_ON_THIS_PLATFORM,
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -630,22 +688,9 @@ impl WindowCapabilities {
     /// pretends.
     #[must_use]
     pub const fn availability(&self, command: &WindowCommand) -> Availability {
-        match command {
-            WindowCommand::SetTitle(_) => self.sets_title,
-            WindowCommand::SetPosition(_) => self.sets_position,
-            WindowCommand::SetSize(_) => self.sets_size,
-            WindowCommand::SetConstraints(_) => self.sets_constraints,
-            WindowCommand::SetResizable(_) => self.sets_resizable,
-            WindowCommand::SetDecorated(_) => self.sets_decorated,
-            WindowCommand::SetMode(WindowMode::Minimized) => self.minimizes,
-            WindowCommand::SetMode(WindowMode::Maximized) => self.maximizes,
-            WindowCommand::SetMode(WindowMode::Fullscreen) => self.enters_fullscreen,
-            WindowCommand::SetMode(WindowMode::Normal) => Availability::Native,
-            WindowCommand::Hide => self.hides,
-            WindowCommand::Show => self.shows,
-            WindowCommand::Activate => self.activates,
-            WindowCommand::Close => self.closes,
-            WindowCommand::SetMaterial(_) => self.material,
+        match Self::slot(command) {
+            Some(slot) => self.field(slot),
+            None => Availability::Native,
         }
     }
 
@@ -655,32 +700,28 @@ impl WindowCapabilities {
         self.availability(command).is_available()
     }
 
-    /// These capabilities with `command`'s capability `Unavailable` for
-    /// `reason`, which admission then answers for `command`.
+    /// These capabilities with `command`'s capability `Unavailable` because of
+    /// `absence`, which admission then answers for `command`.
     ///
-    /// The reason says which absence it is:
-    /// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) where the
-    /// platform has the capability and this device — its operating system
-    /// build or its hardware — lacks it,
-    /// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) where the
+    /// The absence says where the capability is missing:
+    /// [`NotOnThisDevice`](CapabilityAbsence::NotOnThisDevice) where the
+    /// platform has it and this device — its operating system build or its
+    /// hardware — lacks it,
+    /// [`NotYetOnThisHost`](CapabilityAbsence::NotYetOnThisHost) where the
     /// operating system has it and the host does not implement it yet, and
-    /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform), what a
+    /// [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform), what a
     /// field set to `Unavailable` by hand answers, where no device of the
     /// platform has it. The mode every window has ([`WindowMode::Normal`])
     /// cannot be taken away.
     ///
-    /// The reason is borrowed for `'static` (`&UnsupportedReason::NotYetOnThisHost`
-    /// is one) so that capabilities stay small enough to copy into every
-    /// snapshot.
-    ///
     /// ```
     /// use flui_platform::{
-    ///     UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
+    ///     CapabilityAbsence, UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
     /// };
     ///
     /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    /// let capabilities = WindowCapabilities::ALL
-    ///     .unavailable(&material, &UnsupportedReason::NotYetOnThisHost);
+    /// let capabilities =
+    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NotYetOnThisHost);
     /// let refused = material.admit(&capabilities).unwrap_err();
     /// assert_eq!(
     ///     refused.unsupported().map(|absent| absent.reason),
@@ -691,68 +732,73 @@ impl WindowCapabilities {
     pub const fn unavailable(
         mut self,
         command: &WindowCommand,
-        reason: &'static UnsupportedReason,
+        absence: CapabilityAbsence,
     ) -> Self {
         let Some(slot) = Self::slot(command) else {
             return self;
         };
-        match command {
-            WindowCommand::SetTitle(_) => self.sets_title = Availability::Unavailable,
-            WindowCommand::SetPosition(_) => self.sets_position = Availability::Unavailable,
-            WindowCommand::SetSize(_) => self.sets_size = Availability::Unavailable,
-            WindowCommand::SetConstraints(_) => self.sets_constraints = Availability::Unavailable,
-            WindowCommand::SetResizable(_) => self.sets_resizable = Availability::Unavailable,
-            WindowCommand::SetDecorated(_) => self.sets_decorated = Availability::Unavailable,
-            WindowCommand::SetMode(WindowMode::Minimized) => {
-                self.minimizes = Availability::Unavailable;
-            }
-            WindowCommand::SetMode(WindowMode::Maximized) => {
-                self.maximizes = Availability::Unavailable;
-            }
-            WindowCommand::SetMode(WindowMode::Fullscreen) => {
-                self.enters_fullscreen = Availability::Unavailable;
-            }
-            WindowCommand::SetMode(WindowMode::Normal) => {}
-            WindowCommand::Hide => self.hides = Availability::Unavailable,
-            WindowCommand::Show => self.shows = Availability::Unavailable,
-            WindowCommand::Activate => self.activates = Availability::Unavailable,
-            WindowCommand::Close => self.closes = Availability::Unavailable,
-            WindowCommand::SetMaterial(_) => self.material = Availability::Unavailable,
-        }
-        self.reasons[slot] = reason;
+        *self.field_mut(slot) = Availability::Unavailable;
+        self.absences[slot as usize] = absence;
         self
     }
 
     /// Why admission refuses `command` when its capability is `Unavailable`:
-    /// the reason [`unavailable`](Self::unavailable) gave it or, for a field
-    /// set by hand, [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform).
+    /// the absence [`unavailable`](Self::unavailable) gave it or, for a field
+    /// set by hand, [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform).
+    /// While the capability is available there is no refusal, and this answers
+    /// `NotOnThisPlatform` too.
     #[must_use]
-    pub const fn refusal(&self, command: &WindowCommand) -> UnsupportedReason {
+    pub const fn refusal(&self, command: &WindowCommand) -> CapabilityAbsence {
         match Self::slot(command) {
-            Some(slot) => *self.reasons[slot],
-            None => UnsupportedReason::NotOnThisPlatform,
+            Some(slot) => match self.absence_in_force(slot) {
+                Some(absence) => absence,
+                None => CapabilityAbsence::NotOnThisPlatform,
+            },
+            None => CapabilityAbsence::NotOnThisPlatform,
         }
     }
 
-    /// The index of `command`'s capability in `reasons`; `None` for the mode
-    /// every window has.
-    const fn slot(command: &WindowCommand) -> Option<usize> {
+    /// The absence recorded for `slot`, while its capability is `Unavailable`;
+    /// `None` while it is available, where a recorded absence means nothing.
+    const fn absence_in_force(&self, slot: Slot) -> Option<CapabilityAbsence> {
+        match self.field(slot) {
+            Availability::Unavailable => Some(self.absences[slot as usize]),
+            Availability::Native | Availability::Emulated => None,
+        }
+    }
+
+    /// Every slot's absence in force, for equality and hashing: an absence left
+    /// behind in a slot that became available again is no difference.
+    const fn absences_in_force(&self) -> [Option<CapabilityAbsence>; Slot::COUNT] {
+        let mut in_force = [None; Slot::COUNT];
+        let mut at = 0;
+        while at < Slot::COUNT {
+            in_force[at] = self.absence_in_force(Slot::ALL[at]);
+            at += 1;
+        }
+        in_force
+    }
+
+    /// The capability `command` is admitted against; `None` for the mode every
+    /// window has. Exhaustive, so a command added to [`WindowCommand`] does
+    /// not compile until it names its slot.
+    const fn slot(command: &WindowCommand) -> Option<Slot> {
         Some(match command {
-            WindowCommand::SetTitle(_) => 0,
-            WindowCommand::SetPosition(_) => 1,
-            WindowCommand::SetSize(_) => 2,
-            WindowCommand::SetConstraints(_) => 3,
-            WindowCommand::SetResizable(_) => 4,
-            WindowCommand::SetDecorated(_) => 5,
-            WindowCommand::SetMode(WindowMode::Minimized) => 6,
-            WindowCommand::SetMode(WindowMode::Maximized) => 7,
-            WindowCommand::SetMode(WindowMode::Fullscreen) => 8,
+            WindowCommand::SetTitle(_) => Slot::SetTitle,
+            WindowCommand::SetPosition(_) => Slot::SetPosition,
+            WindowCommand::SetSize(_) => Slot::SetSize,
+            WindowCommand::SetConstraints(_) => Slot::SetConstraints,
+            WindowCommand::SetResizable(_) => Slot::SetResizable,
+            WindowCommand::SetDecorated(_) => Slot::SetDecorated,
+            WindowCommand::SetMode(WindowMode::Minimized) => Slot::Minimize,
+            WindowCommand::SetMode(WindowMode::Maximized) => Slot::Maximize,
+            WindowCommand::SetMode(WindowMode::Fullscreen) => Slot::EnterFullscreen,
             WindowCommand::SetMode(WindowMode::Normal) => return None,
-            WindowCommand::Hide => 9,
-            WindowCommand::Show => 10,
-            WindowCommand::Activate => 11,
-            WindowCommand::Close => 12,
-            WindowCommand::SetMaterial(_) => 13,
+            WindowCommand::Hide => Slot::Hide,
+            WindowCommand::Show => Slot::Show,
+            WindowCommand::Activate => Slot::Activate,
+            WindowCommand::Close => Slot::Close,
+            WindowCommand::SetMaterial(_) => Slot::SetMaterial,
         })
     }
 }
@@ -857,7 +903,7 @@ impl WindowCommand {
     ) -> Result<AdmittedCommand, AdmissionError> {
         self.validate()?;
         if !capabilities.permits(&self) {
-            return Err(Unsupported::new(capabilities.refusal(&self)).into());
+            return Err(Unsupported::from(capabilities.refusal(&self)).into());
         }
         Ok(AdmittedCommand {
             command: self,

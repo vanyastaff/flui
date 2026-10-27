@@ -3,10 +3,10 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner, SizeConstraints,
-    Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowExecutionState, WindowGeometry, WindowMaterial, WindowMode, WindowRevision,
-    WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner,
+    CapabilityAbsence, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry, WindowMaterial,
+    WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -171,28 +171,97 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         // A capability this device lacks where the platform has it, and one
         // the operating system has that the host does not implement yet:
         // admission answers the reason the host marked, not the platform's.
-        for reason in [
-            &UnsupportedReason::NotOnThisDevice,
-            &UnsupportedReason::NotYetOnThisHost,
+        for (absence, reason) in [
+            (
+                CapabilityAbsence::NotOnThisDevice,
+                UnsupportedReason::NotOnThisDevice,
+            ),
+            (
+                CapabilityAbsence::NotYetOnThisHost,
+                UnsupportedReason::NotYetOnThisHost,
+            ),
         ] {
-            let marked = WindowCapabilities::ALL.unavailable(&command, reason);
+            let marked = WindowCapabilities::ALL.unavailable(&command, absence);
             assert_eq!(
                 marked.availability(&command),
                 Availability::Unavailable,
-                "{command:?} taken away, {reason:?}"
+                "{command:?} taken away, {absence:?}"
             );
             assert_eq!(
                 admits(&command, &marked),
-                Err(AdmissionError::Unsupported(Unsupported::new(*reason))),
-                "{command:?} without its capability, {reason:?}"
+                Err(AdmissionError::Unsupported(Unsupported::new(reason))),
+                "{command:?} without its capability, {absence:?}"
             );
-            assert_eq!(marked.refusal(&command), *reason, "{command:?}");
+            assert_eq!(marked.refusal(&command), absence, "{command:?}");
             assert_ne!(marked, WindowCapabilities::ALL, "{command:?}");
         }
         assert_ne!(
-            WindowCapabilities::ALL.unavailable(&command, &UnsupportedReason::NotOnThisDevice),
-            WindowCapabilities::ALL.unavailable(&command, &UnsupportedReason::NotYetOnThisHost),
-            "{command:?}: the reason is part of what the window honours"
+            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NotOnThisDevice),
+            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NotYetOnThisHost),
+            "{command:?}: the absence is part of what the window honours"
+        );
+    }
+}
+
+/// An absence matters only while its capability is unavailable: a host that
+/// makes the capability available again publishes the same capabilities as
+/// one that never marked it, and the revision does not move for the absence
+/// left behind.
+fn an_absence_left_in_an_available_slot_is_no_difference() {
+    let material = WindowCommand::SetMaterial(WindowMaterial::System);
+    let mut restored =
+        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NotYetOnThisHost);
+    restored.material = Availability::Native;
+    assert_eq!(restored, WindowCapabilities::ALL);
+    assert_eq!(
+        hash_of(&restored),
+        hash_of(&WindowCapabilities::ALL),
+        "equal capabilities hash alike"
+    );
+
+    let published = base_state()
+        .successor(base_state().with_capabilities(WindowCapabilities::ALL))
+        .expect("capabilities change");
+    let next = published
+        .successor(base_state().with_capabilities(restored))
+        .expect("an equal sample");
+    assert_eq!(
+        next.revision, published.revision,
+        "an absence in an available slot moved the revision"
+    );
+    assert_eq!(
+        next.capabilities.revision(),
+        published.capabilities.revision()
+    );
+}
+
+fn hash_of(capabilities: &WindowCapabilities) -> u64 {
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+    BuildHasherDefault::<DefaultHasher>::default().hash_one(capabilities)
+}
+
+/// Each absence a capability carries converts to the reason of the same name,
+/// and none asks to be tried again: a capability stays `Unavailable` until
+/// the host publishes it again.
+fn no_absence_is_retryable() {
+    for (absence, reason) in [
+        (
+            CapabilityAbsence::NotOnThisPlatform,
+            UnsupportedReason::NotOnThisPlatform,
+        ),
+        (
+            CapabilityAbsence::NotOnThisDevice,
+            UnsupportedReason::NotOnThisDevice,
+        ),
+        (
+            CapabilityAbsence::NotYetOnThisHost,
+            UnsupportedReason::NotYetOnThisHost,
+        ),
+    ] {
+        assert_eq!(UnsupportedReason::from(absence), reason);
+        assert!(
+            !Unsupported::from(absence).is_retryable(),
+            "{absence:?} asks to be retried"
         );
     }
 }
@@ -572,6 +641,11 @@ fn window_command_validate() {
                 "a_token_opens_only_on_the_window_it_was_admitted_for",
                 a_token_opens_only_on_the_window_it_was_admitted_for,
             ),
+            (
+                "an_absence_left_in_an_available_slot_is_no_difference",
+                an_absence_left_in_an_available_slot_is_no_difference,
+            ),
+            ("no_absence_is_retryable", no_absence_is_retryable),
         ],
     );
 }
