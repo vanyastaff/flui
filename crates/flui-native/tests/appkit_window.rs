@@ -67,7 +67,7 @@ mod cases {
         reason = "`nextEventMatchingMask:untilDate:inMode:dequeue:` with an `NSDate`, which \
                   this crate's objc2-foundation features leave unbound"
     )]
-    fn pump(app: &NSApplication, span: Duration) {
+    fn run_appkit(app: &NSApplication, span: Duration) {
         use objc2::runtime::AnyObject;
         use objc2::{class, msg_send};
         use objc2_app_kit::{NSEvent, NSEventMask};
@@ -161,7 +161,7 @@ mod cases {
             let mut last = self.window.state().revision;
             let mut quiet_since = Instant::now();
             while Instant::now() < deadline {
-                pump(&self.app, Duration::from_millis(50));
+                run_appkit(&self.app, Duration::from_millis(50));
                 let now = self.window.state().revision;
                 if now == last {
                     if quiet_since.elapsed() >= Duration::from_secs(1) {
