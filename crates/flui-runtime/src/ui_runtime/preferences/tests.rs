@@ -1,10 +1,7 @@
 //! Synchronous same-presentation replacement is below OwnerHost's queued lease
 //! boundary. These private fixtures invoke the real query/diagnostic path.
 use super::*;
-use flui_foundation::{
-    ManualClock,
-    geometry::{Offset, Size},
-};
+use flui_foundation::{ManualClock, geometry::Offset};
 use flui_painting::TextSizing;
 use flui_platform::{Distance, PlatformWindow};
 use flui_view::prelude::*;
@@ -39,23 +36,8 @@ impl PlatformWindow for Window {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -64,12 +46,7 @@ impl PlatformWindow for Window {
         self.inner.set_cursor(cursor)
     }
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+        self.inner.state()
     }
 
     fn apply(
@@ -93,12 +70,6 @@ impl PlatformWindow for Window {
     }
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         let answer = self.answer.lock().expect("query script").clone();
@@ -330,23 +301,8 @@ impl PlatformWindow for HapticWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -356,9 +312,6 @@ impl PlatformWindow for HapticWindow {
     }
     fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.inner.capabilities()
     }
     fn apply(
         &self,
@@ -377,9 +330,6 @@ impl PlatformWindow for HapticWindow {
     }
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         self.inner.drag_source()
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        self.inner.show()
     }
 }
 

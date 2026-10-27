@@ -112,10 +112,6 @@ impl WindowInputs for NoInputs {
         None
     }
 
-    fn modifiers(&self, _window: WindowRef) -> Option<flui_platform::Modifiers> {
-        None
-    }
-
     fn press_kind(
         &self,
         _window: WindowRef,

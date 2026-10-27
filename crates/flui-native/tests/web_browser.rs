@@ -28,7 +28,7 @@ use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 use flui_platform::text_store::{
     InMemoryTextStore, TextStore, TextStoreHost, Utf16Offset, Utf16Range,
 };
-use flui_platform::{DispatchEventResult, WindowOptions};
+use flui_platform::{DispatchEventResult, WindowCommand, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -433,7 +433,7 @@ impl CanvasWindow {
 
 impl Drop for CanvasWindow {
     fn drop(&mut self) {
-        self.window.close();
+        let _ = self.window.apply(WindowCommand::Close);
     }
 }
 
@@ -488,7 +488,7 @@ fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
             .open_window(WindowOptions::default())
             .expect("the page's canvas opens");
         assert_eq!(touch_action(), "none", "the canvas {canvas}");
-        window.close();
+        let _ = window.apply(WindowCommand::Close);
     }
 }
 
@@ -848,14 +848,14 @@ fn the_context_menu_is_answered_as_its_secondary_press() {
 #[wasm_bindgen_test]
 fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
     let window = CanvasWindow::open();
-    let closing = Arc::clone(&window.window);
-    window
-        .window
-        .on_visibility_status_change(Box::new(move |visible| {
-            if !visible {
-                closing.close();
-            }
-        }));
+    let closing = Arc::downgrade(&window.window);
+    window.window.on_state_changed(Box::new(move || {
+        if let Some(window) = closing.upgrade()
+            && !window.state().visible
+        {
+            let _ = window.apply(WindowCommand::Close);
+        }
+    }));
     pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
     hide_page(true);
     hide_page(false);
@@ -1167,8 +1167,17 @@ impl HostedCanvas {
                 }));
                 let active = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let seen = Arc::clone(&active);
-                window.on_active_status_change(Box::new(move |focused| {
-                    seen.lock().expect("focus log").push(focused);
+                let observed = Arc::downgrade(&window);
+                let mut last = window.state().focused;
+                window.on_state_changed(Box::new(move || {
+                    let Some(window) = observed.upgrade() else {
+                        return;
+                    };
+                    let focused = window.state().focused;
+                    if focused != last {
+                        last = focused;
+                        seen.lock().expect("focus log").push(focused);
+                    }
                 }));
                 *out.borrow_mut() = Some(Self {
                     owner,
@@ -1190,7 +1199,7 @@ impl HostedCanvas {
 
 impl Drop for HostedCanvas {
     fn drop(&mut self) {
-        self.window.close();
+        let _ = self.window.apply(WindowCommand::Close);
         self.owner.quit();
     }
 }
@@ -1315,7 +1324,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
         canvas.active.lock().expect("focus log")[reported..].is_empty(),
         "focus moved within the canvas's area: no window focus change"
     );
-    assert!(canvas.window.is_focused());
+    assert!(canvas.window.state().focused);
 
     editor_composition("compositionstart");
     type_into_editor("abに", 3, true);
@@ -1343,7 +1352,10 @@ fn a_textarea_serves_the_field_without_edit_context() {
 
     canvas.host.focus_store(None);
     assert!(editor().is_none(), "the textarea is gone");
-    assert!(canvas.window.is_focused(), "focus went back to the canvas");
+    assert!(
+        canvas.window.state().focused,
+        "focus went back to the canvas"
+    );
 }
 
 /// A frame request carries the browser's own frame time, not the moment the callback ran: a frame

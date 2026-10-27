@@ -17,8 +17,8 @@ use super::frame_pacing::{
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, prepare_ui_runtime_alongside,
+    PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
+    install_input_wiring, prepare_ui_runtime_alongside,
 };
 use crate::app::AppConfig;
 
@@ -41,7 +41,9 @@ impl Drop for InstallRollback {
         if let Some(dispatcher) = self.dispatcher {
             crate::app::application_control::contain(|| close_this_window(dispatcher));
         }
-        crate::app::application_control::contain(|| self.window.close());
+        crate::app::application_control::contain(|| {
+            let _ = self.window.apply(flui_platform::WindowCommand::Close);
+        });
     }
 }
 
@@ -94,7 +96,8 @@ where
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
     // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
     // gives it its own strong ref rather than a borrow of `window`.
-    let phys_size = window.physical_size();
+    let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+    let phys_size = geometry.physical;
     let renderer = pollster::block_on(Renderer::with_surface_color(
         Arc::clone(&window),
         config.surface_color,
@@ -120,7 +123,7 @@ where
     // physical surface. `UiRuntime::new` applies the DPR to the freshly
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
-    let scale_factor = window.scale_factor();
+    let scale_factor = geometry.scale;
     let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(e) => {
@@ -145,7 +148,7 @@ where
     config.install_error_view_builder(&ui_runtime);
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
-    let logical = window.logical_size();
+    let logical = geometry.logical;
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
     });
@@ -263,15 +266,6 @@ where
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     }));
 
-    // 7. Register resize callback -> typed Resized event; the applier
-    // installed above (not this closure) actually touches the renderer.
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
-
     // 8. Lifecycle callbacks
     //
     // Detached is dispatched through the ui_runtime because shutdown must
@@ -335,57 +329,12 @@ where
     // it, together with the router entry it consults, so the two can
     // never be wired apart.
 
-    // Window focus/visibility -> the `(visible, focused)`
-    // `AppLifecycleState` derivation. `on_visibility_status_change`
-    // rides winit's `Occluded` event, which winit 0.30 only emits on
-    // X11/macOS/iOS/Web (see that callback's own doc, verified against
-    // winit's source) — winit has NO Wayland emitter for this event at
-    // all, so on this workspace's own Wayland desktop reference the
-    // window is always treated as visible (the same as before this
-    // callback existed).
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
-    });
-
-    window.on_hover_status_change(Box::new(move |is_hovered| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    // Seed the initial size and device-pixel ratio the same way: the
-    // source must not sit on defaults until the first live resize —
-    // on the web backend no resize observer exists, so a default
-    // would be permanent there.
-    if let Ok(metrics) = window.metrics() {
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-    }
+    // 7. The window's facts — metrics, focus, visibility, execution, hover,
+    // appearance, safe area and display — reach the presentation from its
+    // one snapshot subscription, seeded from the snapshot read right after
+    // it; the resize applier installed above (not the subscription) touches
+    // the renderer.
+    installation.observe_window();
 
     // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
     // marking the lifecycle Resumed or requesting the initial redraw.

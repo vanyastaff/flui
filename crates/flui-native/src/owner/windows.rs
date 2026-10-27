@@ -217,9 +217,6 @@ pub(crate) trait WindowInputs {
     /// Whether the mouse is over the window's client area.
     fn hovered(&self, window: WindowRef) -> Option<bool>;
 
-    /// The keyboard modifiers the window's last key message carried.
-    fn modifiers(&self, window: WindowRef) -> Option<flui_platform::Modifiers>;
-
     /// The kind of the contact whose press began `pointer`'s sequence in the
     /// window.
     fn press_kind(

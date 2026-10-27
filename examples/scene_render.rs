@@ -45,7 +45,7 @@ mod effects;
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
-use flui_foundation::geometry::{Rect, Size};
+use flui_foundation::geometry::{Rect, Size, WindowMetrics};
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_native::current_platform;
@@ -53,6 +53,15 @@ use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::WindowOptions;
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
+/// The window's drawable size, from its snapshot: zero before the host has
+/// published drawable metrics.
+fn physical_size(window: &dyn flui_platform::PlatformWindow) -> Size<i32> {
+    window
+        .state()
+        .metrics
+        .map_or(Size::new(0, 0), WindowMetrics::physical)
+}
+
 fn build_test_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
@@ -168,10 +177,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_window(options)
         .expect("Failed to open window");
 
+    let opened = window.state().metrics;
     tracing::info!(
         "Window created: {:?} @ {:.1}x scale",
-        window.physical_size(),
-        window.scale_factor()
+        opened.map(WindowMetrics::physical),
+        opened.map_or(1.0, |metrics| metrics.scale().get())
     );
 
     // `Renderer::new` takes ownership of a `WindowTarget` (issue #1043) —
@@ -179,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut renderer = pollster::block_on(Renderer::new(Arc::clone(&window)))
         .expect("Failed to create GPU renderer");
 
-    let phys = window.physical_size();
+    let phys = physical_size(window.as_ref());
     renderer.resize(phys.width as u32, phys.height as u32);
 
     tracing::info!(
@@ -195,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window_for_frame = window.clone();
     let hot_reload_frame = hot_reload.clone();
     window.on_request_frame(Box::new(move |_| {
-        let size = window_for_frame.physical_size();
+        let size = physical_size(window_for_frame.as_ref());
         let w = size.width as f64;
         let h = size.height as f64;
 
@@ -234,12 +244,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }));
 
-    // Register resize callback
+    // Resize the surface when the snapshot carries a new drawable size.
     let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |metrics| {
-        let w = metrics.physical().width.unsigned_abs();
-        let h = metrics.physical().height.unsigned_abs();
-        renderer_resize.lock().unwrap().resize(w, h);
+    let observed = Arc::downgrade(&window);
+    let mut sized = phys;
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let size = physical_size(window.as_ref());
+        if size == sized {
+            return;
+        }
+        sized = size;
+        renderer_resize
+            .lock()
+            .unwrap()
+            .resize(size.width.unsigned_abs(), size.height.unsigned_abs());
     }));
 
     // Request first frame

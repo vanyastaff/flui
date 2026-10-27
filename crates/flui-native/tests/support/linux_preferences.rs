@@ -610,19 +610,18 @@ pub mod linux {
                         .open_window(flui_platform::WindowOptions::default().with_visible(false))?
                         .try_ready()?;
                     assert_eq!(
-                        window.appearance(),
+                        window.state().appearance,
                         WindowAppearance::Dark,
                         "the first window must observe the portal's dark scheme"
                     );
                     let proxy = owner.proxy();
                     let observed = Arc::downgrade(&window);
                     let seen = Arc::clone(&scheme_witness);
-                    window.on_appearance_changed(Box::new(move || {
-                        if observed
-                            .upgrade()
-                            .is_some_and(|window| window.appearance() == WindowAppearance::Light)
+                    window.on_state_changed(Box::new(move || {
+                        if observed.upgrade().is_some_and(|window| {
+                            window.state().appearance == WindowAppearance::Light
+                        }) && !seen.swap(true, Ordering::SeqCst)
                         {
-                            seen.store(true, Ordering::SeqCst);
                             proxy.request_quit().expect("color-scheme owner quit");
                         }
                     }));

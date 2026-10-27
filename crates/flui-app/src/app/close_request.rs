@@ -494,10 +494,10 @@ impl CloseRequestRouter {
                 .upgrade()
                 .ok_or(CloseRequestError::WindowGone { address })?
         };
-        // Outside the lock: `close()` fires the window's own `on_close`,
+        // Outside the lock: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
-        window.close();
+        let _ = window.apply(flui_platform::WindowCommand::Close);
         Ok(())
     }
 }

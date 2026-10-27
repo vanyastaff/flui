@@ -288,35 +288,6 @@ pub enum WindowExecutionState {
     Detached,
 }
 
-/// Failure to show an existing window without changing its display mode.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum WindowShowError {
-    /// This backend cannot show and request focus for an existing window.
-    #[error("the window cannot be shown: {0}")]
-    Unsupported(#[from] Unsupported),
-    /// The native window has closed.
-    #[error("the window is closed")]
-    Closed,
-    /// A native operation failed.
-    #[error("could not show the window: {message}")]
-    Native {
-        /// Native failure description.
-        message: String,
-    },
-}
-
-impl WindowShowError {
-    /// What is not here, when that is why the window was not shown.
-    #[must_use]
-    pub const fn unsupported(&self) -> Option<Unsupported> {
-        match self {
-            Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::Closed | Self::Native { .. } => None,
-        }
-    }
-}
-
 // ==================== Value Types ====================
 
 /// Window appearance (light/dark theme)
@@ -385,80 +356,4 @@ impl CursorError {
             Self::Backend(_) => None,
         }
     }
-}
-
-// ==================== Events ====================
-
-/// Window events that can be observed via `flui_native::Platform::on_window_event`
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum WindowEvent {
-    /// Window was created
-    Created(WindowId),
-
-    /// A close was *asked for* and the window's should-close veto passed.
-    ///
-    /// The rule is the veto, not the caller: this event accompanies every
-    /// close that consults `on_should_close` and survives it. A refused close
-    /// emits nothing at all.
-    ///
-    /// In practice that means the user route — a close button or compositor
-    /// close on winit, `WM_CLOSE` on Win32, `simulate_close` on the headless
-    /// double. A programmatic [`PlatformWindow::close`](crate::PlatformWindow::close) on the
-    /// owning thread is a decision rather than a request, asks no veto, and
-    /// so reports only [`Closed`](Self::Closed). The one case where a
-    /// programmatic close does emit this is Win32's *cross-thread* route,
-    /// which cannot call `DestroyWindow` and posts `WM_CLOSE` instead — so
-    /// the veto is re-asked and the close becomes a request, exactly as that
-    /// impl documents.
-    ///
-    /// Ordering: emitted BEFORE the window's own `on_close` callback runs,
-    /// so a global handler observes the window still intact when told the
-    /// close is going ahead; [`Closed`](Self::Closed) follows once the
-    /// window has left the backend's tracking. (Earlier winit versions ran
-    /// `on_close` first — a deliberate change, made when both close routes
-    /// were unified into one teardown.)
-    CloseRequested {
-        /// The window whose close button was activated
-        window_id: WindowId,
-    },
-
-    /// Window was closed — left the backend's tracking, whichever route
-    /// (user-initiated or programmatic) took it there. Emitted after the
-    /// window's own `on_close` callback and before the exit-policy consult.
-    ///
-    /// Emitted for *every* window that closes, not only the last one: a
-    /// consumer tracking open windows by these events would otherwise believe
-    /// a closed window is still open whenever another remains.
-    Closed(WindowId),
-
-    /// Window focus changed
-    FocusChanged {
-        /// The window whose focus state changed
-        window_id: WindowId,
-        /// `true` if the window gained focus, `false` if it lost focus
-        focused: bool,
-    },
-
-    /// Window was resized (size in device pixels)
-    Resized {
-        /// The window that was resized
-        window_id: WindowId,
-        /// New client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window scale factor (DPI) changed
-    ScaleFactorChanged {
-        /// The window whose scale factor changed
-        window_id: WindowId,
-        /// New device-pixel-per-logical-pixel ratio
-        scale_factor: f64,
-    },
-
-    /// Window needs to be redrawn
-    RedrawRequested {
-        /// The window that must be repainted
-        window_id: WindowId,
-    },
 }

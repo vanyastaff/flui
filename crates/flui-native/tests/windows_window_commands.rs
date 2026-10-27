@@ -167,7 +167,7 @@ fn a_deferred_window_is_hidden_until_its_first_frame() {
     let window = open(&platform, deferred());
     assert!(!shown(&window), "no blank frame before the first present");
     assert!(
-        window.is_visible() && window.state().visible,
+        window.state().visible,
         "it is visible to the runtime meanwhile, so its frames run"
     );
     window.reveal_after_first_frame();
@@ -189,7 +189,7 @@ fn a_window_opened_hidden_stays_hidden_until_shown() {
 fn activating_an_unshown_window_shows_it() {
     let platform = platform();
     let window = open(&platform, deferred());
-    window.activate();
+    apply(&window, WindowCommand::Activate);
     assert!(shown(&window));
 }
 
@@ -265,7 +265,7 @@ fn hiding_a_deferred_window_cancels_its_reveal() {
     let platform = platform();
     let window = open(&platform, deferred());
     apply(&window, WindowCommand::Hide);
-    assert!(!window.is_visible() && !window.state().visible);
+    assert!(!window.state().visible);
     window.reveal_after_first_frame();
     assert!(!shown(&window), "the first frame does not undo a hide");
     apply(&window, WindowCommand::Show);
@@ -532,10 +532,11 @@ fn a_state_read_inside_a_callback_never_sees_a_half_made_change() {
     let before = window.state().revision;
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
-    let reader = Arc::clone(&window);
-    window.on_resize(Box::new(move |_| {
-        log.lock().expect("log").push(reader.state().revision);
-    }));
+    on_changes(&window, move |window, previous, next| {
+        if previous.metrics != next.metrics {
+            log.lock().expect("log").push(window.state().revision);
+        }
+    });
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     let after = window.state().revision;
     let seen = seen.lock().expect("log").clone();
@@ -697,28 +698,47 @@ fn maximizing_a_hidden_window_shows_it_but_the_normal_mode_does_not() {
     assert!(shown(&window), "Win32 shows a window it maximizes");
 }
 
-fn a_hidden_windows_frame_request_reaches_the_global_redraw_event() {
+fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
     let platform = platform();
     let redraws = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&redraws);
-    platform.on_window_event(Box::new(move |event| {
-        if matches!(event, flui_platform::WindowEvent::RedrawRequested { .. }) {
-            counted.fetch_add(1, Ordering::SeqCst);
-        }
-    }));
     let window = open(&platform, deferred());
+    window.on_request_frame(Box::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+    }));
     window.request_redraw();
     assert!(pump_until(Duration::from_secs(2), || redraws
         .load(Ordering::SeqCst)
         > 0));
 }
 
+/// Run `changed` with the snapshot before and after each `on_state_changed`
+/// of `window` from here on, as a consumer compares them.
+fn on_changes(
+    window: &Arc<dyn HostWindow>,
+    mut changed: impl FnMut(&Arc<dyn HostWindow>, &WindowState, &WindowState) + Send + 'static,
+) {
+    let weak = Arc::downgrade(window);
+    let mut seen = window.state();
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let next = window.state();
+        let previous = std::mem::replace(&mut seen, next.clone());
+        changed(&window, &previous, &next);
+    }));
+}
+
+/// Whether `window`'s content can be seen, each time the snapshot changes it.
 fn record_visibility(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<bool>>> {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&events);
-    window.on_visibility_status_change(Box::new(move |visible| {
-        log.lock().expect("log").push(visible);
-    }));
+    on_changes(window, move |_, previous, next| {
+        if previous.is_seen() != next.is_seen() {
+            log.lock().expect("log").push(next.is_seen());
+        }
+    });
     events
 }
 
@@ -727,12 +747,17 @@ fn a_show_asked_for_while_a_hidden_window_is_restored_is_kept() {
     let window = open(&platform, options());
     apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
     apply(&window, WindowCommand::Hide);
-    let events = record_visibility(&window);
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&events);
     // The app answers the restore's resize by showing the window.
-    let inner = Arc::clone(&window);
-    window.on_resize(Box::new(move |_| {
-        let _ = inner.apply(WindowCommand::Show);
-    }));
+    on_changes(&window, move |window, previous, next| {
+        if previous.is_seen() != next.is_seen() {
+            log.lock().expect("log").push(next.is_seen());
+        }
+        if previous.metrics != next.metrics || previous.mode != next.mode {
+            let _ = window.apply(WindowCommand::Show);
+        }
+    });
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     assert!(
         shown(&window),
@@ -907,14 +932,19 @@ fn a_dpi_change_that_keeps_the_client_size_still_delivers_the_scale() {
     settle();
     let resizes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&resizes);
-    window.on_resize(Box::new(move |metrics| {
-        let scale = metrics.scale().get();
-        log.lock().expect("log").push(scale);
-    }));
+    on_changes(&window, move |_, previous, next| {
+        let scale = |state: &WindowState| state.metrics.map(|metrics| metrics.scale().get());
+        if scale(previous) != scale(next)
+            && let Some(scale) = scale(next)
+        {
+            log.lock().expect("log").push(scale);
+        }
+    });
     // The window keeps the rectangle it has, so no `WM_SIZE` follows.
     dpi_changed(&window, 144, rect(&window));
     assert_eq!(*resizes.lock().expect("log"), [1.5]);
-    assert!(near(window.scale_factor(), 1.5));
+    let scale = window.state().metrics.expect("drawable").scale().get();
+    assert!(near(scale, 1.5));
     dpi_changed(&window, 96, rect(&window));
     assert_eq!(
         *resizes.lock().expect("log"),
@@ -1110,19 +1140,16 @@ fn win32_readback(hwnd: HWND) -> Readback {
     }
 }
 
-/// What a window announced, in order: a snapshot's metrics with what Win32
-/// read back at that moment, or a resize's metrics.
+/// What one `on_state_changed` read: the snapshot's metrics with what Win32
+/// read back at that moment.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Heard {
-    State {
-        published: Option<WindowMetrics>,
-        reported: Option<WindowMetrics>,
-    },
-    Resize(WindowMetrics),
+struct Heard {
+    published: Option<WindowMetrics>,
+    reported: Option<WindowMetrics>,
 }
 
-/// Record `window`'s snapshots and resizes from here on.
-fn listen_for_resizes(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<Heard>>> {
+/// Record what each of `window`'s `on_state_changed` reads from here on.
+fn listen_for_snapshots(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<Heard>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&heard);
     let weak = Arc::downgrade(window);
@@ -1132,55 +1159,37 @@ fn listen_for_resizes(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<
             return;
         };
         let hwnd = HWND(address as *mut std::ffi::c_void);
-        log.lock().expect("log").push(Heard::State {
+        log.lock().expect("log").push(Heard {
             published: window.state().metrics,
             reported: win32_readback(hwnd).metrics,
         });
     }));
-    let log = Arc::clone(&heard);
-    window.on_resize(Box::new(move |metrics| {
-        log.lock().expect("log").push(Heard::Resize(metrics));
-    }));
     heard
 }
 
-/// Every resize in `heard` comes after a snapshot that holds its metrics, and,
-/// with `read_back`, every snapshot is what Win32 reported then. A DPI change
-/// sent as a message has no monitor of that DPI behind it to read back.
-fn each_resize_follows_its_snapshot(heard: &[Heard], read_back: bool) {
+/// `heard` saw the metrics move from `before`, and every snapshot is what
+/// Win32 reported then.
+fn the_snapshots_carry_each_resize(heard: &[Heard], before: WindowMetrics) {
     assert!(
-        heard.iter().any(|heard| matches!(heard, Heard::Resize(_))),
+        heard.iter().any(|heard| heard.published != Some(before)),
         "no resize was heard: {heard:?}"
     );
-    let mut last = None;
-    for event in heard {
-        match *event {
-            Heard::State {
-                published,
-                reported,
-            } => {
-                if read_back {
-                    assert_eq!(published, reported, "a snapshot is what Win32 reported");
-                }
-                last = published;
-            }
-            Heard::Resize(metrics) => assert_eq!(
-                last,
-                Some(metrics),
-                "the resize to {metrics:?} came before its snapshot: {heard:?}"
-            ),
-        }
+    for heard in heard {
+        assert_eq!(
+            heard.published, heard.reported,
+            "a snapshot is what Win32 reported"
+        );
     }
 }
 
 /// A DPI change holds publishing while the window takes its new rectangle:
-/// the resize its `WM_SIZE` raises waits behind the snapshot that ends the
-/// hold.
-fn a_dpi_change_announces_the_snapshot_before_the_resize() {
+/// what `on_state_changed` reads is the whole new window, never the new
+/// rectangle at the old scale.
+fn a_dpi_change_announces_one_whole_snapshot() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
-    let heard = listen_for_resizes(&window);
+    let heard = listen_for_snapshots(&window);
     let now = rect(&window);
     let larger = RECT {
         right: now.left + (now.right - now.left) * 3 / 2,
@@ -1188,7 +1197,13 @@ fn a_dpi_change_announces_the_snapshot_before_the_resize() {
         ..now
     };
     dpi_changed(&window, 144, larger);
-    each_resize_follows_its_snapshot(&heard.lock().expect("log"), false);
+    let seen = heard.lock().expect("log").clone();
+    assert!(!seen.is_empty(), "the DPI change published");
+    assert!(
+        seen.iter()
+            .all(|heard| heard.published.map(|metrics| metrics.scale().get()) == Some(1.5)),
+        "a snapshot was announced half made: {seen:?}"
+    );
     dpi_changed(&window, 96, now);
 }
 
@@ -1232,7 +1247,7 @@ impl WindowFixture for Win32Fixture {
     }
 
     fn close(&mut self) {
-        self.window.close();
+        let _ = self.window.apply(flui_platform::WindowCommand::Close);
         settle();
     }
 }
@@ -1250,7 +1265,7 @@ fn the_win32_window_conforms() {
 
 /// A live resize runs Win32's modal sizing loop: each `WM_SIZE` of it
 /// publishes the snapshot, whose metrics are the size and scale Win32 reports
-/// at that step, and announces it before the step's resize, all before the
+/// at that step, and announces it, all before the
 /// loop returns.
 fn a_live_resize_publishes_inside_its_modal_loop() {
     let platform = platform();
@@ -1259,7 +1274,7 @@ fn a_live_resize_publishes_inside_its_modal_loop() {
     let hwnd = hwnd_of(&window);
     let address = hwnd.0 as isize;
     let before = window.state().metrics.expect("a shown window is drawable");
-    let steps = listen_for_resizes(&window);
+    let steps = listen_for_snapshots(&window);
     let done = Arc::new(AtomicBool::new(false));
     let finished = Arc::clone(&done);
     let sizer = std::thread::spawn(move || {
@@ -1297,7 +1312,7 @@ fn a_live_resize_publishes_inside_its_modal_loop() {
     let inside = steps.lock().expect("log").clone();
     done.store(true, Ordering::SeqCst);
     sizer.join().expect("the sizing thread");
-    each_resize_follows_its_snapshot(&inside, true);
+    the_snapshots_carry_each_resize(&inside, before);
     let grown = window.state().metrics.expect("drawable");
     assert!(
         grown.physical().width > before.physical().width,
@@ -1313,7 +1328,7 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     send(&window, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
     assert_eq!(*events.lock().expect("log"), [false]);
     assert!(
-        !window.is_visible(),
+        !window.state().visible,
         "a runtime that first reads the window now must not see it visible"
     );
     send(
@@ -1323,7 +1338,7 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
         1,
     );
     assert_eq!(*events.lock().expect("log"), [false, true]);
-    assert!(window.is_visible());
+    assert!(window.state().visible);
 
     let cloak = |on: bool| {
         let value = BOOL::from(on);
@@ -1490,8 +1505,8 @@ fn native_window_commands() {
             maximizing_a_hidden_window_shows_it_but_the_normal_mode_does_not,
         ),
         (
-            "a_hidden_windows_frame_request_reaches_the_global_redraw_event",
-            a_hidden_windows_frame_request_reaches_the_global_redraw_event,
+            "a_hidden_windows_frame_request_reaches_its_frame_callback",
+            a_hidden_windows_frame_request_reaches_its_frame_callback,
         ),
         (
             "a_show_asked_for_while_a_hidden_window_is_restored_is_kept",
@@ -1559,8 +1574,8 @@ fn native_window_commands() {
             a_live_resize_publishes_inside_its_modal_loop,
         ),
         (
-            "a_dpi_change_announces_the_snapshot_before_the_resize",
-            a_dpi_change_announces_the_snapshot_before_the_resize,
+            "a_dpi_change_announces_one_whole_snapshot",
+            a_dpi_change_announces_one_whole_snapshot,
         ),
         (
             "activation_is_a_fact_apart_from_focus",

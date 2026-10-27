@@ -25,6 +25,17 @@ fn host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 }
 
 /// [`host`] presenting into `window`.
+/// The scale the window's snapshot reports.
+fn scale(window: &HeadlessWindow) -> f64 {
+    use flui_platform::PlatformWindow as _;
+    window
+        .state()
+        .metrics
+        .expect("a headless window has drawable metrics")
+        .scale()
+        .get()
+}
+
 fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
     let mut host = attached(window, log);
     let _ = host.pump(Duration::from_millis(16));
@@ -149,7 +160,6 @@ fn a_recording_replays_to_the_decisions_it_recorded() {
 /// a `Metrics` row at its position, and the replay applies it there.
 #[test]
 fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
-    use flui_platform::PlatformWindow as _;
     use flui_runtime::owner::WindowObservation;
 
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
@@ -185,7 +195,7 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
     assert_eq!(fresh.replay(&recording), recording.decisions());
     assert_eq!(*log.borrow(), ["tap", "long_press"]);
     assert!(
-        (fresh.window().scale_factor() - 1.5).abs() < f64::EPSILON,
+        (scale(fresh.window()) - 1.5).abs() < f64::EPSILON,
         "the replay moved the window to the recorded scale"
     );
 }
@@ -232,8 +242,6 @@ fn a_move_through_the_window_state_records_the_move() {
 /// that scale before the first row, as the header says it started.
 #[test]
 fn a_replay_starts_at_the_recorded_scale() {
-    use flui_platform::PlatformWindow as _;
-
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut recorder = host(&log);
     recorder.set_scale_factor(recorder.primary_window(), 2.0);
@@ -247,10 +255,10 @@ fn a_replay_starts_at_the_recorded_scale() {
     assert!((recording.header().windows[0].scale_factor - 2.0).abs() < f64::EPSILON);
 
     let mut fresh = host(&Rc::new(RefCell::new(Vec::new())));
-    assert!((fresh.window().scale_factor() - 1.0).abs() < f64::EPSILON);
+    assert!((scale(fresh.window()) - 1.0).abs() < f64::EPSILON);
     assert_eq!(fresh.replay(&recording), recording.decisions());
     assert!(
-        (fresh.window().scale_factor() - 2.0).abs() < f64::EPSILON,
+        (scale(fresh.window()) - 2.0).abs() < f64::EPSILON,
         "the replay started the window at the recorded scale"
     );
 }

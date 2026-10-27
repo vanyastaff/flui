@@ -83,7 +83,14 @@ impl PresentationFactory {
             return Err(window);
         };
         let (_, presentation_id) = crate::runtime_services::next_identity();
-        let device_pixel_ratio = window.window().scale_factor();
+        // A window that has reported no drawable area yet starts at the
+        // pipeline's own ratio; its first metrics observation sets the real
+        // one before anything is drawn.
+        let device_pixel_ratio = window
+            .window()
+            .state()
+            .metrics
+            .map_or(1.0, |metrics| metrics.scale().get());
         let Ok(completion_scope) = self.completion_factory.create() else {
             return Err(window);
         };

@@ -84,9 +84,8 @@ fn a_windows_input_is_gone_once_it_is_destroyed() {
     let kept =
         std::rc::Rc::downgrade(&testing::window_input(this.hwnd()).expect("the window's input"));
 
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     assert_eq!(inputs.hovered(this), None);
-    assert_eq!(inputs.modifiers(this), None);
     assert!(kept.upgrade().is_none(), "the window's input is dropped");
 }
 
@@ -102,7 +101,6 @@ fn a_window_the_input_never_saw_has_no_input() {
     let stranger = InputWindows::new();
 
     assert_eq!(stranger.hovered(this), None);
-    assert_eq!(stranger.modifiers(this), None);
     assert_eq!(stranger.pen_in_range(this, None), None);
     // SAFETY: the arguments a window of this thread receives for the message.
     let answered = unsafe { stranger.message(this.hwnd(), WM_MOUSEMOVE, WPARAM(0), CLIENT_POINT) };

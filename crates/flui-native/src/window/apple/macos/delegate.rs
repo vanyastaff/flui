@@ -513,17 +513,8 @@ impl MacOSWindow {
                 content_rect.size.height as f64,
             );
 
-            // Update state
-            let scale = {
-                let mut state = self.state.lock();
-                state.bounds.size = new_size;
-                state.scale_factor
-            };
-
-            // Notify per-window callbacks
+            self.state.lock().bounds.size = new_size;
             self.publish_state();
-            self.callbacks
-                .dispatch_logical_resize(new_size, scale as f64);
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
         }
@@ -552,7 +543,6 @@ impl MacOSWindow {
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
         self.publish_state();
-        self.callbacks.dispatch_active_status_change(true);
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
         self.facets.accessibility.focus_changed(true);
@@ -562,20 +552,19 @@ impl MacOSWindow {
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.publish_state();
-        self.callbacks.dispatch_active_status_change(false);
         self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
     }
 
     /// Handle occlusion state change (hidden-surface gating).
     ///
-    /// Reads the window's current `occlusionState` and forwards the visible
-    /// bit through `dispatch_visibility_status_change` — the wire the
-    /// runtime's per-presentation `FrameClock` gate and `AppLifecycleState`
-    /// derivation hang off. The decidable half is host-tested: the bit test
-    /// and its polarity in `crate::window::apple::geometry::surface`, the edge
-    /// filter in `crate::window::visibility`; only the `occlusionState` read
-    /// is AppKit-bound.
+    /// Reads the window's current `occlusionState` into the snapshot's
+    /// visibility — what the runtime's per-presentation `FrameClock` gate and
+    /// `AppLifecycleState` derivation read. The bit test and its polarity are
+    /// host-tested in `crate::window::apple::geometry::surface`; only the
+    /// `occlusionState` read is AppKit-bound. AppKit may post the notification
+    /// for reasons other than the visible bit flipping: an unchanged snapshot
+    /// publishes nothing.
     fn handle_occlusion_state_changed(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`;
         // `occlusionState` returns a plain NSUInteger bitmask.
@@ -584,13 +573,9 @@ impl MacOSWindow {
             state as u64
         };
         let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
-        let edge = self.state.lock().occlusion_visible.report(visible);
-        // Dispatch outside the state lock, like every other handler here.
-        if let Some(visible) = edge {
-            tracing::debug!(?visible, "Window occlusion state changed");
-            self.publish_state();
-            self.callbacks.dispatch_visibility_status_change(visible);
-        }
+        self.state.lock().occlusion_visible = visible;
+        // Published outside the state lock, like every other handler here.
+        self.publish_state();
     }
 
     /// Handle close request event
@@ -672,42 +657,31 @@ impl MacOSWindow {
             let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
 
             // Update window state
-            let (changed, size) = {
+            let changed = {
                 let mut state = self.state.lock();
                 let changed = (state.scale_factor - new_scale).abs() > 0.01;
                 if changed {
                     state.scale_factor = new_scale;
                     tracing::info!("Window scale factor changed to {}", new_scale);
                 }
-                (changed, state.bounds.size)
+                changed
             };
 
             // Re-read the display in the same pass: this handler is reached on
             // both a backing-properties change and a screen change
             // (`handle_screen_changed` delegates here), and the display belongs
-            // to the window exactly as the scale does. A change of display or
-            // of its scale is a hint to re-read the snapshot; it dispatches no
-            // resize, because a refresh period does not invalidate layout.
+            // to the window exactly as the scale does.
             let moved = self.refresh_display();
-            self.publish_state();
-
             if moved || changed {
-                // The snapshot carries each display's scale, and a window that
-                // moved may sit on a display the last sample did not hold.
-                // Invalidated before any callback so a resize handler that
-                // reads the snapshot sees the new scale.
+                // The display snapshot carries each display's scale, and a
+                // window that moved may sit on a display the last sample did
+                // not hold. Invalidated before the window's snapshot is
+                // published, so a consumer it wakes reads the displays again.
                 if let Some(displays) = self.displays.get() {
                     displays.invalidate();
                 }
             }
-
-            // A scale change invalidates layout: notify as a resize
-            if changed {
-                self.callbacks.dispatch_logical_resize(size, new_scale);
-            }
-            if moved || changed {
-                self.callbacks.dispatch_display_changed();
-            }
+            self.publish_state();
         }
     }
 
@@ -726,7 +700,7 @@ impl MacOSWindow {
             } else if self.refresh_display() {
                 // Off every screen: the window names no display until it is
                 // on one again, and its scale is left as it was.
-                self.callbacks.dispatch_display_changed();
+                self.publish_state();
             }
         }
     }

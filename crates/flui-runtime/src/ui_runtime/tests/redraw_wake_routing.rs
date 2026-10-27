@@ -250,6 +250,7 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
     let window: Arc<dyn PlatformWindow> = Arc::new(
         crate::testing::TestWindow::new()
             .focused(false)
+            .with_scale_factor(2.0)
             .with_sizes(Size::new(600, 400), Size::new(300.0, 200.0)),
     );
     // A presentation holds its window weakly; the host keeps it alive.

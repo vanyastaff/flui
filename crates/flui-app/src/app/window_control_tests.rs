@@ -14,7 +14,7 @@ use flui_native::{HeadlessPlatform, Platform as _};
 use flui_platform::WindowId;
 use flui_platform::{CursorError, CursorIcon};
 use flui_platform::{Unsupported, UnsupportedReason};
-use flui_platform::{WindowMode, WindowOptions};
+use flui_platform::{WindowCapabilities, WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -225,22 +225,7 @@ impl PlatformWindow for RecordingWindow {
     fn id(&self) -> WindowId {
         WindowId(900)
     }
-    fn physical_size(&self) -> Size<i32> {
-        Size::new(10, 10)
-    }
-    fn logical_size(&self) -> Size<f64> {
-        Size::new(10.0, 10.0)
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {}
-    fn is_focused(&self) -> bool {
-        true
-    }
-    fn is_visible(&self) -> bool {
-        true
-    }
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Ok(())
     }
@@ -249,9 +234,9 @@ impl PlatformWindow for RecordingWindow {
             flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
             Size::new(10.0, 10.0),
         )
-    }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
+        .with_visible(true)
+        .with_focused(true)
+        .with_capabilities(WindowCapabilities::ALL)
     }
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
@@ -276,12 +261,6 @@ impl PlatformWindow for RecordingWindow {
     }
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 }
 
@@ -565,13 +544,16 @@ fn commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply() {
     rig.queues.apply_pending();
     assert_eq!(
         applied(&closing),
-        [WindowCommand::SetTitle("before".into())],
-        "nothing is applied to a window that was just closed"
+        [
+            WindowCommand::SetTitle("before".into()),
+            WindowCommand::Close
+        ],
+        "nothing is applied to a window after its close"
     );
     rig.queues.apply_pending();
     assert_eq!(
         applied(&closing).len(),
-        1,
+        2,
         "nor given back for a later turn"
     );
 

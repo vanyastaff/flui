@@ -63,7 +63,7 @@ fn closing_the_only_window_without_a_hook_never_calls_quit() {
     let window = platform
         .open_window(WindowOptions::default())
         .expect("headless platform should create a window");
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 
     assert_eq!(
         quit_calls.load(Ordering::SeqCst),
@@ -87,7 +87,7 @@ fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
     let window = platform
         .open_window(WindowOptions::default())
         .expect("headless platform should create a window");
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 
     assert_eq!(
         quit_calls.load(Ordering::SeqCst),

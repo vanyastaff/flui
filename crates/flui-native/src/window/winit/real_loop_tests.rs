@@ -33,8 +33,8 @@ use crate::owner::winit::testing::{
     build_test_event_loop, install_control_lane, install_test_owner_signal, wait_for_map_len,
     wait_for_running,
 };
-use crate::{WinitPlatform, host_window::HostWindow, platform::Platform};
-use flui_platform::{WindowEvent, WindowId, WindowOptions};
+use crate::{WinitPlatform, host_window::HostWindow};
+use flui_platform::{WindowCommand, WindowOptions};
 
 fn options(title: impl Into<String>) -> WindowOptions {
     WindowOptions::default()
@@ -169,34 +169,6 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
     worker.join().expect("worker thread does not panic");
 }
 
-/// Which of the two close-related global `WindowEvent`s a test saw.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GlobalCloseEvent {
-    CloseRequested,
-    Closed,
-}
-
-/// Installs a global window-event handler that records the close-related
-/// events in order (other events are ignored) — the only way to pin
-/// which route emits which event, since no production code installs
-/// one.
-fn record_global_close_events(
-    platform: &WinitPlatform,
-) -> Arc<Mutex<Vec<(GlobalCloseEvent, WindowId)>>> {
-    let events: Arc<Mutex<Vec<(GlobalCloseEvent, WindowId)>>> = Arc::new(Mutex::new(Vec::new()));
-    let events_for_handler = Arc::clone(&events);
-    platform.on_window_event(Box::new(move |event| match event {
-        WindowEvent::CloseRequested { window_id } => events_for_handler
-            .lock()
-            .push((GlobalCloseEvent::CloseRequested, window_id)),
-        WindowEvent::Closed(window_id) => events_for_handler
-            .lock()
-            .push((GlobalCloseEvent::Closed, window_id)),
-        _ => {}
-    }));
-    events
-}
-
 /// Programmatic close runs the owner's full close teardown and exits
 /// the loop on its own (issue #919). Before the fix
 /// `WinitWindow::close` hid the window and fired its callback but never
@@ -217,8 +189,8 @@ fn record_global_close_events(
 /// 3. the registered callbacks are cleared inside the teardown, while
 ///    the window and loop are alive (the #713 ordering the compositor
 ///    path already pins);
-/// 4. the global handler sees `Closed` and NOT `CloseRequested` — a
-///    programmatic close was never a request;
+/// 4. the window's `on_should_close` is never asked — a programmatic
+///    close was never a request;
 /// 5. the loop exits by the teardown's own exit-policy consult — the
 ///    worker waits for `exiting` BEFORE arming its fallback quit, so a
 ///    map removal without the exit is a timeout here, not a pass.
@@ -365,7 +337,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
     let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
-    let global_close_events = record_global_close_events(&host);
+    let close_asked = Arc::new(AtomicUsize::new(0));
+    let close_asked_for_worker = Arc::clone(&close_asked);
 
     let platform_for_worker = Arc::clone(&platform);
     let control_for_worker = control;
@@ -400,6 +373,10 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             window.on_close(Box::new(move || {
                 *close_thread_for_callback.lock() = Some(thread::current().id());
             }));
+            window.on_should_close(Box::new(move || {
+                close_asked_for_worker.fetch_add(1, Ordering::SeqCst);
+                true
+            }));
             let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
 
             // Every owner wake from here on holds a pointer move first; one
@@ -415,11 +392,13 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
-            window.close();
+            window
+                .apply(WindowCommand::Close)
+                .expect("a winit window closes");
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
             assert!(
-                !window.is_visible(),
+                !window.state().visible,
                 "the teardown reports the closed window as not visible"
             );
 
@@ -493,15 +472,11 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             && state.active_window.is_none()),
         "the programmatic close must leave no trace in the tracking maps"
     );
-    let closed_id = kept_window.lock().as_ref().map(|window| window.id());
     assert_eq!(
-        *global_close_events.lock(),
-        vec![(
-            GlobalCloseEvent::Closed,
-            closed_id.expect("window was opened")
-        )],
-        "a programmatic close reports Closed only — it was never a request, so no \
-         CloseRequested"
+        close_asked.load(Ordering::SeqCst),
+        0,
+        "a programmatic close was never a request, so the window is not asked \
+         whether it should close"
     );
     let kept = kept_window.lock().take();
     drop(kept);
@@ -610,7 +585,7 @@ mod wayland_window {
                     ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
                     _ => panic!("the window request is delivered"),
                 };
-                let capabilities = window.capabilities();
+                let capabilities = window.state().capabilities;
                 assert!(
                     !capabilities.sets_position.is_available()
                         && !capabilities.places_at_open.is_available()
@@ -629,7 +604,10 @@ mod wayland_window {
                         && capabilities.sets_size.is_available()
                         && capabilities.maximizes.is_available()
                 );
-                assert_eq!(host_for_worker.window_capabilities(), capabilities);
+                assert_eq!(
+                    crate::platform::Platform::window_capabilities(&*host_for_worker),
+                    capabilities
+                );
                 assert_ne!(capabilities, WindowCapabilities::ALL);
 
                 let state = window.state();

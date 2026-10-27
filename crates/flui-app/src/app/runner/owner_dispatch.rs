@@ -113,61 +113,33 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 /// lifecycle and surface restoration. The payload is
 /// `Send` (ADR-0037 §3); execution still goes through exact-address admission
 /// on the owner thread, never through an arbitrary cross-thread callback.
+///
+/// The window facts among them are read from the window's snapshot: its one
+/// `on_state_changed` subscription compares each new snapshot with the one it
+/// saw before and delivers what differs ([`Self::of_state_change`]).
 // `pub(in crate::app)` because `RuntimeTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
 // reachable at that same visibility.
-// Every runner produces `AppearanceChanged`
-// (`WindowInstall::observe_appearance`). `WindowHover` has no mobile producer,
-// and Android drives focus, visibility and execution from its activity
-// callbacks instead of these variants, so mobile targets leave some unconstructed.
-#[cfg_attr(
-    all(
-        // Only android and iOS drop the window-event variants: the web runner
-        // constructs `WindowFocus`/`WindowHover` through the browser's
-        // visibility/focus signals, so on wasm32 they are live.
-        any(target_os = "android", target_os = "ios")
-    ),
-    expect(
-        dead_code,
-        reason = "mobile runners have no pointer-hover producer"
-    )
-)]
 pub(in crate::app) enum RuntimeEvent {
+    /// The drawable area or its scale changed.
     Resized(flui_foundation::geometry::WindowMetrics),
-    /// Window focus changed (winit's `WindowEvent::Focused`, or the
-    /// equivalent per-backend signal; same source as the deleted `Active`
-    /// variant this one replaces). Feeds the `(visible, focused)` ->
-    /// `AppLifecycleState` derivation below, alongside
+    /// Window focus changed. Feeds the `(visible, focused)` ->
+    /// `AppLifecycleState` derivation, alongside
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
     WindowExecution(flui_platform::WindowExecutionState),
-    /// Addressed logical content-view safe area.
-    ///
-    /// Android and iOS runners produce this report; this module's own tests construct
-    /// it directly to pin the addressed-write contract (a report for a
-    /// presentation closed before delivery is dropped, not a panic).
-    #[cfg_attr(
-        not(any(target_os = "ios", target_os = "android")),
-        expect(
-            dead_code,
-            reason = "safe-area reports are produced by the Android and UIKit runners"
-        )
-    )]
+    /// Addressed logical content-view safe area. A report for a presentation
+    /// closed before delivery is dropped, not a panic.
     SafeAreaChanged(flui_foundation::geometry::EdgeInsets),
-    /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
-    /// negated — see `PlatformWindow::on_visibility_status_change`).
+    /// Whether the window's content can be seen changed
+    /// ([`WindowState::is_seen`](flui_platform::WindowState::is_seen)).
     ///
     /// Combined with [`WindowFocus`](Self::WindowFocus) via
     /// the addressed presentation's lifecycle reconciliation. The UI runtime
     /// scheduler derives its aggregate from all live presentations.
-    // Not yet constructed on wasm32: `run_web` only wires `WindowFocus` —
-    // no occlusion signal for the web backend yet (see run_web's comment at
-    // its `on_active_status_change` registration).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
-    /// The window's system light/dark appearance changed
-    /// (`PlatformWindow::on_appearance_changed`). Republishes
+    /// The window's system light/dark appearance changed. Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
     AppearanceChanged(flui_platform::Brightness),
     /// The host derived a new display for this window from the platform's
@@ -175,22 +147,16 @@ pub(in crate::app) enum RuntimeEvent {
     /// refresh period, possibly "unknown". Delivered after every sample and
     /// acted on only when it differs from what the presentation holds.
     DisplayChanged(flui_runtime::owner::DisplayUpdate),
-    /// The window's published state may have changed
-    /// (`PlatformWindow::on_state_changed`); the owner reads it when it
-    /// delivers this.
+    /// The window's published state changed; the owner reads it when it
+    /// delivers this, for the window's `WindowHandle` subscribers and the
+    /// content's placement.
     WindowStateChanged,
-    /// The pointer entered (`true`) or left (`false`) the window (winit's
-    /// `CursorEntered`/`CursorLeft`, via
-    /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
-    /// presentation's hover state — `MouseRegion::on_exit` fires and the
-    /// cursor resets; without this a widget hovered at the moment the cursor
-    /// crosses the window edge keeps its hover visuals forever. Enter is a
-    /// no-op today: the next `CursorMoved` re-primes hover from a fresh hit
+    /// The pointer entered (`true`) or left (`false`) the window. Leave sweeps
+    /// the addressed presentation's hover state — `MouseRegion::on_exit` fires
+    /// and the cursor resets; without this a widget hovered at the moment the
+    /// cursor crosses the window edge keeps its hover visuals forever. Enter is
+    /// a no-op today: the next `CursorMoved` re-primes hover from a fresh hit
     /// test on its own.
-    // Constructed by both the desktop and web bootstraps' registrations, so
-    // every backend whose `PlatformWindow` dispatches
-    // `on_hover_status_change` routes here; a backend that never fires the
-    // callback simply never constructs the event.
     WindowHover(bool),
     /// A recreated native surface has no previous scene to display. Surface
     /// recovery still belongs to the primary presentation, not every sibling.
@@ -220,6 +186,45 @@ pub(in crate::app) enum RuntimeTask {
 }
 
 impl RuntimeEvent {
+    /// What a window's new snapshot `next` says that `previous` did not, as
+    /// the events its presentation applies, in that order: the state
+    /// notification first, then each fact that differs — the metrics, the
+    /// safe area, the appearance, then the execution state, focus and whether
+    /// the content can be seen (each its own lifecycle step, as a host
+    /// reports them), and the hover. A snapshot without drawable metrics keeps
+    /// the ones before it, so it brings no resize.
+    pub(in crate::app) fn of_state_change(
+        previous: &flui_platform::WindowState,
+        next: &flui_platform::WindowState,
+    ) -> Vec<Self> {
+        let mut events = vec![Self::WindowStateChanged];
+        if next.metrics != previous.metrics
+            && let Some(metrics) = next.metrics
+        {
+            events.push(Self::Resized(metrics));
+        }
+        if next.safe_area != previous.safe_area {
+            events.push(Self::SafeAreaChanged(next.safe_area));
+        }
+        let brightness = flui_platform::Brightness::from(next.appearance);
+        if brightness != flui_platform::Brightness::from(previous.appearance) {
+            events.push(Self::AppearanceChanged(brightness));
+        }
+        if next.execution != previous.execution {
+            events.push(Self::WindowExecution(next.execution));
+        }
+        if next.focused != previous.focused {
+            events.push(Self::WindowFocus(next.focused));
+        }
+        if next.is_seen() != previous.is_seen() {
+            events.push(Self::WindowVisibility(next.is_seen()));
+        }
+        if next.hovered != previous.hovered {
+            events.push(Self::WindowHover(next.hovered));
+        }
+        events
+    }
+
     fn deliver(
         self,
         host: &super::InstalledHost,

@@ -201,7 +201,9 @@ impl MainController {
                 self.pending = None;
                 if !completion.claim() {
                     if let Ok(window) = result {
-                        contain(|| window.close());
+                        contain(|| {
+                            let _ = window.apply(flui_platform::WindowCommand::Close);
+                        });
                     }
                     self.fail(completion.failure().unwrap_or(AppWindowError::Cancelled));
                     return;
@@ -219,13 +221,21 @@ impl MainController {
             return;
         }
         if let Some(open) = &self.open {
-            let result =
-                open.window
-                    .show()
-                    .map(|()| open.address)
-                    .map_err(|error| AppWindowError::Show {
-                        source: Arc::new(error),
-                    });
+            // Shown, then asked for focus: a window system that cannot give
+            // focus (Wayland) still shows the window.
+            let result = open
+                .window
+                .apply(flui_platform::WindowCommand::Show)
+                .and_then(
+                    |()| match open.window.apply(flui_platform::WindowCommand::Activate) {
+                        Err(flui_platform::WindowCommandError::Unsupported(_)) | Ok(()) => Ok(()),
+                        Err(error) => Err(error),
+                    },
+                )
+                .map(|()| open.address)
+                .map_err(|error| AppWindowError::Show {
+                    source: Arc::new(error),
+                });
             let still_registered = APP_RUNTIME.with(|slot| {
                 slot.borrow()
                     .installed_host
@@ -255,10 +265,14 @@ impl MainController {
         let opened = with_owner_platform(|owner| owner.open_window(options));
         if !self.is_current() {
             match opened {
-                Some(Ok(WindowOpen::Ready(window))) => contain(|| window.close()),
+                Some(Ok(WindowOpen::Ready(window))) => contain(|| {
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                }),
                 Some(Ok(WindowOpen::Pending(mut pending))) => {
                     if let Some(Ok(window)) = pending.try_take() {
-                        contain(|| window.close());
+                        contain(|| {
+                            let _ = window.apply(flui_platform::WindowCommand::Close);
+                        });
                     }
                     contain(|| drop(pending));
                 }
@@ -292,7 +306,9 @@ impl MainController {
     }
     fn install(&mut self, window: Arc<dyn HostWindow>) {
         if !self.is_current() {
-            contain(|| window.close());
+            contain(|| {
+                let _ = window.apply(flui_platform::WindowCommand::Close);
+            });
             self.cancel();
             return;
         }
@@ -324,7 +340,9 @@ impl MainController {
                 self.finish_install();
             }
             Ok(open) => {
-                contain(|| window.close());
+                contain(|| {
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                });
                 contain(|| drop(open));
                 if self.is_current() {
                     self.fail(AppWindowError::Cancelled);
@@ -333,7 +351,9 @@ impl MainController {
                 }
             }
             Err(error) => {
-                contain(|| window.close());
+                contain(|| {
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                });
                 if self.is_current() {
                     self.fail(error);
                 } else {
@@ -369,7 +389,9 @@ impl MainController {
                 self.ingress.settle(Ok(address));
             }
             outcome => {
-                contain(|| open.window.close());
+                contain(|| {
+                    let _ = open.window.apply(flui_platform::WindowCommand::Close);
+                });
                 contain(|| drop(open));
                 if self.is_current() {
                     self.fail(match outcome {
@@ -385,12 +407,16 @@ impl MainController {
     fn cancel_pending(&mut self) {
         if let Some(installing) = self.installing.take() {
             installing.installation.cancel();
-            contain(|| installing.window.close());
+            contain(|| {
+                let _ = installing.window.apply(flui_platform::WindowCommand::Close);
+            });
             contain(|| drop(installing));
         }
         if let Some(mut pending) = self.pending.take() {
             if let Some(Ok(window)) = pending.try_take() {
-                contain(|| window.close());
+                contain(|| {
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                });
             }
             contain(|| drop(pending));
         }
@@ -884,7 +910,7 @@ mod tests {
                                 "completion tail cannot publish during the current owner turn"
                             );
                             if close_before_publication {
-                                window.close();
+                                let _ = window.apply(flui_platform::WindowCommand::Close);
                             }
                             Ok(RenderedMain {
                                 window,

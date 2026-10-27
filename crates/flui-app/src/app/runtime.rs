@@ -984,7 +984,7 @@ impl AppRuntime {
             let Some(window) = window else {
                 return false;
             };
-            if window.execution_state() != WindowExecutionState::Running {
+            if window.state().execution != WindowExecutionState::Running {
                 return false;
             }
             window.request_redraw();

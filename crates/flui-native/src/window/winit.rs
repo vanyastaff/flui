@@ -29,7 +29,6 @@ use winit::{
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
 use crate::owner::handlers::Publication;
 use crate::owner::winit::HostDisplays;
@@ -41,11 +40,10 @@ use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
 use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
-use crate::window::visibility::ReportedVisibility;
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
+    WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
@@ -88,8 +86,8 @@ pub struct WinitWindow {
     /// The platform's native display source, by which this window names its
     /// display.
     displays: Arc<dyn HostDisplays>,
-    /// The display last reported through `on_display_changed`, so a hint fires
-    /// when the window really moved.
+    /// The display the window was last read on, so the window is read again
+    /// only when it really moved.
     reported_display: parking_lot::Mutex<Option<DisplayId>>,
     /// The snapshot last published (ADR-0237). Shared with the platform so a
     /// wake from sleep marks it stale.
@@ -130,17 +128,8 @@ pub struct WinitWindow {
     /// minimization then goes unseen until some other event samples it.
     #[cfg(target_os = "linux")]
     minimize_unobserved: AtomicBool,
-    /// Whether the last published snapshot of this X11 window was minimized.
-    /// A window manager minimizes by unmapping, and X sends no visibility
-    /// event for a window that becomes unviewable, so winit raises no
-    /// `Occluded`: the window is hidden from the published mode instead.
-    #[cfg(target_os = "linux")]
-    wm_minimized: AtomicBool,
     /// Whether winit last reported the window fully covered (`Occluded`).
     occluded: AtomicBool,
-    /// What `on_visibility_status_change` last reported (at first, what the
-    /// window opened as): a report is raised only when it changes.
-    reported_visible: parking_lot::Mutex<ReportedVisibility>,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -237,13 +226,10 @@ impl WinitWindow {
             x11: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
             minimize_unobserved: AtomicBool::new(false),
-            #[cfg(target_os = "linux")]
-            wm_minimized: AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
-            reported_visible: parking_lot::Mutex::new(ReportedVisibility::new(options.visible)),
             callbacks: crate::owner::handlers::WindowCallbacks::new(),
             facets,
             #[cfg(target_os = "linux")]
@@ -331,23 +317,20 @@ impl WinitWindow {
         *self.is_visible.lock() = visible;
     }
 
+    /// Read the window again for its state publisher, announcing nothing:
+    /// `WindowCallbacks::announce` delivers `on_state_changed`. A minimize
+    /// the X11 window manager reports is the snapshot's mode, which
+    /// `WindowState::is_seen` reads.
+    fn read_state(&self) -> Publication {
+        self.window_state.invalidate();
+        self.window_state.state_with(|| self.sample()).outcome()
+    }
+
     /// The window as the operating system describes it now.
     ///
     /// Reads winit with no lock of the snapshot held, and keeps the rectangle
     /// a maximized or fullscreen window returns to: the outer geometry the
     /// window had the last time it was in normal mode.
-    /// Read the window again for its state publisher, announcing nothing: the
-    /// fact that asked is delivered behind the announcement.
-    fn read_state(&self) -> Publication {
-        self.window_state.invalidate();
-        let published = self.window_state.state_with(|| self.sample());
-        #[cfg(target_os = "linux")]
-        if published.changed {
-            self.follow_wm_minimized(&published.state);
-        }
-        published.outcome()
-    }
-
     fn sample(&self) -> WindowState {
         let title = self.title.lock().clone();
         // Read once: a second lock of the flag inside the literal below would
@@ -360,14 +343,14 @@ impl WinitWindow {
                 constraints: *self.constraints.lock(),
                 focused,
                 visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
-                display: PlatformWindow::display_id(self),
+                display: self.display(),
                 probed_mode: self.probed_mode(),
                 reported: reported_facts(
                     &self.window,
-                    PlatformWindow::appearance(self),
+                    self.appearance(),
                     focused,
                     self.callbacks.hovered(),
-                    PlatformWindow::capabilities(self),
+                    self.capabilities(),
                 ),
             },
         );
@@ -395,17 +378,54 @@ impl WinitWindow {
         state
     }
 
-    /// Follow a published snapshot of an X11 window into or out of the
-    /// minimized mode (see `wm_minimized`).
-    #[cfg(target_os = "linux")]
-    fn follow_wm_minimized(&self, state: &WindowState) {
-        if self.x11.get().is_none() {
-            return;
+    /// The display the window is on, as the platform's display snapshot names
+    /// it.
+    fn display(&self) -> Option<DisplayId> {
+        self.displays.id_of_window(&self.window)
+    }
+
+    /// The user's theme as applied to the window: winit's, else the portal's.
+    fn appearance(&self) -> WindowAppearance {
+        #[cfg(target_os = "linux")]
+        let portal_dark = self.portal_dark.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_os = "linux"))]
+        let portal_dark = false;
+        appearance_of(&self.window, portal_dark)
+    }
+
+    /// What the window honours now: an X11 window manager that never reported
+    /// a minimize leaves the minimized mode unobserved.
+    fn capabilities(&self) -> WindowCapabilities {
+        #[cfg(target_os = "linux")]
+        if self.minimize_unobserved.load(Ordering::Acquire) {
+            let mut capabilities = self.capabilities;
+            capabilities.observes_minimized = flui_platform::Availability::Unavailable;
+            return capabilities;
         }
-        let minimized = state.mode == WindowMode::Minimized;
-        if self.wm_minimized.swap(minimized, Ordering::AcqRel) != minimized {
-            self.report_visibility();
+        self.capabilities
+    }
+
+    /// Hide now, from whichever thread this is called on: the visible effect
+    /// of a close should not wait for the owner's next turn. The close itself
+    /// — `on_close`, map removal, callback clear, exit policy — is the
+    /// owner's (see `close_lane`): running `on_close` here would fire it on
+    /// the caller's thread, where an embedder's owner-affine close handling
+    /// (`flui-app` rejects ui_runtime dispatch off its owner thread) would
+    /// silently refuse it, and skipping the map removal is precisely issue
+    /// #919 — a hidden window that the exit policy still counts, so the
+    /// process never exits.
+    fn close_window(&self) {
+        {
+            // Closing is terminal for a deferred reveal: the flag is set and the
+            // window hidden holding the lock a reveal checks it under, so a
+            // reveal on another thread cannot map the window after this.
+            let mut pending = self.reveal_pending.lock();
+            self.mark_closed();
+            *pending = false;
+            self.window.set_visible(false);
+            *self.is_visible.lock() = false;
         }
+        self.close_lane.request_close_window(self.id);
     }
 
     /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
@@ -656,39 +676,8 @@ impl PlatformWindow for WinitWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        let size = self.window.inner_size();
-        Size::new(size.width as i32, size.height as i32)
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        let size = self.window.inner_size();
-        let scale = self.window.scale_factor();
-        Size::new(size.width as f64 / scale, size.height as f64 / scale)
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        #[cfg(target_os = "linux")]
-        let portal_dark = self.portal_dark.load(std::sync::atomic::Ordering::Relaxed);
-        #[cfg(not(target_os = "linux"))]
-        let portal_dark = false;
-        appearance_of(&self.window, portal_dark)
-    }
-
-    fn is_hovered(&self) -> bool {
-        self.callbacks.hovered()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.window.scale_factor()
-    }
-
     fn request_redraw(&self) {
         self.window.request_redraw();
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.displays.id_of_window(&self.window)
     }
 
     fn pre_present_notify(&self) {
@@ -697,38 +686,12 @@ impl PlatformWindow for WinitWindow {
         self.window.pre_present_notify();
     }
 
-    fn is_focused(&self) -> bool {
-        *self.is_focused.lock()
-    }
-
-    fn is_visible(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        if self.wm_minimized.load(Ordering::Acquire) {
-            return false;
-        }
-        *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire)
-    }
-
     fn state(&self) -> WindowState {
         let published = self.window_state.state_with(|| self.sample());
         if published.changed {
-            // The snapshot is announced before the visibility report it may
-            // bring, as every fact's own callback follows its snapshot.
             self.callbacks.dispatch_state_changed();
-            #[cfg(target_os = "linux")]
-            self.follow_wm_minimized(&published.state);
         }
         published.state
-    }
-
-    fn capabilities(&self) -> WindowCapabilities {
-        #[cfg(target_os = "linux")]
-        if self.minimize_unobserved.load(Ordering::Acquire) {
-            let mut capabilities = self.capabilities;
-            capabilities.observes_minimized = flui_platform::Availability::Unavailable;
-            return capabilities;
-        }
-        self.capabilities
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -771,18 +734,19 @@ impl PlatformWindow for WinitWindow {
             WindowCommand::SetResizable(resizable) => self.window.set_resizable(resizable),
             WindowCommand::SetDecorated(decorated) => self.window.set_decorations(decorated),
             WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
-            WindowCommand::Show => self.show().map_err(|error| match error {
-                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
-                flui_platform::WindowShowError::Native { message } => {
-                    WindowCommandError::Backend { message }
-                }
-                flui_platform::WindowShowError::Unsupported(unsupported) => unsupported.into(),
-                other => WindowCommandError::Backend {
-                    message: other.to_string(),
-                },
-            })?,
+            // `admit` refused this where winit cannot unminimize or focus
+            // (Wayland).
+            WindowCommand::Show => {
+                self.make_visible();
+                self.window.set_minimized(false);
+                self.window.focus_window();
+            }
             WindowCommand::Hide => self.make_hidden(),
             WindowCommand::Activate => self.window.focus_window(),
+            WindowCommand::Close => {
+                self.close_window();
+                return Ok(());
+            }
             // `admit` refuses a command this window does not know.
             _ => {
                 return Err(flui_platform::Unsupported::new(
@@ -791,29 +755,8 @@ impl PlatformWindow for WinitWindow {
                 .into());
             }
         }
-        // The snapshot first, so a visibility report never runs ahead of
-        // `state()`; both after the command's native work.
+        // After the command's native work.
         self.refresh_state();
-        self.report_visibility();
-        Ok(())
-    }
-
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(flui_platform::WindowShowError::Closed);
-        }
-        // Winit cannot unminimize or focus Wayland windows.
-        if !self.capabilities.shows.is_available() {
-            return Err(flui_platform::Unsupported::new(
-                flui_platform::UnsupportedReason::NotOnThisPlatform,
-            )
-            .into());
-        }
-        self.make_visible();
-        self.window.set_minimized(false);
-        self.window.focus_window();
-        self.refresh_state();
-        self.report_visibility();
         Ok(())
     }
 
@@ -826,29 +769,6 @@ impl PlatformWindow for WinitWindow {
             self.map_window();
         }
         self.refresh_state();
-    }
-
-    fn close(&self) {
-        // Hide now, from whichever thread this is called on: the visible
-        // effect of a close should not wait for the owner's next turn. The
-        // close itself — `on_close`, map removal, callback clear, exit
-        // policy — is the owner's (see `close_lane`): running `on_close`
-        // here would fire it on the caller's thread, where an embedder's
-        // owner-affine close handling (`flui-app` rejects ui_runtime dispatch
-        // off its owner thread) would silently refuse it, and skipping the
-        // map removal is precisely issue #919 — a hidden window that the
-        // exit policy still counts, so the process never exits.
-        {
-            // Closing is terminal for a deferred reveal: the flag is set and the
-            // window hidden holding the lock a reveal checks it under, so a
-            // reveal on another thread cannot map the window after this.
-            let mut pending = self.reveal_pending.lock();
-            self.mark_closed();
-            *pending = false;
-            self.window.set_visible(false);
-            *self.is_visible.lock() = false;
-        }
-        self.close_lane.request_close_window(self.id);
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -968,27 +888,11 @@ impl LoopWindow for WinitWindow {
         WinitWindow::set_visible(self, visible);
     }
 
-    /// Raise `on_visibility_status_change` when [`PlatformWindow::is_visible`]
-    /// answers differently from the last report. Showing and hiding, the
-    /// occlusion events and the minimized mode all change it, in any order, and
-    /// an `Occluded` can repeat what is already known or arrive late. The
-    /// answer is read under the report's lock, so two reporters cannot leave an
-    /// older one last, and the lock is released before the dispatch.
-    fn report_visibility(&self) {
-        let report = self
-            .reported_visible
-            .lock()
-            .report(PlatformWindow::is_visible(self));
-        if let Some(visible) = report {
-            self.callbacks.dispatch_visibility_status_change(visible);
-        }
-    }
-
-    /// Whether [`PlatformWindow::display_id`] answers differently from the last
-    /// time this was asked, remembering the answer. The window event handler
-    /// uses it to raise `on_display_changed` only on a real move.
+    /// Whether the window's display differs from the last time this was
+    /// asked, remembering the answer. The window event handler uses it to read
+    /// the window again only on a real move.
     fn take_display_change(&self) -> bool {
-        let current = PlatformWindow::display_id(self);
+        let current = self.display();
         let mut reported = self.reported_display.lock();
         let changed = *reported != current;
         *reported = current;
@@ -1005,7 +909,7 @@ impl LoopWindow for WinitWindow {
     }
 
     /// Record the portal's `color-scheme`; `true` when it changed what
-    /// [`PlatformWindow::appearance`] reports.
+    /// the snapshot's appearance reports.
     #[cfg(target_os = "linux")]
     fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
         let dark = flui_platform::Brightness::from(appearance).is_dark();
@@ -1309,13 +1213,6 @@ impl host::Window<WinitLoop> for WinitWindow {
 
     fn frame_inset(_: &WinitLoop, windows: &WinitWindows, scale_factor: f64) -> Size<f64> {
         windows.frame_inset.logical(scale_factor)
-    }
-
-    fn on_event(owner: &WinitLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &owner.handler(|state| &mut state.handlers.window_event),
-            callback,
-        );
     }
 }
 

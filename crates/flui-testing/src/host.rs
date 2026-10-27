@@ -220,27 +220,7 @@ impl PlatformWindow for HeadlessWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<i32> {
-        self.physical_size_i32()
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        *self.scale_factor.lock()
-    }
-
     fn request_redraw(&self) {}
-
-    fn is_focused(&self) -> bool {
-        true
-    }
-
-    fn is_visible(&self) -> bool {
-        true
-    }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.text_input
@@ -265,17 +245,6 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
     }
 
-    /// The host's window is always shown: there is no window manager to
-    /// raise it.
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
-    }
-
-    /// The display the window was [moved to](HeadlessHost::move_to_display).
-    fn display_id(&self) -> Option<DisplayId> {
-        *self.display.lock()
-    }
-
     fn set_input_regions(&self, regions: &[InputRegion]) {
         let scale = *self.scale_factor.lock();
         let display = *self.display.lock();
@@ -289,20 +258,26 @@ impl PlatformWindow for HeadlessWindow {
         }
     }
 
-    /// No position (as on Wayland), the display it was
+    /// Shown and focused, with no position (as on Wayland), its logical size
+    /// at its scale, the display it was
     /// [moved to](HeadlessHost::move_to_display), and a revision each move
-    /// advances.
+    /// advances. The host's window is always shown: there is no window
+    /// manager to raise it, and it honours no command.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
+        let size = self.size;
         let mut state =
             flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-                .with_display(*self.display.lock());
+                .with_focused(true)
+                .with_display(*self.display.lock())
+                .with_metrics(
+                    flui_foundation::geometry::WindowMetrics::from_logical(
+                        size,
+                        *self.scale_factor.lock(),
+                    )
+                    .ok(),
+                );
         state.revision = *self.revision.lock();
         state
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
     }
 
     fn apply(
@@ -1550,10 +1525,6 @@ struct HeadlessWindowControl(Arc<HeadlessWindow>);
 impl flui_platform::WindowControl for HeadlessWindowControl {
     fn state(&self) -> flui_platform::WindowState {
         self.0.state()
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
     }
 
     fn submit(

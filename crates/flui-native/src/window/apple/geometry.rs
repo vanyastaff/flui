@@ -758,9 +758,8 @@ pub(crate) mod mode {
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod surface {
-    //! When an `NSWindow`'s surface is seen, from its occlusion state: the
-    //! AppKit twin of the Win32 window's `surface` rules. The delegate reads
-    //! `occlusionState` and reports through `window::visibility`.
+    //! When an `NSWindow`'s surface is seen, from its occlusion state. The
+    //! delegate reads `occlusionState` into the window's snapshot.
 
     /// `NSWindowOcclusionStateVisible` (`NSWindow.h`: `1 << 1`) — the only bit
     /// AppKit defines in `NSWindowOcclusionState`.
@@ -768,8 +767,8 @@ pub(crate) mod surface {
 
     /// Whether an `NSWindowOcclusionState` raw value means the window's surface
     /// is seen. AppKit reports "visible" as a positive bit (set when at least
-    /// part of the window is on screen and composed), so the polarity of
-    /// `on_visibility_status_change` (`is_visible`) is the bit itself — no
+    /// part of the window is on screen and composed), so the snapshot's
+    /// visibility is the bit itself — no
     /// negation, unlike winit's `Occluded` event.
     #[must_use]
     pub(crate) const fn occlusion_state_is_visible(occlusion_state: u64) -> bool {

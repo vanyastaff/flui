@@ -21,20 +21,18 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
     PlatformWindow, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId, WindowMode,
+    WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
 use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::call_point::{Field, install};
+
 use crate::owner::handlers::{OpenWindows, Publication, WindowCallbacks};
 use crate::owner::headless::TextStoreHostFactory;
-use crate::owner::headless::{
-    HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy, emit_window_event,
-};
+use crate::owner::headless::{HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy};
 use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
 use crate::window::state::{ReportedFacts, WindowStateCell};
@@ -300,9 +298,6 @@ impl host::Window<HeadlessLoop> for MockWindow {
         let window = owner.with_state(|state| {
             TrackedWindows::open(Arc::clone(windows), state, platform_state, options)
         });
-        // Announced once the state lock is released: the handler may open
-        // another window, install a handler or quit.
-        emit_window_event(&owner.state, WindowEvent::Created(window.id()));
         Ok(window)
     }
 
@@ -318,13 +313,6 @@ impl host::Window<HeadlessLoop> for MockWindow {
         // A headless window draws no frame.
         Size::new(0.0, 0.0)
     }
-
-    fn on_event(owner: &HeadlessLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &Field::new(&*owner.state, |state| &mut state.handlers.window_event),
-            callback,
-        );
-    }
 }
 
 // ==================== Mock Implementations ====================
@@ -337,6 +325,23 @@ impl host::Window<HeadlessLoop> for MockWindow {
 pub struct UnknownDisplay {
     /// The display the move named.
     pub display: DisplayId,
+}
+
+/// What a headless window's simulated window system holds
+/// ([`MockWindow::window_system`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct HeadlessWindowSystem {
+    /// The drawable area and scale; `None` for a size or scale that is not a
+    /// drawable area.
+    pub metrics: Option<flui_foundation::geometry::WindowMetrics>,
+    /// Whether the window has input focus.
+    pub focused: bool,
+    /// Whether the window is the active window of the simulated desktop: its
+    /// focus, which the headless host has no notion apart from.
+    pub active: bool,
+    /// Whether the window is shown and open.
+    pub visible: bool,
 }
 
 /// The canonical test/headless window double.
@@ -464,8 +469,7 @@ struct MockWindowState {
     execution: flui_platform::WindowExecutionState,
     safe_area: flui_foundation::geometry::EdgeInsets,
     closed: bool,
-    hovered: bool,
-    modifiers: flui_platform::keyboard::Modifiers,
+
     appearance: WindowAppearance,
     cursor: CursorIcon,
     /// The display this window is on; `None` when the platform has no displays.
@@ -667,8 +671,7 @@ impl MockWindow {
             safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
             visible: options.visible,
             closed: false,
-            hovered: false,
-            modifiers: flui_platform::keyboard::Modifiers::NONE,
+
             appearance: WindowAppearance::default(),
             cursor: CursorIcon::default(),
             display,
@@ -737,8 +740,8 @@ impl MockWindow {
 
     /// The whole close teardown, in the order both production backends run it:
     /// hide, fire `on_close`, drop the window from tracking, clear its
-    /// callbacks, emit the global `Closed`, and consult the exit policy only
-    /// once nothing is tracked any more.
+    /// callbacks, and consult the exit policy only once nothing is tracked any
+    /// more.
     ///
     /// Mirrors `WinitAppHandler::complete_window_close`. Two of its steps have
     /// no analogue here and are deliberately absent rather than forgotten:
@@ -746,7 +749,7 @@ impl MockWindow {
     /// `forget_window` has nothing to forget because this backend's data
     /// transfer is the null source.
     ///
-    /// Reached from both routes — [`flui_platform::PlatformWindow::close`] and
+    /// Reached from both routes — [`WindowCommand::Close`] and
     /// [`Self::simulate_close`] — so the two cannot drift apart.
     fn complete_close(&self) {
         {
@@ -761,26 +764,26 @@ impl MockWindow {
         self.facets.text.detach();
         self.facets.accessibility.detach();
         self.notify_closed();
-        // After the global `Closed`, never before: a handler that inspects the
-        // window it was just told about must not find its callbacks already
-        // gone.
+        // After the exit-policy consult, never before: a hook that inspects
+        // the window it was just told about must not find its callbacks
+        // already gone.
         self.callbacks.clear();
     }
 
-    /// Removes this window from the platform's own tracking, announces
-    /// `Closed`, and, only once every window this platform knows about is
-    /// gone, consults the exit-policy hook (see
+    /// Removes this window from the platform's own tracking and, only once
+    /// every window this platform knows about is gone, consults the
+    /// exit-policy hook (see
     /// [`crate::owner::handlers::PlatformHandlers::exit_policy`]) exactly as
     /// the winit backend's `CloseRequested` handling does. A caller that never
     /// installed a hook sees no behavior change: this is a no-op unless
     /// [`crate::Platform::set_exit_policy_hook`] was called first, matching
     /// every other headless test/consumer that predates this mechanism.
     ///
-    /// Every application handler (the window-event handler, the hook, and
-    /// `on_quit`) runs through the call point with the state lock released
-    /// (ADR-0039): the hook's body (`flui-app`'s `AppRuntime::should_exit`)
-    /// drops removed UI runtime state, whose destructors may call back into
-    /// this platform (a dispose hook opening another window, say).
+    /// Every application handler (the hook and `on_quit`) runs through the
+    /// call point with the state lock released (ADR-0039): the hook's body
+    /// (`flui-app`'s `AppRuntime::should_exit`) drops removed UI runtime
+    /// state, whose destructors may call back into this platform (a dispose
+    /// hook opening another window, say).
     fn notify_closed(&self) {
         let Some(platform_state) = self.platform_state.upgrade() else {
             return;
@@ -788,17 +791,6 @@ impl MockWindow {
         if let Some(windows) = self.windows.upgrade() {
             windows.forget(self.id);
         }
-
-        // Emitted for EVERY close, not only the last one: `Closed` is the
-        // event a consumer tracks windows by, so skipping it while other
-        // windows remain would leave that consumer believing a closed window
-        // is still open — the multi-window case these events exist for.
-        emit_window_event(&platform_state, WindowEvent::Closed(self.id));
-
-        // Emptiness is read after the event, not carried down from the lock
-        // above: the handler that ran in between is exactly the code that
-        // opens windows (a close handler showing the next one), and the
-        // policy re-checks it again before quitting.
         consult_exit_policy(&platform_state);
     }
 
@@ -816,6 +808,25 @@ impl MockWindow {
     pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
         self.input_regions.lock().updates.clone()
     }
+    /// What the simulated window system holds for this window now, read from
+    /// its model and never through the snapshot: what a conformance fixture
+    /// compares the snapshot with, as a native fixture reads the operating
+    /// system.
+    #[must_use]
+    pub fn window_system(&self) -> HeadlessWindowSystem {
+        let state = self.state.lock();
+        HeadlessWindowSystem {
+            metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                state.size,
+                state.scale_factor,
+            )
+            .ok(),
+            focused: state.focused,
+            active: state.focused,
+            visible: state.visible && !state.closed,
+        }
+    }
+
     /// Every frame-rate hint the window was given, oldest first.
     #[must_use]
     pub fn frame_rate_hints(&self) -> Vec<flui_platform::FrameRateHint> {
@@ -828,23 +839,12 @@ impl MockWindow {
         self.callbacks.dispatch_input(event)
     }
 
-    /// Simulate a resize for testing.
-    /// Fires `on_state_changed` when the snapshot differs, then the
-    /// registered `on_resize` callback.
+    /// Simulate a resize for testing. Fires `on_state_changed` when the
+    /// snapshot differs; a size that is not a drawable area keeps the metrics
+    /// the snapshot already holds.
     pub fn simulate_resize(&self, width: f64, height: f64) {
-        let size = Size::new(width, height);
-        let scale = {
-            let mut state = self.state.lock();
-            state.size = size;
-            state.scale_factor
-        };
-        // A drawable size is published with its resize, in one event; one that
-        // is not reaches only the snapshot.
-        if flui_foundation::geometry::WindowMetrics::from_logical(size, scale).is_ok() {
-            self.callbacks.dispatch_logical_resize(size, scale);
-        } else {
-            self.publish_state();
-        }
+        self.state.lock().size = Size::new(width, height);
+        self.publish_state();
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
@@ -856,56 +856,41 @@ impl MockWindow {
         self.publish_state();
     }
 
-    /// Simulate a monitor DPI change for testing: the scale factor moves
-    /// with NO size change, and — matching the winit backend — the new
-    /// scale is delivered through the resize path with the current logical
-    /// size, because that path is the only one the UI runtime learns its
-    /// device-pixel ratio from.
+    /// Simulate a monitor DPI change for testing: the scale factor moves with
+    /// no logical size change, and the snapshot's metrics carry the new scale.
     pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
-        let size = {
-            let mut state = self.state.lock();
-            state.scale_factor = scale_factor;
-            state.size
-        };
-        self.callbacks.dispatch_logical_resize(size, scale_factor);
+        self.state.lock().scale_factor = scale_factor;
+        self.publish_state();
     }
 
-    /// Simulate focus change for testing.
-    /// Fires the registered `on_active_status_change` callback.
+    /// Simulate focus change for testing. Fires `on_state_changed` when the
+    /// snapshot differs.
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
-        self.callbacks.dispatch_active_status_change(focused);
+        self.publish_state();
     }
 
-    /// Simulate the pointer entering (`true`) or leaving the window's content.
-    /// Fires `on_state_changed` when the snapshot differs, then the registered
-    /// `on_hover_status_change` callback when the hover changed; a closed
-    /// window ignores the report.
+    /// Simulate the pointer entering (`true`) or leaving the window's content,
+    /// through the one hover report every host uses. Fires `on_state_changed`
+    /// when the snapshot differs; a closed window ignores the report.
     pub fn simulate_hover(&self, hovered: bool) {
-        {
-            let mut state = self.state.lock();
-            if state.closed || state.hovered == hovered {
-                return;
-            }
-            state.hovered = hovered;
+        if self.state.lock().closed {
+            return;
         }
-        self.callbacks.dispatch_hover_status_change(hovered);
+        self.callbacks.report_hover(hovered);
     }
 
-    /// Simulate an owner-thread safe-area report; the callback fires without
-    /// holding window state. Closed and detached windows ignore the report.
+    /// Simulate an owner-thread safe-area report. Closed and detached windows
+    /// ignore the report.
     pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
         {
             let mut state = self.state.lock();
-            if state.closed
-                || state.execution == flui_platform::WindowExecutionState::Detached
-                || state.safe_area == insets
-            {
+            if state.closed || state.execution == flui_platform::WindowExecutionState::Detached {
                 return;
             }
             state.safe_area = insets;
         }
-        self.callbacks.dispatch_safe_area_change(insets);
+        self.publish_state();
     }
 
     /// Simulate reversible native execution eligibility; terminal close stays terminal.
@@ -917,33 +902,33 @@ impl MockWindow {
             }
             state.execution = execution;
         }
-        self.callbacks.dispatch_execution_state_change(execution);
+        self.publish_state();
     }
 
-    /// Simulate a visibility/occlusion change for testing.
-    /// Fires the registered `on_visibility_status_change` callback.
+    /// Simulate a visibility/occlusion change for testing. Fires
+    /// `on_state_changed` when the snapshot differs.
     pub fn simulate_visibility(&self, visible: bool) {
         self.state.lock().visible = visible;
-        self.callbacks.dispatch_visibility_status_change(visible);
+        self.publish_state();
     }
 
-    /// Simulate the system light/dark appearance this window observes.
-    /// Fires `on_appearance_changed` only when the value changes, as the
-    /// native backends do; closed windows ignore the report.
+    /// Simulate the system light/dark appearance this window observes. Fires
+    /// `on_state_changed` when the snapshot differs; closed windows ignore the
+    /// report.
     pub fn simulate_appearance(&self, appearance: WindowAppearance) {
         {
             let mut state = self.state.lock();
-            if state.closed || state.appearance == appearance {
+            if state.closed {
                 return;
             }
             state.appearance = appearance;
         }
-        self.callbacks.dispatch_appearance_changed();
+        self.publish_state();
     }
 
     /// Move this window to display `id`, as the user dragging it onto another
-    /// monitor does. Fires `on_display_changed` only when the display really
-    /// changes; a closed window ignores the report.
+    /// monitor does. Fires `on_state_changed` when the snapshot differs; a
+    /// closed window ignores the report.
     ///
     /// # Errors
     /// [`UnknownDisplay`] when the platform holds no display with this id (or
@@ -958,13 +943,12 @@ impl MockWindow {
         }
         {
             let mut state = self.state.lock();
-            if state.closed || state.display == Some(id) {
+            if state.closed {
                 return Ok(());
             }
             state.display = Some(id);
         }
         self.publish_state();
-        self.callbacks.dispatch_display_changed();
         Ok(())
     }
 
@@ -987,17 +971,6 @@ impl MockWindow {
     pub fn simulate_close(&self) -> bool {
         let should = self.callbacks.dispatch_should_close();
         if should {
-            // The user asked and nothing vetoed. This global event belongs to
-            // the user route: on winit only a compositor `CloseRequested`
-            // produces it, and on Win32 only the `WM_CLOSE` arm does. A veto
-            // must produce neither event, which is why this sits inside the
-            // `should` branch and not above it.
-            if let Some(platform_state) = self.platform_state.upgrade() {
-                emit_window_event(
-                    &platform_state,
-                    WindowEvent::CloseRequested { window_id: self.id },
-                );
-            }
             self.complete_close();
         }
         should
@@ -1007,22 +980,6 @@ impl MockWindow {
 impl PlatformWindow for MockWindow {
     fn id(&self) -> WindowId {
         self.id
-    }
-
-    fn physical_size(&self) -> Size<i32> {
-        let state = self.state.lock();
-        flui_foundation::geometry::DevicePixelRatio::new(state.scale_factor)
-            .map_or(Size::new(0, 0), |ratio| {
-                flui_foundation::geometry::device_size(state.size, ratio)
-            })
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.state.lock().size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
     }
 
     fn request_redraw(&self) {
@@ -1042,35 +999,10 @@ impl PlatformWindow for MockWindow {
         self.state.lock().pre_present_notifies += 1;
     }
 
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
-        self.state.lock().safe_area
-    }
-
-    fn execution_state(&self) -> flui_platform::WindowExecutionState {
-        let state = self.state.lock();
-        if state.closed {
-            flui_platform::WindowExecutionState::Detached
-        } else {
-            state.execution
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        self.state.lock().visible
-    }
-
     // ==================== State and commands (ADR-0237) ====================
 
     fn state(&self) -> WindowState {
         self.publish_state()
-    }
-
-    fn capabilities(&self) -> WindowCapabilities {
-        self.capabilities
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -1078,15 +1010,20 @@ impl PlatformWindow for MockWindow {
             return Err(WindowCommandError::Closed);
         }
         command.admit(&self.capabilities)?;
+        if command == WindowCommand::Close {
+            // Synchronous, as a same-thread Win32 `DestroyWindow` is: the
+            // teardown and `on_close` run before this returns.
+            self.complete_close();
+            return Ok(());
+        }
         let display_bounds = match command {
             WindowCommand::SetMode(WindowMode::Maximized | WindowMode::Fullscreen) => {
                 self.display_bounds()
             }
             _ => None,
         };
-        let resized = {
+        {
             let mut state = self.state.lock();
-            let before = state.size;
             match command {
                 WindowCommand::SetTitle(title) => state.title = title,
                 WindowCommand::SetPosition(at) => {
@@ -1124,40 +1061,12 @@ impl PlatformWindow for MockWindow {
                 WindowCommand::Hide => state.visible = false,
                 WindowCommand::Activate => state.focused = true,
                 // A command this host does not know is refused by `admit`
-                // through its capability, so none reaches here.
+                // through its capability, and `Close` returned above.
                 _ => {}
             }
-            (state.size != before).then_some((state.size, state.scale_factor))
-        };
-        self.publish_state();
-        if let Some((size, scale)) = resized {
-            self.callbacks.dispatch_logical_resize(size, scale);
         }
+        self.publish_state();
         Ok(())
-    }
-
-    fn is_active(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn is_hovered(&self) -> bool {
-        self.state.lock().hovered
-    }
-
-    fn mouse_position(&self) -> Point<f64> {
-        Point::default()
-    }
-
-    fn modifiers(&self) -> flui_platform::keyboard::Modifiers {
-        self.state.lock().modifiers
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        self.state.lock().appearance
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.state.lock().display
     }
 
     fn set_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) {
@@ -1236,31 +1145,6 @@ impl PlatformWindow for MockWindow {
     }
 
     // ==================== Control Methods ====================
-
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        {
-            let mut state = self.state.lock();
-            if state.closed {
-                return Err(flui_platform::WindowShowError::Closed);
-            }
-            if state.mode == WindowMode::Minimized {
-                state.enter_mode(WindowMode::Normal, &self.limits, None);
-            }
-            state.visible = true;
-            state.focused = true;
-        }
-        self.publish_state();
-        Ok(())
-    }
-
-    fn activate(&self) {
-        self.state.lock().focused = true;
-        self.publish_state();
-    }
-
-    fn close(&self) {
-        self.complete_close();
-    }
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
         // No-op in headless mode

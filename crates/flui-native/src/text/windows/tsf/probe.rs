@@ -569,7 +569,7 @@ fn text_services_probe() {
     println!("PROBE ja-JP profile for this thread: {ja:?}");
     if ja.is_err() {
         println!("PROBE SKIP: Microsoft IME ja-JP is not installed; points (2)-(7) need it");
-        window.close();
+        let _ = window.apply(flui_platform::WindowCommand::Close);
         return;
     }
     let mut active = TF_INPUTPROCESSORPROFILE::default();
@@ -723,7 +723,7 @@ fn text_services_probe() {
         previous.hkl,
     );
     println!("PROBE previous profile restored: {restored:?}");
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     pump(100, &probe);
     println!(
         "PROBE (8) after the window's WM_DESTROY the host answers {:?}",

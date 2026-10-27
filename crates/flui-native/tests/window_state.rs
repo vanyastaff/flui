@@ -245,7 +245,7 @@ fn a_true_capability_is_honoured() {
     only_title.sets_title = flui_platform::Availability::Native;
     let platform = HeadlessPlatform::new().with_window_capabilities(only_title);
     let window = open(&platform);
-    assert_eq!(window.capabilities(), only_title);
+    assert_eq!(window.state().capabilities, only_title);
     window
         .apply(WindowCommand::SetTitle("Allowed".into()))
         .expect("the one capability the window has");
@@ -289,7 +289,7 @@ fn invalid_geometry_is_refused_before_the_host() {
 fn a_closed_window_refuses_commands() {
     let platform = HeadlessPlatform::new();
     let window = open(&platform);
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     assert_eq!(
         window.apply(WindowCommand::SetTitle("late".into())),
         Err(WindowCommandError::Closed)
@@ -344,59 +344,26 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
     assert_eq!(state.normal_geometry, Some(normal));
 }
 
-/// What a window announced, in order: `on_state_changed` with the snapshot
-/// it then read, or one fact's own callback.
-#[derive(Debug, Clone, PartialEq)]
-enum Heard {
-    State(Box<WindowState>),
-    Fact(&'static str),
-}
-
-/// Record every notification of `window` from here on.
-fn listen(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<Heard>>> {
+/// Record the snapshot read inside every `on_state_changed` of `window` from
+/// here on.
+fn listen(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
     let state = Arc::downgrade(window);
     let log = Arc::clone(&heard);
     window.on_state_changed(Box::new(move || {
         if let Some(window) = state.upgrade() {
             let snapshot = window.state();
-            log.lock()
-                .expect("log")
-                .push(Heard::State(Box::new(snapshot)));
+            log.lock().expect("log").push(snapshot);
         }
     }));
-    let fact = |name: &'static str| {
-        let log = Arc::clone(&heard);
-        move || log.lock().expect("log").push(Heard::Fact(name))
-    };
-    let (focus, visibility, hover, metrics) = (
-        fact("focus"),
-        fact("visibility"),
-        fact("hover"),
-        fact("metrics"),
-    );
-    let (appearance, safe_area, execution, display) = (
-        fact("appearance"),
-        fact("safe area"),
-        fact("execution"),
-        fact("display"),
-    );
-    window.on_active_status_change(Box::new(move |_| focus()));
-    window.on_visibility_status_change(Box::new(move |_| visibility()));
-    window.on_hover_status_change(Box::new(move |_| hover()));
-    window.on_resize(Box::new(move |_| metrics()));
-    window.on_appearance_changed(Box::new(appearance));
-    window.on_safe_area_change(Box::new(move |_| safe_area()));
-    window.on_execution_state_change(Box::new(move |_| execution()));
-    window.on_display_changed(Box::new(display));
     heard
 }
 
-/// Each window fact (ADR-0254 §1) reaches the snapshot: its change publishes
-/// one revision, announced once and before the fact's own callback; the same
-/// report again publishes nothing; a report that is not a drawable area
-/// publishes nothing.
-fn each_window_fact_reaches_the_snapshot_before_its_callback() {
+/// Each window fact (ADR-0254 §1) arrives only in the snapshot: its change
+/// publishes one revision, announced by exactly one `on_state_changed` that
+/// reads it; the same report again publishes nothing; a report that is not a
+/// drawable area publishes nothing.
+fn window_facts_arrive_only_in_the_snapshot() {
     use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
     use flui_platform::{WindowAppearance, WindowExecutionState};
 
@@ -410,39 +377,33 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
     let insets = EdgeInsets::new(24.0, 0.0, 48.0, 0.0);
     type Report = Box<dyn Fn(&MockWindow)>;
     type Holds = Box<dyn Fn(&WindowState) -> bool>;
-    let rows: Vec<(&str, &str, Report, Holds)> = vec![
+    let rows: Vec<(&str, Report, Holds)> = vec![
         (
-            "focus",
             "focus",
             Box::new(|mock: &MockWindow| mock.simulate_focus(false)),
             Box::new(|state: &WindowState| !state.focused && !state.active),
         ),
         (
             "visibility",
-            "visibility",
             Box::new(|mock: &MockWindow| mock.simulate_visibility(false)),
             Box::new(|state: &WindowState| !state.visible),
         ),
         (
-            "hover",
             "hover",
             Box::new(|mock: &MockWindow| mock.simulate_hover(true)),
             Box::new(|state: &WindowState| state.hovered),
         ),
         (
             "appearance",
-            "appearance",
             Box::new(|mock: &MockWindow| mock.simulate_appearance(WindowAppearance::Dark)),
             Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
         ),
         (
             "safe area",
-            "safe area",
             Box::new(move |mock: &MockWindow| mock.simulate_safe_area(insets)),
             Box::new(move |state: &WindowState| state.safe_area == insets),
         ),
         (
-            "execution",
             "execution",
             Box::new(|mock: &MockWindow| {
                 mock.simulate_execution_state(WindowExecutionState::Suspended);
@@ -451,7 +412,6 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
         ),
         (
             "display",
-            "display",
             Box::new(move |mock: &MockWindow| {
                 mock.simulate_move_to(right).expect("a held display");
             }),
@@ -459,7 +419,6 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
         ),
         (
             "scale",
-            "metrics",
             Box::new(|mock: &MockWindow| mock.simulate_scale_factor_change(2.0)),
             Box::new(|state: &WindowState| {
                 state.metrics.map(|metrics| metrics.scale().get()) == Some(2.0)
@@ -468,7 +427,6 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
         ),
         (
             "size",
-            "metrics",
             Box::new(|mock: &MockWindow| mock.simulate_resize(1000.0, 500.0)),
             Box::new(|state: &WindowState| {
                 state.metrics.map(WindowMetrics::physical) == Some(Size::new(2000, 1000))
@@ -476,27 +434,23 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
         ),
     ];
     let mut failures = Vec::new();
-    for (name, callback, report, holds) in &rows {
+    for (name, report, holds) in &rows {
         let heard = listen(&window);
         let before = window.state();
         report(&mock);
-        let after = window.state();
+        // What the report itself announced, before any read could sample
+        // the window again.
         let log = heard.lock().expect("log").clone();
+        let after = window.state();
         if !holds(&after) || after.revision.get() != before.revision.get() + 1 {
             failures.push(format!("{name}: the snapshot is {after:?}"));
         }
-        if log != [Heard::State(Box::new(after.clone())), Heard::Fact(callback)] {
+        if log != [after.clone()] {
             failures.push(format!("{name}: heard {log:?}"));
         }
         heard.lock().expect("log").clear();
         report(&mock);
-        if window.state() != after
-            || !heard
-                .lock()
-                .expect("log")
-                .iter()
-                .all(|heard| !matches!(heard, Heard::State(_)))
-        {
+        if window.state() != after || !heard.lock().expect("log").is_empty() {
             failures.push(format!("{name}: the same report published again"));
         }
     }
@@ -504,7 +458,7 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
     let heard = listen(&window);
     let drawn = window.state();
     mock.simulate_scale_factor_change(f64::NAN);
-    if window.state().metrics != drawn.metrics {
+    if window.state().metrics != drawn.metrics || !heard.lock().expect("log").is_empty() {
         failures.push("a NaN scale reached the snapshot".to_owned());
     }
     mock.simulate_scale_factor_change(2.0);
@@ -515,44 +469,7 @@ fn each_window_fact_reaches_the_snapshot_before_its_callback() {
     if empty.metrics != before_empty.metrics {
         failures.push(format!("an empty area reached the metrics: {empty:?}"));
     }
-    // The capabilities are the window's.
-    if window.state().capabilities != window.capabilities() {
-        failures.push("the snapshot's capabilities are not the window's".to_owned());
-    }
     assert!(failures.is_empty(), "{failures:#?}");
-}
-
-/// `on_state_changed` and a fact's own callback are delivered together: one
-/// that panics loses neither, and its failure resurfaces afterwards.
-fn a_panicking_state_callback_still_delivers_the_resize() {
-    let platform = HeadlessPlatform::new();
-    let window = open(&platform);
-    let mock = mock(&window).clone();
-    window.on_state_changed(Box::new(|| panic!("a state callback that fails")));
-    let resized = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&resized);
-    window.on_resize(Box::new(move |_| {
-        counter.fetch_add(1, Ordering::SeqCst);
-    }));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mock.simulate_resize(1024.0, 768.0);
-    }));
-    let payload = outcome.expect_err("the state callback's failure resurfaces");
-    assert_eq!(
-        payload.downcast_ref::<&str>(),
-        Some(&"a state callback that fails"),
-        "the first failure is the one resurfaced"
-    );
-    assert_eq!(
-        resized.load(Ordering::SeqCst),
-        1,
-        "the resize arrived in spite of it"
-    );
-    assert_eq!(
-        window.state().content_size,
-        Size::new(1024.0, 768.0),
-        "and the snapshot holds it"
-    );
 }
 
 #[test]
@@ -621,12 +538,8 @@ fn window_state_contract() {
                 opening_options_are_reflected_in_the_first_snapshot as fn(),
             ),
             (
-                "each_window_fact_reaches_the_snapshot_before_its_callback",
-                each_window_fact_reaches_the_snapshot_before_its_callback as fn(),
-            ),
-            (
-                "a_panicking_state_callback_still_delivers_the_resize",
-                a_panicking_state_callback_still_delivers_the_resize as fn(),
+                "window_facts_arrive_only_in_the_snapshot",
+                window_facts_arrive_only_in_the_snapshot as fn(),
             ),
         ],
     );

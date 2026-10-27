@@ -20,9 +20,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_platform::{
-    CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowShowError,
-};
+use flui_platform::{CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId};
 use flui_semantics::platform::PlatformAccessibility;
 
 use crate::sink::{FrameSink, SubmitVerdict};
@@ -36,7 +34,6 @@ pub struct TestWindow {
     physical_size: Size<i32>,
     logical_size: Size<f64>,
     focused: bool,
-    on_show: Option<Arc<dyn Fn() + Send + Sync>>,
     visible: bool,
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
@@ -94,7 +91,6 @@ impl TestWindow {
             physical_size: Size::default(),
             logical_size: Size::default(),
             focused: false,
-            on_show: None,
             visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
@@ -113,14 +109,15 @@ impl TestWindow {
         self
     }
 
-    /// Report `scale_factor` from [`PlatformWindow::scale_factor`].
+    /// Report the scale `scale_factor` in the snapshot's metrics.
     #[must_use]
     pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
         self
     }
 
-    /// Report these physical and logical sizes.
+    /// Report these physical and logical sizes in the snapshot: the metrics'
+    /// drawable area and the content size.
     #[must_use]
     pub fn with_sizes(mut self, physical: Size<i32>, logical: Size<f64>) -> Self {
         self.physical_size = physical;
@@ -128,21 +125,14 @@ impl TestWindow {
         self
     }
 
-    /// Run `callback` from [`PlatformWindow::show`].
-    #[must_use]
-    pub fn with_show_callback(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.on_show = Some(callback);
-        self
-    }
-
-    /// Report `visible` from [`PlatformWindow::is_visible`].
+    /// Report `visible` in the snapshot.
     #[must_use]
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Report `focused` from [`PlatformWindow::is_focused`].
+    /// Report `focused` in the snapshot.
     #[must_use]
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
@@ -212,27 +202,8 @@ impl TestWindow {
 }
 
 impl PlatformWindow for TestWindow {
-    fn show(&self) -> Result<(), WindowShowError> {
-        if let Some(callback) = &self.on_show {
-            callback();
-        }
-        Ok(())
-    }
-
     fn id(&self) -> WindowId {
         self.id
-    }
-
-    fn physical_size(&self) -> Size<i32> {
-        self.physical_size
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.logical_size
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
     }
 
     fn pre_present_notify(&self) {
@@ -242,14 +213,6 @@ impl PlatformWindow for TestWindow {
     fn request_redraw(&self) {
         self.redraw_calls.fetch_add(1, Ordering::Relaxed);
         self.redraw_threads.lock().push(std::thread::current().id());
-    }
-
-    fn is_focused(&self) -> bool {
-        self.focused
-    }
-
-    fn is_visible(&self) -> bool {
-        self.visible
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -273,13 +236,20 @@ impl PlatformWindow for TestWindow {
         Ok(())
     }
 
+    /// What the builder set, honouring no command; a size or scale that is
+    /// not a drawable area reports no metrics.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
+        let size = self.logical_size;
         flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+            .with_visible(self.visible)
+            .with_focused(self.focused)
+            .with_metrics(
+                flui_foundation::geometry::WindowMetrics::new(
+                    self.physical_size,
+                    self.scale_factor,
+                )
+                .ok(),
+            )
     }
 
     fn apply(

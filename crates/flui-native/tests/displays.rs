@@ -127,18 +127,18 @@ fn window_move_names_the_new_display_and_hints_once() {
         .expect("headless window")
         .clone();
     assert_eq!(
-        window.display_id(),
+        window.state().display,
         Some(left),
         "a window opens on the primary"
     );
 
     let hints = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hints);
-    window.on_display_changed(Box::new(move || {
+    window.on_state_changed(Box::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
     mock.simulate_move_to(right).expect("move");
-    assert_eq!(window.display_id(), Some(right));
+    assert_eq!(window.state().display, Some(right));
     assert_eq!(hints.load(Ordering::SeqCst), 1);
     mock.simulate_move_to(right)
         .expect("move to where it already is");
@@ -160,7 +160,7 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
         .downcast_ref::<MockWindow>()
         .expect("headless window")
         .clone();
-    let before = window.display_id();
+    let before = window.state().display;
     let unissued = {
         let registry = flui_platform::DisplayRegistry::new();
         let _ = registry.mint(&flui_platform::DisplayKey::Unkeyed);
@@ -175,7 +175,11 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
         Err(unissued),
         "the window names the display it was refused"
     );
-    assert_eq!(window.display_id(), before, "the window stays where it was");
+    assert_eq!(
+        window.state().display,
+        before,
+        "the window stays where it was"
+    );
 }
 
 #[test]

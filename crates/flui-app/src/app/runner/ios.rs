@@ -315,7 +315,8 @@ where
 
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
     // strong `Arc` of the window as the surface target (issue #1043).
-    let phys_size = window.physical_size();
+    let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+    let phys_size = geometry.physical;
     let renderer = pollster::block_on(Renderer::with_surface_color(
         Arc::clone(&window),
         config.surface_color,
@@ -332,7 +333,7 @@ where
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
-    let scale_factor = window.scale_factor();
+    let scale_factor = geometry.scale;
     let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(error) => {
@@ -348,7 +349,7 @@ where
     config.install_input_tap(&ui_runtime);
     config.install_error_view_builder(&ui_runtime);
 
-    let logical = window.logical_size();
+    let logical = geometry.logical;
     let owner = APP_RUNTIME
         .with(|slot| slot.borrow().owner_platform.clone())
         .expect("BUG: UIKit owner installed before scene bootstrap");
@@ -410,24 +411,6 @@ where
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     }));
 
-    // 7. Resize -> typed Resized event; the applier installed above touches
-    // the renderer.
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
-
-    // Safe-area intrusions: addressed to this window's presentation, which
-    // republishes the root `MediaQuery` without touching renderer geometry.
-    window.on_safe_area_change(Box::new(move |insets| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(insets)),
-        );
-    }));
-
     // 8. Lifecycle.
     //
     // Surface availability: release the wgpu surface before the
@@ -454,40 +437,13 @@ where
         report_surface_settlement("iOS", &outcome);
     }));
 
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    // Register before sampling, so native facts changed during renderer bootstrap
-    // cannot be replaced by a synthetic Resumed observation.
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
-    });
-    if let Ok(metrics) = window.metrics() {
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
-    }
+    // The scene's facts — metrics, safe area, lifecycle, appearance and
+    // display — reach the presentation through the window's one snapshot
+    // subscription; the resize applier installed above touches the renderer.
+    // Registered before the seed is read, so native facts changed during
+    // renderer bootstrap cannot be replaced by a synthetic Resumed
+    // observation.
+    installation.observe_window();
 
     installation.on_close(move || {
         close_this_window(owner_dispatch);

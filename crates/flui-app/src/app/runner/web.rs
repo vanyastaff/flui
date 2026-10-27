@@ -80,7 +80,8 @@ where
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
         // transform maps to the physical canvas. `UiRuntime::new` applies the
         // DPR to the freshly built pipeline before returning.
-        let scale_factor = window.scale_factor() as f64;
+        let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
+        let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
             Ok(ui_runtime) => ui_runtime,
             Err(error) => {
@@ -101,7 +102,7 @@ where
         config.install_input_tap(&ui_runtime);
         config.install_error_view_builder(&ui_runtime);
 
-        let logical = window.logical_size();
+        let logical = geometry.logical;
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
                 &root,
@@ -224,7 +225,7 @@ impl WebFrameDriver {
         if let Some(renderer) = self.renderer.lock().as_mut() {
             // The canvas's backing store, which the browser may have sized
             // from its device-pixel layout rather than `size × scale`.
-            let size = self.window.physical_size();
+            let size = super::window_install::SurfaceGeometry::of(self.window.as_ref()).physical;
             renderer.resize(size.width as u32, size.height as u32);
         }
     }
@@ -433,7 +434,7 @@ impl WebFrameDriver {
                 gpu_loss.record_device_loss();
             }
             // The adapter and device may take many native resizes to arrive.
-            let size = window.physical_size();
+            let size = super::window_install::SurfaceGeometry::of(window.as_ref()).physical;
             renderer.resize(size.width as u32, size.height as u32);
             match authority.publish(&renderer_slot, renderer) {
                 Ok(previous) => drop(previous),

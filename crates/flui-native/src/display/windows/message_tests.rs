@@ -217,5 +217,5 @@ fn dpi_change_invalidates_the_snapshot() {
         sampled + 1,
         "a DPI change left the snapshot cached"
     );
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 }

@@ -18,7 +18,7 @@
 //!   ([`input_capabilities`], ADR-0213);
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
-//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
+//!   ([`WindowId`], [`WindowOptions`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
 //!   operations return);
 //! - the window state contract: the [`WindowState`] snapshot a window
@@ -182,8 +182,8 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowEvent,
-    WindowExecutionState, WindowId, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, InputLatency, WindowAppearance, WindowBackgroundAppearance, WindowExecutionState,
+    WindowId, WindowOptions, WindowReveal,
 };
 pub use window_state::{
     SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,

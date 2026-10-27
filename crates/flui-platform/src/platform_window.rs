@@ -9,13 +9,11 @@
 use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
+use flui_foundation::geometry::Point;
 
-use crate::keyboard::Modifiers;
 use crate::{
-    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
+    CursorError, DispatchEventResult, PlatformHaptics, PlatformInput, PlatformTextInput,
+    WindowBackgroundAppearance, WindowCommand, WindowCommandError, WindowId, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -83,11 +81,18 @@ pub enum WindowAt {
 /// deferred window creation. Direct backends create windows through their
 /// owner capability; browser signals follow ADR-0196.
 ///
-/// [`close`](Self::close) is the one method that documents itself out of this
-/// default: it is callable from any thread the native API permits, and states
-/// per backend what the cross-thread route costs (AppKit excepted). How each
-/// backend enforces the default is recorded in `flui-native`'s
+/// How each backend enforces this default is recorded in `flui-native`'s
 /// `ARCHITECTURE.md`.
+///
+/// # One source of truth
+///
+/// Every fact of the window — its metrics and scale, focus, visibility, hover,
+/// appearance, display, safe area, execution state and capabilities — is a
+/// field of the [`WindowState`] snapshot (ADR-0254 §1), and a change of any of
+/// them is one [`on_state_changed`](Self::on_state_changed). There is no getter
+/// and no callback per fact: a consumer that needs to know which fact changed
+/// compares the new snapshot with the one it saw last. Showing, activating and
+/// closing a window are [`WindowCommand`]s like every other change.
 ///
 /// # A window built from this crate alone
 ///
@@ -97,9 +102,9 @@ pub enum WindowAt {
 /// use flui_platform::{
 ///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
 ///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+///     WindowCommandError, WindowGeometry, WindowId, WindowState,
 /// };
-/// use flui_foundation::geometry::{DeviceSize, Size};
+/// use flui_foundation::geometry::Size;
 ///
 /// struct Offscreen;
 ///
@@ -107,27 +112,9 @@ pub enum WindowAt {
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> DeviceSize {
-///         Size::default()
-///     }
-///     fn logical_size(&self) -> Size {
-///         Size::default()
-///     }
-///     fn scale_factor(&self) -> f64 {
-///         1.0
-///     }
 ///     fn request_redraw(&self) {}
-///     fn is_focused(&self) -> bool {
-///         false
-///     }
-///     fn is_visible(&self) -> bool {
-///         false
-///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
-///     }
-///     fn capabilities(&self) -> WindowCapabilities {
-///         WindowCapabilities::NONE
 ///     }
 ///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
 ///         command.admit(&WindowCapabilities::NONE)?;
@@ -148,14 +135,22 @@ pub enum WindowAt {
 ///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
 ///         None
 ///     }
-///     fn show(&self) -> Result<(), WindowShowError> {
-///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
 /// assert_eq!(window.id(), WindowId(7));
-/// assert!(matches!(window.show(), Err(WindowShowError::Unsupported(_))));
+/// assert!(matches!(
+///     window.apply(WindowCommand::Show),
+///     Err(WindowCommandError::Unsupported(_))
+/// ));
+/// ```
+///
+/// A fact is read from the snapshot, never asked of the window on its own:
+///
+/// ```compile_fail,E0599
+/// fn focused(window: &dyn flui_platform::PlatformWindow) -> bool {
+///     window.is_focused()
+/// }
 /// ```
 ///
 /// The accessibility bridge is not part of this contract; a window that
@@ -167,9 +162,9 @@ pub enum WindowAt {
 /// use flui_platform::{
 ///     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
 ///     PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+///     WindowCommandError, WindowGeometry, WindowId, WindowState,
 /// };
-/// use flui_foundation::geometry::{DeviceSize, Size};
+/// use flui_foundation::geometry::Size;
 ///
 /// struct Offscreen;
 ///
@@ -177,27 +172,9 @@ pub enum WindowAt {
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> DeviceSize {
-///         Size::default()
-///     }
-///     fn logical_size(&self) -> Size {
-///         Size::default()
-///     }
-///     fn scale_factor(&self) -> f64 {
-///         1.0
-///     }
 ///     fn request_redraw(&self) {}
-///     fn is_focused(&self) -> bool {
-///         false
-///     }
-///     fn is_visible(&self) -> bool {
-///         false
-///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
-///     }
-///     fn capabilities(&self) -> WindowCapabilities {
-///         WindowCapabilities::NONE
 ///     }
 ///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
 ///         command.admit(&WindowCapabilities::NONE)?;
@@ -218,15 +195,8 @@ pub enum WindowAt {
 ///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
 ///         None
 ///     }
-///     fn show(&self) -> Result<(), WindowShowError> {
-///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
-///     }
 ///     fn accessibility(&self) -> Option<()> { None }
 /// }
-///
-/// let window: &dyn PlatformWindow = &Offscreen;
-/// assert_eq!(window.id(), WindowId(7));
-/// assert!(matches!(window.show(), Err(WindowShowError::Unsupported(_))));
 /// ```
 ///
 /// Nor is the downcast to a host's own window: `flui_native::HostWindow`,
@@ -248,21 +218,6 @@ pub trait PlatformWindow: Send + Sync {
     /// value — never a shared sentinel that would make two different
     /// windows compare equal.
     fn id(&self) -> WindowId;
-
-    /// Get the window size in physical pixels (device pixels)
-    fn physical_size(&self) -> Size<i32>;
-
-    /// Get the window size in logical pixels
-    fn logical_size(&self) -> Size<f64>;
-
-    /// Get the scale factor (DPI scaling)
-    fn scale_factor(&self) -> f64;
-
-    /// The drawable area and scale the window reports now, or why it is not a drawable area
-    /// (a minimised window's zero size, a scale that is not finite and positive).
-    fn metrics(&self) -> Result<WindowMetrics, InvalidMetrics> {
-        WindowMetrics::new(self.physical_size(), self.scale_factor())
-    }
 
     /// Query gesture geometry for this presentation's native coordinate context.
     ///
@@ -347,15 +302,11 @@ pub trait PlatformWindow: Send + Sync {
     /// doing. A no-op on backends with no such protocol.
     fn pre_present_notify(&self) {}
 
-    /// Check if window is focused
-    fn is_focused(&self) -> bool;
-
-    /// Check if window is visible
-    fn is_visible(&self) -> bool;
-
     // ==================== State and commands (ADR-0237) ====================
 
-    /// The window's state as the operating system reports it now.
+    /// The window's state as the operating system reports it now: every fact
+    /// of the window, its [`WindowCapabilities`](crate::WindowCapabilities)
+    /// included (ADR-0254 §1).
     ///
     /// An immutable snapshot with a [`WindowRevision`](crate::WindowRevision):
     /// the revision grows when something differs from the previous call and
@@ -367,22 +318,25 @@ pub trait PlatformWindow: Send + Sync {
     /// one that would never change.
     fn state(&self) -> WindowState;
 
-    /// Which [`WindowCommand`]s [`apply`](Self::apply) carries out.
-    ///
-    /// Required: a window states what it honours instead of inheriting a
-    /// claim.
-    fn capabilities(&self) -> WindowCapabilities;
-
     /// Request a change to the window.
     ///
     /// Accepted means requested: the outcome is visible only in the next
     /// [`state`](Self::state), because the OS may clamp, delay or refuse it.
     /// Call it on the owner thread. An implementation begins with
-    /// [`WindowCommand::admit`] against its own
-    /// [`capabilities`](Self::capabilities), so it refuses with
-    /// [`WindowCommandError::Unsupported`] exactly when a capability is
-    /// `false`, and with [`WindowCommandError::InvalidGeometry`] before the OS
-    /// is called.
+    /// [`WindowCommand::admit`] against the capabilities of its own snapshot,
+    /// so it refuses with [`WindowCommandError::Unsupported`] exactly when a
+    /// capability is unavailable, and with
+    /// [`WindowCommandError::InvalidGeometry`] before the OS is called.
+    ///
+    /// [`WindowCommand::Close`] is a decision already made, not a request: it
+    /// asks no should-close veto ([`on_should_close`](Self::on_should_close))
+    /// and runs the same teardown a user's close takes — the
+    /// [`on_close`](Self::on_close) callback, removal from the backend's window
+    /// tracking, cleanup of per-window input state, and the exit-policy consult
+    /// that ends the loop when this was the last window. Win32 and the headless
+    /// double run that teardown before `apply` returns; winit runs it on the
+    /// owner thread's next turn. A window that has already closed answers
+    /// [`WindowCommandError::Closed`].
     ///
     /// # Errors
     /// [`WindowCommandError`].
@@ -402,50 +356,6 @@ pub trait PlatformWindow: Send + Sync {
     /// re-reads `state()` and compares it with the snapshot it last saw.
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
-    }
-
-    // ==================== Query Methods (US2) ====================
-
-    /// Check if window is the active (foreground) window
-    fn is_active(&self) -> bool {
-        self.is_focused()
-    }
-
-    /// Check if the mouse cursor is hovering over this window
-    fn is_hovered(&self) -> bool {
-        false
-    }
-
-    /// Get the current mouse position in logical pixels (relative to window)
-    fn mouse_position(&self) -> Point<f64> {
-        Point::default()
-    }
-
-    /// Get the currently pressed keyboard modifiers
-    fn modifiers(&self) -> Modifiers {
-        Modifiers::NONE
-    }
-
-    /// The light/dark appearance the system currently applies to this window.
-    ///
-    /// This is the user's system theme, never a value the backend chose for
-    /// its own window chrome. A backend that cannot observe the theme reports
-    /// [`WindowAppearance::Light`].
-    fn appearance(&self) -> WindowAppearance {
-        WindowAppearance::default()
-    }
-
-    /// The display this window is on right now, named by the identity the
-    /// platform's [`DisplaySnapshot`](crate::DisplaySnapshot) uses.
-    ///
-    /// `None` when the backend cannot tell (no monitor reported, a window
-    /// before its first placement, a backend without the query, an output the
-    /// platform could not issue an id for). A consumer reads that as an unknown
-    /// display, never as the primary one. The display's refresh period and
-    /// scale come from the snapshot, not from here: the window names the
-    /// display and the snapshot describes it.
-    fn display_id(&self) -> Option<DisplayId> {
-        None
     }
 
     /// This window's IME text-input capability: the receiver of the
@@ -521,19 +431,7 @@ pub trait PlatformWindow: Send + Sync {
         let _ = regions;
     }
 
-    // ==================== Control Methods (US2) ====================
-
-    /// Show this window, unminimizing it and requesting foreground focus.
-    /// Preserves maximized/fullscreen mode and the existing widget tree.
-    /// Focus is a request: the window manager may decline to grant it.
-    ///
-    /// Every implementation says what it does; there is no default, so a
-    /// window that can show itself never answers that it cannot.
-    ///
-    /// # Errors
-    /// Returns unsupported when the backend cannot perform this operation,
-    /// closed after native teardown, or a native operation failure.
-    fn show(&self) -> Result<(), WindowShowError>;
+    // ==================== Control ====================
 
     /// The embedder has presented the first frame into this window's
     /// surface — or has waited as long as it is willing to for one.
@@ -541,7 +439,8 @@ pub trait PlatformWindow: Send + Sync {
     /// A backend that defers the physical reveal of a window opened
     /// [`WindowOptions::visible`](crate::WindowOptions::visible)
     /// `== true` performs it now, exactly once; a window opened hidden, one
-    /// already shown explicitly (`show`/`set_visible(true)`/`activate`),
+    /// already shown explicitly ([`WindowCommand::Show`] or
+    /// [`WindowCommand::Activate`]),
     /// or a backend that reveals at open, ignores the call. Calling it
     /// again is harmless.
     ///
@@ -551,45 +450,6 @@ pub trait PlatformWindow: Send + Sync {
     /// window the user can see and close rather than a process with no
     /// window at all.
     fn reveal_after_first_frame(&self) {}
-
-    /// Activate (bring to front / focus) the window.
-    fn activate(&self) {}
-
-    /// Close and destroy the window — a decision already made, not a
-    /// request.
-    ///
-    /// Bypasses the should-close veto ([`on_should_close`](Self::on_should_close))
-    /// when called on the backend's owning thread — natively so: AppKit's
-    /// `-close` never sends `windowShouldClose:`, and a same-thread Win32
-    /// `DestroyWindow` never sends `WM_CLOSE`. Off the owning thread the
-    /// veto's fate is backend-defined: Win32 posts `WM_CLOSE`, whose owner-side
-    /// handler re-asks `on_should_close` before destroying, so a cross-thread
-    /// `close()` there is a close *request* (see that impl); winit defers the
-    /// whole teardown to the owner thread's next turn with no veto asked.
-    ///
-    /// Never bypasses the *bookkeeping* once the close proceeds: the backend
-    /// runs the same teardown a user-initiated close takes — the
-    /// [`on_close`](Self::on_close) callback, removal from the backend's window
-    /// tracking, cleanup of per-window input state, the global
-    /// [`WindowEvent::Closed`](crate::WindowEvent::Closed), and the exit-policy
-    /// consult that ends the loop when this was the last window. That
-    /// bookkeeping is universal; the *timing* below is not.
-    ///
-    /// Callable from any thread the native windowing API permits. On winit the
-    /// teardown, and so `on_close`, runs on the owner thread's next turn —
-    /// never synchronously within this call, whichever thread makes it. Win32's
-    /// same-thread route is the opposite: `DestroyWindow` dispatches
-    /// `WM_DESTROY`, and with it `on_close` and `Closed`, before this call
-    /// returns. The headless double follows Win32's shape and runs the teardown
-    /// synchronously, which is what the tests asserting state right after
-    /// `close()` pin; issue #937 tracks an opt-in mode for winit's timing, for
-    /// when something needs to observe it headlessly. AppKit's `close()` has no
-    /// thread marshaling today: call it from the main thread only.
-    ///
-    /// One thing the double does *not* model, and cannot until #937 lands: it
-    /// runs `on_close` on the calling thread, while this trait requires every
-    /// window callback to run on the thread that registered it.
-    fn close(&self) {}
 
     /// Set the window's background appearance (backdrop material)
     fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
@@ -639,15 +499,6 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
-    /// Register a callback for window resize events
-    ///
-    /// Called with the window's new [`WindowMetrics`]: its drawable area in device pixels and
-    /// the ratio to logical pixels. A report that is not a drawable area (a zero size, a
-    /// non-finite scale) is never delivered.
-    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
-        let _ = callback;
-    }
-
     /// Register a callback for when the window is destroyed
     ///
     /// This fires once when the window is actually closed/destroyed.
@@ -661,104 +512,6 @@ pub trait PlatformWindow: Send + Sync {
     /// Return `false` to veto the close request (e.g., unsaved changes dialog).
     /// If no callback is registered, close is always allowed.
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for focus changes
-    ///
-    /// Called with `true` when the window gains focus, `false` when it loses
-    /// focus.
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        let _ = callback;
-    }
-
-    /// Safe-area intrusions in logical pixels, relative to the content view.
-    /// Backends without native inset reporting return zero. Detached windows
-    /// retain their last accepted geometry; this is not keyboard occlusion.
-    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
-        flui_foundation::geometry::EdgeInsets::ZERO
-    }
-
-    /// Observe safe-area changes on the owner thread. Register, then resample
-    /// `safe_area_insets` to cover changes before callback installation.
-    fn on_safe_area_change(
-        &self,
-        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
-    ) {
-        let _ = callback;
-    }
-
-    /// Current native execution eligibility. Backends without suspension use Running.
-    fn execution_state(&self) -> WindowExecutionState {
-        WindowExecutionState::Running
-    }
-
-    /// Observe native execution changes on the window's owner thread.
-    /// Registration does not emit a snapshot; register first, then read execution_state.
-    /// This does not signal focus or GPU surface success. Detached is reversible.
-    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for visibility (occlusion) changes.
-    ///
-    /// Called with `true` when the window becomes visible/unoccluded,
-    /// `false` when it becomes fully occluded (or minimized, on backends
-    /// that report that through the same signal). Distinct from
-    /// [`on_active_status_change`](Self::on_active_status_change): a window
-    /// can be visible but unfocused, or occluded while still nominally
-    /// focused.
-    ///
-    /// Delivery is backend-conditional, verified against winit 0.30's own
-    /// `WindowEvent::Occluded` documentation and `platform_impl` source
-    /// (not assumed): the emitting backends are **X11** (via Xlib's
-    /// `VisibilityFullyObscured` — fires only on FULL obscuration, never
-    /// partial), **macOS**, **iOS**, and **Web**. Winit's own doc states
-    /// plainly: "Android / Wayland / Windows / Orbital: Unsupported." —
-    /// there is no Wayland emitter anywhere in `platform_impl` at all, not
-    /// merely a compositor-dependent one. On a Wayland compositor (this
-    /// workspace's own primary desktop reference session), this callback
-    /// never fires and the window is always treated as visible; on X11 it
-    /// only fires when a window is fully covered, which a compositing
-    /// window manager may rarely or never produce.
-    ///
-    /// The native backends derive their own signal (rules in
-    /// `flui-native`'s window feature, host-tested): **Win32** from
-    /// `WM_SIZE`-minimize/restore plus `WM_SHOWWINDOW` hide/show (Windows
-    /// has no occlusion events at all), **AppKit** from
-    /// `windowDidChangeOcclusionState:`'s visible bit (fires on full
-    /// occlusion, miniaturization, hide, and space switches). The headless
-    /// backend's `simulate_visibility` drives the same wire for tests.
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for mouse hover changes
-    ///
-    /// Called with `true` when the mouse enters the window, `false` when it
-    /// leaves.
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for changes to [`appearance`](Self::appearance).
-    ///
-    /// Called on the owner thread after the value `appearance()` returns has
-    /// changed; the callback carries no payload, so it re-reads `appearance()`.
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback meaning "the display this window is on may have
-    /// changed".
-    ///
-    /// Called on the owner thread when the window moves to another display,
-    /// when its display's scale changes, or when the backend otherwise suspects
-    /// [`display_id`](Self::display_id) answers differently now. The callback
-    /// carries no payload and the hint may be spurious: the consumer re-reads
-    /// the platform's snapshot and the window's `display_id()`, and acts only on
-    /// a real difference. A backend that never learns of a change never calls it.
-    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }
 
@@ -788,11 +541,10 @@ pub trait PlatformWindow: Send + Sync {
     /// happened before, so an implementation may receive more of either than
     /// it needs.
     ///
-    /// This is not [`on_active_status_change`](Self::on_active_status_change)
-    /// with a different name. That one also fires on focus changes, and the
-    /// surface must not be dropped because a window lost focus; the two
-    /// signals coincide on some backends and diverge on the ones that report
-    /// focus at all.
+    /// This is not the snapshot's focus or execution state under another
+    /// name: those change when a window loses focus or is suspended, and the
+    /// surface must not be dropped for that; the signals coincide on some
+    /// backends and diverge on the ones that report focus at all.
     ///
     /// # Delivery is backend-conditional, and the asymmetry costs
     ///
@@ -823,9 +575,7 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// # Why `bool`
     ///
-    /// The signal is genuinely two-state, and every sibling in this family is
-    /// `bool` (`on_active_status_change`, `on_visibility_status_change`,
-    /// `on_hover_status_change`). A callback's parameter type is a one-way
+    /// The signal is genuinely two-state. A callback's parameter type is a one-way
     /// door — changing it later breaks every registrant's closure — so the
     /// alternative considered was a `#[non_exhaustive] enum` (the shape these
     /// crates use for input and owner status). A third state would be a third

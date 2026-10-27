@@ -43,9 +43,7 @@ use crate::{
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{
-    Clipboard, DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences, WindowEvent, WindowId,
-};
+use flui_platform::{Clipboard, DisplayId, DisplaySnapshot, SystemNotice, SystemPreferences};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -425,9 +423,19 @@ impl WebLoop {
             // spawn_local posts a microtask even when the future is ready.
             // Admission stays committed before any owner callback can run.
             js_sys::futures::spawn_local(async move {
-                let owner = weak
-                    .upgrade()
-                    .and_then(|state| state.lock().owner.upgrade());
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                let (owner, window) = {
+                    let state = state.lock();
+                    (state.owner.upgrade(), state.window_callbacks.clone())
+                };
+                // A wake is how a screen change reaches the page: the window
+                // reads which screen it is on again before the owner's turn, so
+                // the turn sees the display in the window's snapshot.
+                if let Some(window) = window {
+                    window.publish_state();
+                }
                 if let Some(owner) = owner
                     && owner.signal.drive()
                 {
@@ -463,16 +471,6 @@ impl WebLoop {
         project: fn(&mut WebState) -> &mut Option<H>,
     ) -> Field<'_, Mutex<WebState>, H> {
         Field::new(state, project)
-    }
-
-    /// Call the window-event handler through the call point, outside the
-    /// page state's lock; a replacement registered during the call wins.
-    pub(crate) fn dispatch_window_event(state: &Mutex<WebState>, event: WindowEvent) {
-        call(
-            &Self::handler(state, |state| &mut state.handlers.window_event),
-            |handler| handler(event),
-        )
-        .or_resume(());
     }
 
     /// The page was hidden or shown again: tell the session-end hook, so the
@@ -528,21 +526,6 @@ impl WebLoop {
             // Dispatch frame request to window callbacks
             if let Some(ref cbs) = callbacks {
                 cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
-                // The frame callback can close and reopen the canvas. An old
-                // frame receipt cannot produce a redraw for the newer slot.
-                let current = state
-                    .lock()
-                    .window_callbacks
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, cbs));
-                if current {
-                    Self::dispatch_window_event(
-                        &state,
-                        WindowEvent::RedrawRequested {
-                            window_id: WindowId(0),
-                        },
-                    );
-                }
             }
 
             // Request next frame after work (ensures smooth loop)

@@ -134,22 +134,7 @@ impl PlatformWindow for DragWindow {
     fn id(&self) -> WindowId {
         WindowId(1)
     }
-    fn physical_size(&self) -> Size<i32> {
-        Size::new(100, 100)
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.size
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
     fn request_redraw(&self) {}
-    fn is_focused(&self) -> bool {
-        true
-    }
-    fn is_visible(&self) -> bool {
-        true
-    }
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
@@ -161,9 +146,6 @@ impl PlatformWindow for DragWindow {
             flui_platform::WindowGeometry::new(None, self.size),
             self.size,
         )
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
     }
     fn apply(
         &self,
@@ -182,12 +164,6 @@ impl PlatformWindow for DragWindow {
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 }
 

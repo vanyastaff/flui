@@ -326,7 +326,13 @@ impl UiRuntime {
             return primary;
         }
         presentation
-            .with_window(|window| window.logical_size())
+            .with_window(|window| {
+                let state = window.state();
+                state.metrics.map_or(
+                    state.content_size,
+                    flui_foundation::geometry::WindowMetrics::logical,
+                )
+            })
             .filter(|size| {
                 size.width.is_finite()
                     && size.height.is_finite()

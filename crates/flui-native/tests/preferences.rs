@@ -123,7 +123,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         refused,
         Err(flui_platform::PreferenceQueryError::WrongThread)
     );
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
     assert_eq!(
         window.gesture_geometry(),
         Err(flui_platform::PreferenceQueryError::Unsupported(

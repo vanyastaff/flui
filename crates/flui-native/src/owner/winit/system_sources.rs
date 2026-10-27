@@ -180,7 +180,7 @@ impl WinitApp {
             .with_state(|state| state.windows.values().cloned().collect());
         for window in windows {
             if window.observe_portal_appearance(appearance) {
-                window.callbacks().dispatch_appearance_changed();
+                window.refresh_state();
             }
         }
     }

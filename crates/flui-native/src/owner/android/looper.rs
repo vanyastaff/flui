@@ -178,6 +178,10 @@ pub(crate) trait ActivityWindow: CallbackWindow {
     /// Publishes the window's state if the Activity's changed it.
     fn publish_state(&self);
 
+    /// The ratio of device to logical pixels the window's display has, read
+    /// now: the input translation and the Java view take it.
+    fn scale(&self) -> f64;
+
     /// Reads the input capabilities again (the Java view became ready).
     fn refresh_capabilities(&self);
 
@@ -329,16 +333,11 @@ impl AndroidLoop {
 
     /// Record one fact of the Activity's lifecycle and tell the window: its
     /// state is published first, so an observer reads the new value.
-    fn publish_activity_fact(
-        &self,
-        record: impl FnOnce(&ActivityFlags),
-        notify: impl FnOnce(&dyn ActivityWindow),
-    ) {
+    fn publish_activity_fact(&self, record: impl FnOnce(&ActivityFlags)) {
         record(&self.activity);
         let window = self.window.lock().clone();
         if let Some(window) = window {
             window.publish_state();
-            notify(window.as_ref());
         }
     }
 
@@ -494,7 +493,7 @@ impl AndroidLoop {
 
         drop(window_guard);
 
-        let scale_factor = window.scale_factor();
+        let scale_factor = window.scale();
         let callbacks = window.callbacks();
 
         match self.app.input_events_iter() {
@@ -557,36 +556,19 @@ impl AndroidLoop {
 
 impl ActivityTarget for AndroidLoop {
     fn visibility_changed(&self, visible: bool) {
-        self.publish_activity_fact(
-            |flags| flags.visible.store(visible, Ordering::SeqCst),
-            |window| {
-                window
-                    .callbacks()
-                    .dispatch_visibility_status_change(visible);
-            },
-        );
+        self.publish_activity_fact(|flags| flags.visible.store(visible, Ordering::SeqCst));
     }
 
     fn execution_changed(&self, state: WindowExecutionState) {
-        self.publish_activity_fact(
-            |flags| {
-                flags
-                    .resumed
-                    .store(state == WindowExecutionState::Running, Ordering::SeqCst);
-            },
-            |window| {
-                window.callbacks().dispatch_execution_state_change(state);
-            },
-        );
+        self.publish_activity_fact(|flags| {
+            flags
+                .resumed
+                .store(state == WindowExecutionState::Running, Ordering::SeqCst);
+        });
     }
 
     fn focus_changed(&self, focused: bool) {
-        self.publish_activity_fact(
-            |flags| flags.focused.store(focused, Ordering::SeqCst),
-            |window| {
-                window.callbacks().dispatch_active_status_change(focused);
-            },
-        );
+        self.publish_activity_fact(|flags| flags.focused.store(focused, Ordering::SeqCst));
     }
 
     /// The system does not wait for an answer, so this is
@@ -826,7 +808,6 @@ impl host::Loop for AndroidLoop {
                                 // asked for, so the recreated surface is
                                 // configured at this size, not the old one.
                                 w.publish_state();
-                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 w.request_safe_area();
                                 // The request rode on the window that is gone. The
                                 // host sends its demand again on
@@ -888,7 +869,6 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.publish_state();
-                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 // The insets of the old size no longer apply.
                                 w.request_safe_area();
                                 w.request_redraw();
@@ -918,7 +898,6 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();
-                                window.callbacks().dispatch_logical_resize(window.logical_size(), window.scale_factor());
                                 window.request_safe_area();
                             }
                         }
@@ -968,7 +947,7 @@ impl host::Loop for AndroidLoop {
             }
             let window = self.window.lock().clone();
             if let Some(window) = window {
-                self.java_view.set_scale(window.scale_factor());
+                self.java_view.set_scale(window.scale());
             }
             self.deliver_view_events();
             let resumed = self.activity.resumed.load(Ordering::SeqCst);

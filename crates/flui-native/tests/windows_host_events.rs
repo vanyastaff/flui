@@ -370,7 +370,7 @@ fn a_block_is_registered_on_the_visible_window() {
     host.platform.release_session_end();
     assert_eq!(reason_held_for(window_hwnd), None);
     // The window goes with the case: the next one must not find it visible.
-    window.close();
+    let _ = window.apply(flui_platform::WindowCommand::Close);
 }
 
 fn a_second_query_replaces_the_first_block() {

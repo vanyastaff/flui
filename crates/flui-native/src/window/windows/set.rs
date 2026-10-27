@@ -247,12 +247,6 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         // reports the contract's default: no inset.
         Size::new(0.0, 0.0)
     }
-
-    fn on_event(owner: &WindowsLoop, callback: Box<dyn FnMut(flui_platform::WindowEvent) + Send>) {
-        owner.register_handler("on_window_event", callback, |handlers| {
-            &mut handlers.window_event
-        });
-    }
 }
 
 /// DPI constants

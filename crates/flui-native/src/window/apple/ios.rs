@@ -53,7 +53,6 @@ use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
     SceneInstallation, SceneWindow, SceneWindows,
 };
-use crate::owner::call_point::install;
 use crate::owner::handlers::WindowCallbacks;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
@@ -63,10 +62,7 @@ use crate::window::installation::{PendingWindowInstallation, WindowInstallation}
 use crate::window::state::{ReportedFacts, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform::{
-    CursorError, DisplayId, PlatformWindow, WindowEvent, WindowExecutionState, WindowId,
-    WindowOptions,
-};
+use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowOptions};
 use flui_platform::{
     WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
     WindowState,
@@ -330,7 +326,7 @@ impl FluiView {
         // thread UIKit requires.
         let dark = unsafe { traits.userInterfaceStyle() } == UIUserInterfaceStyle::Dark;
         if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
-            self.callbacks().dispatch_appearance_changed();
+            self.callbacks().publish_state();
         }
     }
 
@@ -426,7 +422,7 @@ impl FluiView {
         if let Some(link) = link {
             self.ivars().displays.request_frame_rate(&link, screen);
         }
-        self.callbacks().dispatch_display_changed();
+        self.callbacks().publish_state();
     }
 
     /// The scene is gone: this window names no screen until it is attached
@@ -440,7 +436,7 @@ impl FluiView {
             ScreenIdentity::default(),
         );
         if moved {
-            self.callbacks().dispatch_display_changed();
+            self.callbacks().publish_state();
         }
     }
 
@@ -460,7 +456,6 @@ impl FluiView {
         if let Some(signal) = self.ivars().owner_signal.upgrade() {
             let _ = signal.wake();
         }
-        self.callbacks().dispatch_display_changed();
     }
 
     /// Pause or resume the tick — driven by the app's background/foreground
@@ -591,32 +586,9 @@ impl FluiView {
             let mut metrics = self.ivars().metrics.lock();
             std::mem::replace(&mut *metrics, next)
         };
-        if previous.size != next.size || previous.scale != next.scale {
-            self.callbacks()
-                .dispatch_metrics_resize(next.size, next.scale);
-            // The published state follows the metrics; the resize above
-            // published it unless the metrics are not a drawable area, and
-            // the size is part of it either way.
+        if previous != next {
+            // The size, scale and safe area go out in one revision.
             self.callbacks().publish_state();
-        }
-        if self.ivars().sampling.get() != admission {
-            // The resize dispatch above retired this view, so this snapshot's
-            // safe-area half must not be announced either. Roll the snapshot
-            // back before returning: leaving un-announced insets committed as
-            // the baseline would make every later sample compare equal and
-            // never report them at all, whereas rolled back they are still
-            // seen by a later sample — or by the reattach's own
-            // `sample_metrics`. The equality guard keeps the rollback to this
-            // very snapshot, so a newer one committed by a callback that
-            // re-entered sampling during the dispatch above is left alone.
-            let mut metrics = self.ivars().metrics.lock();
-            if *metrics == next {
-                *metrics = previous;
-            }
-            return;
-        }
-        if previous.safe_area != next.safe_area {
-            self.callbacks().dispatch_safe_area_change(next.safe_area);
         }
     }
 }
@@ -836,7 +808,7 @@ impl SceneWindow for IOSWindow {
             window.layoutIfNeeded();
             self.native.get(marker).view.sample_metrics();
             if self.attachment_matches(token, marker)
-                && self.execution_state() == WindowExecutionState::Running
+                && self.execution_now() == WindowExecutionState::Running
             {
                 self.set_frame_tick_paused(false);
             }
@@ -942,13 +914,9 @@ impl SceneWindow for IOSWindow {
             return;
         }
         self.begin_retirement();
-        use crate::owner::handlers::LifecycleEvent;
-        self.callbacks
-            .dispatch_lifecycle_immediate(LifecycleEvent::Execution(
-                WindowExecutionState::Detached,
-            ));
-        self.callbacks
-            .dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
+        // A closed window's snapshot is detached, hidden and unfocused.
+        self.callbacks.publish_state();
+        self.callbacks.dispatch_surface_immediate(false);
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
         crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
         self.facets.text.detach();
@@ -960,12 +928,27 @@ impl SceneWindow for IOSWindow {
 }
 
 impl IOSWindow {
+    /// What the scene's lifecycle lets the window run now; a closed window is
+    /// detached. Read without publishing, as the snapshot reads it.
+    fn execution_now(&self) -> WindowExecutionState {
+        if self.closed.load(Ordering::SeqCst) {
+            WindowExecutionState::Detached
+        } else {
+            self.lifecycle.lock().execution
+        }
+    }
+
     /// The scene's size, visibility, focus, metrics and lifecycle, read again.
+    /// A closed scene is hidden, unfocused and detached.
     fn sample_state(&self) -> WindowState {
         let metrics = *self.metrics.lock();
-        let focused = self.is_focused();
+        let closed = self.closed.load(Ordering::SeqCst);
+        let (focused, visible) = {
+            let lifecycle = self.lifecycle.lock();
+            (lifecycle.focused && !closed, lifecycle.visible && !closed)
+        };
         let state = WindowState::new(WindowGeometry::new(None, metrics.size), metrics.size)
-            .with_visible(self.is_visible())
+            .with_visible(visible)
             .with_focused(focused)
             .with_resizable(false)
             .with_decorated(false)
@@ -976,13 +959,17 @@ impl IOSWindow {
                 metrics.scale,
             )
             .ok(),
-            appearance: PlatformWindow::appearance(self),
+            appearance: if self.dark.load(Ordering::Relaxed) {
+                WindowAppearance::Dark
+            } else {
+                WindowAppearance::Light
+            },
             safe_area: metrics.safe_area,
-            execution: PlatformWindow::execution_state(self),
+            execution: self.execution_now(),
             hovered: self.callbacks.hovered(),
             // A scene has no activation apart from its focus.
             active: focused,
-            capabilities: PlatformWindow::capabilities(self),
+            capabilities: scene_capabilities(),
         }
         .onto(state)
     }
@@ -1018,7 +1005,6 @@ impl IOSWindow {
         native.view.detach_screen();
     }
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
-        use crate::owner::handlers::LifecycleEvent;
         use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
             let mut state = self.lifecycle.lock();
@@ -1052,56 +1038,34 @@ impl IOSWindow {
                 }
             }
         }
-        // Execution, visibility and focus are published in one revision,
-        // before the callbacks of each.
+        // Execution, visibility and focus are published in one revision.
         self.callbacks.publish_state();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
-        let emit = |event| self.callbacks.dispatch_lifecycle_immediate(event);
         match observation {
-            Inactive => emit(LifecycleEvent::Focus(false)),
+            Inactive => {}
             Active => {
-                emit(LifecycleEvent::Focus(true));
                 if current() {
                     self.set_frame_tick_paused(false);
                     self.request_redraw();
                 }
             }
+            // The surface goes after the snapshot that stops the frames.
             Background | Detached => {
-                emit(LifecycleEvent::Execution(self.execution_state()));
-                if !current() {
-                    return;
+                if current() {
+                    self.callbacks.dispatch_surface_immediate(false);
                 }
-                emit(LifecycleEvent::Focus(false));
-                if !current() {
-                    return;
-                }
-                emit(LifecycleEvent::Visibility(false));
-                if !current() {
-                    return;
-                }
-                emit(LifecycleEvent::Surface(false));
             }
+            // The surface comes back before the snapshot that runs the frames
+            // again.
             Foreground => {
-                emit(LifecycleEvent::Surface(true));
+                self.callbacks.dispatch_surface_immediate(true);
                 if !current() {
                     return;
                 }
-                let focused = {
-                    let mut state = self.lifecycle.lock();
-                    state.execution = WindowExecutionState::Running;
-                    state.focused
-                };
-                emit(LifecycleEvent::Focus(focused));
-                if !current() {
-                    return;
-                }
-                emit(LifecycleEvent::Visibility(true));
-                if !current() {
-                    return;
-                }
-                emit(LifecycleEvent::Execution(WindowExecutionState::Running));
+                self.lifecycle.lock().execution = WindowExecutionState::Running;
+                self.callbacks.publish_state();
                 if current() {
                     self.set_frame_tick_paused(false);
                     self.request_redraw();
@@ -1177,20 +1141,22 @@ impl host::Window<IOSLoop> for IOSWindow {
     }
 
     fn capabilities(_: &IOSLoop, _: &IOSWindows) -> WindowCapabilities {
-        WindowCapabilities::NONE
+        scene_capabilities()
     }
 
     fn frame_inset(_: &IOSLoop, _: &IOSWindows, _: f64) -> Size<f64> {
         // A UIKit window has no non-client area.
         Size::new(0.0, 0.0)
     }
+}
 
-    fn on_event(owner: &IOSLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        install(
-            &owner.handler(|handlers| &mut handlers.window_event),
-            callback,
-        );
-    }
+/// What a scene's window honours: `UIWindow` has no title, frame, position or
+/// commands, and observes nothing; the app may only ask the system to destroy
+/// its scene session.
+const fn scene_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.closes = flui_platform::Availability::Native;
+    capabilities
 }
 
 impl crate::host_window::CoreHostWindow for IOSWindow {}
@@ -1224,31 +1190,8 @@ impl crate::host_window::HostWindow for IOSWindow {
 }
 
 impl PlatformWindow for IOSWindow {
-    fn close(&self) {
-        crate::owner::apple::ios::request_close(self.id);
-    }
-
     fn id(&self) -> WindowId {
         self.id
-    }
-
-    fn physical_size(&self) -> Size<i32> {
-        let metrics = *self.metrics.lock();
-        Size::new(
-            (metrics.size.width * metrics.scale).round() as i32,
-            (metrics.size.height * metrics.scale).round() as i32,
-        )
-    }
-
-    fn logical_size(&self) -> Size<f64> {
-        self.metrics.lock().size
-    }
-    fn scale_factor(&self) -> f64 {
-        self.metrics.lock().scale
-    }
-
-    fn display_id(&self) -> Option<DisplayId> {
-        self.screen.lock().id
     }
 
     /// Ask for a frame.
@@ -1283,10 +1226,6 @@ impl PlatformWindow for IOSWindow {
         tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
     }
 
-    fn safe_area_insets(&self) -> EdgeInsets {
-        self.metrics.lock().safe_area
-    }
-
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
@@ -1306,8 +1245,14 @@ impl PlatformWindow for IOSWindow {
         let Some(marker) = MainThreadMarker::new() else {
             return;
         };
-        let size = self.physical_size();
-        let scale = self.scale_factor();
+        let (size, scale) = {
+            let metrics = *self.metrics.lock();
+            let size = Size::new(
+                (metrics.size.width * metrics.scale).round() as i32,
+                (metrics.size.height * metrics.scale).round() as i32,
+            );
+            (size, metrics.scale)
+        };
         let edges = {
             let mut state = self.input_regions.lock();
             let (projection, edges) = &mut *state;
@@ -1339,39 +1284,6 @@ impl PlatformWindow for IOSWindow {
         None
     }
 
-    /// A scene cannot bring itself to the foreground: the user and the system
-    /// decide which app is shown, on every iOS device.
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
-    }
-
-    fn appearance(&self) -> WindowAppearance {
-        if self.dark.load(Ordering::Relaxed) {
-            WindowAppearance::Dark
-        } else {
-            WindowAppearance::Light
-        }
-    }
-
-    fn execution_state(&self) -> WindowExecutionState {
-        if self.closed.load(Ordering::SeqCst) {
-            WindowExecutionState::Detached
-        } else {
-            self.lifecycle.lock().execution
-        }
-    }
-
-    fn is_focused(&self) -> bool {
-        self.lifecycle.lock().focused && !self.closed.load(Ordering::SeqCst)
-    }
-
-    fn is_visible(&self) -> bool {
-        self.lifecycle.lock().visible && !self.closed.load(Ordering::SeqCst)
-    }
-
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         // iOS has no pointer cursor on a touch device.
         Err(
@@ -1380,32 +1292,29 @@ impl PlatformWindow for IOSWindow {
         )
     }
 
-    /// `UIWindow` has no title, frame, position or commands, so a scene's
-    /// window honours none and observes nothing.
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::NONE
-    }
-
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(WindowCommandError::Closed);
         }
-        // The system owns the surface: every command is refused, except the one
-        // that asks for the mode every window has.
-        command.admit(&PlatformWindow::capabilities(self))?;
+        // The system owns the surface: every command is refused, except the
+        // ones every window takes. A scene cannot bring itself to the
+        // foreground: the user and the system decide which app is shown.
+        command.admit(&scene_capabilities())?;
+        if command == WindowCommand::Close {
+            crate::owner::apple::ios::request_close(self.id);
+        }
         Ok(())
     }
 
     /// The scene's size, visibility and focus. The metrics and lifecycle live
     /// apart from this cell, so each call reads them again. `on_state_changed`
     /// is raised where they change: when the view's size or scale does, and on
-    /// each lifecycle step.
+    /// each lifecycle step. `UIWindow` has no title, frame, position or
+    /// commands, so a scene's window honours none and observes nothing.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| self.sample_state());
-        if published.changed {
-            self.callbacks.dispatch_state_changed();
-        }
+        self.callbacks.announce(published.changed);
         published.state
     }
 
@@ -1421,7 +1330,7 @@ impl PlatformWindow for IOSWindow {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let marker = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
-        if self.execution_state() == WindowExecutionState::Detached {
+        if self.execution_now() == WindowExecutionState::Detached {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let view_ptr = Retained::as_ptr(&self.native.get(marker).view);

@@ -31,12 +31,13 @@ pub fn start() {
         .open_window(options)
         .expect("Failed to create canvas");
 
+    let opened = window.state();
     web_sys::console::log_1(
         &format!(
             "Window created: {}x{} (scale: {})",
-            window.logical_size().width,
-            window.logical_size().height,
-            window.scale_factor()
+            opened.content_size.width,
+            opened.content_size.height,
+            opened.metrics.map_or(1.0, |metrics| metrics.scale().get())
         )
         .into(),
     );
@@ -104,13 +105,25 @@ pub fn start() {
         // Frame rendered -- no-op for now (no GPU renderer in this demo)
     }));
 
-    // Register resize callback
-    window.on_resize(Box::new(|metrics| {
-        let size = metrics.physical();
-        let scale = metrics.scale().get();
-        web_sys::console::log_1(
-            &format!("Resize: {}x{} (scale: {scale})", size.width, size.height).into(),
-        );
+    // Log each new drawable size from the window's snapshot.
+    let observed = std::sync::Arc::downgrade(&window);
+    let mut logged = opened.metrics;
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let metrics = window.state().metrics;
+        if metrics == logged {
+            return;
+        }
+        logged = metrics;
+        if let Some(metrics) = metrics {
+            let size = metrics.physical();
+            let scale = metrics.scale().get();
+            web_sys::console::log_1(
+                &format!("Resize: {}x{} (scale: {scale})", size.width, size.height).into(),
+            );
+        }
     }));
 
     web_sys::console::log_1(&"FLUI Web Demo ready! Try clicking and typing on the canvas.".into());

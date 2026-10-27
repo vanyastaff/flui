@@ -8,8 +8,7 @@ use std::sync::{Arc, Mutex};
 use flui_native::{HostWindow, WindowOpen};
 use flui_platform::WindowOptions;
 use flui_platform::{
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, WindowCapabilities, WindowExecutionState,
-    WindowMode,
+    SessionEndAnswer, SessionEndPhase, WindowCapabilities, WindowExecutionState, WindowMode,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -121,18 +120,36 @@ fn recorder<T: Send + 'static>() -> (Arc<Mutex<Vec<T>>>, Arc<Mutex<Vec<T>>>) {
     (Arc::clone(&seen), seen)
 }
 
+/// Each execution state the window's snapshots carry after this call, once
+/// per change.
+fn record_executions(window: &Arc<dyn HostWindow>) -> Arc<Mutex<Vec<WindowExecutionState>>> {
+    let (seen, log) = recorder();
+    let observed = Arc::downgrade(window);
+    let mut last = window.state().execution;
+    window.on_state_changed(Box::new(move || {
+        let Some(window) = observed.upgrade() else {
+            return;
+        };
+        let execution = window.state().execution;
+        if execution != last {
+            last = execution;
+            log.lock().unwrap().push(execution);
+        }
+    }));
+    seen
+}
+
 #[wasm_bindgen_test]
 async fn web_freeze_and_resume_set_the_execution_state() {
     let (_probe, running, window) = page().await;
-    let (seen, log) = recorder();
-    window.on_execution_state_change(Box::new(move |state| log.lock().unwrap().push(state)));
-    assert_eq!(window.execution_state(), WindowExecutionState::Running);
+    let seen = record_executions(&window);
+    assert_eq!(window.state().execution, WindowExecutionState::Running);
 
     fire_document("freeze");
-    assert_eq!(window.execution_state(), WindowExecutionState::Suspended);
+    assert_eq!(window.state().execution, WindowExecutionState::Suspended);
     fire_document("freeze");
     fire_document("resume");
-    assert_eq!(window.execution_state(), WindowExecutionState::Running);
+    assert_eq!(window.state().execution, WindowExecutionState::Running);
     fire_document("resume");
 
     assert_eq!(
@@ -333,10 +350,7 @@ async fn web_page_events_leave_with_the_window() {
         "the window listens on the page"
     );
 
-    let (executions, execution_log) = recorder();
-    window.on_execution_state_change(Box::new(move |state| {
-        execution_log.lock().unwrap().push(state);
-    }));
+    let executions = record_executions(&window);
     let (surfaces, surface_log) = recorder();
     window.on_surface_status_change(Box::new(move |available| {
         surface_log.lock().unwrap().push(available);
@@ -348,7 +362,9 @@ async fn web_page_events_leave_with_the_window() {
     assert_eq!(executions.lock().unwrap().len(), 1);
     assert_eq!(surfaces.lock().unwrap().len(), 1);
 
-    window.close();
+    window
+        .apply(flui_platform::WindowCommand::Close)
+        .expect("a page retires its canvas");
     assert_eq!(
         document_listeners(),
         baseline,
@@ -372,7 +388,8 @@ async fn web_window_reports_what_a_page_can_do() {
     let mut expected = WindowCapabilities::NONE;
     expected.sets_title = flui_platform::Availability::Native;
     expected.enters_fullscreen = flui_platform::Availability::Native;
-    assert_eq!(window.capabilities(), expected);
+    expected.closes = flui_platform::Availability::Emulated;
+    assert_eq!(window.state().capabilities, expected);
     assert_eq!(
         running
             .owner

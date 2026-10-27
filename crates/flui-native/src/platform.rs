@@ -10,7 +10,7 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName,
-    SystemNotice, SystemPreferences, WindowCapabilities, WindowEvent, WindowId, WindowOptions,
+    SystemNotice, SystemPreferences, WindowCapabilities, WindowId, WindowOptions,
 };
 
 use crate::error::{BootstrapError, PlatformError};
@@ -406,7 +406,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// known before any window exists.
     ///
     /// It is the same set every window the platform opens reports through
-    /// [`PlatformWindow::capabilities`](flui_platform::PlatformWindow::capabilities),
+    /// its state snapshot ([`WindowState::capabilities`](flui_platform::WindowState::capabilities)),
     /// so a caller can fit a remembered placement to what the window will be
     /// able to do (`WindowCapabilities::places_at_open`) before it opens one.
     fn window_capabilities(&self) -> flui_platform::WindowCapabilities;
@@ -433,9 +433,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// registrations; callbacks are released when the native run ends.
     /// Other hosts never produce the signal and drop the callback unused.
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>);
-
-    /// Register a callback for window events
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
 
     /// Register a callback for URLs opened by the system
     ///
@@ -718,10 +715,6 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
         H::Lifecycle::on_reopen(&self.owner, callback);
-    }
-
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        H::Window::on_event(&self.owner, callback);
     }
 
     fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {

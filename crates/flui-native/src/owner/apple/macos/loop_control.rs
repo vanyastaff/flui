@@ -464,7 +464,9 @@ impl LoopControl {
             cleanup_step(|| window.callbacks().clear());
         }
         for window in &windows {
-            cleanup_step(|| PlatformWindow::close(window.as_ref()));
+            cleanup_step(|| {
+                let _ = PlatformWindow::apply(window.as_ref(), flui_platform::WindowCommand::Close);
+            });
         }
         let remaining = std::mem::take(&mut *self.windows.lock());
         cleanup_step(|| drop(remaining));

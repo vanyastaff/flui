@@ -33,13 +33,12 @@ struct StubControl {
 impl WindowControl for StubControl {
     fn state(&self) -> WindowState {
         let size = Size::new(320.0, 240.0);
-        WindowState::new(WindowGeometry::new(None, size), size).with_title(Some("Stub".to_owned()))
-    }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
+        WindowState::new(WindowGeometry::new(None, size), size)
+            .with_title(Some("Stub".to_owned()))
+            .with_capabilities(WindowCapabilities::ALL)
     }
     fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        command.admit(&self.capabilities())?;
+        command.admit(&self.state().capabilities)?;
         self.submitted.borrow_mut().push(command);
         Ok(())
     }
@@ -130,7 +129,10 @@ fn a_lifecycle_hook_receives_the_window_it_is_presented_in() {
     let state = handle.state().expect("open");
     assert_eq!(state.title.as_deref(), Some("Stub"));
     assert_eq!(state.content_size, Size::new(320.0, 240.0));
-    assert_eq!(handle.capabilities(), Ok(WindowCapabilities::ALL));
+    assert_eq!(
+        handle.state().map(|state| state.capabilities),
+        Ok(WindowCapabilities::ALL)
+    );
 }
 
 #[test]
@@ -222,9 +224,6 @@ impl WindowControl for Overtaken {
             host.drain();
         }
         first
-    }
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::ALL
     }
     fn submit(&self, _: WindowCommand) -> Result<(), WindowCommandError> {
         Ok(())

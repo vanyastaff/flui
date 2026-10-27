@@ -736,9 +736,10 @@ impl PresentationState {
         })
         .deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor())
         .build();
+        let snapshot = window.state();
         haptics.set_visible(
-            window.is_visible()
-                && window.execution_state() == flui_platform::WindowExecutionState::Running,
+            snapshot.is_seen()
+                && snapshot.execution == flui_platform::WindowExecutionState::Running,
         );
         haptics
     }
@@ -917,6 +918,7 @@ impl PresentationState {
             capabilities.command_sender,
         );
 
+        let snapshot = window.state();
         let state = Self {
             id,
             gesture_geometry: RefCell::new(
@@ -929,10 +931,10 @@ impl PresentationState {
                 window.as_ref(),
                 pipeline.with(PipelineOwner::device_pixel_ratio),
             )),
-            window_visible: Cell::new(window.is_visible()),
-            window_focused: Cell::new(window.is_focused()),
+            window_visible: Cell::new(snapshot.is_seen()),
+            window_focused: Cell::new(snapshot.focused),
             window_display,
-            window_execution: Cell::new(window.execution_state()),
+            window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             textures,
@@ -1038,6 +1040,7 @@ impl PresentationState {
             semantics_flag.store(enabled, Ordering::Relaxed);
         }));
 
+        let snapshot = window.state();
         let state = Self {
             id,
             gesture_geometry: RefCell::new(
@@ -1050,10 +1053,10 @@ impl PresentationState {
                 window.as_ref(),
                 pipeline.with(PipelineOwner::device_pixel_ratio),
             )),
-            window_visible: Cell::new(window.is_visible()),
-            window_focused: Cell::new(window.is_focused()),
+            window_visible: Cell::new(snapshot.is_seen()),
+            window_focused: Cell::new(snapshot.focused),
             window_display,
-            window_execution: Cell::new(window.execution_state()),
+            window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             textures,

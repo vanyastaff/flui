@@ -11,8 +11,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
-    WindowMode, WindowRevision, WindowState,
+    SizeConstraints, WindowCommand, WindowCommandError, WindowControl, WindowMode, WindowRevision,
+    WindowState,
 };
 
 use crate::observation::{Observation, Phase, Subscription, WeakObservation};
@@ -64,20 +64,14 @@ impl WindowHandle {
         self.open()?.control.submit(command)
     }
 
-    /// The window's last published state.
+    /// The window's last published state, with the
+    /// [`capabilities`](WindowState::capabilities) that say which commands it
+    /// honours.
     ///
     /// # Errors
     /// [`WindowClosed`] once the window has closed.
     pub fn state(&self) -> Result<WindowState, WindowClosed> {
         Ok(self.open()?.control.state())
-    }
-
-    /// Which commands the window honours.
-    ///
-    /// # Errors
-    /// [`WindowClosed`] once the window has closed.
-    pub fn capabilities(&self) -> Result<WindowCapabilities, WindowClosed> {
-        Ok(self.open()?.control.capabilities())
     }
 
     /// Set the title.

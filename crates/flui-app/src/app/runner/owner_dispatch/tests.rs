@@ -67,26 +67,8 @@ impl PlatformWindow for ReentrantIdentityWindow {
         self.inner.id()
     }
 
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        if let Some(on_scale) = &self.on_scale {
-            on_scale();
-        }
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -94,13 +76,12 @@ impl PlatformWindow for ReentrantIdentityWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    /// Assembly reads the window's scale from here: the hook runs inside it.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+        if let Some(on_scale) = &self.on_scale {
+            on_scale();
+        }
+        self.inner.state()
     }
 
     fn apply(
@@ -124,12 +105,6 @@ impl PlatformWindow for ReentrantIdentityWindow {
     }
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
 }
 
@@ -1858,7 +1833,7 @@ fn platform_brightness_follows_the_window_appearance() {
                     resize: None,
                 }))
                 .expect("prepare driver");
-            installation.observe_appearance();
+            installation.observe_window();
             installation
                 .submit()
                 .outcome()
@@ -2480,7 +2455,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
         let dispatcher_a =
             install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window_a);
         // Mirror `run_desktop`'s own `on_close` wiring exactly, so a
-        // real `window_a.close()` in a test drives the SAME production
+        // real `WindowCommand::Close` in a test drives the SAME production
         // path a real desktop bootstrap would.
         window_a.on_close(Box::new(move || {
             close_this_window(dispatcher_a);
@@ -2511,7 +2486,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
 /// `RuntimeTask::ClosePresentation` is a same-runtime reentrant dispatch, so
 /// it only enqueues onto the already-checked-out UI runtime's queue; the
 /// uninstall applies at the OUTER dispatch's tail, strictly after
-/// `window.close()`'s own `notify_closed` — and the exit-policy hook it
+/// `WindowCommand::Close`'s own `notify_closed` — and the exit-policy hook it
 /// consulted — has already returned "don't exit". Nothing re-checked
 /// afterwards, so the exit was missed rather than delayed.
 ///
@@ -2541,7 +2516,7 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
             // `close_this_window(dispatcher)` -> `close_presentation` ->
             // a nested `dispatch_platform_ui_runtime` on the SAME ui_runtime this
             // Frame task's own dispatch already checked out.
-            window_a.close();
+            let _ = window_a.apply(flui_platform::WindowCommand::Close);
         })),
     )
     .expect("the outer Frame dispatch itself must not be refused");

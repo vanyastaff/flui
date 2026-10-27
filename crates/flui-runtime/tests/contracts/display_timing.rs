@@ -92,23 +92,8 @@ impl PlatformWindow for CountingWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -117,12 +102,7 @@ impl PlatformWindow for CountingWindow {
         self.inner.set_cursor(cursor)
     }
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+        self.inner.state()
     }
 
     fn apply(
@@ -146,12 +126,6 @@ impl PlatformWindow for CountingWindow {
     }
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
     }
     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
         self.geometry_reads

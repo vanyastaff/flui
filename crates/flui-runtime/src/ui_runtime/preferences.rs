@@ -137,7 +137,7 @@ fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
 /// The display the presentation's window is on, when its backend can say.
 fn current_display(presentation: &PresentationState) -> Option<DisplayId> {
     presentation
-        .with_window(|window| window.display_id())
+        .with_window(|window| window.state().display)
         .flatten()
 }
 

@@ -24,9 +24,8 @@ use super::host::{APP_RUNTIME, with_owner_platform};
     not(target_arch = "wasm32")
 ))]
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, prepare_presentation_alongside,
-    prepare_ui_runtime_alongside,
+    PresentationDispatcher, close_this_window, install_input_wiring,
+    prepare_presentation_alongside, prepare_ui_runtime_alongside,
 };
 #[cfg(all(
     not(target_os = "android"),
@@ -528,7 +527,7 @@ thread_local! {
 ))]
 fn discard_pending_open(mut request: PendingOpen) {
     if let Some(Ok(window)) = request.pending.try_take() {
-        window.close();
+        let _ = window.apply(flui_platform::WindowCommand::Close);
     }
     // An unresolved handle is disclaimed; a delivered handle is explicitly
     // closed above, since dropping an Arc alone need not destroy a native window.
@@ -557,9 +556,10 @@ pub(super) fn cancel_pending_secondary_windows() {
         );
     }
     for completion in completions {
-        let error =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.window.close()))
-                .err();
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = completion.window.apply(flui_platform::WindowCommand::Close);
+        }))
+        .err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut panic,
             error,
@@ -758,8 +758,10 @@ pub(super) fn drain_pending_secondary_window_completions(
             "pending window installation",
         );
         if failed {
-            let error =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close())).err();
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = window.apply(flui_platform::WindowCommand::Close);
+            }))
+            .err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first_panic,
                 error,
@@ -800,7 +802,7 @@ pub(super) fn drain_pending_secondary_window_completions(
 /// native window it opened and wired — the public function discards it
 /// (embedders address the window only through dispatched events, never a
 /// held handle); this module's own tests need it to drive a REAL close
-/// (`window.close()`) instead of reaching for the internal
+/// (`WindowCommand::Close`) instead of reaching for the internal
 /// `close_this_window`/`request_ui_runtime_uninstall` primitives directly, which
 /// would prove the primitives work without proving THIS function's own
 /// `on_close` wiring calls them.
@@ -1052,8 +1054,9 @@ fn finish_open_secondary_window(
     impl Drop for Uninstalled {
         fn drop(&mut self) {
             if let Some(window) = self.0.take()
-                && let Err(payload) =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close()))
+                && let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                }))
             {
                 std::mem::forget(payload);
             }
@@ -1094,7 +1097,8 @@ fn finish_open_secondary_window(
                 .map_err(mount_error)?
             }
             WindowPolicy::Isolated => {
-                let scale_factor = window.scale_factor();
+                let scale_factor =
+                    super::window_install::SurfaceGeometry::of(window.as_ref()).scale;
                 let ui_runtime = super::host::build_ui_runtime(
                     super::presentation_window(Arc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
@@ -1137,13 +1141,6 @@ fn finish_open_secondary_window(
 
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    window.on_resize(Box::new(move |metrics| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
-        );
-    }));
-
     // Window close -> close THIS window's own presentation, exactly like
     // `run_desktop`'s primary window (see `close_this_window`'s own doc):
     // `WindowPolicy::Isolated` reduces to a full uninstall of this new, independent
@@ -1164,36 +1161,10 @@ fn finish_open_secondary_window(
         tracing::info!(?owner_dispatch, "Secondary window closed");
         close_this_window(owner_dispatch);
     });
-    // The prepared close-request wiring publishes its router entry with the window.
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-        );
-    }));
-    window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
-        );
-    }));
-    window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
-        );
-    }));
-    installation.observe_appearance();
-    installation.observe_display();
-    installation.observe_window_state();
-    let execution = window.execution_state();
-    let focused = window.is_focused();
-    let visible = window.is_visible();
-    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
-        execution,
-        focused,
-        visible,
-    });
+    // The prepared close-request wiring publishes its router entry with the
+    // window; its facts reach the presentation from its one snapshot
+    // subscription.
+    installation.observe_window();
     let receipt = installation.submit();
     match receipt.outcome() {
         Some(Err(error)) => return Err(error.into()),
@@ -1238,6 +1209,7 @@ fn warn_window_storage_dir(config: &AppConfig) {
     not(target_arch = "wasm32")
 ))]
 mod tests {
+    use super::super::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
     use super::*;
     use flui_native::{HeadlessPlatform, Platform};
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
@@ -1358,7 +1330,7 @@ mod tests {
                                         resize: Some(Box::new(move |_| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
                                             if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
-                                                closing_window.close();
+                                                let _ = closing_window.apply(flui_platform::WindowCommand::Close);
                                             }
                                             assert!(
                                                 !matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic),
@@ -1381,7 +1353,7 @@ mod tests {
                                 "publication is queued in the completion tail"
                             );
                             if case == InstallCase::Closed {
-                                window.close();
+                                let _ = window.apply(flui_platform::WindowCommand::Close);
                             }
                             Ok(receipt)
                         })),

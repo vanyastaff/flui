@@ -2219,23 +2219,8 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -2243,13 +2228,11 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     ) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    /// The display the test scripted, with what the wrapped window reports.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size();
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-    }
-
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
+        self.inner
+            .state()
+            .with_display(*self.display.lock().expect("display script"))
     }
 
     fn apply(
@@ -2274,16 +2257,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
         None
     }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
-    }
 
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        *self.display.lock().expect("display script")
-    }
     fn gesture_geometry(
         &self,
     ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
@@ -2318,23 +2292,8 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
-    fn physical_size(&self) -> Size<i32> {
-        self.inner.physical_size()
-    }
-    fn logical_size(&self) -> Size<f64> {
-        self.inner.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
     fn request_redraw(&self) {
         self.inner.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
     }
     fn set_cursor(
         &self,
@@ -2343,10 +2302,13 @@ impl flui_platform::PlatformWindow for RegionWindow {
         self.inner.set_cursor(cursor)
     }
     fn state(&self) -> flui_platform::WindowState {
+        if self
+            .panic_display
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted display query failure");
+        }
         self.inner.state()
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
     }
     fn apply(
         &self,
@@ -2365,21 +2327,6 @@ impl flui_platform::PlatformWindow for RegionWindow {
         None
     }
     fn drag_source(&self) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform)
-                .into(),
-        )
-    }
-    fn display_id(&self) -> Option<flui_platform::DisplayId> {
-        if self
-            .panic_display
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            panic!("scripted display query failure");
-        }
         None
     }
     fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
@@ -2414,9 +2361,6 @@ impl flui_platform::WindowControl for SharedControl {
         );
         state.revision = revision;
         state
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        flui_platform::WindowCapabilities::NONE
     }
     fn submit(
         &self,

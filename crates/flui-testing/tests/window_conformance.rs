@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{DeviceSize, Size, WindowMetrics};
-use flui_native::{HeadlessPlatform, Platform};
+use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_platform::{
     CursorError, CursorIcon, PlatformHaptics, PlatformSystemChrome, PlatformTextInput,
     PlatformWindow, Unsupported, UnsupportedReason, WindowCommand, WindowCommandError, WindowId,
@@ -17,7 +16,8 @@ use flui_testing::window_conformance::{self, Readback, WindowFixture};
 
 /// A headless window with a fault of its own: it refuses what it does not
 /// take as unavailable for now, as if asking again could succeed
-/// ([`Fault::RefusesForNow`]), or publishes a snapshot without the facts the
+/// ([`Fault::RefusesForNow`]), stays open when told to close
+/// ([`Fault::IgnoresClose`]), or publishes a snapshot without the facts the
 /// window system reports ([`Fault::SnapshotWithoutFacts`]).
 struct Faulty(Arc<dyn PlatformWindow>, Fault);
 
@@ -25,47 +25,27 @@ impl PlatformWindow for Faulty {
     fn id(&self) -> WindowId {
         self.0.id()
     }
-    fn physical_size(&self) -> DeviceSize {
-        self.0.physical_size()
-    }
-    fn logical_size(&self) -> Size {
-        self.0.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.0.scale_factor()
-    }
     fn request_redraw(&self) {
         self.0.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        self.0.is_focused()
-    }
-    fn is_visible(&self) -> bool {
-        self.0.is_visible()
     }
     fn state(&self) -> WindowState {
         let mut state = self.0.state();
         if matches!(self.1, Fault::SnapshotWithoutFacts) {
-            // The snapshot of a window that keeps metrics and capabilities
-            // to its getters.
+            // The snapshot of a window that keeps its metrics to itself.
             state.metrics = None;
-            state.capabilities = WindowCapabilities::NONE;
         }
         state
     }
-    fn capabilities(&self) -> WindowCapabilities {
-        self.0.capabilities()
-    }
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if command == WindowCommand::Close && matches!(self.1, Fault::IgnoresClose) {
+            return Ok(());
+        }
         self.0.apply(command).map_err(|error| match error {
             WindowCommandError::Unsupported(_) if matches!(self.1, Fault::RefusesForNow) => {
                 Unsupported::new(UnsupportedReason::Unavailable).into()
             }
             other => other,
         })
-    }
-    fn close(&self) {
-        self.0.close();
     }
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
@@ -82,16 +62,24 @@ impl PlatformWindow for Faulty {
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         self.0.drag_source()
     }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        self.0.show()
-    }
 }
 
 /// A headless window under `capabilities`, with `fault` applied to how the
 /// fixture settles or closes it.
 struct Fixture {
     window: Arc<dyn PlatformWindow>,
+    /// The headless window itself, whose model is the window system.
+    model: Arc<dyn HostWindow>,
     fault: Option<Fault>,
+}
+
+impl Fixture {
+    fn mock(&self) -> &MockWindow {
+        self.model
+            .as_any()
+            .downcast_ref::<MockWindow>()
+            .expect("a headless platform opens mock windows")
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -102,23 +90,27 @@ enum Fault {
     IgnoresClose,
     /// The window refuses what it does not take as unavailable for now.
     RefusesForNow,
-    /// The window's snapshot holds neither its metrics nor its capabilities.
+    /// The window's snapshot holds no metrics.
     SnapshotWithoutFacts,
 }
 
 impl Fixture {
     fn new(capabilities: WindowCapabilities, fault: Option<Fault>) -> Self {
         let platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
-        let window: Arc<dyn PlatformWindow> = platform
+        let model = platform
             .open_window(WindowOptions::default())
             .expect("a headless window opens");
-        let window = match fault {
-            Some(fault @ (Fault::RefusesForNow | Fault::SnapshotWithoutFacts)) => {
-                Arc::new(Faulty(window, fault))
-            }
-            _ => window,
+        let window: Arc<dyn PlatformWindow> = match fault {
+            Some(
+                fault @ (Fault::RefusesForNow | Fault::SnapshotWithoutFacts | Fault::IgnoresClose),
+            ) => Arc::new(Faulty(Arc::clone(&model) as _, fault)),
+            _ => Arc::clone(&model) as _,
         };
-        Self { window, fault }
+        Self {
+            window,
+            model,
+            fault,
+        }
     }
 }
 
@@ -130,12 +122,12 @@ impl WindowFixture for Fixture {
     /// The headless host's model: what its window system says, read apart
     /// from the snapshot.
     fn readback(&self) -> Readback {
+        let system = self.mock().window_system();
         Readback {
-            metrics: WindowMetrics::new(self.window.physical_size(), self.window.scale_factor())
-                .ok(),
-            focused: self.window.is_focused(),
-            active: self.window.is_active(),
-            visible: self.window.is_visible(),
+            metrics: system.metrics,
+            focused: system.focused,
+            active: system.active,
+            visible: system.visible,
         }
     }
 
@@ -153,9 +145,10 @@ impl WindowFixture for Fixture {
         }
     }
 
+    /// The user's close, through the simulated window system.
     fn close(&mut self) {
         if !matches!(self.fault, Some(Fault::IgnoresClose)) {
-            self.window.close();
+            self.mock().simulate_close();
         }
     }
 }

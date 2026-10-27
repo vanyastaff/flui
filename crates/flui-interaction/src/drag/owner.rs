@@ -1348,7 +1348,7 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
     let Some(window) = window else {
         return here;
     };
-    let size = window.logical_size();
+    let size = window.state().content_size;
     let inside =
         global.dx >= 0.0 && global.dy >= 0.0 && global.dx <= size.width && global.dy <= size.height;
     if inside {

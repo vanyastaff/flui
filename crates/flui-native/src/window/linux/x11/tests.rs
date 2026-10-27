@@ -113,7 +113,7 @@ fn until_reports(
         );
         thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(Some(&window.is_visible()), expected.last(), "{what}");
+    assert_eq!(Some(&window.state().is_seen()), expected.last(), "{what}");
 }
 
 fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -218,26 +218,25 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
         // already counts as visible, which is the intent.
         assert_eq!(map_state(server, id), MapState::UNMAPPED);
         assert!(window.state().visible);
-        assert_eq!(window.capabilities(), WindowCapabilities::ALL);
+        assert_eq!(window.state().capabilities, WindowCapabilities::ALL);
+        // Each change of whether the window is seen, after the one the window
+        // opened with (an unmapped window has had no visibility event yet),
+        // and the notifications in all.
         let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = Arc::clone(&changes);
-        window.on_state_changed(Box::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }));
-        // Every visibility report, after the one the window opened with:
-        // an unmapped window has had no visibility event yet.
-        // Each report also checks that the snapshot already says the same.
         let visibility = Arc::new(Mutex::new(vec![true]));
         let reported = Arc::clone(&visibility);
         let observed = Arc::downgrade(&window);
-        window.on_visibility_status_change(Box::new(move |visible| {
-            let published = observed.upgrade().map(|window| window.state().visible);
-            assert_eq!(
-                published,
-                Some(visible),
-                "the snapshot runs behind a report"
-            );
-            reported.lock().push(visible);
+        window.on_state_changed(Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let Some(window) = observed.upgrade() else {
+                return;
+            };
+            let seen = window.state().is_seen();
+            let mut reports = reported.lock();
+            if reports.last() != Some(&seen) {
+                reports.push(seen);
+            }
         }));
 
         window.reveal_after_first_frame();
@@ -296,7 +295,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             state.mode == WindowMode::Minimized
         });
         assert!(changes.load(Ordering::SeqCst) > before, "a notification");
-        assert!(!window.state().visible, "a minimized window is not visible");
+        assert!(!window.state().is_seen(), "a minimized window is not seen");
         // The report follows the publication on whichever thread made it.
         until_reports(
             &window,
@@ -345,7 +344,9 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             "a report of the cover",
         );
         // A show of a window that stays mapped keeps its occlusion.
-        window.show().expect("a desktop window shows");
+        window
+            .apply(WindowCommand::Show)
+            .expect("a desktop window shows");
         assert!(!window.state().visible, "still covered");
         assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
         server.destroy_window(cover).expect("request");
@@ -580,7 +581,7 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
         "no probe was made yet"
     );
     run_x11_window(host, WindowOptions::default(), |window, _server| {
-        let capabilities = window.capabilities();
+        let capabilities = window.state().capabilities;
         assert!(!capabilities.observes_minimized.is_available());
         // Nothing else is taken away.
         let mut expected = WindowCapabilities::ALL;

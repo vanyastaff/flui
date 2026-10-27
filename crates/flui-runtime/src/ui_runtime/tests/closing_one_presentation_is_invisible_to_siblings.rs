@@ -491,23 +491,8 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn id(&self) -> flui_platform::WindowId {
         self.delegate.id()
     }
-    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
-        self.delegate.physical_size()
-    }
-    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
-        self.delegate.logical_size()
-    }
-    fn scale_factor(&self) -> f64 {
-        self.delegate.scale_factor()
-    }
     fn request_redraw(&self) {
         self.delegate.request_redraw();
-    }
-    fn is_focused(&self) -> bool {
-        true
-    }
-    fn is_visible(&self) -> bool {
-        true
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
@@ -520,9 +505,6 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     }
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
         self.delegate.drag_source()
-    }
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        self.delegate.show()
     }
     fn set_cursor(
         &self,
@@ -538,9 +520,6 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     }
     fn state(&self) -> flui_platform::WindowState {
         self.delegate.state()
-    }
-    fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.delegate.capabilities()
     }
     fn apply(
         &self,

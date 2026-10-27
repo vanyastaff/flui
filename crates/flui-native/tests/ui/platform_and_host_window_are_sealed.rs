@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use flui_foundation::geometry::{DeviceSize, Size};
+use flui_foundation::geometry::Size;
 use flui_native::storage::DataDirs;
 use flui_native::{
     HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformError, PlatformExecutor,
@@ -18,7 +18,7 @@ use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice, SystemPreferences,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
     WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -119,8 +119,6 @@ impl Platform for OutsidePlatform {
 
     fn on_reopen(&self, _: Box<dyn FnMut() + Send>) {}
 
-    fn on_window_event(&self, _: Box<dyn FnMut(WindowEvent) + Send>) {}
-
     fn on_open_urls(&self, _: Box<dyn FnMut(Vec<String>) + Send>) {}
 
     fn name(&self) -> &'static str {
@@ -147,34 +145,10 @@ impl PlatformWindow for OutsideWindow {
         WindowId(7)
     }
 
-    fn physical_size(&self) -> DeviceSize {
-        Size::default()
-    }
-
-    fn logical_size(&self) -> Size {
-        Size::default()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
-
     fn request_redraw(&self) {}
-
-    fn is_focused(&self) -> bool {
-        false
-    }
-
-    fn is_visible(&self) -> bool {
-        false
-    }
 
     fn state(&self) -> WindowState {
         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
-    }
-
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::NONE
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -202,9 +176,6 @@ impl PlatformWindow for OutsideWindow {
         None
     }
 
-    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
-    }
 }
 
 impl HostWindow for OutsideWindow {
