@@ -601,6 +601,19 @@ large_futures = "warn"
 imprecise_flops = "warn"
 # A mutating debug assertion changes behavior between debug and release builds.
 debug_assert_with_mut_call = "warn"
+# Already on through `pedantic` (the first three) and `all` (`unnecessary_unwrap`),
+# so CI holds them at zero sites on every target; pinned so a group change cannot
+# drop them. `is_some()` then `unwrap()` is a pattern match; `use x::*` hides which
+# name a rename breaks (`use super::*` in a test module stays allowed).
+match_wildcard_for_single_variants = "warn"
+wildcard_imports = "warn"
+needless_for_each = "warn"
+unnecessary_unwrap = "warn"
+# `missing_assert_message` — measured, kept off. It skips `#[test]` functions
+# only, not test helpers, table rows or `#[cfg(test)]` modules, and clippy has no
+# `allow-...-in-tests` option for it: 8,337 sites across Windows, macOS, Android
+# and wasm32, 158 of them in Windows lib/bin code (49 in flui-engine's
+# build.rs-generated pipeline bindings).
 # `wildcard_enum_match_arm` — measured, kept off workspace-wide. A `_` arm that
 # swallows a variant added later is the "accepted work dropped" defect, but the
 # measured count is 729 sites (Windows all-targets/all-features 701, of which
