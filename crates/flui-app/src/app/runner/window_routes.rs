@@ -17,7 +17,9 @@
 //!   change carries no payload, a frame request is answered by one frame, and
 //!   the newest surface change is the surface the window needs (a lost
 //!   `Rebuild` would leave it blank);
-//! - a close request keeps the window open: there is no one to ask yet;
+//! - a close request keeps the window open for now and is remembered: the
+//!   close route is asked once when it is set, and its `Close` closes the
+//!   window;
 //! - `closed` is kept, and the close route runs at once when it is set, so a
 //!   window that closed while the runner was building its presentation still
 //!   retires it.
@@ -115,6 +117,8 @@ pub(crate) struct WindowRoutes {
     closed: RefCell<Option<Box<dyn FnOnce()>>>,
     /// `closed` arrived before its route.
     closed_heard: Cell<bool>,
+    /// A close request arrived before its route: asked once it is set.
+    close_pending: Cell<bool>,
     surface_changed: Slot<SurfaceChange, ()>,
     held: RefCell<Held>,
 }
@@ -188,9 +192,20 @@ impl WindowRoutes {
         }
     }
 
-    /// Route the window's close requests.
-    pub(crate) fn route_close_requested(&self, mut route: impl FnMut() -> CloseDecision + 'static) {
+    /// Route the window's close requests. A request that arrived before the
+    /// route kept the window open and is asked now, once; granted, `close`
+    /// closes the window (the window system's own request was answered
+    /// already, so the close is the application's command).
+    pub(crate) fn route_close_requested(
+        &self,
+        mut route: impl FnMut() -> CloseDecision + 'static,
+        close: impl FnOnce() + 'static,
+    ) {
         self.close_requested.set(Box::new(move |()| route()));
+        if self.close_pending.take() && self.close_requested.call(()) == Some(CloseDecision::Close)
+        {
+            close();
+        }
     }
 
     /// Run `route` when the window has closed, in place of the route set
@@ -254,10 +269,12 @@ impl WindowHandler for WindowRoutes {
     }
 
     fn close_requested(&self) -> CloseDecision {
-        // No presentation to ask yet: the window stays.
-        self.close_requested
-            .call(())
-            .unwrap_or(CloseDecision::KeepOpen)
+        self.close_requested.call(()).unwrap_or_else(|| {
+            // No presentation to ask yet: the window stays, and the request
+            // is asked once the route is set.
+            self.close_pending.set(true);
+            CloseDecision::KeepOpen
+        })
     }
 
     fn closed(&self) {

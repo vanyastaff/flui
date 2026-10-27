@@ -41,4 +41,5 @@
   `InputCallback` and `InputWake`. The host no longer holds input for a callback registered
   later: the handler exists from the open. An application window's input, state change, frame
   request and surface change that arrive before its presentation exists are kept by the runner
-  and handed to the presentation in order; a close request in that gap keeps the window.
+  and handed to the presentation in order; a close request in that gap keeps the
+  window open until the presentation can be asked, once, and closes it if granted.

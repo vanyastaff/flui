@@ -250,12 +250,18 @@ impl WindowInstall {
             handler,
         ));
         let router = self.host.native().close_requests();
-        WindowRoutes::of(&**self.window.native()).route_close_requested(move || {
-            match router.consult(address, crate::app::close_request::CloseReason::User) {
+        let closing = std::sync::Arc::downgrade(self.window.native());
+        WindowRoutes::of(&**self.window.native()).route_close_requested(
+            move || match router.consult(address, crate::app::close_request::CloseReason::User) {
                 CloseResponse::Close => flui_platform::CloseDecision::Close,
                 _ => flui_platform::CloseDecision::KeepOpen,
-            }
-        });
+            },
+            move || {
+                if let Some(window) = closing.upgrade() {
+                    super::close_granted_request(&*window);
+                }
+            },
+        );
     }
 
     #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]

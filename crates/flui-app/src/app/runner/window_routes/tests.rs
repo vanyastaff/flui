@@ -140,6 +140,48 @@ fn a_route_survives_its_panic_and_yields_to_its_successor() {
     assert!(successor.get(), "the route set from inside its call lost");
 }
 
+/// A close request before the close route keeps the window and is asked of
+/// the route exactly once when it is set, however many came; granted, the
+/// window is closed then, refused, it is not.
+fn a_close_request_before_its_route_is_asked_once() {
+    for (answer, closes) in [(CloseDecision::Close, 1), (CloseDecision::KeepOpen, 0)] {
+        let routes = WindowRoutes::new();
+        assert_eq!(routes.close_requested(), CloseDecision::KeepOpen);
+        assert_eq!(routes.close_requested(), CloseDecision::KeepOpen);
+        let asked = Rc::new(Cell::new(0));
+        let closed = Rc::new(Cell::new(0));
+        let (count, closing) = (Rc::clone(&asked), Rc::clone(&closed));
+        routes.route_close_requested(
+            move || {
+                count.set(count.get() + 1);
+                answer
+            },
+            move || closing.set(closing.get() + 1),
+        );
+        assert_eq!(
+            asked.get(),
+            1,
+            "{answer:?}: the held request reached the route once"
+        );
+        assert_eq!(
+            closed.get(),
+            closes,
+            "{answer:?}: the close follows the answer"
+        );
+        assert_eq!(
+            routes.close_requested(),
+            answer,
+            "a later request asks the route"
+        );
+        assert_eq!(asked.get(), 2);
+        assert_eq!(
+            closed.get(),
+            closes,
+            "{answer:?}: a later request is its caller's"
+        );
+    }
+}
+
 #[test]
 fn window_routes_contract() {
     let rows: &[(&str, fn())] = &[
@@ -150,6 +192,10 @@ fn window_routes_contract() {
         (
             "state, frame and surface wait for their routes",
             state_frame_and_surface_wait_for_their_routes,
+        ),
+        (
+            "a close request before its route is asked once",
+            a_close_request_before_its_route_is_asked_once,
         ),
         (
             "a close heard early runs its route",

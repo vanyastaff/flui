@@ -288,10 +288,20 @@ pub fn run_direct(
         // wants to refuse a close here owns the loop already and opens
         // its window with a handler of its own — the
         // presentation-addressed API would have nothing to key on.
-        routes.route_close_requested(|| {
-            tracing::debug!("Window close requested, allowing (direct mode hosts no ui_runtime)");
-            flui_platform::CloseDecision::Close
-        });
+        let closing = std::sync::Arc::downgrade(&window);
+        routes.route_close_requested(
+            || {
+                tracing::debug!(
+                    "Window close requested, allowing (direct mode hosts no ui_runtime)"
+                );
+                flui_platform::CloseDecision::Close
+            },
+            move || {
+                if let Some(window) = closing.upgrade() {
+                    crate::app::runner::close_granted_request(&*window);
+                }
+            },
+        );
 
         owner_platform_installed(|owner| {
             owner.shared().on_quit(Box::new(|| {
