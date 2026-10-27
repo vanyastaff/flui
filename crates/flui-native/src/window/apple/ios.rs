@@ -570,7 +570,16 @@ impl FluiView {
         // dispatches a callback, so admission is rechecked below as for any
         // other emission.
         if let Some(scene) = window.windowScene() {
-            self.adopt_screen(&scene.screen());
+            let screen = scene.screen();
+            self.adopt_screen(&screen);
+            // A view without `drawRect:` keeps a content scale of 1.0 on any
+            // screen, and the Metal layer wgpu adds follows this view's layer
+            // scale, so a 3x screen would get a 1x drawable stretched three
+            // times and a snapshot claiming a pixel ratio of 1. The screen's
+            // scale is the one to render and report at.
+            if self.contentScaleFactor() != screen.scale() {
+                self.setContentScaleFactor(screen.scale());
+            }
         }
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();

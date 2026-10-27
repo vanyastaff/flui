@@ -1,5 +1,5 @@
-//! The Apple displays: `NSScreen` on macOS ([`macos`]), `UIScreen` on iOS
-//! ([`ios`]), and how the two sources name a display, which is what they share.
+//! The Apple displays: `NSScreen` on macOS (`macos`), `UIScreen` on iOS
+//! (`ios`), and how the two sources name a display, which is what they share.
 //!
 //! macOS keys a screen by the UUID of the display behind it, and publishes its
 //! frame in device pixels from the top-left of the primary screen. iOS has no
@@ -8,7 +8,7 @@
 //!
 //! The pure half, which every host compiles and tests, is how a screen is keyed
 //! and placed ([`screen`]) and the iOS display link's frame-rate rules
-//! ([`link_rate`]). A macOS mode's rate and a link's tick become a period by
+//! (`link_rate`). A macOS mode's rate and a link's tick become a period by
 //! the one constructor in `display::source`.
 
 #[cfg(target_os = "ios")]
