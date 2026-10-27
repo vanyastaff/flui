@@ -8,6 +8,10 @@
   permission vocabulary, `Plugin` and the registrar in the contract crate, and the carve-out for
   handles that framework widgets name. Providers of the seam are assembled by `flui-app`, not by
   the core host.
+- **Amended:** 2026-10-27 — decision 2, item 7, approved by the owner: the reasons gain
+  `NotYetOnThisHost` (the OS has it, this FLUI host does not implement it yet; not retryable), so
+  a caller tells "never on this platform" from "not in FLUI yet". A window capability left
+  unimplemented says so on `WindowCapabilities`, and admission answers it (ADR-0254 §6).
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -230,6 +234,7 @@ is keyed by the marker, not by the implementation.
    |---|---|
    | `NotOnThisPlatform` | This platform never has it. |
    | `NotOnThisDevice` | This platform has it, but the OS build or the hardware of this device lacks it (ADR-0244's gate refused, or the sensor is absent). The value carries no version number; the number stays inside the gate. |
+   | `NotYetOnThisHost` | This platform's OS has it, but this FLUI host does not implement it yet. Not retryable: the same host answers the same way. A later FLUI may remove it, which `NotOnThisPlatform` never invites. |
    | `NotDeclared { what }` | The application's manifest lacks something the capability needs (a permission, a usage string, a background mode); `what` names it. The declarations of ADR-0154 make this detectable before the OS refuses or ends the process. |
    | `Unavailable` | Temporary: the capability can work here but not now, and the caller may try again. Not the user's refusal (a permission state) and not an OS service switched off (service state). |
    | `NotRegistered` | The UI runtime has no provider. Answered by the registry. |
@@ -356,6 +361,7 @@ impl Unsupported {
 pub enum UnsupportedReason {
     NotOnThisPlatform,
     NotOnThisDevice,
+    NotYetOnThisHost,
     NotDeclared { what: &'static str },
     Unavailable,
     NotRegistered,

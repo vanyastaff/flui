@@ -12,17 +12,45 @@ use flui_platform::{
     SubmitError, Unsupported, UnsupportedReason,
 };
 
-/// Every reason there is.
-const REASONS: [UnsupportedReason; 6] = [
-    UnsupportedReason::NotOnThisPlatform,
-    UnsupportedReason::NotOnThisDevice,
-    UnsupportedReason::NotDeclared {
-        what: "android.permission.VIBRATE",
-    },
-    UnsupportedReason::Unavailable,
-    UnsupportedReason::NotRegistered,
-    UnsupportedReason::NoWindow,
+/// Every reason there is, whether asking again may succeed, and its message.
+const ANSWERS: [(UnsupportedReason, bool, &str); 7] = [
+    (
+        UnsupportedReason::NotOnThisPlatform,
+        false,
+        "not on this platform",
+    ),
+    (UnsupportedReason::NotOnThisDevice, false, "not on this device"),
+    (
+        UnsupportedReason::NotYetOnThisHost,
+        false,
+        "not yet implemented by this host",
+    ),
+    (
+        UnsupportedReason::NotDeclared {
+            what: "android.permission.VIBRATE",
+        },
+        false,
+        "the application does not declare android.permission.VIBRATE",
+    ),
+    (UnsupportedReason::Unavailable, true, "unavailable for now"),
+    (
+        UnsupportedReason::NotRegistered,
+        false,
+        "nothing is registered to provide it",
+    ),
+    (UnsupportedReason::NoWindow, false, "its window is not there"),
 ];
+
+/// Every reason there is.
+const REASONS: [UnsupportedReason; ANSWERS.len()] = {
+    let mut reasons = [UnsupportedReason::NoWindow; ANSWERS.len()];
+    let mut at = 0;
+    while at < ANSWERS.len() {
+        reasons[at] = ANSWERS[at].0;
+        at += 1;
+    }
+    reasons
+};
 
 /// `make` builds the error from each reason's [`Unsupported`], and the error
 /// answers that value back, says its reason and names it as its source.
@@ -100,12 +128,17 @@ fn haptic_outcomes() {
     assert_eq!(HapticOutcome::Suppressed.unsupported(), None);
 }
 
-/// Only a reason that may pass is worth asking again.
-fn only_unavailable_is_retryable() {
-    for reason in REASONS {
+/// Only a reason that may pass is worth asking again, and each reason says
+/// which absence it is: a host that has not implemented what the operating
+/// system has does not read as the platform lacking it.
+fn each_reason_answers_retry_and_message() {
+    for (reason, retryable, message) in ANSWERS {
+        let unsupported = Unsupported::new(reason);
+        assert_eq!(unsupported.is_retryable(), retryable, "{reason:?}");
+        assert_eq!(reason.to_string(), message, "{reason:?}");
         assert_eq!(
-            Unsupported::new(reason).is_retryable(),
-            reason == UnsupportedReason::Unavailable,
+            unsupported.to_string(),
+            format!("unsupported: {message}"),
             "{reason:?}"
         );
     }
@@ -124,8 +157,8 @@ fn every_error_carries_its_reason() {
             ("text store hosts", text_store_hosts),
             ("haptic outcomes", haptic_outcomes),
             (
-                "only unavailable is retryable",
-                only_unavailable_is_retryable,
+                "each reason answers retry and message",
+                each_reason_answers_retry_and_message,
             ),
         ],
     );

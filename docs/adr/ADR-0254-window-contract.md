@@ -11,6 +11,11 @@
   `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
+- **Amended:** 2026-10-27 — decision 6, approved by the owner as an extension of the vocabulary of
+  absence: `NotYetOnThisHost` joins the reasons (ADR-0152's table). A host marks a capability
+  the OS has and it does not implement yet with `WindowCapabilities::unavailable(command, reason)`,
+  the one per-capability reason that also carries `NotOnThisDevice`, and admission refuses the
+  command with that reason instead of `NotOnThisPlatform`.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -353,7 +358,8 @@ method stops compiling instead of being documented. The raster thread receives a
 the vocabulary of the window side too. It replaces the unit `Unsupported` and `Unavailable`
 variants of `WindowCommandError`, `WindowShowError`, `CursorError` and the other window-side enums,
 which embed it. The reasons are ADR-0152's: `NotOnThisPlatform`, `NotOnThisDevice` (the OS build
-or the hardware of this device lacks it), `NotDeclared`, `Unavailable` (temporary: trying again
+or the hardware of this device lacks it), `NotYetOnThisHost` (the OS has it and this host does not
+implement it yet; amended 2026-10-27), `NotDeclared`, `Unavailable` (temporary: trying again
 may succeed), `NotRegistered` and `NoWindow`. A window builds the value with
 `Unsupported::new(reason)`; `Unsupported::of::<C>(reason)`, which names a capability, is for the
 seam.
