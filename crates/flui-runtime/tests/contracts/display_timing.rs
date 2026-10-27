@@ -437,7 +437,10 @@ fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
         inner: flui_native::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
+            .open_window(
+                flui_platform::WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("headless window"),
         geometry_reads: Arc::clone(&reads),
     });

@@ -91,7 +91,7 @@ impl HeadlessInputDevices {
             let mut state = state.lock();
             let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
             let change = state.devices.attach(kind, time)?;
-            let windows = state.windows.callbacks_of_all();
+            let windows = state.windows.deliveries_of_all();
             (change, windows, state.devices.present())
         };
         for callbacks in windows {
@@ -117,7 +117,7 @@ impl HeadlessInputDevices {
             let Some(removed) = state.devices.remove(id, time) else {
                 return false;
             };
-            let windows = state.windows.callbacks_of_all();
+            let windows = state.windows.deliveries_of_all();
             (removed, windows, state.devices.present())
         };
         for callbacks in windows {

@@ -117,8 +117,9 @@ fn window_move_names_the_new_display_and_hints_once() {
     let platform = two_displays();
     let snapshot = platform.display_snapshot().expect("snapshot");
     let (left, right) = (snapshot.displays()[0].id, snapshot.displays()[1].id);
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("window");
     let window: Arc<dyn flui_native::HostWindow> = window;
     let mock = window
@@ -134,9 +135,9 @@ fn window_move_names_the_new_display_and_hints_once() {
 
     let hints = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hints);
-    window.on_state_changed(Box::new(move || {
+    handler.react_to_state_change(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     mock.simulate_move_to(right).expect("move");
     assert_eq!(window.state().display, Some(right));
     assert_eq!(hints.load(Ordering::SeqCst), 1);
@@ -152,7 +153,10 @@ fn window_move_names_the_new_display_and_hints_once() {
 fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
     let platform = two_displays();
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("window");
     let window: Arc<dyn flui_native::HostWindow> = window;
     let mock = window

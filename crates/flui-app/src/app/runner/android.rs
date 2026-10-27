@@ -104,9 +104,9 @@ where
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
-    /// bootstrap registers `on_surface_status_change`, which releases the
+    /// bootstrap routes the window's `surface_changed`, which releases the
     /// renderer's surface on `Pause`/`TerminateWindow` and rebuilds it when a
-    /// window returns — see that registration below. **Unvalidated
+    /// window returns — see that route below. **Unvalidated
     /// on-device**: no device and no CI compile target for
     /// `target_os = "android"` verify this; stated here and in the registry
     /// rather than assumed.
@@ -173,15 +173,20 @@ where
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_native::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Failed to create Android window");
-                return Err(anyhow::Error::from(error).context("Failed to create Android window"));
-            }
-        };
+        let routes = super::window_routes::WindowRoutes::new();
+        let host =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Failed to create Android window");
+                    return Err(
+                        anyhow::Error::from(error).context("Failed to create Android window")
+                    );
+                }
+            };
+        routes.adopt(host.id());
         let presentation_window = super::presentation_window(Arc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);
         let window = Arc::clone(presentation_window.window());
@@ -318,7 +323,7 @@ where
             },
         ))?;
         let binding = frame.binding;
-        window.on_request_frame(Box::new(move |request| {
+        routes.route_frame_requested(move |request| {
             // The frame is the turn a window command's wake asks for: it starts
             // with the queued commands, before the callback guard would leave
             // them waiting.
@@ -329,7 +334,7 @@ where
                     RuntimeTask::Frame(binding, request),
                 );
             });
-        }));
+        });
 
         // 8. Lifecycle callbacks
         //
@@ -390,27 +395,26 @@ where
         // ends at the mint and the dispatch runs outside it; the ui_runtime half is
         // documented as deferrable below, so the ordering does not change.
         //
-        // Two more invariants this registration rests on, stated where it is
-        // made rather than assumed:
+        // Two more invariants this route rests on, stated where it is set
+        // rather than assumed:
         //
-        // * The slots are cleared exactly once, on the Android platform's `run`
-        //   exit path (`flui-native`'s `owner/android/looper.rs`, after the
-        //   loop and before the quit hook), on the loop's three returning
-        //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
-        //   plus one named exception, a panic that unwinds out of `run` and
-        //   skips the clear by decision (ADR-0063 decision 5). The clear drops
-        //   this closure and the frame closure above, which are the only
-        //   owners of `lane`, so the renderer and its surface lease go with
-        //   them and the window's `Arc` is released.
-        // * Nothing registers on the cleared set afterwards. `on_ready` is
-        //   `FnOnce`, so this bootstrap runs once per platform, and a recreated
-        //   activity is a new `android_main` with a new `AndroidApp`, a new
-        //   platform and a new window (`android-activity` 0.6.1,
-        //   `native_activity/glue.rs`'s `ANativeActivity_onCreate`); the
-        //   once-then-discarded rule `WindowCallbacks::clear` documents is
-        //   never reached by this runner.
+        // * The window lets go of its handler exactly once, on the Android
+        //   platform's `run` exit path (`flui-native`'s `owner/android/looper.rs`,
+        //   after the loop and before the quit hook), on the loop's three
+        //   returning routes: `MainEvent::Destroy`, a `quit()`, a bootstrap
+        //   that failed, plus one named exception, a panic that unwinds out of
+        //   `run` and skips the release by decision (ADR-0063 decision 5). The
+        //   handler owns this route and the frame route above, which are the
+        //   only owners of `lane`, so the renderer and its surface lease go
+        //   with them and the window's `Arc` is released.
+        // * One window, one handler: `on_ready` is `FnOnce`, so this bootstrap
+        //   runs once per platform, and a recreated activity is a new
+        //   `android_main` with a new `AndroidApp`, a new platform and a new
+        //   window (`android-activity` 0.6.1, `native_activity/glue.rs`'s
+        //   `ANativeActivity_onCreate`).
         let lane_surface = Arc::clone(&lane);
-        window.on_surface_status_change(Box::new(move |has_surface| {
+        routes.route_surface_changed(move |change| {
+            let has_surface = change == flui_platform::SurfaceChange::Rebuild;
             let now = web_time::Instant::now();
             let mut lane = lane_surface.lock();
             // The engine's tracker mark, the generation mint and the retry's
@@ -445,7 +449,7 @@ where
             // `Resume` independently of the window — and is traced; a genuine
             // failure warns, and the frame-path retry above now polls it.
             report_surface_settlement("Android", &outcome);
-        }));
+        });
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.

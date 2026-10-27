@@ -27,9 +27,12 @@ fn owner() -> OwnerPlatform {
     saved.borrow_mut().take().expect("started owner")
 }
 
-fn open(owner: &OwnerPlatform) -> Arc<dyn HostWindow> {
+fn open(
+    owner: &OwnerPlatform,
+    handler: &std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
+) -> Arc<dyn HostWindow> {
     owner
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("open")
         .try_ready()
         .expect("ready")
@@ -48,15 +51,16 @@ fn device(left: i32, top: i32, right: i32, bottom: i32) -> DeviceInputRegion {
 
 fn headless_reports_input_regions_and_sends_only_changes() {
     let owner = owner();
-    let window = open(&owner);
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let capabilities = Arc::new(Mutex::new(None));
     let seen = Arc::clone(&capabilities);
-    window.on_input(Box::new(move |input| {
+    handler.react_to_input(move |input| {
         if let PlatformInput::Capabilities(value) = input {
             *seen.lock() = Some(value);
         }
         DispatchEventResult::default()
-    }));
+    });
+    let window = open(&owner, &handler);
     assert_eq!(
         capabilities.lock().map(|value| value.input_regions()),
         Some(Availability::Native)

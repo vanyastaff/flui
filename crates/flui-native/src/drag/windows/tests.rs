@@ -18,6 +18,7 @@
 //! `owner::modal_pace`.
 
 use flui_testing::window_commands::AdmitAndApply as _;
+use flui_testing::window_handler::RecordingWindowHandler;
 use std::cell::{Cell, RefCell};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
@@ -278,6 +279,7 @@ impl Drop for Poke {
 /// A window, its drop target as OLE holds it, and what its input callback saw
 /// of drags.
 struct Window {
+    handler: Rc<RecordingWindowHandler>,
     host: Arc<dyn HostWindow>,
     hwnd: HWND,
     ole: IDropTarget,
@@ -308,12 +310,14 @@ fn open(
     title: &str,
     react: impl FnMut(&DragDropEvent) + 'static,
 ) -> Window {
+    let handler = RecordingWindowHandler::new();
     let window = platform
         .open_window(
             WindowOptions::default()
                 .with_title(title)
                 .with_size(Size::new(240.0, 160.0))
                 .with_visible(true),
+            handler.clone(),
         )
         .expect("window");
     let hwnd = window
@@ -324,18 +328,19 @@ fn open(
     let seen = Rc::new(RefCell::new(Vec::new()));
     let offer = Rc::new(RefCell::new(None));
     let (log, kept) = (Rc::clone(&seen), Rc::clone(&offer));
-    let mut react = react;
-    window.on_input(Box::new(move |input| {
+    let react = RefCell::new(react);
+    handler.react_to_input(move |input| {
         if let PlatformInput::DragDrop(event) = input {
             if let DragDropEvent::Entered { offer, .. } = &event {
                 *kept.borrow_mut() = Some(offer.clone());
             }
             log.borrow_mut().push(describe(&event));
-            react(&event);
+            (react.borrow_mut())(&event);
         }
         DispatchEventResult::default()
-    }));
+    });
     Window {
+        handler,
         host: window,
         hwnd,
         ole: drop_target(hwnd),
@@ -995,11 +1000,11 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     let frames = Arc::new(AtomicU64::new(0));
     let release = Arc::new(AtomicBool::new(false));
     let (counted, released) = (Arc::clone(&frames), Arc::clone(&release));
-    second.host.on_request_frame(Box::new(move |_| {
+    second.handler.react_to_frame(move |_| {
         if counted.fetch_add(1, Ordering::Relaxed) + 1 >= 3 {
             released.store(true, Ordering::Release);
         }
-    }));
+    });
     platform.set_wake_deadline_hook(Box::new(|| Some(web_time::Instant::now())));
     let _ = pump_until(|| false, Duration::from_millis(50));
     let before = frames.load(Ordering::Relaxed);

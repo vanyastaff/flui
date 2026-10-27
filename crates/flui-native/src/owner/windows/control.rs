@@ -649,8 +649,12 @@ impl OwnerHooks for WindowsOwnerHooks {
         }
     }
 
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
-        self.direct.open_owner_window(options)
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: std::rc::Rc<dyn flui_platform::WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
+        self.direct.open_owner_window(options, handler)
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {

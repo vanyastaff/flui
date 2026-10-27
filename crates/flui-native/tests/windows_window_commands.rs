@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_native::{HostWindow, Platform as _, WindowsPlatform};
+
+use crate::Opened;
 use flui_platform::{
     ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
     WindowCommand, WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
@@ -74,8 +76,8 @@ fn deferred() -> WindowOptions {
         .with_reveal(WindowReveal::AfterFirstFrame)
 }
 
-fn open(platform: &WindowsPlatform, options: WindowOptions) -> Arc<dyn HostWindow> {
-    platform.open_window(options).expect("a Win32 window opens")
+fn open(platform: &WindowsPlatform, options: WindowOptions) -> Opened {
+    Opened::on(platform, options).expect("a Win32 window opens")
 }
 
 fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
@@ -279,9 +281,9 @@ fn a_hidden_window_still_runs_its_frame_requests() {
     let window = open(&platform, deferred());
     let frames = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&frames);
-    window.on_request_frame(Box::new(move |_| {
+    window.handler.react_to_frame(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     window.request_redraw();
     assert!(
         pump_until(Duration::from_secs(2), || frames.load(Ordering::SeqCst) > 0),
@@ -720,35 +722,36 @@ fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
     let redraws = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&redraws);
     let window = open(&platform, deferred());
-    window.on_request_frame(Box::new(move |_| {
+    window.handler.react_to_frame(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     window.request_redraw();
     assert!(pump_until(Duration::from_secs(2), || redraws
         .load(Ordering::SeqCst)
         > 0));
 }
 
-/// Run `changed` with the snapshot before and after each `on_state_changed`
-/// of `window` from here on, as a consumer compares them.
+/// Run `changed` with the snapshot before and after each `state_changed` of
+/// `window`'s handler from here on, as a consumer compares them.
 fn on_changes(
-    window: &Arc<dyn HostWindow>,
-    mut changed: impl FnMut(&Arc<dyn HostWindow>, &WindowState, &WindowState) + Send + 'static,
+    window: &Opened,
+    changed: impl FnMut(&Arc<dyn HostWindow>, &WindowState, &WindowState) + 'static,
 ) {
-    let weak = Arc::downgrade(window);
-    let mut seen = window.state();
-    window.on_state_changed(Box::new(move || {
+    let weak = Arc::downgrade(&window.window);
+    let seen = std::cell::RefCell::new(window.state());
+    let changed = std::cell::RefCell::new(changed);
+    window.handler.react_to_state_change(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
         let next = window.state();
-        let previous = std::mem::replace(&mut seen, next.clone());
-        changed(&window, &previous, &next);
-    }));
+        let previous = seen.replace(next.clone());
+        (changed.borrow_mut())(&window, &previous, &next);
+    });
 }
 
 /// Whether `window`'s content can be seen, each time the snapshot changes it.
-fn record_visibility(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<bool>>> {
+fn record_visibility(window: &Opened) -> Arc<std::sync::Mutex<Vec<bool>>> {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&events);
     on_changes(window, move |_, previous, next| {
@@ -863,9 +866,9 @@ fn a_title_the_system_sets_reaches_the_snapshot() {
     let window = open(&platform, hidden());
     let changed = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&changed);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     let before = window.state().revision;
     // SAFETY: a plain call on this test's own live window.
     unsafe { SetWindowTextW(hwnd_of(&window), w!("set from outside")) }.expect("title");
@@ -894,12 +897,12 @@ fn a_style_the_system_changes_reaches_the_snapshot() {
 // --- frames, scale and visibility ----------------------------------------
 
 /// Count the window's frame requests from here on.
-fn count_frames(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
+fn count_frames(window: &Opened) -> Arc<AtomicUsize> {
     let frames = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&frames);
-    window.on_request_frame(Box::new(move |_| {
+    window.handler.react_to_frame(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     frames
 }
 
@@ -1049,7 +1052,9 @@ fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
     settle();
     assert_ne!(window.state().mode, WindowMode::Fullscreen);
 
-    window.on_input(Box::new(|_| DispatchEventResult::resolved(false, true)));
+    window
+        .handler
+        .react_to_input(|_| DispatchEventResult::resolved(false, true));
     press_f11(&window);
     settle();
     assert_ne!(
@@ -1058,7 +1063,9 @@ fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
         "the app prevented it"
     );
 
-    window.on_input(Box::new(|_| DispatchEventResult::resolved(true, false)));
+    window
+        .handler
+        .react_to_input(|_| DispatchEventResult::resolved(true, false));
     press_f11(&window);
     assert_ne!(
         window.state().mode,
@@ -1191,7 +1198,7 @@ fn system_backdrop(hwnd: HWND) -> Option<flui_platform::WindowMaterial> {
     }
 }
 
-/// What one `on_state_changed` read: the snapshot's metrics with what Win32
+/// What one `state_changed` read: the snapshot's metrics with what Win32
 /// read back at that moment.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Heard {
@@ -1199,13 +1206,13 @@ struct Heard {
     reported: Option<WindowMetrics>,
 }
 
-/// Record what each of `window`'s `on_state_changed` reads from here on.
-fn listen_for_snapshots(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<Heard>>> {
+/// Record what each of `window`'s `state_changed` reads from here on.
+fn listen_for_snapshots(window: &Opened) -> Arc<std::sync::Mutex<Vec<Heard>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&heard);
     let weak = Arc::downgrade(window);
     let address = hwnd_of(window).0 as isize;
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
@@ -1214,7 +1221,7 @@ fn listen_for_snapshots(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Ve
             published: window.state().metrics,
             reported: win32_readback(hwnd).metrics,
         });
-    }));
+    });
     heard
 }
 
@@ -1234,7 +1241,7 @@ fn the_snapshots_carry_each_resize(heard: &[Heard], before: WindowMetrics) {
 }
 
 /// A DPI change holds publishing while the window takes its new rectangle:
-/// what `on_state_changed` reads is the whole new window, never the new
+/// what `WindowHandler::state_changed` reads is the whole new window, never the new
 /// rectangle at the old scale.
 fn a_dpi_change_announces_one_whole_snapshot() {
     let platform = platform();
@@ -1317,7 +1324,7 @@ fn the_win32_window_conforms() {
     let hwnd = hwnd_of(&window);
     window_conformance::assert_conforms(&mut Win32Fixture {
         _platform: platform,
-        window,
+        window: window.window,
         hwnd,
     });
 }
@@ -1432,13 +1439,15 @@ fn a_close_from_another_thread_asks_no_veto() {
     settle();
     let asked = Arc::new(AtomicUsize::new(0));
     let veto = Arc::clone(&asked);
-    window.on_should_close(Box::new(move || {
+    window.handler.react_to_close_request(move || {
         veto.fetch_add(1, Ordering::SeqCst);
-        false
-    }));
+        flui_platform::CloseDecision::KeepOpen
+    });
     let closed = Arc::new(AtomicBool::new(false));
     let heard = Arc::clone(&closed);
-    window.on_close(Box::new(move || heard.store(true, Ordering::SeqCst)));
+    window
+        .handler
+        .react_to_close(move || heard.store(true, Ordering::SeqCst));
     let elsewhere = Arc::clone(&window);
     std::thread::spawn(move || {
         elsewhere

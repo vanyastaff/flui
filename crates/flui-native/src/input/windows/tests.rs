@@ -28,6 +28,7 @@ fn open(platform: &WindowsPlatform, title: &str) -> Arc<dyn HostWindow> {
             WindowOptions::default()
                 .with_title(title)
                 .with_size(Size::new(160.0, 120.0)),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window")
 }

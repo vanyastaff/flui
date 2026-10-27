@@ -677,7 +677,10 @@ mod material_tests {
 
     fn open(platform: &crate::WindowsPlatform) -> (Arc<dyn HostWindow>, HWND) {
         let window = platform
-            .open_window(WindowOptions::default().with_title("flui material"))
+            .open_window(
+                WindowOptions::default().with_title("flui material"),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a Win32 window opens");
         let hwnd = window
             .as_any()

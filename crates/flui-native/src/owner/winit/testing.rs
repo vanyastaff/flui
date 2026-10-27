@@ -380,6 +380,7 @@ impl host::Window<WinitLoop> for NoWindows {
         _: &WinitLoop,
         _: &Arc<NoWindows>,
         _: WindowOptions,
+        _: std::rc::Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         Err(Self::refusal())
     }
@@ -648,23 +649,23 @@ mod window_scenario {
     };
 
     use flui_foundation::ClaimOutcome;
-    use flui_platform::WindowOptions;
     use winit::event_loop::EventLoop;
 
     use super::{install_control_lane, install_test_owner_signal, wait_for_running};
+    use crate::WindowRequest;
     use crate::host_window::HostWindow;
     use crate::owner::winit::{WinitApp, WinitLoop};
     use crate::platform::Platform;
 
     /// Run `event_loop` for `platform`, the loop of `owner_platform`, open a
-    /// window with `opening` once the loop runs, and run `scenario` against
+    /// window for `opening` once the loop runs, and run `scenario` against
     /// it on a worker thread; the loop quits when the scenario returns, and a
     /// panic in it fails the test.
     pub(crate) fn run_window_scenario(
         platform: Arc<WinitLoop>,
         owner_platform: Arc<dyn Platform>,
         event_loop: EventLoop<()>,
-        opening: WindowOptions,
+        opening: WindowRequest,
         scenario: impl FnOnce(Arc<dyn HostWindow>) + Send + 'static,
     ) {
         install_test_owner_signal(&platform, &event_loop);

@@ -3,13 +3,14 @@
 //!
 //! # The seam this fills
 //!
-//! [`flui_platform::PlatformWindow::on_should_close`] is a real
+//! [`flui_platform::WindowHandler::close_requested`] is a real
 //! per-window veto: the winit, Win32 and AppKit backends all consult it
-//! synchronously when the *user* asks a window to close, and a `false`
-//! answer stops the close before anything else in the arm runs — no
-//! `on_close`, no UI runtime teardown, no exit-policy consultation. Until this
-//! module existed every `flui-app` registration hard-coded `true`, so the
-//! mechanism shipped and no application could reach it.
+//! synchronously when the *user* asks a window to close, and a
+//! [`KeepOpen`](flui_platform::CloseDecision::KeepOpen) answer stops the
+//! close before anything else in the arm runs — no `closed`, no UI runtime
+//! teardown, no exit-policy consultation. Until this module existed every
+//! `flui-app` window answered `Close`, so the mechanism shipped and no
+//! application could reach it.
 //!
 //! # Presentation-addressed, because the question is per window
 //!
@@ -67,11 +68,11 @@
 //!   pair is how a seam ends up unreachable. Same deliberate remainder
 //!   [`TaskSpawner`](crate::TaskSpawner) carries in
 //!   [`lifecycle`](super::lifecycle).
-//! - **Backends that never consult the seam.** The web and Android
-//!   backends implement the callback *setter* (through the shared
-//!   `impl_window_callback_setters!` macro) but no code path in either
-//!   calls `dispatch_should_close`, so a handler registered there is inert.
-//!   That is a property of those backends, not of this module.
+//! - **Backends that never consult the seam.** No code path in the web or
+//!   Android backend asks a window's handler `close_requested`: neither
+//!   system lets the application refuse a close, so a handler registered
+//!   there is never asked. That is a property of those backends, not of
+//!   this module.
 //! - **Resolving a deferred close on winit completes on the owner's next
 //!   turn, not inside the call** (issue #919, fixed). A winit window's
 //!   `WindowCommand::Close` posts the close to that backend's owner lane and the owner runs the
@@ -181,8 +182,8 @@ pub enum CloseResponse {
 /// mutability.
 ///
 /// Two failure modes are answered with [`CloseResponse::KeepOpen`] — the
-/// same conservative veto `WindowCallbacks::dispatch_should_close` already
-/// applies to a reentrant query — because neither can produce a trustworthy
+/// same conservative veto a host's window delivery already applies to a
+/// close request raised inside a handler method — because neither can produce a trustworthy
 /// answer and closing on a wrong answer destroys data:
 ///
 /// - a handler that **panics** (contained here, logged at error level; the
@@ -302,7 +303,7 @@ struct PresentationCloseEntry {
 /// Loop-scoped registry of per-presentation close-request handlers.
 ///
 /// Held by [`AppRuntime`](super::runtime::AppRuntime) as an `Arc` rather
-/// than inline, so the `on_should_close` closure each window registers can
+/// than inline, so the close-request route each window is opened with can
 /// hold its own clone and answer **without** re-entering the `APP_RUNTIME`
 /// thread-local at all. That matters: a close request can arrive while a
 /// UI runtime is checked out for dispatch, and a router reached through the
@@ -616,7 +617,7 @@ mod tests {
 
     /// A panicking handler cannot be read as consent to discard unsaved
     /// work, so it vetoes -- the same conservative answer
-    /// `WindowCallbacks::dispatch_should_close` gives a reentrant query --
+    /// a host's window delivery gives a close request raised inside a handler method --
     /// and stays registered, so a handler that stops panicking works again.
     fn a_panicking_handler_vetoes_and_stays_registered() {
         let router = CloseRequestRouter::new();

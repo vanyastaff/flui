@@ -50,14 +50,14 @@ use crate::input::assembly::ContactRegistry;
 #[cfg(windows)]
 use crate::owner::call_point::{Field, call};
 #[cfg(windows)]
-use crate::owner::handlers::{PlatformHandlers, WindowCallbacks};
-#[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
 use crate::owner::windows::{
     CreatedWindow, WindowInputs, WindowMessages, WindowRef, WindowScale, WindowStep, WindowTable,
     WindowsLoop, window_step,
 };
+#[cfg(windows)]
+use crate::owner::{handlers::PlatformHandlers, window_delivery::WindowDelivery};
 #[cfg(windows)]
 use flui_platform::Modifiers;
 
@@ -152,7 +152,7 @@ struct InputWindow {
     /// of them.
     hooks: Weak<[Rc<dyn WindowMessages>]>,
     /// Its callbacks, which its input is dispatched to.
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     /// The application's handlers: a keyboard layout change reaches theirs.
     handlers: Rc<RefCell<PlatformHandlers>>,
     /// The system preferences, which give its double-click interval and
@@ -196,7 +196,7 @@ impl InputWindow {
         Self {
             window: window.window(),
             hooks: Rc::downgrade(&window.hooks),
-            callbacks: Arc::clone(&window.callbacks),
+            delivery: Arc::clone(&window.delivery),
             handlers: Rc::clone(&window.handlers),
             preferences: Rc::clone(&window.preferences),
             scale: window.scale.clone(),
@@ -267,7 +267,7 @@ impl WindowMessages for InputWindows {
             input.touchpad.install(host);
         }
         input
-            .callbacks
+            .delivery
             .set_input_capabilities(crate::input::availability::windows(input.has_touchpad()));
     }
 
@@ -459,7 +459,7 @@ impl InputWindows {
                         );
                         for event in events {
                             if ctx.registry.borrow().delivers(&event) {
-                                ctx.callbacks.dispatch_input(event);
+                                ctx.delivery.dispatch_input(event);
                             }
                         }
                     }
@@ -503,7 +503,7 @@ impl InputWindows {
                         );
                         for event in events {
                             if ctx.registry.borrow().delivers(&event) {
-                                ctx.callbacks.dispatch_input(event);
+                                ctx.delivery.dispatch_input(event);
                             }
                         }
                     }
@@ -547,7 +547,7 @@ impl InputWindows {
                             &ctx.registry,
                         );
                         for cancel in cancels {
-                            ctx.callbacks.dispatch_input(cancel);
+                            ctx.delivery.dispatch_input(cancel);
                         }
                     }
                     LRESULT(0)
@@ -572,7 +572,7 @@ impl InputWindows {
                             time,
                         );
                         if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
+                            ctx.delivery.dispatch_input(event);
                         }
                     }
                     LRESULT(0)
@@ -640,7 +640,7 @@ impl InputWindows {
                             let mut held = ctx.held_dead_keys.borrow_mut();
                             key_down_event(wparam, lparam, stroke, &mut held, time)
                         };
-                        let result = ctx.callbacks.dispatch_input(event);
+                        let result = ctx.delivery.dispatch_input(event);
                         // A callback can close this window and create another
                         // with a recycled HWND: only while the window is the
                         // one this input was made for does the native default
@@ -681,7 +681,7 @@ impl InputWindows {
                             let mut held = ctx.held_dead_keys.borrow_mut();
                             key_up_event(wparam, lparam, &mut held, time)
                         };
-                        let result = ctx.callbacks.dispatch_input(event);
+                        let result = ctx.delivery.dispatch_input(event);
                         if result.default_prevented || !ctx.is_current() {
                             return Some(LRESULT(0));
                         }
@@ -709,7 +709,7 @@ impl InputWindows {
                         if let Some(text) = text {
                             use raw::stray_char_event;
                             let time = ctx.message_clock.message_time();
-                            ctx.callbacks.dispatch_input(stray_char_event(text, time));
+                            ctx.delivery.dispatch_input(stray_char_event(text, time));
                         }
                     }
                     LRESULT(0)
@@ -868,7 +868,7 @@ impl InputWindow {
     /// for a mouse under `EnableMouseInPointer`.
     fn set_hovered(&self, hovered: bool) {
         if self.hovered.replace(hovered) != hovered {
-            self.callbacks.report_hover(hovered);
+            self.delivery.report_hover(hovered);
         }
     }
 
@@ -924,7 +924,7 @@ impl InputWindow {
         for input in inputs {
             let deliver = self.registry.borrow().delivers(&input);
             if deliver {
-                self.callbacks.dispatch_input(input);
+                self.delivery.dispatch_input(input);
             }
         }
         if mouse && message == WM_POINTERCAPTURECHANGED {
@@ -965,7 +965,7 @@ impl InputWindow {
             );
         }
         for input in inputs {
-            self.callbacks.dispatch_input(input);
+            self.delivery.dispatch_input(input);
         }
     }
 
@@ -985,7 +985,7 @@ impl InputWindow {
                 .borrow_mut()
                 .cancel_surface(raw::SURFACE, time, NativeCancel::FocusLost);
         for cancel in cancels {
-            self.callbacks.dispatch_input(cancel);
+            self.delivery.dispatch_input(cancel);
         }
     }
 }

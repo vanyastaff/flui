@@ -110,18 +110,18 @@ pub(crate) struct Published {
     /// The snapshot now published.
     pub(crate) state: WindowState,
     /// Whether this call published a higher revision. A backend raises
-    /// `on_state_changed` exactly when this is `true`, after the call returned
+    /// `WindowHandler::state_changed` exactly when this is `true`, after the call returned
     /// and so outside the cell's lock.
     pub(crate) changed: bool,
 }
 
 impl Published {
     /// What a state publisher answers for this read.
-    pub(crate) const fn outcome(&self) -> crate::owner::handlers::Publication {
+    pub(crate) const fn outcome(&self) -> crate::owner::window_delivery::Publication {
         if self.changed {
-            crate::owner::handlers::Publication::Changed
+            crate::owner::window_delivery::Publication::Changed
         } else {
-            crate::owner::handlers::Publication::Unchanged
+            crate::owner::window_delivery::Publication::Unchanged
         }
     }
 }

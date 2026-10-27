@@ -6,11 +6,12 @@
     reason = "clippy asks for `const` on the Android target even though the initializer already is"
 )]
 
+use crate::app::runner::window_routes::OpenRouted as _;
 use std::sync::Mutex;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_native::{HeadlessPlatform, Platform as _};
+use flui_native::HeadlessPlatform;
 use flui_platform::WindowId;
 use flui_platform::{CursorError, CursorIcon};
 use flui_platform::{Unsupported, UnsupportedReason};
@@ -36,7 +37,7 @@ fn headless_window(capabilities: WindowCapabilities) -> Arc<dyn PlatformWindow> 
 fn headless_host_window(capabilities: WindowCapabilities) -> Arc<dyn flui_native::HostWindow> {
     HeadlessPlatform::new()
         .with_window_capabilities(capabilities)
-        .open_window(WindowOptions::default())
+        .open_routed(WindowOptions::default())
         .expect("a headless window opens")
 }
 

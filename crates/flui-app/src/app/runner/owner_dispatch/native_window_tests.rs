@@ -14,6 +14,7 @@ use super::super::host::{
     OwnerHostClearGuard, build_ui_runtime, install_owner_platform, with_owner_platform,
 };
 use super::super::presentation_window;
+use super::super::window_routes::OwnerOpenRouted as _;
 use super::*;
 use crate::native::with_window;
 
@@ -35,7 +36,7 @@ fn with_window_reaches_the_host_window_of_its_presentation_and_no_other() {
         }))
         .expect("headless run");
     let host =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");

@@ -14,6 +14,7 @@ fn an_absent_window_position_opens_no_window_on_this_platform() {
         &(),
         &Arc::new(()),
         WindowOptions::default(),
+        flui_testing::window_handler::RecordingWindowHandler::new(),
     );
     match opened {
         Err(OpenWindowError::Unsupported(absent)) => {

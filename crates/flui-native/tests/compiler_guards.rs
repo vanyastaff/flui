@@ -5,7 +5,7 @@ mod trybuild_ui {
     fn ui_tests() {
         let cases = trybuild::TestCases::new();
         cases.pass("tests/ui_pass/owner_and_shared_authority.rs");
-        cases.pass("tests/ui_pass/input_callback_captures_rc.rs");
+        cases.pass("tests/ui_pass/window_handler_holds_rc.rs");
         cases.compile_fail("tests/ui/host_table_names_every_position.rs");
         cases.compile_fail("tests/ui/platform_and_host_window_are_sealed.rs");
         cases.compile_fail("tests/ui/owner_platform_is_not_send.rs");

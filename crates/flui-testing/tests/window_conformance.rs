@@ -147,7 +147,10 @@ impl Fixture {
             platform = platform.with_input_availability(input);
         }
         let model = platform
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a headless window opens");
         let window: Arc<dyn PlatformWindow> = match fault {
             Some(

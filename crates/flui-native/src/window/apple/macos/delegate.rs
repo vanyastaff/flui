@@ -580,11 +580,18 @@ impl MacOSWindow {
 
     /// Handle close request event
     ///
-    /// Returns true to allow close, false to prevent
-    fn handle_close_request(&self) -> bool {
-        let should_close = self.callbacks.dispatch_should_close();
-        tracing::debug!("Window close requested: {}", should_close);
-        should_close
+    /// Returns true to allow close, false to prevent. Asked behind a running
+    /// handler method (a `performClose:` sent from inside `input`), the
+    /// window is kept for now and closed later if the handler grants it.
+    fn handle_close_request(self: &Arc<Self>) -> bool {
+        let window = Arc::downgrade(self);
+        let decision = self.delivery.dispatch_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                window.close_window();
+            }
+        });
+        tracing::debug!(?decision, "Window close requested");
+        decision == flui_platform::CloseDecision::Close
     }
 
     /// Handle window close event
@@ -594,9 +601,9 @@ impl MacOSWindow {
     /// `-[NSWindow close]`, vetoed or not (see [`close`](Self::close)'s own
     /// doc). Order matters: `closed` is set BEFORE `dispatch_close` so that
     /// a frame callback the close dispatch itself triggers observes the
-    /// window as already gone, and `callbacks.clear()` runs AFTER, so the
-    /// `on_close` callback registered above still fires normally before its
-    /// slot — and every other slot — is released.
+    /// window as already gone, and the delivery's `clear()` runs AFTER, so
+    /// the handler's `closed` is still called before the window lets go of
+    /// the handler.
     fn handle_close(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
@@ -619,20 +626,20 @@ impl MacOSWindow {
         // lifetime change. `Drop`'s removal stays as an idempotent safety net.
         let _prev = self.windows_map.lock().remove(&(self.ns_window as u64));
 
-        self.callbacks.dispatch_close();
+        self.delivery.dispatch_close();
         tracing::debug!("Window closed");
 
         // Release every remaining registered callback now, while
         // `ns_window` is still valid (this delegate method runs before
         // AppKit tears the window down further). Without this, the frame
-        // callback registered via `on_request_frame` — which in
+        // the handler's `frame_requested` — which in
         // `flui-app`'s wiring owns this window's GPU renderer, whose
         // `wgpu::Surface` is built from the `Arc<dyn PlatformWindow>` clone
         // the renderer owns (ADR-0063) — stays pinned forever: window
         // (through its callback slots) → frame closure → raster lane →
         // renderer → surface → `Arc<MacOSWindow>`, a cycle nothing else
         // here breaks.
-        self.callbacks.clear();
+        self.delivery.clear();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this

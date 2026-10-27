@@ -9,8 +9,9 @@
 //!   reaches the operating system;
 //! - [`call_point`]: the one point where the platform calls an application or
 //!   window handler, with no lock or borrow held;
-//! - [`handlers`]: the application's handler set and a window's callbacks,
-//!   called through it;
+//! - [`handlers`]: the application's handler set, called through it;
+//! - `window_delivery`: what a window delivers to the handler it was opened
+//!   with, through one causal queue;
 //! - [`notices`]: the channel a loop pushes system notices through, which the
 //!   lifecycle feature implements, and the application's lifecycle hooks a
 //!   loop keeps;
@@ -86,6 +87,7 @@ pub(crate) mod slot;
     all(target_os = "linux", feature = "winit-backend")
 ))]
 pub(crate) mod watch;
+pub(crate) mod window_delivery;
 // Every native host keeps a source; the headless host keeps none, so a Linux
 // build without the winit host has no loop to keep one.
 #[cfg(any(
@@ -124,7 +126,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
-use flui_platform::{Clipboard, ClipboardItem, WindowId, WindowOptions};
+use flui_platform::{Clipboard, ClipboardItem, WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
@@ -219,14 +221,21 @@ impl OwnerPlatform {
         self.platform.window_frame_inset(scale_factor)
     }
 
-    /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
-    /// the backend may defer through its owner lane (where one exists),
-    /// returning `Pending`.
+    /// Open a window whose deliveries go to `handler` (ADR-0254 §4). `Ready`
+    /// is guaranteed inside `on_ready`; afterwards the backend may defer
+    /// through its owner lane (where one exists), returning `Pending`.
+    ///
+    /// The handler exists before the window's first event: its first input
+    /// is the window's capability snapshot. A refused open drops it here.
     ///
     /// # Errors
     /// See [`OpenWindowError`].
-    pub fn open_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
-        self.hooks.open_owner_window(options)
+    pub fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
+        self.hooks.open_owner_window(options, handler)
     }
 
     /// The currently active (focused) window, if any.
@@ -636,9 +645,79 @@ pub enum OpenWindowError {
 // PlatformProxy
 // ============================================================================
 
+/// Builds a window's handler on the owner thread, for a window opened from
+/// another thread ([`PlatformProxy::open_window`]): the handler is an `Rc`,
+/// which cannot cross threads, so the request carries what builds it.
+pub type WindowHandlerFactory = Box<dyn FnOnce() -> Rc<dyn WindowHandler> + Send>;
+
+/// A window opened from another thread: its options, and what builds its
+/// handler on the owner thread. A refused request hands both back.
+pub struct WindowRequest {
+    /// The window's options.
+    pub options: WindowOptions,
+    /// Builds the window's handler, once, on the owner thread.
+    pub handler: WindowHandlerFactory,
+}
+
+impl WindowRequest {
+    /// A request for a window with `options`, whose handler `handler` builds
+    /// on the owner thread.
+    #[must_use]
+    pub fn new(
+        options: WindowOptions,
+        handler: impl FnOnce() -> Rc<dyn WindowHandler> + Send + 'static,
+    ) -> Self {
+        Self {
+            options,
+            handler: Box::new(handler),
+        }
+    }
+}
+
+impl WindowRequest {
+    /// Run the factory, once, on the owner thread: the window's options and
+    /// its handler. The factory is application code: its panic is contained
+    /// here (logged, its payload retained) and the open fails with what it
+    /// said, so a loop draining requests carries on.
+    #[cfg_attr(
+        not(all(
+            feature = "winit-backend",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        )),
+        expect(dead_code, reason = "only the winit lane carries deferred opens")
+    )]
+    pub(crate) fn build_on_owner(
+        self,
+    ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {
+        let Self { options, handler } = self;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
+            Ok(handler) => Ok((options, handler)),
+            Err(payload) => {
+                let message = format!(
+                    "the window's handler factory panicked: {}",
+                    flui_foundation::panic::payload_text(&*payload)
+                        .unwrap_or("non-string panic payload")
+                );
+                panic_boundary::contain_owner_callback(|| tracing::error!("{message}"));
+                flui_foundation::panic::retain_opaque_payload(payload);
+                Err(OpenWindowError::Backend { message })
+            }
+        }
+    }
+}
+
+impl fmt::Debug for WindowRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowRequest")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Cross-thread request capability. `Clone + Send + Sync`. Enqueue-and-wake
-/// with bounded backpressure; never blocks the sender; never carries
-/// closures (ADR-0037 §3 closed vocabulary).
+/// with bounded backpressure; never blocks the sender. The one closure it
+/// carries is a window's handler factory (ADR-0254 §4), run once on the
+/// owner; every other request is a closed vocabulary (ADR-0037 §3).
 #[derive(Clone)]
 pub struct PlatformProxy {
     transport: Arc<dyn ProxyTransport>,
@@ -669,20 +748,21 @@ impl PlatformProxy {
     /// Enqueues a window-open request. Never blocks — on any thread,
     /// including the owner (deferral replaces the old owner-side refusal;
     /// the blocking hazard lives in [`PendingWindow::wait`], which is where
-    /// it is refused). Fails fast with the rejected options returned so the
-    /// producer can retry without rebuilding them.
+    /// it is refused). The request's handler factory runs once, on the owner,
+    /// right before the window is built. Fails fast with the rejected request
+    /// returned so the producer can retry without rebuilding it.
     ///
     /// # Errors
     /// See [`ProxySendError`].
     #[expect(
         clippy::result_large_err,
-        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+        reason = "the rejection hands the caller's request back for a retry; a window open is not a hot path"
     )]
     pub fn open_window(
         &self,
-        options: WindowOptions,
-    ) -> Result<PendingWindow, ProxySendError<WindowOptions>> {
-        self.transport.open_window(options)
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>> {
+        self.transport.open_window(request)
     }
 
     /// Coalesced quit signal, independent of window-command queue capacity.
@@ -923,7 +1003,11 @@ pub(crate) trait OwnerHooks: Send + Sync {
     /// Creates or enqueues a window from the owner thread. Backends with an
     /// owner lane (winit) enqueue when called outside `on_ready`; every
     /// other backend creates directly and always returns `Ready`.
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError>;
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError>;
 
     /// The cross-thread transport backing [`PlatformProxy`]. Operation support
     /// is independent: a signal-only transport need not support window creation.
@@ -954,13 +1038,19 @@ impl OwnerHooks for DirectOwnerHooks {
         self.signal.register(callback)
     }
 
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
         if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
             });
         }
-        self.platform.open_window(options).map(WindowOpen::Ready)
+        self.platform
+            .open_window(options, handler)
+            .map(WindowOpen::Ready)
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
@@ -979,12 +1069,12 @@ pub(crate) trait ProxyTransport: Send + Sync {
     /// Enqueues a window-open request from a worker thread.
     #[expect(
         clippy::result_large_err,
-        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+        reason = "the rejection hands the caller's request back for a retry; a window open is not a hot path"
     )]
     fn open_window(
         &self,
-        options: WindowOptions,
-    ) -> Result<PendingWindow, ProxySendError<WindowOptions>>;
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>>;
 
     /// Requests application quit — coalesced, non-starvable.
     ///

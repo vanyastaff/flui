@@ -5,6 +5,7 @@
 //! are missing too. `PlatformWindow` stays open, so the window below is one.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,7 +20,7 @@ use flui_platform::{
     Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
-    WindowOptions, WindowState,
+    WindowHandler, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 
@@ -42,7 +43,11 @@ impl Platform for OutsidePlatform {
 
     fn set_wake_deadline_hook(&self, _: Box<dyn Fn() -> Option<Instant> + Send + Sync>) {}
 
-    fn open_window(&self, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    fn open_window(
+        &self,
+        _: WindowOptions,
+        _: Rc<dyn WindowHandler>,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         Ok(Arc::new(OutsideWindow))
     }
 

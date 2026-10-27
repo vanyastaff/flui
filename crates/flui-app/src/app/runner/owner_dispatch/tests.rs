@@ -1,6 +1,7 @@
 //! Unit tests for `owner_dispatch.rs`, declared there as its child module `owner_dispatch_tests`
 //! through `#[path]`, so `super::*` still reaches the dispatcher's private items.
 
+use crate::app::runner::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::{
     cell::{Cell, RefCell},
@@ -222,7 +223,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 let shared = owner.shared();
                 install_owner_platform(owner)?;
                 let host = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                    owner.open_routed(flui_platform::WindowOptions::default())
                 })
                 .expect("installed owner")
                 .and_then(flui_native::WindowOpen::try_ready)
@@ -804,10 +805,10 @@ fn panic_restores_dispatch_host_for_next_event() {
 fn install_two_test_ui_runtimes() -> (PresentationDispatcher, PresentationDispatcher) {
     let platform = flui_native::headless_platform();
     let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
+        .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let window_b: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
+        .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
     let dispatcher_a =
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window_a);
@@ -1037,7 +1038,7 @@ fn install_ui_runtime_a_with_driver(
     let ready = platform.run(Box::new(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
         let window_a: Arc<dyn PlatformWindow> =
-            with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+            with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
@@ -1984,7 +1985,7 @@ fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
                 host.effects(),
             )?;
             let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner installed")?
             .try_ready()?;
@@ -2461,7 +2462,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
         });
 
         let window_a: Arc<dyn PlatformWindow> =
-            with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+            with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                 .expect("owner installed above")
                 .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
@@ -2470,9 +2471,9 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
         // Mirror `run_desktop`'s own `on_close` wiring exactly, so a
         // real `WindowCommand::Close` in a test drives the SAME production
         // path a real desktop bootstrap would.
-        window_a.on_close(Box::new(move || {
+        crate::app::runner::window_routes::WindowRoutes::of(&*window_a).route_closed(move || {
             close_this_window(dispatcher_a);
-        }));
+        });
         let _prev = installed_slot_for_on_ready
             .borrow_mut()
             .replace((dispatcher_a, window_a));

@@ -24,6 +24,8 @@
 //! - the window state contract: the [`WindowState`] snapshot a window
 //!   publishes, the [`WindowCommand`]s it takes and the
 //!   [`WindowCapabilities`] that say which (ADR-0237);
+//! - the [`WindowHandler`] a window is opened with: one method per obligation
+//!   the window has towards the code that opened it (ADR-0254 §4);
 //! - one vocabulary for absence: [`Unsupported`] and its
 //!   [`UnsupportedReason`], which every error that can mean "not here"
 //!   embeds, and [`Availability`] (ADR-0151 §4).
@@ -132,6 +134,7 @@ mod text_input;
 pub mod text_store;
 mod unsupported;
 mod window;
+mod window_handler;
 mod window_state;
 
 pub use brightness::Brightness;
@@ -185,6 +188,7 @@ pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
     WindowOptions, WindowReveal,
 };
+pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CommandRefusal,
     PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities, WindowCommand,

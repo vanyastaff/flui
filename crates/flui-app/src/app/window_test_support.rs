@@ -8,6 +8,8 @@
 //! own capabilities.
 
 #[cfg(not(target_os = "android"))]
+use crate::app::runner::window_routes::OpenRouted as _;
+#[cfg(not(target_os = "android"))]
 use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]
@@ -28,6 +30,6 @@ pub(crate) fn headless_test_window() -> Arc<dyn PlatformWindow> {
 #[cfg(not(target_os = "android"))]
 pub(crate) fn headless_test_host_window() -> Arc<dyn HostWindow> {
     flui_native::headless_platform()
-        .open_window(flui_platform::WindowOptions::default())
+        .open_routed(flui_platform::WindowOptions::default())
         .expect("headless platform should create a test window")
 }

@@ -35,6 +35,9 @@ mod set;
 #[cfg(windows)]
 mod window;
 
+#[cfg(all(test, target_os = "windows"))]
+mod delivery_tests;
+
 #[cfg(windows)]
 pub(crate) use set::WindowSet;
 #[cfg(windows)]

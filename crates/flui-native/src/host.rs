@@ -35,6 +35,7 @@
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
@@ -44,7 +45,7 @@ use flui_platform::{
     ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
     PlatformSystemChrome, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
     SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowId, WindowOptions,
+    WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -195,7 +196,9 @@ pub trait Window<O> {
     /// window is made of.
     type Ref: ?Sized + 'static;
 
-    /// [`Platform::open_window`].
+    /// [`Platform::open_window`]: the window is built with `handler`, which
+    /// it delivers to from its first event on. The capability snapshot is
+    /// the platform's to deliver once this returns.
     ///
     /// # Errors
     /// What [`Platform::open_window`] reports.
@@ -203,6 +206,7 @@ pub trait Window<O> {
         owner: &O,
         shared: &Arc<Self::Shared>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
 
     /// [`Platform::active_window`].
@@ -485,7 +489,12 @@ impl<O> Window<O> for Absent<position::Window> {
     /// And none is referred to.
     type Ref = ();
 
-    fn open(_: &O, _: &Arc<()>, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+    fn open(
+        _: &O,
+        _: &Arc<()>,
+        _: WindowOptions,
+        _: Rc<dyn WindowHandler>,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         Err(NOT_ON_THIS_PLATFORM.into())
     }
 

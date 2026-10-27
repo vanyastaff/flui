@@ -478,8 +478,8 @@ pub(crate) mod events {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::*;
 
-    use crate::owner::handlers::WindowCallbacks;
     use crate::owner::web::{Accepting, CanvasKeys, CanvasRegistration, HostInput, PointerCustody};
+    use crate::owner::window_delivery::WindowDelivery;
     use flui_platform::PlatformInput;
 
     /// The page's input, as the web loop holds it ([`HostInput`]).
@@ -500,7 +500,7 @@ pub(crate) mod events {
         fn register(
             &self,
             canvas: &web_sys::HtmlCanvasElement,
-            callbacks: &Arc<WindowCallbacks>,
+            delivery: &Arc<WindowDelivery>,
             latency: flui_platform::InputLatency,
             registration: &mut dyn CanvasRegistration,
         ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError> {
@@ -510,7 +510,7 @@ pub(crate) mod events {
                     .with_reserved_contact(MOUSE_CONTACT),
             ));
             let pinch = Rc::new(Pinch {
-                callbacks: Arc::clone(callbacks),
+                delivery: Arc::clone(delivery),
                 accepting: accepting.clone(),
                 contacts: Rc::clone(&contacts),
                 wheel: RefCell::default(),
@@ -518,7 +518,7 @@ pub(crate) mod events {
                 focal: Cell::new(None),
             });
             let keys = Rc::new(KeyRoute {
-                callbacks: Arc::clone(callbacks),
+                delivery: Arc::clone(delivery),
                 pinch: Rc::clone(&pinch),
                 accepting,
                 composing: Cell::new(false),
@@ -547,8 +547,8 @@ pub(crate) mod events {
             )?;
             register_keyboard_events(canvas, &keys, registration)?;
             register_loss_events(canvas, &loss, registration)?;
-            register_hover_events(canvas, callbacks, registration)?;
-            register_wheel_events(canvas, callbacks, &pinch, registration)?;
+            register_hover_events(canvas, delivery, registration)?;
+            register_wheel_events(canvas, delivery, &pinch, registration)?;
             register_gesture_events(canvas, &pinch, registration)?;
             register_context_menu(canvas, &menu, registration)?;
             Ok(keys)
@@ -575,7 +575,7 @@ pub(crate) mod events {
     /// How a DOM key event reaches the window: from the canvas, or from the
     /// text input's own editor.
     struct KeyRoute {
-        callbacks: Arc<WindowCallbacks>,
+        delivery: Arc<WindowDelivery>,
         pinch: Rc<Pinch>,
         accepting: Accepting,
         /// Whether the window's text input composes now.
@@ -597,7 +597,7 @@ pub(crate) mod events {
             if !self.accepting.get() {
                 return;
             }
-            answer(event, self.callbacks.dispatch_input(input));
+            answer(event, self.delivery.dispatch_input(input));
         }
 
         fn composing(&self) -> bool {
@@ -653,16 +653,16 @@ pub(crate) mod events {
     /// The mouse coming over the canvas and leaving it, as the window's hover.
     fn register_hover_events(
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
-            let callbacks = Arc::clone(callbacks);
+            let delivery = Arc::clone(delivery);
             registration.listen(
                 canvas.as_ref(),
                 kind,
                 Rc::new(move |_: web_sys::Event| {
-                    callbacks.report_hover(hovered);
+                    delivery.report_hover(hovered);
                 }),
             )?;
         }
@@ -938,7 +938,7 @@ pub(crate) mod events {
                     PointerEvent::Down(_) | PointerEvent::ButtonChange(ButtonChange::Pressed(_))
                 )
             );
-            let result = pinch.callbacks.dispatch_input(input);
+            let result = pinch.delivery.dispatch_input(input);
             if press {
                 pressed = Some(result);
             }
@@ -1056,7 +1056,7 @@ pub(crate) mod events {
     /// No borrow of its cells is held across a dispatch: an application callback
     /// can dispatch another DOM event at the canvas synchronously.
     struct Pinch {
-        callbacks: Arc<WindowCallbacks>,
+        delivery: Arc<WindowDelivery>,
         accepting: Accepting,
         contacts: Rc<RefCell<ContactRegistry>>,
         wheel: RefCell<CtrlWheel>,
@@ -1104,7 +1104,7 @@ pub(crate) mod events {
                 if !self.accepting.get() {
                     break;
                 }
-                let result = self.callbacks.dispatch_input(input);
+                let result = self.delivery.dispatch_input(input);
                 if let Some(event) = event {
                     answer(event, result);
                 }
@@ -1143,7 +1143,7 @@ pub(crate) mod events {
                 if !self.accepting.get() {
                     return;
                 }
-                let result = self.callbacks.dispatch_input(head);
+                let result = self.delivery.dispatch_input(head);
                 if !result.default_prevented {
                     if let Some(cancel) = refuse() {
                         let cancelled = self.assemble(cancel, time, None, Modifiers::NONE);
@@ -1159,7 +1159,7 @@ pub(crate) mod events {
 
     fn register_wheel_events(
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         pinch: &Rc<Pinch>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
@@ -1175,7 +1175,7 @@ pub(crate) mod events {
                 }
             }))
         };
-        let callbacks = Arc::clone(callbacks);
+        let delivery = Arc::clone(delivery);
         let pinch = Rc::clone(pinch);
         let target = canvas.clone();
         registration.listen(
@@ -1208,7 +1208,7 @@ pub(crate) mod events {
                     WheelRoute::Refused => {}
                     WheelRoute::Scroll => {
                         if let Some(input) = convert_wheel_event(we, &target, &pinch.contacts) {
-                            answer(&e, callbacks.dispatch_input(input));
+                            answer(&e, delivery.dispatch_input(input));
                         }
                     }
                     WheelRoute::Pinch(reading) => {

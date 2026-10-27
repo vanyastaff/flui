@@ -128,6 +128,7 @@ pub mod text_store_kit;
 pub mod widgets;
 pub mod window_commands;
 pub mod window_conformance;
+pub mod window_handler;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,

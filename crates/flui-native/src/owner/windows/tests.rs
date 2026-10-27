@@ -175,7 +175,10 @@ fn created(hwnd: HWND) -> CreatedWindow {
         identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
         client_size: (0, 0),
         scale: super::WindowScale::new(96),
-        callbacks: Arc::new(crate::owner::handlers::WindowCallbacks::default()),
+        delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+        )),
         handlers: Rc::new(RefCell::new(crate::owner::handlers::PlatformHandlers::new())),
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),

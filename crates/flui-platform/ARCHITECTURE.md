@@ -59,7 +59,8 @@ this one path (ADR-0151 §9).
   trait, paired with a twin that compiles, pins that the method is gone.
 - **A window fact has one source: the `WindowState` snapshot (ADR-0254 §1).**
   `PlatformWindow` has no getter and no per-fact callback beside `state()`
-  and `on_state_changed`; its capabilities are a field of the snapshot.
+  and the handler's `state_changed`; its capabilities are a field of the
+  snapshot.
   Showing, activating and closing are `WindowCommand`s (`Show`, `Activate`,
   `Close`, the last admitted by `WindowCapabilities::closes`), with no method
   twin. `WindowState::is_seen` is the one reading of "the surface is seen":
@@ -88,6 +89,18 @@ this one path (ADR-0151 §9).
   `WindowCommand::admit_and_apply` is the one path that applies at once
   (admit against the snapshot, apply, admit once more on `Superseded`), and
   answers `CommandRefusal` (`Admission` or `Apply`).
+- **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
+  one required method per obligation (`input`, `state_changed`,
+  `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
+  registration beside it, so nothing a window delivers can arrive before a
+  handler exists or fall into an inert default. The host holds it as an
+  `Rc<dyn WindowHandler>`, so it stays on the thread that opened the window
+  and every method runs there. A method takes no platform argument: the
+  owner's platform is a host type (`OwnerPlatform`), which this crate cannot
+  name, and a handler that drives the platform captures what it needs.
+  `close_requested` answers a `CloseDecision`;
+  `surface_changed` names its `SurfaceChange` (`Release` before the surface
+  goes, `Rebuild` when a valid one must exist again).
 - **"Not here" has one vocabulary.** Every error and outcome that can mean
   absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
   never written as a literal, whose `UnsupportedReason` says why
