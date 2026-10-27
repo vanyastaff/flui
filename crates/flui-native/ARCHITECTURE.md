@@ -122,13 +122,16 @@ trait depends on `flui-platform` instead.
   desktop window manager is `Refused` with its `HRESULT`; each attribute is a
   constant that pairs its ordinal with its value's type, and each mapping is
   one table read both ways. The contract's material
-  (`PlatformWindow::set_material`) is a Win32 window's own verb, not the
-  view's: the window set reads the build once, and the `SystemBackdrop` gate
-  (build 22621, `window::windows::material`) decides both the window's
-  `material` capability and whether the verb reaches the desktop window
-  manager; below it, and when the manager refuses, the answer is
-  `Unsupported` with `NotOnThisDevice`. A Win32 window opens on Mica through
-  the same gate. The AppKit backdrop (`AppKitWindow::set_backdrop`)
+  (`WindowCommand::SetMaterial`) is a window command: the Win32 window set
+  reads the build once, and the `SystemBackdrop` gate (build 22621,
+  `window::windows::material`) is the one gate of `DWMWA_SYSTEMBACKDROP_TYPE`.
+  Below it the window's `material` capability is unavailable on this device,
+  so admission refuses with `NotOnThisDevice`, and `Win32Window::set_backdrop`
+  answers the same; every write of the attribute takes the gate's proof. A
+  refusal of the desktop window manager is `ApplyError::Platform`. A Win32
+  window opens on Mica through the same gate. AppKit draws `System` as
+  `NSVisualEffectView`'s window-background material behind FLUI's view, for
+  windows on the main lane. The AppKit backdrop (`AppKitWindow::set_backdrop`)
   is an `NSVisualEffectView` material or Liquid Glass, an
   `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),
   holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a

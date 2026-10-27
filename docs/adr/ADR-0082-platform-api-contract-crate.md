@@ -168,7 +168,8 @@ moves to `flui-platform` with its signature unchanged: `PlatformTextInput`,
 `DragDropEvent`, the re-exported `ui-events` pointer and keyboard types, the pixel conversion
 helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOptions`,
 `WindowReveal`, `WindowMode`, `WindowEvent`, `WindowExecutionState`, `WindowShowError`,
-`WindowAppearance`, `WindowBackgroundAppearance`, `WindowBounds`, `CursorError`).
+`WindowAppearance`, `WindowBackgroundAppearance` (since replaced by `WindowCommand::SetMaterial`,
+ADR-0254 §3), `WindowBounds`, `CursorError`).
 `flui-native` re-exports every moved item at its old path, so no caller outside the two
 edges changes; `flui-interaction` and the widget harness switch to `flui-platform`.
 `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` stay in `flui-native` until

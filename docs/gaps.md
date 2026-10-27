@@ -254,7 +254,7 @@ request.
 > **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
 
 - Backdrop materials, transparency, icon, capture exclusion.
-- The contract's window material (`set_material`: `Opaque`, `System`) is drawn on Windows only (Mica, build 22621 and later; a Win32 window still opens on it); macOS, Linux, Web and mobile report it `Unavailable`. The macOS backdrop material and Liquid Glass (`flui::native::macos`) have never run on a Mac; no window icon on Windows or Linux.
+- The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The macOS material, the backdrop material and Liquid Glass (`flui::native::macos`) have never run on a Mac; no window icon on Windows or Linux.
 
 ### 21. Unaudited rows
 
@@ -475,6 +475,6 @@ request.
 | 2026-10-26 | minor | Entry 15: `PlatformInput::PointerFrame` carries a frame from a backend; the Win32 touch and pen path reads it with `GetPointerFrameInfo` (synthetic data only, live touch run pending) |
 | 2026-10-26 | minor | Entry 20: the macOS backdrop material and Liquid Glass come back through the escape hatch `flui::native::macos` (`AppKitWindow::set_backdrop`), type-checked only and listed in [#1840](https://github.com/vanyastaff/flui/issues/1840); Windows still forces Mica |
 | 2026-10-26 | minor | Entry 9: the window snapshot holds every window fact, and the window conformance compares it with what the window system reads back; it ran on headless and Win32, and the winit, AppKit, UIKit, Web and Android runs are listed |
-| 2026-10-27 | minor | Entry 20: the contract's window material (`PlatformWindow::set_material`, `Opaque` and `System`) replaces `WindowBackgroundAppearance`; Windows draws it from build 22621 and answers `NotOnThisDevice` below, which ran on Windows 11; every other host reports it `Unavailable` |
+| 2026-10-27 | minor | Entry 20: the contract's window material (`WindowCommand::SetMaterial`, `Opaque` and `System`) replaces `WindowBackgroundAppearance`; Windows draws it from build 22621 and admission answers `NotOnThisDevice` below, which ran on Windows 11; macOS draws it type-checked only; every other host reports it `Unavailable` |
 
 </details>
