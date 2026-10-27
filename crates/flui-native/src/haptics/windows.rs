@@ -598,6 +598,7 @@ mod tests {
                 WindowOptions::default()
                     .with_title("flui haptics")
                     .with_size(Size::new(160.0, 120.0)),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         let haptics = window.haptics().expect("a Win32 window has an actuator");
@@ -643,6 +644,7 @@ mod tests {
                     WindowOptions::default()
                         .with_title(title)
                         .with_size(Size::new(160.0, 120.0)),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
                 )
                 .expect("window")
         };

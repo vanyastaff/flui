@@ -91,7 +91,7 @@ mod objects {
 
     use super::super::OleTransfer;
     use super::SourceEntry;
-    use crate::owner::handlers::WindowCallbacks;
+    use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::windows::{WindowRef, WindowScale};
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
@@ -128,7 +128,7 @@ mod objects {
         pub(super) window: WindowRef,
         pub(super) transfer: Arc<OleTransfer>,
         /// The window's callbacks, which its drag events are dispatched to.
-        pub(super) callbacks: Arc<WindowCallbacks>,
+        pub(super) delivery: Arc<WindowDelivery>,
         /// The window's scale, which its procedure changes: OLE reports
         /// positions in device pixels.
         pub(super) scale: WindowScale,
@@ -411,7 +411,7 @@ impl WindowDropTarget {
         Self {
             window: window.window(),
             transfer,
-            callbacks: Arc::clone(&window.callbacks),
+            delivery: Arc::clone(&window.delivery),
             scale: window.scale.clone(),
             revoked: Cell::new(false),
             over: Cell::new(None),
@@ -448,8 +448,7 @@ impl WindowDropTarget {
         // Dispatch is the window's own: it queues behind a callback already
         // running and contains the callback's panics.
         if let Some(event) = event(position) {
-            self.callbacks
-                .dispatch_input(PlatformInput::DragDrop(event));
+            self.delivery.dispatch_input(PlatformInput::DragDrop(event));
         }
     }
 

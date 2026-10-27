@@ -3,6 +3,7 @@
 //! real owner turns. Declared in `owner_dispatch.rs` through `#[path]` because
 //! the host it exercises is private to the runner.
 
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -120,7 +121,7 @@ fn install_window(
     deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
 ) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
@@ -137,13 +138,15 @@ fn install_window(
     let fail_redraw = Arc::new(AtomicBool::new(false));
     let counter = Arc::clone(&redraws);
     let failing = Arc::clone(&fail_redraw);
-    window.on_request_frame(Box::new(move |_| {
-        assert!(
-            !failing.load(Ordering::SeqCst),
-            "injected redraw wake failure"
-        );
-        counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
+        move |_| {
+            assert!(
+                !failing.load(Ordering::SeqCst),
+                "injected redraw wake failure"
+            );
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+    );
     let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
     let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
     let dispatcher = installation.dispatcher();
@@ -270,11 +273,14 @@ fn snapshot_is_committed_before_observers_run() {
     let win = open_window(&rig, None);
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
-    win.native.on_request_frame(Box::new(move |_| {
-        let accepted = APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
-        log.lock()
-            .push(accepted.map(|snapshot| snapshot.revision().get()));
-    }));
+    crate::app::runner::window_routes::WindowRoutes::of(&win.native).route_frame_requested(
+        move |_| {
+            let accepted =
+                APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
+            log.lock()
+                .push(accepted.map(|snapshot| snapshot.revision().get()));
+        },
+    );
     let before = Rig::accepted().expect("seed").revision().get();
 
     // One sample, taken directly: owner turns re-sample until they are idle, and
@@ -345,9 +351,11 @@ fn foreign_thread_invalidation_wakes_the_owner() {
     let owner_thread = std::thread::current().id();
     let ran_on = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let log = Arc::clone(&ran_on);
-    win.native.on_request_frame(Box::new(move |_| {
-        log.lock().push(std::thread::current().id());
-    }));
+    crate::app::runner::window_routes::WindowRoutes::of(&win.native).route_frame_requested(
+        move |_| {
+            log.lock().push(std::thread::current().id());
+        },
+    );
 
     let controls = rig.controls.clone();
     let left = rig.ids[LEFT];

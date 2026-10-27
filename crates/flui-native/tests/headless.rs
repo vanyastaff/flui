@@ -62,7 +62,10 @@ fn closing_the_only_window_without_a_hook_never_calls_quit() {
     }));
 
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("headless platform should create a window");
     window.close_now();
 
@@ -86,7 +89,10 @@ fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
     }));
 
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("headless platform should create a window");
     window.close_now();
 

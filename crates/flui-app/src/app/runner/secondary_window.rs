@@ -88,8 +88,8 @@ use flui_view::View;
 /// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
 /// `OwnerPlatform` access constraint: reachable only from inside, or after,
-/// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
-/// callback the FIRST window already registered).
+/// `on_ready` — e.g. from the input or close-request route of the FIRST
+/// window).
 ///
 /// # [`WindowPolicy::Isolated`]
 ///
@@ -464,6 +464,8 @@ struct PendingOpen {
     config: SecondaryWindowInstallConfig,
     pending: flui_native::PendingWindow,
     waker: std::task::Waker,
+    /// The handler the window was opened with, adopted once it resolves.
+    routes: std::rc::Rc<super::window_routes::WindowRoutes>,
 }
 #[cfg(all(
     not(target_os = "android"),
@@ -698,6 +700,7 @@ pub(super) fn drain_pending_secondary_window_completions(
             }
             Ok(std::task::Poll::Pending) => {}
             Ok(std::task::Poll::Ready(Ok(window))) => {
+                request.routes.adopt(window.id());
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {
                         reply: None,
@@ -855,7 +858,8 @@ pub(super) fn open_secondary_window_impl(
     // ever call `reveal_after_first_frame` — see
     // `desktop::rendered_window_options` for the path that defers.
     let options: WindowOptions = (&config).into();
-    let open = with_owner_platform(|owner| owner.open_window(options))
+    let routes = super::window_routes::WindowRoutes::new();
+    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
 
@@ -873,9 +877,12 @@ pub(super) fn open_secondary_window_impl(
     };
 
     match open {
-        WindowOpen::Ready(window) => finish_open_secondary_window(install_config, window),
+        WindowOpen::Ready(window) => {
+            routes.adopt(window.id());
+            finish_open_secondary_window(install_config, window)
+        }
         WindowOpen::Pending(pending) => {
-            spawn_pending_secondary_window_completion(install_config, pending)?;
+            spawn_pending_secondary_window_completion(install_config, pending, routes)?;
             Ok(None)
         }
     }
@@ -926,12 +933,14 @@ where
     // Deferred reveal: the content install below goes through
     // `install_desktop_window`, which performs the reveal.
     let options: WindowOptions = super::desktop::rendered_window_options(&config);
-    let open = with_owner_platform(|owner| owner.open_window(options))
+    let routes = super::window_routes::WindowRoutes::new();
+    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
 
     match open {
         WindowOpen::Ready(window) => {
+            routes.adopt(window.id());
             let (reply, request) = crate::app::WindowRequest::new();
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
@@ -1001,6 +1010,7 @@ where
 fn spawn_pending_secondary_window_completion(
     config: SecondaryWindowInstallConfig,
     pending: flui_native::PendingWindow,
+    routes: std::rc::Rc<super::window_routes::WindowRoutes>,
 ) -> Result<(), AppWindowError> {
     let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
         .ok_or(AppWindowError::NoOwnerLoop)?;
@@ -1015,6 +1025,7 @@ fn spawn_pending_secondary_window_completion(
             config,
             pending,
             waker,
+            routes,
         });
     });
     if let Err(error) = proxy.wake() {
@@ -1211,6 +1222,7 @@ fn warn_window_storage_dir(config: &AppConfig) {
 mod tests {
     use super::super::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
     use super::*;
+    use crate::app::runner::window_routes::OwnerOpenRouted as _;
     use flui_native::{HeadlessPlatform, Platform};
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
     use flui_testing::window_commands::AdmitAndApply as _;
@@ -1256,8 +1268,7 @@ mod tests {
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(HeadlessPlatform::new())
             .run(Box::new(move |owner| {
-                let window = owner
-                    .open_window(flui_platform::WindowOptions::default())
+                let window = owner.open_routed(flui_platform::WindowOptions::default())
                     .expect("native window");
                 let flui_native::WindowOpen::Ready(window) = window else {
                     panic!("headless ready window")
@@ -1508,16 +1519,18 @@ mod tests {
                 let mut requests = Vec::new();
                 for _ in 0..2 {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_platform::WindowOptions::default())
+                        owner.open_routed(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
                     .try_ready()
                     .expect("headless ready");
                     let observed = Arc::clone(&closed);
-                    window.on_close(Box::new(move || {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                    }));
+                    crate::app::runner::window_routes::WindowRoutes::of(&*window).route_closed(
+                        move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        },
+                    );
                     let (reply, request) = crate::app::WindowRequest::new();
                     requests.push(request);
                     let config = SecondaryWindowInstallConfig {
@@ -1602,7 +1615,7 @@ mod tests {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 for first in [true, false] {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_platform::WindowOptions::default())
+                        owner.open_routed(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
@@ -1696,7 +1709,7 @@ mod tests {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
             Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
-                let window = with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+                let window = with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
                     .expect("owner").expect("open").try_ready().expect("headless ready");
                 let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                 let (reply, mut request) = crate::app::WindowRequest::new();

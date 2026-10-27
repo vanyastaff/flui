@@ -14,7 +14,10 @@ use flui_testing::window_commands::AdmitAndApply as _;
 fn a_window_that_cannot_close() -> Arc<dyn HostWindow> {
     HeadlessPlatform::new()
         .with_window_capabilities(WindowCapabilities::NONE)
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("a headless window opens")
 }
 
@@ -56,7 +59,10 @@ fn a_cleanup_while_unwinding_keeps_the_first_failure() {
 
 fn a_closed_window_is_closed_for_both() {
     let window = HeadlessPlatform::new()
-        .open_window(WindowOptions::default())
+        .open_window(
+            WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("a headless window opens");
     window.close_now();
     window.close_now();

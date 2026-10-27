@@ -419,7 +419,12 @@ fn text_services_probe() {
     let options = WindowOptions::default()
         .with_title("flui tsf probe")
         .with_size(Size::new(640.0, 200.0));
-    let window = platform.open_window(options).expect("window");
+    let window = platform
+        .open_window(
+            options,
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
     let hwnd = window
         .as_any()
         .downcast_ref::<crate::window::windows::WindowsWindow>()

@@ -32,7 +32,7 @@
 //! returns, and `MainEvent::Pause` does not touch the window at all. A wgpu
 //! surface built from a handle into that window therefore has to be gone
 //! before the handle is, which is what the `false` edge of
-//! [`PlatformWindow::on_surface_status_change`] asks the presentation to do.
+//! [`WindowHandler::surface_changed`] asks the presentation to do.
 //!
 //! Both ends of the pair carry the signal: `Pause` and `TerminateWindow` emit
 //! `false`, `Resume` and `InitWindow` emit `true`. `Pause` alone would be the
@@ -67,7 +67,7 @@ use crate::owner::android::{
     ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
     HostDisplays,
 };
-use crate::owner::handlers::CallbackWindow;
+
 use crate::{
     error::BootstrapError,
     error::PlatformError,
@@ -171,7 +171,7 @@ impl std::fmt::Debug for ActivityRef {
 /// the loop holds without naming it (ADR-0151 §10). The looper hands it what
 /// the Activity reports — a native window that comes or goes, a resize, a
 /// configuration change, the Java view's events — and asks it for a frame.
-pub(crate) trait ActivityWindow: CallbackWindow {
+pub(crate) trait ActivityWindow: crate::host_window::HostWindow {
     /// The window's identity, which what features keep of it is keyed by.
     fn activity_id(&self) -> ActivityWindowId;
 
@@ -382,7 +382,7 @@ impl AndroidLoop {
         let window = self.window.lock().clone();
         if let Some(window) = window {
             for event in events {
-                window.callbacks().dispatch_input(event);
+                window.delivery().dispatch_input(event);
             }
         }
     }
@@ -420,7 +420,7 @@ impl AndroidLoop {
                 java_view::ViewEvent::Drag(event) => match &window {
                     Some(window) => {
                         window
-                            .callbacks()
+                            .delivery()
                             .dispatch_input(flui_platform::PlatformInput::DragDrop(event));
                         window.request_redraw();
                     }
@@ -494,7 +494,7 @@ impl AndroidLoop {
         drop(window_guard);
 
         let scale_factor = window.scale();
-        let callbacks = window.callbacks();
+        let delivery = window.delivery();
 
         match self.app.input_events_iter() {
             Ok(mut iter) => loop {
@@ -507,7 +507,7 @@ impl AndroidLoop {
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {
-                                let result = callbacks.dispatch_input(platform_input);
+                                let result = delivery.dispatch_input(platform_input);
                                 if result.default_prevented {
                                     any_handled = true;
                                 }
@@ -522,7 +522,7 @@ impl AndroidLoop {
                             if let Some(platform_input) =
                                 self.input.key(&self.app, key, self.java_view.composing())
                             {
-                                let result = callbacks.dispatch_input(platform_input);
+                                let result = delivery.dispatch_input(platform_input);
                                 result.default_prevented
                             } else {
                                 false
@@ -549,7 +549,7 @@ impl AndroidLoop {
         // A hover exit no press continued in this drain was a leave.
         let held = self.input.finish_drain();
         for event in held {
-            callbacks.dispatch_input(event);
+            delivery.dispatch_input(event);
         }
     }
 }
@@ -745,7 +745,7 @@ impl host::Loop for AndroidLoop {
                             // previous surface still released asks for one, and
                             // a `true` that finds a live surface simply
                             // replaces it — see
-                            // `PlatformWindow::on_surface_status_change`.
+                            // `WindowHandler::surface_changed`.
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
                             }
@@ -754,7 +754,7 @@ impl host::Loop for AndroidLoop {
                             // into the platform.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
-                                w.callbacks().dispatch_surface_status_change(true);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Rebuild);
                                 w.request_redraw();
                             }
                         }
@@ -775,7 +775,7 @@ impl host::Loop for AndroidLoop {
                             // code.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
-                                w.callbacks().dispatch_surface_status_change(false);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
                             }
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
@@ -816,7 +816,7 @@ impl host::Loop for AndroidLoop {
                                 // noticing, that one covers hosts whose windows
                                 // do not remember. Sending twice is idempotent.
                                 w.apply_frame_rate_hint();
-                                w.callbacks().dispatch_surface_status_change(true);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Rebuild);
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
@@ -833,7 +833,7 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
-                                w.callbacks().dispatch_surface_status_change(false);
+                                w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
                             }
                         }
                         MainEvent::Destroy => {
@@ -857,7 +857,7 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.revoke_geometry();
-                                w.callbacks().dispatch_close();
+                                w.delivery().dispatch_close();
                             }
 
                             self.running.store(false, Ordering::Relaxed);
@@ -965,7 +965,7 @@ impl host::Loop for AndroidLoop {
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {
-                w.callbacks().dispatch_request_frame();
+                w.delivery().dispatch_request_frame();
             }
         }
 
@@ -1024,8 +1024,8 @@ impl host::Loop for AndroidLoop {
         let window = self.window.lock().take();
         if let Some(window) = window {
             window.revoke_geometry();
-            window.callbacks().clear();
-            tracing::debug!("Android: loop exited; window released and its callbacks cleared");
+            window.delivery().clear();
+            tracing::debug!("Android: loop exited; window released and its delivery cleared");
         }
 
         // The quit handler runs with no lock held: it may install another

@@ -293,10 +293,10 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use crate::{
     drag::offers::{OfferTable, payload_of_bytes},
-    owner::handlers::WindowCallbacks,
     owner::panic_boundary::contain_owner_callback,
     owner::web::event::{answer, pointer_position},
     owner::web::{CanvasDrag, CanvasRegistration, HostDrag},
+    owner::window_delivery::WindowDelivery,
 };
 #[cfg(target_arch = "wasm32")]
 use mapping::{
@@ -446,10 +446,10 @@ impl HostDrag for WebTransfer {
     fn register(
         self: Arc<Self>,
         canvas: &web_sys::HtmlCanvasElement,
-        callbacks: &Arc<WindowCallbacks>,
+        delivery: &Arc<WindowDelivery>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<Box<dyn CanvasDrag>, crate::OpenWindowError> {
-        Ok(Box::new(register(canvas, &self, callbacks, registration)?))
+        Ok(Box::new(register(canvas, &self, delivery, registration)?))
     }
 }
 
@@ -780,7 +780,7 @@ fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, Representatio
 fn register(
     canvas: &web_sys::HtmlCanvasElement,
     transfer: &Arc<WebTransfer>,
-    callbacks: &Arc<WindowCallbacks>,
+    delivery: &Arc<WindowDelivery>,
     registration: &mut dyn CanvasRegistration,
 ) -> Result<HtmlCanvasDrag, crate::OpenWindowError> {
     let hover: Hover = Rc::default();
@@ -788,9 +788,9 @@ fn register(
 
     // The target.
     for kind in ["dragenter", "dragover"] {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -824,7 +824,7 @@ fn register(
                     )
                 };
                 hover.set(Some((id, allowed)));
-                let result = callbacks.dispatch_input(PlatformInput::DragDrop(input));
+                let result = delivery.dispatch_input(PlatformInput::DragDrop(input));
                 let effect = drop_effect(transfer.feedback(id), allowed);
                 data.set_drop_effect(effect);
                 // Cancelling `dragenter` makes the canvas the drag's target;
@@ -841,9 +841,9 @@ fn register(
         )?;
     }
     {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -854,16 +854,16 @@ fn register(
                     return;
                 };
                 let result =
-                    callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
+                    delivery.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
                 transfer.close_offer(id);
                 answer(&event, result);
             }),
         )?;
     }
     {
-        let (transfer, callbacks, hover) = (
+        let (transfer, delivery, hover) = (
             Arc::clone(transfer),
-            Arc::clone(callbacks),
+            Arc::clone(delivery),
             Rc::clone(&hover),
         );
         registration.listen(
@@ -875,7 +875,7 @@ fn register(
                 };
                 let action = action_of(drop_effect(transfer.feedback(id), allowed));
                 if action.is_empty() {
-                    let result = callbacks
+                    let result = delivery
                         .dispatch_input(PlatformInput::DragDrop(DragDropEvent::Exited { id }));
                     transfer.close_offer(id);
                     answer(&event, result);
@@ -885,7 +885,7 @@ fn register(
                     transfer.materialize(id, &data);
                 }
                 let result =
-                    callbacks.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
+                    delivery.dispatch_input(PlatformInput::DragDrop(DragDropEvent::Dropped {
                         id,
                         action,
                         position: Some(drag_position(&event)),

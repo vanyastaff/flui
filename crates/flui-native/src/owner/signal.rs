@@ -11,7 +11,10 @@
 //! A posted turn is begun before the loop reads anything a wake asked it to
 //! read ([`OwnerSignal::begin_turn`]), and driven after: a wake that lands
 //! while the loop reads posts the next turn, which reads again.
-use super::handlers::{InputWake, WindowCallbacks};
+/// Work a window asks its owner to run in an owner turn of its own (a frame
+/// requested from another thread), through [`OwnerSignal::window_wake`].
+pub(crate) type WindowWake = Arc<dyn Fn() + Send + Sync>;
+
 use super::panic_boundary::contain_owner_callback;
 use crate::{PlatformError, ProxySendError, WakeRegistrationError};
 use parking_lot::Mutex;
@@ -99,8 +102,8 @@ struct State {
     queued: bool,
     active: bool,
     quit: bool,
-    /// Windows whose held input waits for an owner turn (ADR-0213 §3).
-    input_resumes: Vec<InputWake>,
+    /// Windows whose work waits for an owner turn.
+    window_wakes: Vec<WindowWake>,
 }
 
 pub(crate) struct OwnerSignal {
@@ -120,7 +123,7 @@ impl OwnerSignal {
                 queued: false,
                 active: false,
                 quit: false,
-                input_resumes: Vec::new(),
+                window_wakes: Vec::new(),
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
@@ -220,7 +223,7 @@ impl OwnerSignal {
     }
     fn schedule(&self) -> Result<(), ProxySendError<()>> {
         let mut state = self.state.lock();
-        let work = state.pending || state.quit || !state.input_resumes.is_empty();
+        let work = state.pending || state.quit || !state.window_wakes.is_empty();
         if state.running && work && !state.queued && !state.active {
             // Backend-only nonblocking post, never a user callback. Serialize
             // posting with admission so another sender cannot acknowledge a
@@ -233,61 +236,48 @@ impl OwnerSignal {
         }
         Ok(())
     }
-    /// Ask for an owner turn that runs `resume`, a window's held input
-    /// delivery; one queued run per window.
-    pub(crate) fn resume_input(&self, resume: InputWake) {
+    /// Ask for an owner turn that runs `resume`, a window's work for its
+    /// owner; one queued run per window.
+    pub(crate) fn run_for_window(&self, resume: WindowWake) {
         {
             let mut state = self.state.lock();
             if !state.accepting {
                 return;
             }
             if !state
-                .input_resumes
+                .window_wakes
                 .iter()
                 .any(|queued| Arc::ptr_eq(queued, &resume))
             {
-                state.input_resumes.push(resume);
+                state.window_wakes.push(resume);
             }
         }
         if let Err(error) = self.schedule() {
-            contain_owner_callback(|| tracing::error!(%error, "input resume could not be posted"));
+            contain_owner_callback(
+                || tracing::error!(%error, "a window's owner turn could not be posted"),
+            );
         }
     }
 
-    /// The wake a window installs with
-    /// [`WindowCallbacks::set_input_wake`](WindowCallbacks::set_input_wake).
-    /// `resume` calls the window's
-    /// [`WindowCallbacks::resume_input_delivery`](WindowCallbacks::resume_input_delivery)
-    /// through a weak reference, so a queued turn never keeps a window alive.
-    pub(crate) fn input_wake(
+    /// The wake for a window's work in an owner turn of its own: `resume`
+    /// runs there. It holds the signal weakly, so a queued turn never keeps
+    /// the loop alive; `resume` holds its window weakly for the same reason.
+    pub(crate) fn window_wake(
         signal: &Arc<Self>,
         resume: impl Fn() + Send + Sync + 'static,
-    ) -> InputWake {
+    ) -> WindowWake {
         let signal = Arc::downgrade(signal);
-        let resume: InputWake = Arc::new(resume);
+        let resume: WindowWake = Arc::new(resume);
         Arc::new(move || {
             if let Some(signal) = signal.upgrade() {
-                signal.resume_input(Arc::clone(&resume));
-            }
-        })
-    }
-
-    /// The wake for a window whose callbacks are shared.
-    pub(crate) fn callbacks_wake(
-        signal: &Arc<Self>,
-        callbacks: &Arc<WindowCallbacks>,
-    ) -> InputWake {
-        let callbacks = Arc::downgrade(callbacks);
-        Self::input_wake(signal, move || {
-            if let Some(callbacks) = callbacks.upgrade() {
-                callbacks.resume_input_delivery();
+                signal.run_for_window(Arc::clone(&resume));
             }
         })
     }
 
     /// Resume every window that asked, outside the state lock.
-    fn run_input_resumes(&self) {
-        let resumes = std::mem::take(&mut self.state.lock().input_resumes);
+    fn run_window_wakes(&self) {
+        let resumes = std::mem::take(&mut self.state.lock().window_wakes);
         for resume in resumes {
             contain_owner_callback(|| resume());
             contain_owner_callback(|| drop(resume));
@@ -396,12 +386,12 @@ impl OwnerTurn<'_> {
                 state.quit = false;
                 return true;
             }
-            if state.accepting && state.running && !state.input_resumes.is_empty() {
-                // Held window input resumes in its own turn, before the
-                // application's turn; resumes it asks for get a later turn.
+            if state.accepting && state.running && !state.window_wakes.is_empty() {
+                // A window's work runs in its own turn, before the
+                // application's turn; work it asks for gets a later turn.
                 state.active = true;
                 drop(state);
-                signal.run_input_resumes();
+                signal.run_window_wakes();
                 signal.state.lock().active = false;
                 signal.rearm();
                 return false;
@@ -460,9 +450,9 @@ impl SignalTransport {
 impl super::ProxyTransport for SignalTransport {
     fn open_window(
         &self,
-        options: flui_platform::WindowOptions,
-    ) -> Result<crate::PendingWindow, ProxySendError<flui_platform::WindowOptions>> {
-        Err(ProxySendError::Unsupported { rejected: options })
+        request: crate::WindowRequest,
+    ) -> Result<crate::PendingWindow, ProxySendError<crate::WindowRequest>> {
+        Err(ProxySendError::Unsupported { rejected: request })
     }
     fn wake(&self) -> Result<(), ProxySendError<()>> {
         self.signal

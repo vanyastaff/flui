@@ -425,6 +425,9 @@ pub(crate) struct AppRuntime {
         flui_foundation::PresentationAddress,
         Rc<super::placement_recorder::PlacementRecorder>,
     )>,
+    /// The handler each window this runner opened was opened with, by window
+    /// (`runner::window_routes`).
+    window_routes: super::runner::window_routes::RouteBook,
 }
 
 impl AppRuntime {
@@ -510,7 +513,25 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             placement_recorders: Vec::new(),
+            window_routes: super::runner::window_routes::RouteBook::default(),
         }
+    }
+
+    /// The routes the window `window` was opened with, while it is open.
+    pub(super) fn window_routes(
+        &self,
+        window: flui_platform::WindowId,
+    ) -> Option<Rc<super::runner::window_routes::WindowRoutes>> {
+        self.window_routes.find(window)
+    }
+
+    /// Record the routes the window `window` was opened with.
+    pub(super) fn adopt_window_routes(
+        &mut self,
+        window: flui_platform::WindowId,
+        routes: std::rc::Weak<super::runner::window_routes::WindowRoutes>,
+    ) {
+        self.window_routes.adopt(window, routes);
     }
 
     /// Resolves and caches [`SharedEngineServices`] on first call; returns

@@ -606,8 +606,12 @@ pub mod linux {
                     "foreign reads cannot become a second source"
                 );
                 if scheme {
+                    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
                     let window = owner
-                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
+                        .open_window(
+                            flui_platform::WindowOptions::default().with_visible(false),
+                            handler.clone(),
+                        )?
                         .try_ready()?;
                     assert_eq!(
                         window.state().appearance,
@@ -617,14 +621,14 @@ pub mod linux {
                     let proxy = owner.proxy();
                     let observed = Arc::downgrade(&window);
                     let seen = Arc::clone(&scheme_witness);
-                    window.on_state_changed(Box::new(move || {
+                    handler.react_to_state_change(move || {
                         if observed.upgrade().is_some_and(|window| {
                             window.state().appearance == WindowAppearance::Light
                         }) && !seen.swap(true, Ordering::SeqCst)
                         {
                             proxy.request_quit().expect("color-scheme owner quit");
                         }
-                    }));
+                    });
                     start
                         .send(owner.proxy())
                         .expect("start color-scheme change");

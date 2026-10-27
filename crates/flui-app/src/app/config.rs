@@ -146,6 +146,16 @@ pub struct AppConfig {
     /// with it.
     pub frame_latency: FrameLatency,
 
+    /// How early pointer samples reach every window the application opens.
+    ///
+    /// [`InputLatency::Balanced`](flui_platform::InputLatency::Balanced) by
+    /// default: the system's per-frame batches.
+    /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
+    /// sample as soon as the system has it, for live ink and drawing: the web
+    /// host listens to `pointerrawupdate`; a host that cannot deliver earlier
+    /// ignores it.
+    pub input_latency: flui_platform::InputLatency,
+
     /// The development reload driver, if the application installed one with
     /// [`Self::with_dev_reload`] (ADR-0094 §1).
     ///
@@ -311,6 +321,7 @@ impl Default for AppConfig {
             os_options: flui_platform::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
             frame_latency: FrameLatency::Balanced,
+            input_latency: flui_platform::InputLatency::Balanced,
             dev_reload: None,
             dev_agent: None,
             exit_policy: ExitPolicy::default(),
@@ -461,6 +472,14 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_frame_latency(mut self, latency: FrameLatency) -> Self {
         self.frame_latency = latency;
+        self
+    }
+
+    /// Set how early pointer samples reach every window the application
+    /// opens; see [`Self::input_latency`].
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_input_latency(mut self, latency: flui_platform::InputLatency) -> Self {
+        self.input_latency = latency;
         self
     }
 
@@ -675,6 +694,7 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .with_max_size(config.max_size)
             .with_position(config.position)
             .with_mode(config.mode)
+            .with_input_latency(config.input_latency)
             .with_os_options(config.os_options.clone())
     }
 }

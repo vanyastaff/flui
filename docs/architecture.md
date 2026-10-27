@@ -142,7 +142,12 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     fn quit(&self);
 
     // Windows + displays
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    // The handler hears everything the window delivers, from its first event on.
+    fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
     fn active_window(&self) -> Option<WindowId>;
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 

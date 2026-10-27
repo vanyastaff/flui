@@ -244,6 +244,7 @@ mod tests {
         owner_dispatch::{prepare_ui_runtime_alongside, teardown_platform_ui_runtime},
     };
     use super::*;
+    use crate::app::runner::window_routes::OwnerOpenRouted as _;
     use flui_native::Platform;
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_view::{StatefulView, View, ViewState};
@@ -368,7 +369,7 @@ mod tests {
         let platform = saved.borrow_mut().take().expect("owner");
         let acknowledgement = || WindowInstallation::channel(platform.proxy()).0;
         let first = platform
-            .open_window(flui_platform::WindowOptions::default())
+            .open_routed(flui_platform::WindowOptions::default())
             .expect("first native owner")
             .try_ready()
             .expect("ready window");
@@ -410,7 +411,7 @@ mod tests {
         );
         let old_model = probe.model.get();
         let second = platform
-            .open_window(flui_platform::WindowOptions::default())
+            .open_routed(flui_platform::WindowOptions::default())
             .expect("new native owner")
             .try_ready()
             .expect("ready window");
@@ -462,7 +463,7 @@ mod tests {
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
         Box::new(flui_native::HeadlessPlatform::new()).run(Box::new(move |owner| {
-            let window = owner.open_window(flui_platform::WindowOptions::default())?.try_ready()?;
+            let window = owner.open_routed(flui_platform::WindowOptions::default())?.try_ready()?;
             let retained_window = Arc::clone(&window);
             let outer = install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &crate::app::window_test_support::headless_test_window());
             let address = Rc::new(Cell::new(None));
@@ -488,7 +489,7 @@ mod tests {
         Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_routed(flui_platform::WindowOptions::default())?
                     .try_ready()?;
                 let outer = install_platform_ui_runtime(
                     crate::app::ui_runtime::UiRuntime::for_test(),

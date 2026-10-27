@@ -20,9 +20,9 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
-    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
-    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowGeometry, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowGeometry, WindowHandler, WindowId, WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -31,9 +31,10 @@ use crate::host_window::HostWindow;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
 
-use crate::owner::handlers::{OpenWindows, Publication, WindowCallbacks};
+use crate::owner::handlers::OpenWindows;
 use crate::owner::headless::TextStoreHostFactory;
 use crate::owner::headless::{HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy};
+use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
 use crate::window::state::{ReportedFacts, WindowStateCell};
@@ -170,6 +171,7 @@ impl TrackedWindows for HeadlessWindows {
         state: &mut HeadlessState,
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Arc<dyn HostWindow> {
         let window_id = next_headless_window_id();
         let display = state.window_display();
@@ -177,6 +179,11 @@ impl TrackedWindows for HeadlessWindows {
             let tracked = self.tracked.lock();
             (tracked.capabilities, tracked.policy)
         };
+        // The capability snapshot reflects the devices already attached
+        // (ADR-0213 §3).
+        let input = state
+            .input_availability
+            .with_present(state.devices.present());
         let mut window = MockWindow::new(
             window_id,
             options,
@@ -190,28 +197,18 @@ impl TrackedWindows for HeadlessWindows {
                 capabilities,
                 limits,
             },
+            WindowDelivery::new(handler, input),
         );
 
         window.drag = state.window_drag_source();
-        // The initial snapshot reflects the devices already attached (ADR-0213 §3).
-        window.callbacks.set_input_capabilities(
-            state
-                .input_availability
-                .with_present(state.devices.present()),
-        );
         if let Some(signal) = state.owner_signal.upgrade() {
-            window
-                .callbacks
-                .set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
-                    &signal,
-                    &window.callbacks,
-                ));
-            let callbacks = Arc::downgrade(&window.callbacks);
+            window.delivery.resume_through_signal(&signal);
+            let delivery = Arc::downgrade(&window.delivery);
             window.owner_redraw = Some(OwnerRedraw {
                 signal: Arc::downgrade(&signal),
-                wake: crate::owner::signal::OwnerSignal::input_wake(&signal, move || {
-                    if let Some(callbacks) = callbacks.upgrade() {
-                        callbacks.dispatch_request_frame();
+                wake: crate::owner::signal::OwnerSignal::window_wake(&signal, move || {
+                    if let Some(delivery) = delivery.upgrade() {
+                        delivery.dispatch_request_frame();
                     }
                 }),
             });
@@ -227,22 +224,22 @@ impl TrackedWindows for HeadlessWindows {
         Arc::new(window) as Arc<dyn HostWindow>
     }
 
-    fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>> {
+    fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>> {
         self.tracked
             .lock()
             .windows
             .iter()
-            .map(|window| Arc::clone(&window.callbacks))
+            .map(|window| Arc::clone(&window.delivery))
             .collect()
     }
 
-    fn callbacks_of(&self, id: WindowId) -> Option<Arc<WindowCallbacks>> {
+    fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>> {
         self.tracked
             .lock()
             .windows
             .iter()
             .find(|window| window.id == id)
-            .map(|window| Arc::clone(&window.callbacks))
+            .map(|window| Arc::clone(&window.delivery))
     }
 }
 
@@ -292,12 +289,13 @@ impl host::Window<HeadlessLoop> for MockWindow {
         owner: &HeadlessLoop,
         windows: &Arc<HeadlessWindows>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&owner.state);
         let window = owner.with_state(|state| {
-            TrackedWindows::open(Arc::clone(windows), state, platform_state, options)
+            TrackedWindows::open(Arc::clone(windows), state, platform_state, options, handler)
         });
         Ok(window)
     }
@@ -352,13 +350,13 @@ pub struct HeadlessWindowSystem {
 ///
 /// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
 ///   delivered through the resize path exactly like the winit backend);
-/// - `request_redraw` dispatching through the registered callbacks on the
-///   owner thread, a request from another thread in the owner's next turn
-///   ([`WindowCallbacks`]), like a real backend's frame wire;
+/// - `request_redraw` dispatching through the window handler on the
+///   owner thread, a request from another thread in the owner's next turn,
+///   like a real backend's frame wire;
 /// - programmatic event injection ([`Self::inject_event`]) and lifecycle
 ///   simulation (`simulate_resize` / `simulate_focus` /
-///   `simulate_visibility` / `simulate_close`), each firing the same
-///   registered callback a real platform would.
+///   `simulate_visibility` / `simulate_close`), each calling the same
+///   handler method a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
@@ -369,10 +367,10 @@ pub struct MockWindow {
     state: Arc<Mutex<MockWindowState>>,
     /// The published snapshot, shared by every clone of this window.
     window_state: Arc<WindowStateCell>,
-    /// What the window's state publisher reads; the callbacks hold it weakly.
+    /// What the window's state publisher reads; the delivery holds it weakly.
     source: Arc<SnapshotSource>,
     limits: HeadlessWindowPolicy,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     /// What the window holds of the table's window-level positions.
     facets: WindowFacets,
     /// Builds this window's text-store host, when the platform was made
@@ -402,7 +400,7 @@ pub struct MockWindow {
 #[derive(Clone)]
 struct OwnerRedraw {
     signal: Weak<crate::owner::signal::OwnerSignal>,
-    wake: crate::owner::handlers::InputWake,
+    wake: crate::owner::signal::WindowWake,
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -417,7 +415,7 @@ impl std::fmt::Debug for MockWindow {
             .field("scale_factor", &state.scale_factor)
             .field("focused", &state.focused)
             .field("visible", &state.visible)
-            .field("callbacks", &self.callbacks)
+            .field("delivery", &self.delivery)
             .finish_non_exhaustive()
     }
 }
@@ -606,10 +604,10 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
 fn read_window_state(
     cell: &WindowStateCell,
     model: &Mutex<MockWindowState>,
-    callbacks: &WindowCallbacks,
+    delivery: &WindowDelivery,
 ) -> crate::window::state::Published {
     cell.invalidate();
-    cell.state_with(|| sample_window_state(&model.lock(), callbacks.hovered()))
+    cell.state_with(|| sample_window_state(&model.lock(), delivery.hovered()))
 }
 
 /// What a window's state publisher reads: the model standing in for the OS,
@@ -617,15 +615,15 @@ fn read_window_state(
 struct SnapshotSource {
     cell: Arc<WindowStateCell>,
     model: Arc<Mutex<MockWindowState>>,
-    callbacks: Weak<WindowCallbacks>,
+    delivery: Weak<WindowDelivery>,
 }
 
 impl SnapshotSource {
     fn read(&self) -> Publication {
-        self.callbacks
+        self.delivery
             .upgrade()
-            .map_or(Publication::Unchanged, |callbacks| {
-                read_window_state(&self.cell, &self.model, &callbacks).outcome()
+            .map_or(Publication::Unchanged, |delivery| {
+                read_window_state(&self.cell, &self.model, &delivery).outcome()
             })
     }
 }
@@ -637,6 +635,7 @@ impl MockWindow {
         platform_state: Weak<Mutex<HeadlessState>>,
         windows: Weak<HeadlessWindows>,
         host: MockWindowHost,
+        delivery: WindowDelivery,
     ) -> Self {
         let MockWindowHost {
             positions,
@@ -684,20 +683,20 @@ impl MockWindow {
         let initial = sample_window_state(&model, false);
         let state = Arc::new(Mutex::new(model));
         let window_state = Arc::new(WindowStateCell::new(initial));
-        let callbacks = Arc::new(WindowCallbacks::new());
+        let delivery = Arc::new(delivery);
         let source = Arc::new(SnapshotSource {
             cell: Arc::clone(&window_state),
             model: Arc::clone(&state),
-            callbacks: Arc::downgrade(&callbacks),
+            delivery: Arc::downgrade(&delivery),
         });
-        callbacks.publish_through(Arc::downgrade(&source), SnapshotSource::read);
+        delivery.publish_through(Arc::downgrade(&source), SnapshotSource::read);
         Self {
             id,
             state,
             window_state,
             source,
             limits,
-            callbacks,
+            delivery,
             facets: positions.for_window(&()),
             text_store_host,
             input_regions: Arc::default(),
@@ -719,19 +718,19 @@ impl MockWindow {
     }
 
     /// Publish what the model says now: read it into a snapshot, and raise
-    /// `on_state_changed` after the cell's lock is released when the revision
+    /// the handler's `state_changed` after the cell's lock is released when the revision
     /// grew.
     fn publish_state(&self) -> WindowState {
-        let published = read_window_state(&self.source.cell, &self.source.model, &self.callbacks);
+        let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
 
     /// The whole close teardown, in the order both production backends run it:
-    /// hide, fire `on_close`, drop the window from tracking, clear its
-    /// callbacks, and consult the exit policy only once nothing is tracked any
+    /// hide, deliver `closed`, drop the window from tracking, let go of its
+    /// handler, and consult the exit policy only once nothing is tracked any
     /// more.
     ///
     /// Mirrors `WinitAppHandler::complete_window_close`. Two of its steps have
@@ -750,15 +749,15 @@ impl MockWindow {
         }
         // Hidden and detached, in one revision, before the window is gone.
         self.publish_state();
-        self.callbacks.dispatch_close();
+        self.delivery.dispatch_close();
         // What the window-level positions put on the window goes with it.
         self.facets.text.detach();
         self.facets.accessibility.detach();
         self.notify_closed();
         // After the exit-policy consult, never before: a hook that inspects
-        // the window it was just told about must not find its callbacks
+        // the window it was just told about must not find its handler
         // already gone.
-        self.callbacks.clear();
+        self.delivery.clear();
     }
 
     /// Removes this window from the platform's own tracking and, only once
@@ -824,12 +823,12 @@ impl MockWindow {
     }
 
     /// Inject a platform input event for testing.
-    /// Fires the registered `on_input` callback.
+    /// Delivers to the window handler's `input`.
     pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
-        self.callbacks.dispatch_input(event)
+        self.delivery.dispatch_input(event)
     }
 
-    /// Simulate a resize for testing. Fires `on_state_changed` when the
+    /// Simulate a resize for testing. Fires the handler's `state_changed` when the
     /// snapshot differs; a size that is not a drawable area keeps the metrics
     /// the snapshot already holds.
     pub fn simulate_resize(&self, width: f64, height: f64) {
@@ -840,7 +839,7 @@ impl MockWindow {
     /// Simulate the user (or the OS) moving the window to `position`, outer
     /// top-left in global logical pixels. This host draws no frame, so that is
     /// also where its content starts: [`PlatformWindow::window_at`] answers
-    /// from it. Fires `on_state_changed` when the snapshot differs.
+    /// from it. Fires the handler's `state_changed` when the snapshot differs.
     pub fn simulate_move(&self, position: Point<f64>) {
         self.state.lock().position = position;
         self.publish_state();
@@ -853,7 +852,7 @@ impl MockWindow {
         self.publish_state();
     }
 
-    /// Simulate focus change for testing. Fires `on_state_changed` when the
+    /// Simulate focus change for testing. Fires the handler's `state_changed` when the
     /// snapshot differs.
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
@@ -861,13 +860,13 @@ impl MockWindow {
     }
 
     /// Simulate the pointer entering (`true`) or leaving the window's content,
-    /// through the one hover report every host uses. Fires `on_state_changed`
+    /// through the one hover report every host uses. Fires the handler's `state_changed`
     /// when the snapshot differs; a closed window ignores the report.
     pub fn simulate_hover(&self, hovered: bool) {
         if self.state.lock().closed {
             return;
         }
-        self.callbacks.report_hover(hovered);
+        self.delivery.report_hover(hovered);
     }
 
     /// Simulate an owner-thread safe-area report. Closed and detached windows
@@ -896,14 +895,14 @@ impl MockWindow {
     }
 
     /// Simulate a visibility/occlusion change for testing. Fires
-    /// `on_state_changed` when the snapshot differs.
+    /// the handler's `state_changed` when the snapshot differs.
     pub fn simulate_visibility(&self, visible: bool) {
         self.state.lock().visible = visible;
         self.publish_state();
     }
 
     /// Simulate the system light/dark appearance this window observes. Fires
-    /// `on_state_changed` when the snapshot differs; closed windows ignore the
+    /// the handler's `state_changed` when the snapshot differs; closed windows ignore the
     /// report.
     pub fn simulate_appearance(&self, appearance: WindowAppearance) {
         {
@@ -918,7 +917,7 @@ impl MockWindow {
 
     /// Simulate the window system revising what it lets this window do, as a
     /// compositor that stops honouring a request does. Fires
-    /// `on_state_changed` when the snapshot differs, with the capabilities at
+    /// the handler's `state_changed` when the snapshot differs, with the capabilities at
     /// a new revision; a closed window ignores the report.
     pub fn simulate_capabilities(&self, capabilities: WindowCapabilities) {
         {
@@ -932,7 +931,7 @@ impl MockWindow {
     }
 
     /// Move this window to display `id`, as the user dragging it onto another
-    /// monitor does. Fires `on_state_changed` when the snapshot differs; a
+    /// monitor does. Fires the handler's `state_changed` when the snapshot differs; a
     /// closed window ignores the report.
     ///
     /// # Errors
@@ -958,23 +957,31 @@ impl MockWindow {
     }
 
     /// Simulate a GPU-surface availability change for testing.
-    /// Fires the registered `on_surface_status_change` callback.
+    /// Delivers to the window handler's `surface_changed`.
     ///
     /// No backend in this workspace emits this signal but Android, so this is
     /// the only way a host-run test can drive the seam the released-surface
-    /// path hangs off: `false` asks the callback to release its surface,
-    /// `true` asks it to rebuild one.
-    pub fn simulate_surface_status(&self, has_surface: bool) {
-        self.callbacks.dispatch_surface_status_change(has_surface);
+    /// path hangs off: [`SurfaceChange::Release`] asks the handler to release
+    /// its surface, [`SurfaceChange::Rebuild`] to build one again.
+    pub fn simulate_surface_change(&self, change: SurfaceChange) {
+        self.delivery.dispatch_surface_change(change);
     }
 
     /// Simulate close request for testing.
-    /// Fires `on_should_close`, then `on_close` if allowed, then (real,
+    /// Fires the handler's `close_requested`, then `closed` if it closes, then (real,
     /// production behavior — not a test-only shortcut) removes this window
     /// from the platform's tracking and consults the exit-policy hook if
     /// every tracked window is now gone. See `Self::notify_closed`.
+    ///
+    /// Raised while one of the handler's methods runs, the request is
+    /// answered `false` at once and asked behind it; the window then closes
+    /// if the handler grants it.
     pub fn simulate_close(&self) -> bool {
-        let should = self.callbacks.dispatch_should_close();
+        let later = self.clone();
+        let should = self
+            .delivery
+            .dispatch_close_request(move || later.complete_close())
+            == flui_platform::CloseDecision::Close;
         if should {
             self.complete_close();
         }
@@ -997,7 +1004,7 @@ impl PlatformWindow for MockWindow {
             (redraw.wake)();
             return;
         }
-        self.callbacks.dispatch_request_frame();
+        self.delivery.dispatch_request_frame();
     }
 
     fn pre_present_notify(&self) {
@@ -1017,7 +1024,7 @@ impl PlatformWindow for MockWindow {
         let command = command.against(&self.window_state.published_capabilities())?;
         if command == WindowCommand::Close {
             // Synchronous, as a same-thread Win32 `DestroyWindow` is: the
-            // teardown and `on_close` run before this returns.
+            // teardown and `closed` run before this returns.
             self.complete_close();
             return Ok(());
         }
@@ -1159,13 +1166,13 @@ impl PlatformWindow for MockWindow {
         self.state.lock().cursor = cursor;
         Ok(())
     }
-
-    // ==================== Callbacks ====================
-
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 }
 
-impl crate::host_window::CoreHostWindow for MockWindow {}
+impl crate::host_window::CoreHostWindow for MockWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl HostWindow for MockWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {

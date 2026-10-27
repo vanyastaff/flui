@@ -28,6 +28,7 @@ use flui_platform::{
     DispatchEventResult, PlatformInput, PlatformWindow, Unsupported, UnsupportedReason,
     WindowExecutionState,
 };
+use flui_testing::window_handler::RecordingWindowHandler;
 
 /// A drag the OS cannot take: the window has no drag source.
 const NO_OS_DRAG: DragError =
@@ -215,13 +216,31 @@ fn nonce() -> ProcessNonce {
     ProcessNonce::from_raw(NonZeroU64::new(0x000d_15c0).expect("nonzero"))
 }
 
-fn open(platform: &HeadlessPlatform) -> (Arc<dyn HostWindow>, PresentationWindow) {
+/// A headless window and the handler it was opened with.
+struct Window {
+    host: Arc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
+}
+
+impl std::ops::Deref for Window {
+    type Target = Arc<dyn HostWindow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.host
+    }
+}
+
+fn open(platform: &HeadlessPlatform) -> (Window, PresentationWindow) {
+    let handler = RecordingWindowHandler::new();
     let window = platform
-        .open_window(WindowOptions::default())
+        .open_window(WindowOptions::default(), handler.clone())
         .expect("headless window");
     let accessibility = window.accessibility();
     (
-        Arc::clone(&window),
+        Window {
+            host: Arc::clone(&window),
+            handler,
+        },
         PresentationWindow::new(window, accessibility),
     )
 }
@@ -261,7 +280,7 @@ fn mount(runtime: &mut UiRuntime, presentation: PresentationId, root: &ReceiverA
 fn publish(
     owner: &OwnerHost,
     mut runtime: UiRuntime,
-    windows: &[(&Arc<dyn HostWindow>, PresentationId)],
+    windows: &[(&Window, PresentationId)],
 ) -> Vec<PresentationDispatcher> {
     let _ = runtime.pump(
         &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
@@ -282,10 +301,10 @@ fn publish(
                 })
                 .expect("input authority");
             let routed = dispatcher.clone();
-            window.on_input(Box::new(move |input: PlatformInput| {
+            window.handler.react_to_input(move |input: PlatformInput| {
                 let _ = routed.input(input, &Effects);
                 DispatchEventResult::resolved(false, false)
-            }));
+            });
             dispatcher
         })
         .collect()
@@ -298,8 +317,8 @@ struct World {
     runtime: flui_foundation::UiRuntimeId,
     primary: PresentationId,
     secondary: PresentationId,
-    first: Arc<dyn HostWindow>,
-    second: Arc<dyn HostWindow>,
+    first: Window,
+    second: Window,
     dispatchers: Vec<PresentationDispatcher>,
     _platform: HeadlessPlatform,
 }

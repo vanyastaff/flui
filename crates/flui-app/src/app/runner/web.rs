@@ -59,15 +59,20 @@ where
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_native::WindowOpen::try_ready)
-        {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "Failed to create canvas window");
-                return Err(anyhow::Error::from(error).context("Failed to create canvas window"));
-            }
-        };
+        let routes = super::window_routes::WindowRoutes::new();
+        let host =
+            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
+                .and_then(flui_native::WindowOpen::try_ready)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(%error, "Failed to create canvas window");
+                    return Err(
+                        anyhow::Error::from(error).context("Failed to create canvas window")
+                    );
+                }
+            };
+        routes.adopt(host.id());
         let presentation_window =
             super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
         let window = Arc::clone(presentation_window.window());
@@ -130,14 +135,14 @@ where
         let wake = ui_runtime.wake_handle();
         {
             let (gpu_loss, wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
-            window.on_surface_status_change(Box::new(move |available| {
-                if available {
+            routes.route_surface_changed(move |change| {
+                if change == flui_platform::SurfaceChange::Rebuild {
                     gpu_loss.record_context_restore();
                 } else {
                     gpu_loss.record_context_loss();
                 }
                 wake();
-            }));
+            });
         }
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.dev_agent(config.dev_agent.zip(agent_window));

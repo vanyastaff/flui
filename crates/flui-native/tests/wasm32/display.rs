@@ -999,7 +999,13 @@ async fn web_window_names_the_display_the_snapshot_describes() {
     let window = {
         let owner = running.owner.borrow();
         let owner = owner.as_ref().expect("owner");
-        match owner.open_window(WindowOptions::default()).expect("window") {
+        match owner
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("window")
+        {
             WindowOpen::Ready(window) => window,
             WindowOpen::Pending(_) => panic!("a Web window opens at once"),
         }
@@ -1110,7 +1116,10 @@ async fn web_granting_screen_access_keeps_the_window_display() {
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window")
         {
             WindowOpen::Ready(window) => window,
@@ -1255,12 +1264,13 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
 
 /// A window opened on `running`, and the scale of every resize it reports.
 fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
+    let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = {
         let owner = running.owner.borrow();
         match owner
             .as_ref()
             .expect("owner")
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), handler.clone())
             .expect("window")
         {
             WindowOpen::Ready(window) => window,
@@ -1270,20 +1280,19 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
     let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
     let observed = Arc::downgrade(&window);
-    let mut last = window.state().metrics;
-    window.on_state_changed(Box::new(move || {
+    let last = std::cell::Cell::new(window.state().metrics);
+    handler.react_to_state_change(move || {
         let Some(window) = observed.upgrade() else {
             return;
         };
         let metrics = window.state().metrics;
-        if metrics == last {
+        if metrics == last.replace(metrics) {
             return;
         }
-        last = metrics;
         if let Some(metrics) = metrics {
             seen.lock().expect("resizes").push(metrics.scale().get());
         }
-    }));
+    });
     (window, resized)
 }
 

@@ -5,6 +5,9 @@
 //! window's own messages and pump.
 
 use flui_testing::window_commands::AdmitAndApply as _;
+use flui_testing::window_handler::RecordingWindowHandler;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::Size;
@@ -32,6 +35,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 struct Fixture {
     // Field order: the window closes before its platform goes.
     window: Arc<dyn HostWindow>,
+    handler: Rc<RecordingWindowHandler>,
     _platform: WindowsPlatform,
     hwnd: HWND,
     log: Log,
@@ -104,6 +108,7 @@ fn send(hwnd: HWND, message: u32) {
 /// once, from inside the callback, on the first scroll it receives.
 fn fixture(nested: Option<fn(HWND)>) -> Fixture {
     let platform = WindowsPlatform::new().expect("platform");
+    let handler = RecordingWindowHandler::new();
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -111,6 +116,7 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
                 .with_size(Size::new(200.0, 120.0))
                 // Shown: a hidden window keeps no update region.
                 .with_visible(true),
+            handler.clone(),
         )
         .expect("window");
     let hwnd = window
@@ -121,9 +127,9 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
     let scale = scale_of(hwnd);
     let log = Log::default();
     let inputs = Arc::clone(&log);
-    let mut nested = nested;
+    let nested = Cell::new(nested);
     let raw = hwnd.0 as isize;
-    window.on_input(Box::new(move |input| {
+    handler.react_to_input(move |input| {
         if let Some(line) = describe(&input, scale) {
             inputs.lock().expect("log").push(line);
             if let Some(nested) = nested.take() {
@@ -131,17 +137,18 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
             }
         }
         DispatchEventResult::default()
-    }));
+    });
     let frames = Arc::clone(&log);
-    window.on_request_frame(Box::new(move |_| {
+    handler.react_to_frame(move |_| {
         frames.lock().expect("log").push("frame".to_owned());
-    }));
+    });
     // What the viewport reported while it was built is not a manipulation.
     pump(hwnd);
     let _ = take_timer(hwnd);
     log.lock().expect("log").clear();
     Fixture {
         window,
+        handler,
         _platform: platform,
         hwnd,
         log,
@@ -324,7 +331,7 @@ fn a_focus_loss_stamps_its_cancellations_in_order() {
     let f = fixture(None);
     let timeline = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&timeline);
-    f.window.on_input(Box::new(move |input| {
+    f.handler.react_to_input(move |input| {
         let entry = match input.as_pointer() {
             Some(PointerEvent::Scroll(scroll)) => Some(("scroll", scroll.time)),
             Some(PointerEvent::Down(press)) => Some(("down", press.sample.time)),
@@ -335,7 +342,7 @@ fn a_focus_loss_stamps_its_cancellations_in_order() {
             recorded.lock().expect("timeline").push(entry);
         }
         DispatchEventResult::default()
-    }));
+    });
     push(f.hwnd, &[status(Running), content(-8.0)]);
     pump(f.hwnd);
     // SAFETY: integer message data for the fixture's own window on its
@@ -371,15 +378,15 @@ fn destroying_the_window_cancels_what_is_open_before_it_closes() {
     push(f.hwnd, &[status(Running), content(-8.0)]);
     pump(f.hwnd);
     let closes = Arc::clone(&f.log);
-    f.window.on_close(Box::new(move || {
+    f.handler.react_to_close(move || {
         closes.lock().expect("log").push("close".to_owned());
-    }));
+    });
     f.window.close_now();
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0", "close"]);
 }
 
 fn capabilities(hwnd: HWND) -> InputCapabilities {
-    input(hwnd).callbacks.input_capabilities()
+    input(hwnd).delivery.input_capabilities()
 }
 
 /// A viewport whose `Update` fails is released, what it had open is

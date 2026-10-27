@@ -4,13 +4,14 @@
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName,
-    SystemNotice, SystemPreferences, WindowCapabilities, WindowId, WindowOptions,
+    SystemNotice, SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 
 use crate::error::{BootstrapError, PlatformError};
@@ -228,7 +229,14 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     // ==================== Window Management ====================
 
-    /// Create and open a new window
+    /// Create and open a new window, whose deliveries go to `handler`
+    /// (ADR-0254 §4).
+    ///
+    /// The handler exists before the window's first event: its first input
+    /// is the window's capability snapshot, delivered before this call
+    /// returns, and it is the one place the window's input, state changes,
+    /// frame and close requests, close and surface changes go. Call it on the
+    /// owner thread, which the handler lives on; a refused open drops it.
     ///
     /// Returns the canonical shared window identity. The platform event loop,
     /// presentation owner, and raster surface clone this same allocation; no
@@ -243,7 +251,11 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// [`OwnerGone`](OpenWindowError::OwnerGone) /
     /// [`Unavailable`](OpenWindowError::Unavailable) for cross-thread
     /// lifecycle refusals.
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
+    fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
 
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
@@ -618,8 +630,16 @@ impl<H: Host> Platform for HostPlatform<H> {
         self.owner.set_wake_deadline_hook(hook);
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        H::Window::open(&self.owner, &self.window_shared, options)
+    fn open_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        let window = H::Window::open(&self.owner, &self.window_shared, options, handler)?;
+        // Every lock the open took is released: the handler hears its
+        // window's capabilities now, before anything later.
+        window.delivery().deliver_capability_snapshot();
+        Ok(window)
     }
 
     fn active_window(&self) -> Option<WindowId> {

@@ -68,6 +68,9 @@ mod sealed {
     pub trait Sealed {
         /// The window as its own type: [`HostWindow::as_any`](super::HostWindow::as_any).
         fn any(&self) -> &dyn std::any::Any;
+
+        /// What the window delivers to the handler it was opened with.
+        fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
     }
 
     /// A window a host in this crate builds; each implements it beside its
@@ -75,12 +78,19 @@ mod sealed {
     /// implementation rather than one per window, so the compiler's account
     /// of a refused outside `impl HostWindow` names the same implementations
     /// on every target and feature set, and the downcast is written once.
-    pub trait CoreHostWindow: 'static {}
+    pub trait CoreHostWindow: 'static {
+        /// What the window delivers to the handler it was opened with.
+        fn window_delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
+    }
 
     #[diagnostic::do_not_recommend]
     impl<W: CoreHostWindow> Sealed for W {
         fn any(&self) -> &dyn std::any::Any {
             self
+        }
+
+        fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery {
+            self.window_delivery()
         }
     }
 }

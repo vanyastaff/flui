@@ -210,7 +210,10 @@ mod cases {
         let app = launched(mtm);
         let platform = MacOSPlatform::new().expect("the AppKit platform");
         let window = platform
-            .open_window(WindowOptions::default().with_title(title))
+            .open_window(
+                WindowOptions::default().with_title(title),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("an AppKit window opens");
         let ns_window = ns_window_of(window.as_ref());
         let mut fixture = AppKitFixture {

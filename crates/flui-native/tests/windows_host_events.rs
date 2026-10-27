@@ -359,7 +359,10 @@ fn a_block_is_registered_on_the_visible_window() {
     let host = hosted(|_| SessionEndAnswer::Block);
     let window = host
         .platform
-        .open_window(flui_platform::WindowOptions::default().with_visible(true))
+        .open_window(
+            flui_platform::WindowOptions::default().with_visible(true),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("a window");
     let window_hwnd = crate::win32_handle(window.as_ref());
     assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);

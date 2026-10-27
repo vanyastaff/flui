@@ -598,9 +598,10 @@ trait depends on `flui-platform` instead.
     the two cannot see different windows; the platform passes it to every
     call of the position.
   - **The loops' hooks.** Each loop declares what it asks of its windows, and
-    the window file implements it: `owner::handlers::{CallbackWindow,
-    OpenWindows}` (a window's callbacks; whether any window is open), shared
-    by the hooks that extend them; `owner::windows::ClassWindows` (the
+    the window file implements it: `owner::handlers::OpenWindows` (whether
+    any window is open), shared by the hooks that extend it, and a window's
+    delivery to its handler reached through `HostWindow`
+    (`owner::window_delivery::WindowDelivery`); `owner::windows::ClassWindows` (the
     deadline redraws and modal paints); `owner::apple::macos::WindowRegistry`
     (the open AppKit windows, for the wake pump's frames and the stop);
     `owner::apple::ios::{SceneWindow, SceneWindows, SceneConsumer,
@@ -698,7 +699,7 @@ trait depends on `flui-platform` instead.
   and session end, AppKit, UIKit); a handler displaced during a failed call is
   retained, never dropped into a second failure (ADR-0127 §2). A shared hook
   (the wake deadline, an `Arc`) is called as a clone and stays installed while
-  it runs. `PlatformHandlers` and `WindowCallbacks` call only through it, and
+  it runs. `PlatformHandlers` and `WindowDelivery` call only through it, and
   so does the system-notice channel. Tests: `owner::call_point::tests`; the
   public-API tables in `tests/handler_reentry.rs` (headless, Win32 and winit,
   each case on a worker thread so that a regression fails as a deadlock instead
@@ -813,15 +814,15 @@ trait depends on `flui-platform` instead.
   capabilities.
 - **The snapshot is the one source of a window fact.** No getter and no
   per-fact callback exists beside it: a consumer reads `state()` and hears
-  `on_state_changed`, and one that needs to know which fact changed compares
+  the handler's `state_changed`, and one that needs to know which fact changed compares
   the snapshot with the last one it saw (`flui-app`'s
   `RuntimeEvent::of_state_change`). Whether a window is seen is
   `WindowState::is_seen`: visible and not minimized. Each host sets a
-  `StatePublisher` on the window's `WindowCallbacks` when the window opens
+  `StatePublisher` on the window's `WindowDelivery` when the window opens
   (`publish_through`, over a weak reference to the window). The publisher
   reads the window again and answers `Publication` (changed, unchanged,
   held) without announcing anything; `publish_state` runs it and
-  raises `on_state_changed` when the revision grew, so each fact the OS
+  raises the handler's `state_changed` when the revision grew, so each fact the OS
   reports is one revision and one notification. This happens in the OS
   callback that reported the fact (each `WM_SIZE` of a Win32 live resize
   inside its modal loop). While a window holds its publishing back (Win32
@@ -834,7 +835,7 @@ trait depends on `flui-platform` instead.
   window procedure on the owner thread, and a read the context refuses
   leaves the snapshot stale for the owner's next read. A fact another
   feature reports reaches the snapshot the same way: the hover is what the
-  last `WindowCallbacks::report_hover` said, whether Win32 or web input,
+  last `WindowDelivery::report_hover` said, whether Win32 or web input,
   AppKit's tracking area or winit's cursor events reported it. An
   observation committed at its delivery point (the Web's focus and
   visibility) is published right after its commit. The facts beyond
@@ -850,7 +851,7 @@ trait depends on `flui-platform` instead.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
-  keeps the revision. `on_state_changed` is raised after the publish, outside
+  keeps the revision. the handler's `state_changed` is raised after the publish, outside
   the cell, only when the revision grew. Win32 and AppKit refresh from their
   window messages and delegate callbacks, winit from its window events, the
   Web from the layout, focus and visibility observers and on each owner
@@ -1170,7 +1171,7 @@ capture journals it; it belongs to no contact sequence.
 
 The window's hover (the snapshot's `hovered`, the immediate cursor apply)
 follows the mouse on either route through one `WindowContext::set_hovered`,
-which publishes (`WindowCallbacks::report_hover`) only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
+which publishes (`WindowDelivery::report_hover`) only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
 on the legacy route, and on the `WM_POINTER` route every mouse message but a
 capture change enters and `WM_POINTERLEAVE` leaves. The hover is settled before
 the input of its message reaches user code, so a callback that pumps a message
@@ -1569,7 +1570,7 @@ changed. One read failing neither discards nor delays the other's accepted
 value.
 
 The snapshot's `appearance` is the user's theme on every backend, never a
-value the backend chose for its own chrome, and `on_state_changed` announces
+value the backend chose for its own chrome, and the handler's `state_changed` announces
 it only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
 changed it, until the app picks the chrome through `Win32Window` or opens the
@@ -1705,11 +1706,13 @@ abandon a late deadline. A finite message wait rounds upwards, reserves the
 infinite timeout sentinel, and drains input and quit messages without parking
 again after readiness. Hook replacement is checked by allocation identity;
 observing no deadline permits later admission of the same absolute instant.
-The count of frame callbacks run at delivery is the delivery generation: the
-same instant from the same hook re-arms after every frame callback that ran
-since its delivery, and never when none did. A frame request no callback
-answers (no window, or a window with no frame callback registered, visible or
-hidden) is not counted, so a delivery that reaches no frame cannot spin.
+The count of the frames the handlers produced at delivery is the delivery
+generation: the same instant from the same hook re-arms after every frame
+produced since its delivery (`FrameOutcome::Produced`, or a `frame_requested`
+that panicked), and never when none was. A frame request no handler runs a
+frame for (no window, a window that has let go of its handler, or a handler
+that answers `FrameOutcome::Declined`, visible or hidden) is not counted, so
+a delivery that reaches no frame cannot spin.
 Queries and outgoing capture retirement run outside handler borrows. Incoming
 unwind retains the queried hook before hostile captures can replace the first
 failure; healthy aggregate destruction retains its ordinary Rust limitations.
@@ -1720,8 +1723,8 @@ The bounded native rows `deadline_rearms_independent_windows_without_input`,
 `deadline_none_allows_same_instant_readmission`,
 `deadline_queued_three_times_at_one_instant_gets_three_frames`,
 `deadline_no_frame_can_service_does_not_spin`,
-`deadline_window_without_frame_callback_does_not_spin`,
-`deadline_hidden_window_without_frame_callback_does_not_spin`, and
+`deadline_window_declining_its_frames_does_not_spin`,
+`deadline_hidden_window_declining_its_frames_does_not_spin`, and
 `deadline_query_unwind_retains_replaced_hostile_captures` belong to
 `test_window_lifecycle_contract`. They exercise the native wait and paint
 producer, cancellation, replacement, independent windows and recovery. They do
@@ -1784,8 +1787,9 @@ Registration methods take
 `&self` on `Send + Sync` traits, so any thread can call them. ADR-0082 §4 step
 one for Win32 makes that safe without changing a signature.
 
-- **Storage.** A window's callbacks (`WindowCallbacks`) live by value in its
-  `WindowContext`; the platform-level handlers (`on_quit`,
+- **Storage.** A window's handler lives in its `WindowDelivery`, an
+  owner-thread slot the window shares with its `WindowContext`; it is set
+  when the window opens, never registered later; the platform-level handlers (`on_quit`,
   `on_keyboard_layout_change`) live as `Rc<RefCell<PlatformHandlers>>` in the
   `OwnerControlContext` of the owner message window, shared by every window
   context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
@@ -2128,32 +2132,31 @@ count measured at issue #1092's baseline) and `convert_winit_key` mapped 37 of 3
 `NamedKey` variants to `Key`, falling through to `Unidentified` for the rest
 in both cases.
 
-### The surface-availability signal is a per-window `bool` callback, not a polled query
+### The surface-availability signal is a handler method, not a polled query
 
 **Rule:** a backend that learns the GPU surface's native backing is about to go
-away must say so through `PlatformWindow::on_surface_status_change` **before** the
-handle behind any surface built from it dies, so the presentation can drop that
-surface at the right moment. A backend that never emits the signal is harmless:
-the surface is never released, which is the pre-#1146 behavior. A backend that
-emits `false` and never
-`true` is not harmless, because the presentation stays released, every later frame
-is a skipped one, and the window paints nothing forever.
+away must say so through `WindowHandler::surface_changed(SurfaceChange::Release)`
+**before** the handle behind any surface built from it dies, so the presentation
+can drop that surface at the right moment. A backend that never emits the signal
+is harmless: the surface is never released, which is the pre-#1146 behavior. A
+backend that emits `Release` and never `Rebuild` is not harmless, because the
+presentation stays released, every later frame is a skipped one, and the window
+paints nothing forever.
 
-**Choice:** `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`, a defaulted
-no-op, following the window callbacks' shape: stored in
-`owner::handlers::WindowCallbacks`, dispatched through
-the same FIFO and the call point. `false` means "release the surface before this
-callback returns"; `true` means "a surface valid for the handle available now must
+**Choice:** a required method of the window's handler (ADR-0254 §4), called through
+the window's `WindowDelivery`, in the same FIFO and through the call point as the
+rest of what the window delivers. `Release` means "release the surface before this
+call returns"; `Rebuild` means "a surface valid for the handle available now must
 exist", which the runner acts on unconditionally rather than by comparing it
-against what it already holds — that statelessness is the point, since a `false`
+against what it already holds — that statelessness is the point, since a `Release`
 can be lost and an "already present, do nothing" rule would then keep a surface
-built from a dead window for the rest of the process's life. The parameter is a
-`bool`, not an enum: a third state of the *surface* belongs in its own callback,
-per ADR-0035's split of this family by signal rather than by arity. Android and the Web
-emit it. Android's `Pause` and `TerminateWindow` send `false`, `Resume` and `InitWindow`
-send `true` — `owner/android/looper.rs`'s module doc carries why that pair, and not
-`Pause` alone, is the correct mapping. The Web sends `false` on `webglcontextlost` and
-`true` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
+built from a dead window for the rest of the process's life. `SurfaceChange` has
+these two directions and no third: a third state of the *surface* belongs in its
+own method, per ADR-0035's split of this family by signal rather than by arity.
+Android and the Web emit it. Android's `Pause` and `TerminateWindow` send `Release`,
+`Resume` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
+carries why that pair, and not `Pause` alone, is the correct mapping. The Web sends
+`Release` on `webglcontextlost` and `Rebuild` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
 whatever was built on it must be rebuilt once the browser gives one back. The loss is
 cancelled with `preventDefault` — without that the browser never restores the context —
 and a browser that never restores it leaves the page without a surface, which is all the
@@ -2167,11 +2170,9 @@ signal; the renderer reports it to its owner directly.
   while the native handle is still valid, which on Android means inside the
   `TerminateWindow` callback; a query consulted at the next loop iteration reports
   a window that is already gone.
-- A `#[non_exhaustive] enum WindowSurfaceStatus` parameter instead of `bool`.
-  Rejected for the parameter, not for the concept: it is the shape this crate uses
-  for input and owner status, but every consumer of this signal branches on two
-  states, and a callback's parameter type is a one-way door that changing later
-  breaks for every registrant.
+- A `#[non_exhaustive]` parameter. Rejected: every consumer of this signal
+  branches on two states, and a variant added later would reach every handler
+  as a wildcard arm that does nothing.
 - Delegating the surface to the platform, the shape Leptos reaches on Android by
   hosting a Tauri v2 WebView. Rejected as unavailable rather than inferior: it
   requires giving up the adapter, the swapchain, and any ability to composite
@@ -2225,12 +2226,10 @@ submit, and why the `TerminateWindow` release that follows `Pause` in the ordina
 cycle is an idempotent no-op — while its caller holds the raster lane's guard across
 it by design, so the wait does happen with the lane held.
 
-**Unasserted:** no test pins this. A covering test has to be a wire test —
-registration through the `PlatformWindow` trait method, the `simulate_surface_status`
-affordance driving the platform's own dispatch, and both edges asserted in the
-closure — because a backend left out of `impl_window_callback_setters!` still
-compiles the registration and silently drops it, which a direct
-`dispatch_surface_status_change` test cannot see. The Android arms themselves are
+**Unasserted:** the order against the handle's death is pinned by no test. The
+headless window's `simulate_surface_change` drives the platform's own dispatch to
+the handler (`surface_changed` is a required method, so no backend can drop it
+silently), and the delivery's ordering rows pin the call itself. The Android arms themselves are
 **type-checked by `cargo xtask cross-typecheck` and executed by nothing**: no gate
 on this host runs the Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
@@ -2248,7 +2247,7 @@ it.
 **Choice:** `drawRect:` stays the frame source. It is the signal AppKit actually
 delivers — the view is live and the frame carries its own dirty rect — and the
 produce contract the engine consumes is dispatched from it (`owner::apple::macos::content_view`'s `draw_rect`
-→ `WindowCallbacks::dispatch_request_frame`). What changed is the re-arm.
+→ `WindowDelivery::dispatch_request_frame`). What changed is the re-arm.
 `owner::apple::macos::display_pass` marks the thread for the duration of the frame
 AppKit asked for (an RAII guard, nesting-safe, thread-local), and
 `window/apple/macos.rs::dispatch_redraw_request` — the single decision point `request_redraw`
@@ -2329,8 +2328,8 @@ out, and no Apple documentation was consulted for the API-deprecation claim.
 
 **Trade-off:** this deferral is AppKit-local, and the same defect had a second
 instance on another backend with the opposite sign. Web's `request_redraw`
-dispatched the frame immediately and `WindowCallbacks::drain_events` drains
-synchronously until the queue is empty, so a frame callback that re-armed
+dispatched the frame immediately and the window's queue drained
+synchronously until it was empty, so a frame callback that re-armed
 recursed *within* the originating call rather than reaching a browser frame turn;
 in the interaction gallery an animation started from a click (a swiped row
 closing) re-armed every frame at the same frame time and held the page's thread
@@ -3453,30 +3452,37 @@ release and replacement.
 
 ### A window's input waits behind its capability snapshot
 
-`WindowCallbacks` owns the ADR-0213 §3 feed: a backend sets the initial
-`InputCapabilities` (its availability table from `input::availability`
-with the presence its device registry reports) when it builds the window, and
-`set_input_callback` commits the registration before delivering that snapshot,
-then the input held while no snapshot had been delivered. Input admitted before
-the first registration is held, not dropped; its native default is not
-suppressed, since nothing claims it yet. A pass delivers only the entries it
-started with and contains a callback panic itself: a failed snapshot stays at
-the head (three failed passes per registration, then held until re-registration
-or close), a failed ordinary entry is not re-delivered, and the tail keeps its
-order. Remaining work is resumed by an owner turn the backend's `OwnerSignal`
-schedules (`OwnerSignal::input_wake`), so an idle application still drains it.
-The feed holds at most 256 entries, as many as the runtime holds while it waits
-for a tree: past that the oldest ordinary input is evicted (a queue of
-capability changes only gives its head to the snapshot's baseline), so a window
-whose callback is never registered keeps only its newest input. Once a
-registration's snapshot has failed its passes nothing can deliver, so new input
-is refused with the default result, keeping its platform default, until the
-callback is registered again; the first loss is reported once.
+A window is opened with its handler (ADR-0254 §4), so nothing it delivers can
+arrive before there is someone to hear it: the window's `WindowDelivery`
+delivers the capability snapshot (`PlatformInput::Capabilities`, the
+backend's availability table from `input::availability` with the presence its
+device registry reports) as the handler's first `input`, before the open
+returns, and every later capability change in order with the input around it.
+A close request is a delivery of the same FIFO: asked at once when nothing
+runs, and raised behind a running method (a `WM_CLOSE` sent from inside
+`input`) it keeps the window for now and is asked after the method returns,
+a granted one closing the window by the host's deferred close (Win32 posts
+`CLOSE_WINDOW`, winit and headless close by command, AppKit sends `close`).
+A delivery raised on another thread (a command applied from a worker
+publishes the window's state there) is queued and delivered in an owner turn
+the window asks for (`WindowDelivery::resume_through`: a posted `DELIVER_QUEUED` on
+Win32, the loop's owner signal on winit, headless, AppKit, UIKit and Android).
+The host keeps no input for a handler still to come: a handler that cannot
+take its input yet keeps it itself (`flui-app`'s `WindowRoutes` holds what
+arrives before the window's presentation exists and hands it over in order).
+A delivery raised inside a handler method waits for it: an input that needs an
+answer gets the deferred form of its result (ADR-0207) and is delivered once,
+after the running method returns. A method's panic is contained at the call
+point, the tail behind it is still delivered in order, and the first payload
+is resurfaced afterwards; remaining work is resumed by an owner turn the
+backend's `OwnerSignal` schedules (`OwnerSignal::window_wake`), so an idle
+application still drains it.
 The rows of `input_capabilities_contracts` in `tests/input_capabilities.rs` pin
-the order, retries, the bound and the refusal
-(`input_held_before_any_registration_is_bounded`,
-`input_after_the_snapshot_attempts_run_out_is_refused`), reentrant admission
-and a replaced callback whose capture panics. Presence changes reach a window from the headless device handle and the
+the order (`the_first_event_after_open_reaches_the_handler`,
+`capability_change_is_ordered_with_input`,
+`input_raised_from_input_is_delivered_after_it`) and the panic
+(`a_panic_on_the_snapshot_is_resumed`); `window_handler_obligation_table`
+pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle and the
 winit backend's registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
 

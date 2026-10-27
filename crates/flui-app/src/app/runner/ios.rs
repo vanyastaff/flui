@@ -13,7 +13,7 @@
 //!
 //! - focus and visibility → addressed presentation facts.
 //! - execution → a per-presentation suspension cap, independent of host lifecycle.
-//! - `on_surface_status_change` → drop/rebuild the wgpu surface, so a
+//! - the window's `surface_changed` → drop/rebuild the wgpu surface, so a
 //!   `CAMetalLayer`-backed surface is never alive across a suspension.
 //!
 //! # Hot-reload
@@ -29,6 +29,7 @@
 use flui_native::HostWindow;
 use flui_native::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
@@ -211,7 +212,35 @@ where
             return;
         }
     };
-    if let Err(error) = platform.on_scene_event(Box::new(scene_event)) {
+    // The loop makes a session's window, with its handler, before the
+    // session connects; the connection names the session and its window, so
+    // the routes made for that session are adopted for that window, whatever
+    // order sessions are made and connected in.
+    let made = Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+        flui_native::IOSSceneSessionId,
+        Rc<super::window_routes::WindowRoutes>,
+    >::new()));
+    let adopting = Rc::clone(&made);
+    let handlers = Box::new(move |session: &flui_native::IOSSceneSessionId| {
+        let routes = super::window_routes::WindowRoutes::new();
+        made.borrow_mut()
+            .insert(session.clone(), Rc::clone(&routes));
+        routes as Rc<dyn flui_platform::WindowHandler>
+    });
+    let events = Box::new(move |event: IOSSceneEvent| {
+        if let IOSSceneEvent::Connected {
+            session, window, ..
+        } = &event
+            && let Some(routes) = adopting.borrow_mut().remove(session)
+        {
+            routes.adopt(window.id());
+        }
+        if let IOSSceneEvent::Discarded { session } = &event {
+            adopting.borrow_mut().remove(session);
+        }
+        scene_event(event)
+    });
+    if let Err(error) = platform.on_scene_event(events, handlers) {
         tracing::error!(%error, "iOS scene registration failed");
         return;
     }
@@ -407,9 +436,10 @@ where
             surface_recreation_retry,
         }))?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move |request| {
+    let routes = super::window_routes::WindowRoutes::of(&*window);
+    routes.route_frame_requested(move |request| {
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
-    }));
+    });
 
     // 8. Lifecycle.
     //
@@ -418,13 +448,14 @@ where
     // The same shape Android uses — the engine's tracker mark runs inside
     // the lane lock with the mint, and only the ui_runtime half is dispatched.
     let lane_surface = Arc::clone(&lane);
-    window.on_surface_status_change(Box::new(move |has_surface| {
+    routes.route_surface_changed(move |change| {
+        let has_surface = change == flui_platform::SurfaceChange::Rebuild;
         let now = web_time::Instant::now();
         let mut lane = lane_surface.lock();
         let outcome =
             settle_surface_availability(&mut lane, &surface_retry_for_callback, has_surface, now);
         // The guard ends before the ui_runtime dispatch — see Android's matching
-        // registration for the same-thread hazard that puts the `drop` here.
+        // route for the same-thread hazard that puts the `drop` here.
         drop(lane);
         if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
             // The ui_runtime half is deferrable, so it goes through the ui_runtime
@@ -435,7 +466,7 @@ where
             );
         }
         report_surface_settlement("iOS", &outcome);
-    }));
+    });
 
     // The scene's facts — metrics, safe area, lifecycle, appearance and
     // display — reach the presentation through the window's one snapshot

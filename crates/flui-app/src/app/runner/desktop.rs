@@ -262,9 +262,9 @@ where
             source: Arc::new(error),
         })?;
     let binding = frame.binding;
-    window.on_request_frame(Box::new(move |request| {
+    super::window_routes::WindowRoutes::of(&*window).route_frame_requested(move |request| {
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
-    }));
+    });
 
     // 8. Lifecycle callbacks
     //
@@ -279,7 +279,7 @@ where
     // Window close -> close THIS window's own presentation before the
     // platform decides whether to exit. Load-bearing ordering, not just
     // bookkeeping hygiene: the winit backend's `CloseRequested` handling
-    // calls a window's `on_close` (this callback) BEFORE it consults the
+    // delivers a window's `closed` (this route) BEFORE it consults the
     // exit-policy hook `install_exit_policy_hook` installs above
     // (`AppRuntime::should_exit`, which decides purely from
     // `AppRuntime`'s own ui_runtime registry, never this backend's native
@@ -325,7 +325,7 @@ where
         }
     });
 
-    // No `on_should_close` registration here: step 3c1 above installed
+    // No `WindowHandler::close_requested` registration here: step 3c1 above installed
     // it, together with the router entry it consults, so the two can
     // never be wired apart.
 

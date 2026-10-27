@@ -8,6 +8,8 @@
 use flui_platform::CommandRefusal;
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::sync::Arc;
+
+use crate::Opened;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Point, Size};
@@ -23,11 +25,8 @@ use flui_platform::{
 const NOT_HERE: flui_platform::Unsupported =
     flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform);
 
-fn open(platform: &HeadlessPlatform) -> Arc<dyn HostWindow> {
-    let window: Arc<dyn HostWindow> = platform
-        .open_window(WindowOptions::default())
-        .expect("a headless window opens");
-    window
+fn open(platform: &HeadlessPlatform) -> Opened {
+    Opened::on(platform, WindowOptions::default()).expect("a headless window opens")
 }
 
 fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
@@ -37,13 +36,13 @@ fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
         .expect("the headless platform opens mock windows")
 }
 
-/// Counts `on_state_changed` notifications.
-fn count_changes(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
+/// Counts the handler's `state_changed` calls from here on.
+fn count_changes(window: &Opened) -> Arc<AtomicUsize> {
     let changes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&changes);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     changes
 }
 
@@ -309,7 +308,7 @@ fn a_closed_window_refuses_commands() {
 /// window system revised what the window honours answers `Superseded`, not a
 /// failure of the OS, and changes nothing; admitted again it either applies
 /// or is refused by `admit`. The revision of the capabilities moves with the
-/// change, one `on_state_changed` announces it, and a fact apart from the
+/// change, one `WindowHandler::state_changed` announces it, and a fact apart from the
 /// capabilities leaves their revision where it was.
 fn a_command_admitted_before_a_capability_change_is_superseded() {
     let platform = HeadlessPlatform::new();
@@ -453,30 +452,35 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
         .with_position(Some(Point::new(50.0, 60.0)))
         .with_mode(WindowMode::Maximized)
         .with_normal_geometry(Some(normal));
-    let window: Arc<dyn HostWindow> = platform.open_window(options).expect("window");
+    let window: Arc<dyn HostWindow> = platform
+        .open_window(
+            options,
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
+        .expect("window");
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Maximized);
     assert_eq!(state.revision.get(), 0, "the first snapshot is revision 0");
     assert_eq!(state.normal_geometry, Some(normal));
 }
 
-/// Record the snapshot read inside every `on_state_changed` of `window` from
-/// here on.
-fn listen(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
+/// Record the snapshot read inside every `state_changed` of `window`'s handler
+/// from here on.
+fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
     let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let state = Arc::downgrade(window);
+    let state = Arc::downgrade(&window.window);
     let log = Arc::clone(&heard);
-    window.on_state_changed(Box::new(move || {
+    window.handler.react_to_state_change(move || {
         if let Some(window) = state.upgrade() {
             let snapshot = window.state();
             log.lock().expect("log").push(snapshot);
         }
-    }));
+    });
     heard
 }
 
 /// Each window fact (ADR-0254 §1) arrives only in the snapshot: its change
-/// publishes one revision, announced by exactly one `on_state_changed` that
+/// publishes one revision, announced by exactly one `WindowHandler::state_changed` that
 /// reads it; the same report again publishes nothing; a report that is not a
 /// drawable area publishes nothing.
 fn window_facts_arrive_only_in_the_snapshot() {

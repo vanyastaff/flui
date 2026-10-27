@@ -42,6 +42,8 @@
 #[path = "scene_render/effects.rs"]
 mod effects;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
@@ -50,11 +52,53 @@ use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
-use flui_platform::WindowOptions;
+use flui_platform::{
+    CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
+    WindowHandler, WindowOptions,
+};
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
 /// The window's drawable size, from its snapshot: zero before the host has
 /// published drawable metrics.
+/// The window's handler: it draws a frame and follows the drawable size once
+/// the renderer both need exists, and ignores the rest.
+#[derive(Default)]
+struct SceneWindow {
+    frame: RefCell<Option<Box<dyn FnMut()>>>,
+    resized: RefCell<Option<Box<dyn FnMut()>>>,
+}
+
+impl WindowHandler for SceneWindow {
+    fn input(&self, _input: PlatformInput) -> DispatchEventResult {
+        DispatchEventResult::default()
+    }
+
+    fn state_changed(&self) {
+        if let Some(resized) = self.resized.borrow_mut().as_mut() {
+            resized();
+        }
+    }
+
+    fn frame_requested(&self, _request: FrameRequest) -> FrameOutcome {
+        match self.frame.borrow_mut().as_mut() {
+            Some(frame) => {
+                frame();
+                FrameOutcome::Produced
+            }
+            None => FrameOutcome::Declined,
+        }
+    }
+
+    fn close_requested(&self) -> CloseDecision {
+        CloseDecision::Close
+    }
+
+    fn closed(&self) {}
+
+    // A desktop window keeps its surface while it is open.
+    fn surface_changed(&self, _change: SurfaceChange) {}
+}
+
 fn physical_size(window: &dyn flui_platform::PlatformWindow) -> Size<i32> {
     window
         .state()
@@ -173,8 +217,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_size(None);
 
     // Create window before running the event loop (run() takes ownership)
+    let handler = Rc::new(SceneWindow::default());
     let window = platform
-        .open_window(options)
+        .open_window(options, handler.clone())
         .expect("Failed to open window");
 
     let opened = window.state().metrics;
@@ -202,9 +247,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register frame callback — build scene and render each frame
     let renderer_frame = Arc::clone(&renderer);
-    let window_for_frame = window.clone();
+    let window_for_frame = Arc::downgrade(&window);
     let hot_reload_frame = hot_reload.clone();
-    window.on_request_frame(Box::new(move |_| {
+    *handler.frame.borrow_mut() = Some(Box::new(move || {
+        let Some(window_for_frame) = window_for_frame.upgrade() else {
+            return;
+        };
         let size = physical_size(window_for_frame.as_ref());
         let w = size.width as f64;
         let h = size.height as f64;
@@ -248,7 +296,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer_resize = Arc::clone(&renderer);
     let observed = Arc::downgrade(&window);
     let mut sized = phys;
-    window.on_state_changed(Box::new(move || {
+    *handler.resized.borrow_mut() = Some(Box::new(move || {
         let Some(window) = observed.upgrade() else {
             return;
         };
