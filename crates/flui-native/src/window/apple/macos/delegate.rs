@@ -598,8 +598,8 @@ impl MacOSWindow {
     ///
     /// Fires from `windowWillClose:` while `ns_window` is still valid — the
     /// delegate notification AppKit posts for every route through
-    /// `-[NSWindow close]`, vetoed or not (see [`close`](Self::close)'s own
-    /// doc). Order matters: `closed` is set BEFORE `dispatch_close` so that
+    /// `-[NSWindow close]`, vetoed or not (see the comment in
+    /// [`close_window`](Self::close_window)). Order matters: `closed` is set BEFORE `dispatch_close` so that
     /// a frame callback the close dispatch itself triggers observes the
     /// window as already gone, and the delivery's `clear()` runs AFTER, so
     /// the handler's `closed` is still called before the window lets go of
