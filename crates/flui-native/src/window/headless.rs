@@ -202,6 +202,17 @@ impl TrackedWindows for HeadlessWindows {
 
         window.drag = state.window_drag_source();
         if let Some(signal) = state.owner_signal.upgrade() {
+            let queued = Arc::downgrade(&window.delivery);
+            window
+                .delivery
+                .resume_through(crate::owner::signal::OwnerSignal::window_wake(
+                    &signal,
+                    move || {
+                        if let Some(delivery) = queued.upgrade() {
+                            delivery.deliver_queued();
+                        }
+                    },
+                ));
             let delivery = Arc::downgrade(&window.delivery);
             window.owner_redraw = Some(OwnerRedraw {
                 signal: Arc::downgrade(&signal),

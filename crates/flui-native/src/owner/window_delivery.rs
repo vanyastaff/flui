@@ -30,6 +30,7 @@ use flui_platform::{
 use super::call_point::{HandlerSlot, call, retire};
 use super::handlers::frame_request_now;
 use super::panic_boundary::contain_owner_callback;
+use super::signal::WindowWake;
 use super::slot::OwnerSlot;
 
 /// Keys remembered as answered "not handled" while queued; a platform sends
@@ -139,6 +140,19 @@ impl<'a> Drain<'a> {
         })
     }
 
+    /// A drain of what is already queued, unless one runs or nothing is.
+    fn resume(state: &'a Mutex<DispatchState>) -> Option<Self> {
+        let mut guard = state.lock();
+        if guard.dispatching || guard.pending.is_empty() {
+            return None;
+        }
+        guard.dispatching = true;
+        Some(Self {
+            state,
+            active: true,
+        })
+    }
+
     fn next(&mut self) -> Option<Delivery> {
         let mut state = self.state.lock();
         if let Some(delivery) = state.pending.pop_front() {
@@ -178,10 +192,13 @@ struct InputFront {
 /// the window opens, on its owner thread.
 ///
 /// `Send + Sync` so a window that is still shared across threads can hold
-/// it; the handler itself lives in an owner-thread slot, and a delivery from
-/// any other thread reaches nothing.
+/// it; the handler itself lives in an owner-thread slot. A delivery raised
+/// on any other thread is queued in order and delivered in an owner turn
+/// ([`Self::resume_through`]).
 pub struct WindowDelivery {
     handler: OwnerSlot<Rc<dyn WindowHandler>>,
+    /// Asks the owner for a turn that delivers what other threads queued.
+    owner_turn: Mutex<Option<WindowWake>>,
     input: Mutex<InputFront>,
     /// Keys answered "not handled" while queued behind a running method,
     /// newest last, whose platform follow-up must not be delivered again.
@@ -236,6 +253,7 @@ impl WindowDelivery {
         }
         Self {
             handler: slot,
+            owner_turn: Mutex::new(None),
             input: Mutex::new(InputFront {
                 capabilities,
                 snapshot_due: true,
@@ -370,8 +388,46 @@ impl WindowDelivery {
     /// Queue `delivery` and, unless a drain already runs, drain the FIFO.
     /// Returns the result of the first input the drain delivered.
     fn drain(&self, delivery: Delivery) -> Option<DispatchEventResult> {
+        if !self.handler.is_owner_thread() {
+            self.queue_for_owner(delivery);
+            return None;
+        }
         let drain = Drain::begin(&self.dispatch, delivery)?;
         self.run(drain)
+    }
+
+    /// Keep a delivery raised on another thread (a command applied from a
+    /// worker publishes the window's new state there) in the FIFO, and ask
+    /// the owner for a turn that delivers it ([`Self::deliver_queued`]).
+    fn queue_for_owner(&self, delivery: Delivery) {
+        self.dispatch.lock().pending.push_back(delivery);
+        let wake = self.owner_turn.lock().clone();
+        if let Some(wake) = wake {
+            wake();
+        } else {
+            // Still queued: the owner's next delivery to this window drains it.
+            tracing::warn!(
+                "a window delivery raised off its owner thread waits for the owner's next one"
+            );
+        }
+    }
+
+    /// Ask for the owner turns that deliver what other threads raise; `wake`
+    /// runs [`Self::deliver_queued`] on the owner thread.
+    pub(crate) fn resume_through(&self, wake: WindowWake) {
+        *self.owner_turn.lock() = Some(wake);
+    }
+
+    /// Deliver, on the owner thread, what other threads queued; nothing when
+    /// a drain is already running there, which reaches it in order.
+    pub(crate) fn deliver_queued(&self) {
+        if !self.handler.is_owner_thread() {
+            return;
+        }
+        if let Some(drain) = Drain::resume(&self.dispatch) {
+            // A panic resumes here, in the owner turn's own containment.
+            let _ = self.run(drain);
+        }
     }
 
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
@@ -481,6 +537,11 @@ impl WindowDelivery {
     pub(crate) fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
         if let PlatformInput::Capabilities(capabilities) = event {
             self.set_input_capabilities(capabilities);
+            return DispatchEventResult::DEFERRED;
+        }
+        if !self.handler.is_owner_thread() {
+            // Its answer comes in an owner turn, too late for the caller.
+            self.queue_for_owner(Delivery::Input(event));
             return DispatchEventResult::DEFERRED;
         }
         let key = match &event {

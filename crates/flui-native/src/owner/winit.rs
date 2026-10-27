@@ -880,6 +880,18 @@ impl WinitLoop {
             window.delivery().set_input_capabilities(capabilities);
             state.register_window(window.inner().id(), id, Arc::clone(&window));
         });
+        if let Some(signal) = self.owner_signal.lock().as_ref() {
+            // A command applied from another thread publishes there: what it
+            // raises waits for an owner turn.
+            let resumed = Arc::downgrade(&window);
+            window
+                .delivery()
+                .resume_through(OwnerSignal::window_wake(signal, move || {
+                    if let Some(window) = resumed.upgrade() {
+                        window.delivery().deliver_queued();
+                    }
+                }));
+        }
         window.finish_opening();
         // A monitor attached since the last sample is first seen here.
         self.resample_displays(event_loop);

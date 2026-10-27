@@ -325,11 +325,51 @@ fn a_frame_counts_when_the_handler_runs() {
     assert_eq!(frames.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
+/// A delivery raised on another thread (a command applied from a worker
+/// publishes there) is kept in order and reaches the handler in the owner
+/// turn it asks for, never on the raising thread and never lost.
+fn a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn() {
+    let (delivery, handler) = window();
+    delivery.deliver_capability_snapshot();
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let asking = Arc::clone(&asked);
+    delivery.resume_through(Arc::new(move || {
+        asking.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    let raised = Arc::clone(&delivery);
+    std::thread::spawn(move || {
+        raised.dispatch_state_changed();
+        assert_eq!(
+            raised.dispatch_input(ime()),
+            DispatchEventResult::DEFERRED,
+            "input raised off the owner is answered with its deferred form"
+        );
+    })
+    .join()
+    .expect("the raising thread");
+    assert_eq!(handler.calls(), [snapshot()], "nothing ran off the owner");
+    assert_eq!(
+        asked.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "each one asked for an owner turn"
+    );
+    delivery.deliver_queued();
+    assert_eq!(
+        handler.calls(),
+        [snapshot(), HandlerCall::StateChanged, input()],
+        "the owner turn delivered both, in order"
+    );
+}
+
 /// One row per obligation of a window's handler, as its window delivers
 /// them.
 #[test]
 fn window_handler_obligation_table() {
     let rows: &[(&str, fn())] = &[
+        (
+            "a delivery raised off the owner thread waits for an owner turn",
+            a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn,
+        ),
         (
             "the capability snapshot is the first input",
             the_capability_snapshot_is_the_first_input,

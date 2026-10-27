@@ -53,6 +53,11 @@ impl<T: 'static> OwnerSlot<T> {
         }
     }
 
+    /// Whether the caller is on the thread that made the slot.
+    pub(crate) fn is_owner_thread(&self) -> bool {
+        thread::current().id() == self.owner
+    }
+
     /// The key, when the caller is on the owner thread.
     fn owned_key(&self) -> Option<u64> {
         (thread::current().id() == self.owner)
