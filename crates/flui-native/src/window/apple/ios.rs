@@ -696,6 +696,10 @@ impl IOSWindow {
             handler,
             crate::input::availability::ios(),
         ));
+        // What another thread raises for the window waits for an owner turn.
+        if let Some(signal) = signal.upgrade() {
+            delivery.resume_through_signal(&signal);
+        }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: 1.0,

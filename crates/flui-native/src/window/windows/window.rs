@@ -463,6 +463,9 @@ impl WindowsWindow {
                 flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
                 frames.counter(),
             ));
+            // What another thread raises for the window is delivered in a
+            // turn of the window's own message queue.
+            delivery.resume_through(super::proc::deliver_queued_turn(hwnd, identity));
             // Each fact the window reports, its input's hover included, is
             // published from the owner context of this very window before its
             // own callback runs: the context must carry this window's identity,

@@ -1100,6 +1100,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             owner.view_hooks,
         )?;
         owner.notices.mark_stale_on_wake(window.state_cell());
+        // What another thread raises for the window waits for an owner turn.
+        window
+            .delivery
+            .resume_through_signal(&owner.loop_control.owner_signal);
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
         // a later install would be silently ignored rather than racing.

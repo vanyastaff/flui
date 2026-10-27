@@ -124,6 +124,10 @@ impl AndroidWindow {
             handler,
             input_capabilities(api, java_view.is_ready()),
         ));
+        // What another thread raises for the window waits for a looper turn.
+        if let Some(signal) = owner_signal.upgrade() {
+            delivery.resume_through_signal(&signal);
+        }
         let appearance = night_mode(&app, preferences.as_ref());
         let snapshot = Arc::new(WindowStateCell::new(sample_state(
             &app,

@@ -456,6 +456,21 @@ impl WindowDelivery {
         *self.owner_turn.lock() = Some(wake);
     }
 
+    /// [`Self::resume_through`] an owner turn of `signal`, the loop's own
+    /// wake: the turn delivers what other threads queued, and holds this
+    /// delivery weakly, so a queued turn keeps no window alive.
+    pub(crate) fn resume_through_signal(
+        self: &Arc<Self>,
+        signal: &Arc<super::signal::OwnerSignal>,
+    ) {
+        let queued = Arc::downgrade(self);
+        self.resume_through(super::signal::OwnerSignal::window_wake(signal, move || {
+            if let Some(delivery) = queued.upgrade() {
+                delivery.deliver_queued();
+            }
+        }));
+    }
+
     /// Deliver, on the owner thread, what other threads queued; nothing when
     /// a drain is already running there, which reaches it in order.
     pub(crate) fn deliver_queued(&self) {

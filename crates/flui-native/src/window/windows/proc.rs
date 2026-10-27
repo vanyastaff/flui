@@ -80,6 +80,38 @@ pub(crate) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 /// asking the veto: a close command is not a close request.
 pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 
+/// Posted when another thread raised a delivery for a window: the owner
+/// delivers what waits in the window's FIFO when it takes the message.
+pub(crate) const DELIVER_QUEUED: u32 = WM_APP + 5;
+
+/// The owner turn a window's delivery asks for when another thread raises
+/// something for it: a posted [`DELIVER_QUEUED`] naming this window.
+pub(crate) fn deliver_queued_turn(
+    hwnd: HWND,
+    identity: WindowIdentity,
+) -> crate::owner::signal::WindowWake {
+    let (low, high) = identity.halves();
+    // The handle as an integer: only posted to, never dereferenced.
+    let raw = hwnd.0 as isize;
+    Arc::new(move || {
+        // SAFETY: `PostMessageW` takes a window handle and plain integers by
+        // value, from any thread, and dereferences nothing; the message
+        // names the window's identity, so a handle the system reused by then
+        // is left alone.
+        let posted = unsafe {
+            PostMessageW(
+                Some(HWND(raw as *mut _)),
+                DELIVER_QUEUED,
+                WPARAM(low),
+                LPARAM(high),
+            )
+        };
+        if let Err(error) = posted {
+            tracing::warn!(%error, "posting a window's queued deliveries failed");
+        }
+    })
+}
+
 pub(crate) use crate::owner::windows::WindowRef;
 
 /// The close of a `WM_CLOSE` the handler grants after it was asked behind a
@@ -633,9 +665,9 @@ impl WindowMessages for WindowProc {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
             | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
-            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | WM_SETTEXT
-            | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
-            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
+            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | DELIVER_QUEUED
+            | WM_SETTEXT | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR
+            | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -1142,6 +1174,19 @@ impl WindowProc {
                 TOGGLE_FULLSCREEN => {
                     if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
                         WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    }
+                    LRESULT(0)
+                }
+
+                // Deliveries another thread raised for this window wait in
+                // its FIFO; this turn delivers them. Named by identity, like
+                // `CLOSE_WINDOW`.
+                DELIVER_QUEUED => {
+                    if let Some(ctx) = ctx
+                        && ctx.identity.halves() == (wparam.0, lparam.0)
+                    {
+                        let delivery = Arc::clone(&ctx.delivery);
+                        delivery.deliver_queued();
                     }
                     LRESULT(0)
                 }
