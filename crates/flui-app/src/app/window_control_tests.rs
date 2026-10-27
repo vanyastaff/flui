@@ -295,32 +295,7 @@ impl PlatformWindow for RecordingWindow {
         WindowId(900)
     }
     fn request_redraw(&self) {}
-    fn set_frame_rate_hint(
-        &self,
-        _: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    }
-
-    fn set_input_regions(
-        &self,
-        _: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    }
-
-    fn set_material(
-        &self,
-        _: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    }
+    flui_platform::window_takes_no_frame_verbs!();
 
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Ok(())

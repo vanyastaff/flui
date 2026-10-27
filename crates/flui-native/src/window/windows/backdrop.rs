@@ -202,16 +202,36 @@ const fn system_backdrop(material: WindowMaterial) -> DWM_SYSTEMBACKDROP_TYPE {
     }
 }
 
-/// Draw `material` behind `hwnd`, on a build the gate let through. A refusal
-/// of the desktop window manager is `NotOnThisDevice`: this device's build or
-/// its settings do not draw it, and the window keeps the backdrop it had.
-pub(super) fn apply_material(
+/// Write `hwnd`'s system backdrop: the one write of
+/// `DWMWA_SYSTEMBACKDROP_TYPE`, on a build the gate let through.
+fn set_system_backdrop(
     hwnd: HWND,
     _gate: Since<SystemBackdrop>,
+    value: DWM_SYSTEMBACKDROP_TYPE,
+) -> Result<(), Win32WindowError> {
+    set(hwnd, SYSTEM_BACKDROP, value)
+}
+
+/// Draw `material` behind `hwnd`, on a build the gate let through; the
+/// window keeps the backdrop it had when the desktop window manager refuses.
+pub(super) fn apply_material(
+    hwnd: HWND,
+    gate: Since<SystemBackdrop>,
     material: WindowMaterial,
-) -> Result<(), Unsupported> {
-    set(hwnd, SYSTEM_BACKDROP, system_backdrop(material))
-        .map_err(|_| Unsupported::new(UnsupportedReason::NotOnThisDevice))
+) -> Result<(), flui_platform::ApplyError> {
+    material_applied(set_system_backdrop(hwnd, gate, system_backdrop(material)))
+}
+
+/// What the window answers for the desktop window manager's `outcome`: its
+/// refusal is a failure of the system, [`ApplyError::Platform`], not a
+/// capability the window lacks — admission already held the capability
+/// (ADR-0254 §3).
+///
+/// [`ApplyError::Platform`]: flui_platform::ApplyError::Platform
+fn material_applied(
+    outcome: Result<(), Win32WindowError>,
+) -> Result<(), flui_platform::ApplyError> {
+    outcome.map_err(|refusal| flui_platform::ApplyError::failed(refusal.to_string()))
 }
 
 // ============================================================================
@@ -412,15 +432,18 @@ impl Win32Window<'_> {
         }
     }
 
-    /// Set the material behind the window.
+    /// Set the material behind the window, through the same build gate as
+    /// the contract's `WindowCommand::SetMaterial`.
     ///
     /// # Errors
     /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused (before Windows 11 build 22621).
+    /// thread, the build predates the system backdrop (Windows 11 build
+    /// 22621: `Unsupported` with `NotOnThisDevice`), or the system refused.
     pub fn set_backdrop(self, backdrop: WindowsBackdrop) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
+        let gate = self.0.backdrop_gate()?;
         let value = to_system(&BACKDROPS, backdrop).ok_or(Win32WindowError::NOT_ON_THIS_HOST)?;
-        set(hwnd, SYSTEM_BACKDROP, value)
+        set_system_backdrop(hwnd, gate, value)
     }
 
     /// The material behind the window.
@@ -430,7 +453,9 @@ impl Win32Window<'_> {
     /// [`Win32WindowError::Unrecognized`] for a material this host does not
     /// know.
     pub fn backdrop(self) -> Result<WindowsBackdrop, Win32WindowError> {
-        let value = get(self.live()?, SYSTEM_BACKDROP)?;
+        let hwnd = self.live()?;
+        self.0.backdrop_gate()?;
+        let value = get(hwnd, SYSTEM_BACKDROP)?;
         from_system(&BACKDROPS, value).ok_or(Win32WindowError::Unrecognized {
             request: SYSTEM_BACKDROP.name,
             value: value.0,
@@ -632,15 +657,18 @@ mod material_tests {
     use std::sync::Arc;
 
     use flui_platform::{
-        Availability, Unsupported, UnsupportedReason, WindowCommand, WindowMaterial, WindowOptions,
+        AdmissionError, ApplyError, Availability, CommandRefusal, PlatformFailure, Unsupported,
+        UnsupportedReason, WindowCommand, WindowMaterial, WindowOptions,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{DWMSBT_MAINWINDOW, DWMSBT_NONE};
 
     use super::super::WindowsWindow;
-    use super::super::material::gate;
-    use super::{SYSTEM_BACKDROP, apply_material, get};
+    use super::{
+        SYSTEM_BACKDROP, Win32WindowError, WindowsBackdrop, WindowsWindowExt as _, get,
+        material_applied,
+    };
     use crate::host_window::HostWindow;
     use crate::platform::Platform as _;
     use crate::version::gate::windows::WindowsBuild;
@@ -666,9 +694,10 @@ mod material_tests {
             .0
     }
 
-    /// On a build below 22621 the window says it draws no material, opens
-    /// without one, and a material asked of it is `NotOnThisDevice` and
-    /// reaches no attribute.
+    /// On a build below 22621 the window says it draws no material, on this
+    /// device; it opens without one, admission refuses `SetMaterial` with
+    /// `NotOnThisDevice`, and the Win32 view's own backdrop is refused the
+    /// same way: no write reaches the attribute.
     fn below_the_gate_a_material_is_not_on_this_device() {
         let platform =
             crate::WindowsPlatform::at_build(WindowsBuild::from_number(22000)).expect("platform");
@@ -684,18 +713,26 @@ mod material_tests {
         let before = held(hwnd);
         assert_ne!(before, DWMSBT_MAINWINDOW.0, "it opens without a material");
         assert_eq!(
-            window.set_material(WindowMaterial::System),
-            Err(NOT_ON_THIS_DEVICE)
+            window.admit_and_apply(WindowCommand::SetMaterial(WindowMaterial::System)),
+            Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+                NOT_ON_THIS_DEVICE
+            )))
+        );
+        let view = window.win32().expect("a Win32 window");
+        assert_eq!(
+            view.set_backdrop(WindowsBackdrop::Mica),
+            Err(Win32WindowError::Unsupported(NOT_ON_THIS_DEVICE))
         );
         assert_eq!(held(hwnd), before, "the attribute was left alone");
         window.close_now();
     }
 
     /// On this machine's build, each material is the backdrop the desktop
-    /// window manager holds for the window once the verb returns.
+    /// window manager holds for the window once the command applied; a
+    /// command admitted before the window closed answers `Closed`.
     fn from_the_gate_on_each_material_reaches_the_desktop_window_manager() {
         let platform = crate::WindowsPlatform::new().expect("platform");
-        if gate(WindowsBuild::read()).is_err() {
+        if super::super::material::gate(WindowsBuild::read()).is_err() {
             eprintln!("skipped: this machine's build is below the system backdrop's");
             return;
         }
@@ -711,26 +748,34 @@ mod material_tests {
             (WindowMaterial::System, DWMSBT_MAINWINDOW),
             (WindowMaterial::Opaque, DWMSBT_NONE),
         ] {
-            assert_eq!(window.set_material(material), Ok(()), "{material:?}");
+            assert_eq!(
+                window.admit_and_apply(WindowCommand::SetMaterial(material)),
+                Ok(()),
+                "{material:?}"
+            );
             assert_eq!(held(hwnd), backdrop.0, "{material:?}");
         }
+        let late = WindowCommand::SetMaterial(WindowMaterial::System)
+            .admit(&window.state().capabilities)
+            .expect("admitted while the window is open");
         window
             .admit_and_apply(WindowCommand::Close)
             .expect("the window closes");
-        assert_eq!(
-            window.set_material(WindowMaterial::Opaque),
-            Err(Unsupported::new(UnsupportedReason::NoWindow))
-        );
+        assert_eq!(window.apply(late), Err(ApplyError::Closed));
     }
 
-    /// The desktop window manager's refusal is `NotOnThisDevice`, not a log
-    /// line: a handle that names no window is refused by it.
-    fn a_refusal_of_the_desktop_window_manager_is_not_on_this_device() {
-        let proof = gate(WindowsBuild::from_number(22621)).expect("22621 passes the gate");
-        assert_eq!(
-            apply_material(HWND(std::ptr::null_mut()), proof, WindowMaterial::System),
-            Err(NOT_ON_THIS_DEVICE)
-        );
+    /// The desktop window manager's refusal is a failure of the system,
+    /// `ApplyError::Platform`, not a log line and not a missing capability.
+    fn a_refusal_of_the_desktop_window_manager_is_a_platform_failure() {
+        let refusal = Win32WindowError::Refused {
+            request: "DWMWA_SYSTEMBACKDROP_TYPE",
+            hresult: windows::Win32::Foundation::E_INVALIDARG.0,
+        };
+        assert!(matches!(
+            material_applied(Err(refusal)),
+            Err(ApplyError::Platform(PlatformFailure::Failed { .. }))
+        ));
+        assert_eq!(material_applied(Ok(())), Ok(()));
     }
 
     #[test]
@@ -747,8 +792,8 @@ mod material_tests {
                     from_the_gate_on_each_material_reaches_the_desktop_window_manager as fn(),
                 ),
                 (
-                    "a_refusal_of_the_desktop_window_manager_is_not_on_this_device",
-                    a_refusal_of_the_desktop_window_manager_is_not_on_this_device as fn(),
+                    "a_refusal_of_the_desktop_window_manager_is_a_platform_failure",
+                    a_refusal_of_the_desktop_window_manager_is_a_platform_failure as fn(),
                 ),
             ],
         );

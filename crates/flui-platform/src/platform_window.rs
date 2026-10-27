@@ -13,7 +13,7 @@ use flui_foundation::geometry::Point;
 
 use crate::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformHaptics, PlatformInput,
-    PlatformTextInput, Unsupported, WindowId, WindowMaterial, WindowState,
+    PlatformTextInput, Unsupported, WindowId, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -147,9 +147,6 @@ pub enum WindowAt {
 ///     fn set_input_regions(&self, _regions: &[InputRegion]) -> Result<(), Unsupported> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
 ///     }
-///     fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
-///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
-///     }
 /// }
 ///
 /// let window: &dyn PlatformWindow = &Offscreen;
@@ -159,8 +156,11 @@ pub enum WindowAt {
 ///     WindowCommand::Show.admit(&capabilities),
 ///     Err(AdmissionError::Unsupported(_))
 /// ));
-/// assert!(!capabilities.material.is_available());
-/// assert!(window.set_material(WindowMaterial::System).is_err());
+/// assert!(matches!(
+///     WindowCommand::SetMaterial(WindowMaterial::System).admit(&capabilities),
+///     Err(AdmissionError::Unsupported(_))
+/// ));
+/// assert!(window.set_frame_rate_hint(FrameRateHint::High).is_err());
 /// let normal = WindowCommand::SetMode(WindowMode::Normal)
 ///     .admit(&capabilities)
 ///     .expect("every window has the normal mode");
@@ -234,9 +234,6 @@ pub enum WindowAt {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
 ///     }
 ///     fn set_input_regions(&self, _regions: &[InputRegion]) -> Result<(), Unsupported> {
-///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
-///     }
-///     fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
 ///     }
 ///     fn accessibility(&self) -> Option<()> { None }
@@ -503,25 +500,6 @@ pub trait PlatformWindow: Send + Sync {
     /// window the user can see and close rather than a process with no
     /// window at all.
     fn reveal_after_first_frame(&self) {}
-
-    /// Have the window system draw `material` behind the window's content, in
-    /// place of the material it drew. The material shows through the window's
-    /// frame and wherever the content is transparent. A window opens with the
-    /// material its host gives a new window, which the host's documentation
-    /// names.
-    ///
-    /// A verb with a capability, not a [`WindowCommand`](crate::WindowCommand)
-    /// (ADR-0254 §3): it takes effect when it returns `Ok`. Owner thread only.
-    ///
-    /// # Errors
-    ///
-    /// [`Unsupported`] when the window's
-    /// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
-    /// `Unavailable`, and with [`UnsupportedReason::NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)
-    /// when the window system refuses the material all the same; the window
-    /// then keeps the material it had. A closed window answers
-    /// [`NoWindow`](crate::UnsupportedReason::NoWindow).
-    fn set_material(&self, material: WindowMaterial) -> Result<(), Unsupported>;
 
     /// Apply the cursor selected by this window's presentation.
     ///

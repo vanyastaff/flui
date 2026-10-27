@@ -2240,12 +2240,6 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         self.inner.set_input_regions(regions)
     }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_material(material)
-    }
     /// The display the test scripted, with what the wrapped window reports.
     fn state(&self) -> flui_platform::WindowState {
         self.inner
@@ -2365,12 +2359,6 @@ impl flui_platform::PlatformWindow for RegionWindow {
         hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
         self.inner.set_frame_rate_hint(hint)
-    }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_material(material)
     }
 }
 

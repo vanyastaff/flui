@@ -77,16 +77,6 @@ impl PlatformWindow for Faulty {
         }
     }
 
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        match self.1 {
-            Fault::VerbsIgnoreTheirCapabilities => Ok(()),
-            _ => self.0.set_material(material),
-        }
-    }
-
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
     }
@@ -192,6 +182,7 @@ impl WindowFixture for Fixture {
             // The headless desktop's activation is its focus.
             active: system.focused,
             visible: system.visible,
+            material: Some(system.material),
         }
     }
 

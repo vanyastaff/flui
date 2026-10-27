@@ -518,12 +518,6 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         self.delegate.set_input_regions(regions)
     }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.delegate.set_material(material)
-    }
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,

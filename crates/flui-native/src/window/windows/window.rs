@@ -35,10 +35,9 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, Availability, CursorError, DispatchEventResult, PlatformFailure,
-    PlatformInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowCommand, WindowId, WindowMaterial, WindowMode, WindowOptions,
-    WindowReveal, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformFailure, PlatformInput,
+    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowCommand, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -179,11 +178,15 @@ fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
 }
 
 /// What every Win32 window honours and observes, known before one exists
-/// (`Platform::window_capabilities`), on a build that draws a material as
-/// `material` says. Win32 has no fullscreen of its own: the host makes one of
-/// a borderless window sized to its monitor. It takes no refresh-rate request:
-/// the display's rate is the user's setting.
-pub(crate) const fn window_capabilities(material: Availability) -> WindowCapabilities {
+/// (`Platform::window_capabilities`), on a build that passed or failed the
+/// material's `gate`. Win32 has no fullscreen of its own: the host makes one
+/// of a borderless window sized to its monitor. It takes no refresh-rate
+/// request: the display's rate is the user's setting. The material is
+/// `DWMWA_SYSTEMBACKDROP_TYPE`; a Win32 window opens with
+/// [`WindowMaterial::System`] where the build draws it.
+pub(crate) const fn window_capabilities(
+    gate: &Result<Since<SystemBackdrop>, Unsupported>,
+) -> WindowCapabilities {
     use flui_platform::Availability::{Emulated, Native};
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.sets_title = Native;
@@ -202,8 +205,8 @@ pub(crate) const fn window_capabilities(material: Availability) -> WindowCapabil
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
-    capabilities.material = material;
-    capabilities
+    capabilities.material = Native;
+    super::material::below_the_gate(capabilities, gate)
 }
 
 impl WindowsWindow {
@@ -711,6 +714,12 @@ impl WindowsWindow {
     /// Get the native HWND handle
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// Whether the build the platform runs on draws a system backdrop: the
+    /// one gate every write of `DWMWA_SYSTEMBACKDROP_TYPE` takes.
+    pub(super) fn backdrop_gate(&self) -> Result<Since<SystemBackdrop>, Unsupported> {
+        self.windows.material
     }
 
     /// Whether the mouse is over this window, as its input read it: `None`
@@ -1451,6 +1460,17 @@ impl PlatformWindow for WindowsWindow {
                 self.close_window();
                 return Ok(());
             }
+            // The material is no fact of the snapshot: nothing to publish. A
+            // build below the gate has the capability `Unavailable`, so
+            // admission refused the command before it came here.
+            WindowCommand::SetMaterial(material) => {
+                let Ok(gate) = self.windows.material else {
+                    return Err(crate::window::state::not_carried_out(
+                        &WindowCommand::SetMaterial(material),
+                    ));
+                };
+                return super::backdrop::apply_material(self.hwnd, gate, material);
+            }
             other => return Err(crate::window::state::not_carried_out(&other)),
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
@@ -1470,17 +1490,6 @@ impl PlatformWindow for WindowsWindow {
             self.show_first();
             tracing::debug!("Windows: window revealed after its first presented frame");
         }
-    }
-
-    /// `DWMWA_SYSTEMBACKDROP_TYPE`, from build 22621 on: the platform's gate
-    /// answers for an older build, and the desktop window manager's refusal
-    /// on a newer one is `NotOnThisDevice` too. A Win32 window opens with
-    /// [`WindowMaterial::System`] where the build draws it.
-    fn set_material(&self, material: WindowMaterial) -> Result<(), Unsupported> {
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
-            return Err(Unsupported::new(UnsupportedReason::NoWindow));
-        }
-        super::backdrop::apply_material(self.hwnd, self.windows.material?, material)
     }
 
     /// The display's rate is the user's setting: a Win32 window asks for none.

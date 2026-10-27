@@ -488,9 +488,7 @@ fn sample_state(
 /// system takes one.
 fn activity_capabilities(displays: &dyn crate::owner::android::HostDisplays) -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    if displays.takes_frame_rate_requests() {
-        capabilities.frame_rate_hint = flui_platform::Availability::Native;
-    }
+    capabilities.frame_rate_hint = displays.frame_rate_hint();
     capabilities
 }
 
@@ -656,17 +654,12 @@ impl PlatformWindow for AndroidWindow {
 
     /// Kept and sent with every native window the Activity gets, from API 30.
     fn set_frame_rate_hint(&self, hint: FrameRateHint) -> Result<(), Unsupported> {
-        if !self.displays.takes_frame_rate_requests() {
+        if !self.displays.frame_rate_hint().is_available() {
             return Err(Unsupported::new(UnsupportedReason::NotOnThisDevice));
         }
         *self.frame_rate_hint.lock() = hint;
         self.apply_frame_rate_hint();
         Ok(())
-    }
-
-    /// This host draws none of the contract's materials.
-    fn set_material(&self, _material: flui_platform::WindowMaterial) -> Result<(), Unsupported> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
     fn gesture_geometry(

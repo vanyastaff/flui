@@ -89,12 +89,6 @@ impl PlatformWindow for ReentrantIdentityWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         self.inner.set_input_regions(regions)
     }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_material(material)
-    }
     /// Assembly reads the window's scale from here: the hook runs inside it.
     fn state(&self) -> flui_platform::WindowState {
         if let Some(on_scale) = &self.on_scale {

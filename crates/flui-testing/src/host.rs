@@ -291,20 +291,11 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
-    /// The host's window honours no command and takes no request: its
-    /// capabilities say `Unavailable`.
+    /// The host's window takes no refresh-rate request: its capabilities say
+    /// `Unavailable`.
     fn set_frame_rate_hint(
         &self,
         _: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    }
-
-    fn set_material(
-        &self,
-        _: flui_platform::WindowMaterial,
     ) -> Result<(), flui_platform::Unsupported> {
         Err(flui_platform::Unsupported::new(
             flui_platform::UnsupportedReason::NotOnThisPlatform,

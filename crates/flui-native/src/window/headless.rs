@@ -345,6 +345,9 @@ pub struct HeadlessWindowSystem {
     /// the platform's input availability says
     /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
     pub input_regions: flui_platform::Availability,
+    /// The material the simulated system draws behind the window: the last
+    /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
+    pub material: WindowMaterial,
 }
 
 /// The canonical test/headless window double.
@@ -470,7 +473,7 @@ struct MockWindowState {
     pre_present_notifies: u64,
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window took, in order.
     frame_rate_hints: Vec<flui_platform::FrameRateHint>,
-    /// Every [`PlatformWindow::set_material`] the window took, in order.
+    /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
     materials: Vec<WindowMaterial>,
     title: String,
     /// The outer top-left corner. This host draws no frame, so the outer
@@ -832,6 +835,7 @@ impl MockWindow {
         let state = self.state.lock();
         HeadlessWindowSystem {
             input_regions,
+            material: state.materials.last().copied().unwrap_or_default(),
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 state.size,
                 state.scale_factor,
@@ -848,7 +852,7 @@ impl MockWindow {
         self.state.lock().frame_rate_hints.clone()
     }
 
-    /// Every material the window took, oldest first.
+    /// Every material the window applied, oldest first.
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
         self.state.lock().materials.clone()
@@ -1096,6 +1100,7 @@ impl PlatformWindow for MockWindow {
                 }
                 WindowCommand::Hide => state.visible = false,
                 WindowCommand::Activate => state.focused = true,
+                WindowCommand::SetMaterial(material) => state.materials.push(material),
                 // A command this host does not know is refused by `admit`
                 // through its capability, and `Close` returned above.
                 _ => {}
@@ -1112,14 +1117,6 @@ impl PlatformWindow for MockWindow {
         let mut state = self.state.lock();
         takes(&state, availability)?;
         state.frame_rate_hints.push(hint);
-        Ok(())
-    }
-
-    fn set_material(&self, material: WindowMaterial) -> Result<(), Unsupported> {
-        let availability = self.window_state.published_capabilities().material;
-        let mut state = self.state.lock();
-        takes(&state, availability)?;
-        state.materials.push(material);
         Ok(())
     }
 

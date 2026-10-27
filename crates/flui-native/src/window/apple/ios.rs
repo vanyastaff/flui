@@ -1241,6 +1241,11 @@ impl PlatformWindow for IOSWindow {
     /// projects the regions, and when the projection changed defers each edge an
     /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
     /// clear of every edge has no UIKit equivalent and defers nothing.
+    ///
+    /// Taken from any thread, as the capability says: off the main thread the
+    /// edges reach the root controller through the main queue
+    /// (`StatusBar::defer_edges`). A window not yet in a scene keeps them for
+    /// the controller it attaches. Only a closed window refuses, with `NoWindow`.
     fn set_input_regions(
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
@@ -1250,13 +1255,6 @@ impl PlatformWindow for IOSWindow {
                 flui_platform::UnsupportedReason::NoWindow,
             ));
         }
-        // The owner lane is the main thread; a call from elsewhere is a
-        // caller's mistake the next frame on the owner lane makes good.
-        let Some(marker) = MainThreadMarker::new() else {
-            return Err(flui_platform::Unsupported::new(
-                flui_platform::UnsupportedReason::Unavailable,
-            ));
-        };
         let (size, scale) = {
             let metrics = *self.metrics.lock();
             let size = Size::new(
@@ -1274,29 +1272,8 @@ impl PlatformWindow for IOSWindow {
             *edges = crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size);
             *edges
         };
-        // A window not yet in a scene keeps the edges, which its controller
-        // takes when it attaches.
-        let controller = self
-            .native
-            .get(marker)
-            .attachment
-            .borrow()
-            .as_ref()
-            .map(|attachment| attachment.controller.clone());
-        if let Some(controller) = controller {
-            controller.defer_edges(rect_edge(edges));
-        }
+        self.status_bar.defer_edges(rect_edge(edges));
         Ok(())
-    }
-
-    /// This host draws none of the contract's materials.
-    fn set_material(
-        &self,
-        _material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
     }
 
     /// The display link runs at the screen's best rate whatever the window
@@ -1563,7 +1540,7 @@ pub(crate) mod status_bar {
     use std::cell::{Cell, RefCell};
     use std::sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     };
 
     use dispatch2::DispatchQueue;
@@ -1676,9 +1653,13 @@ pub(crate) mod status_bar {
         }
     }
 
-    /// A window's requested status-bar style and the controller reporting it.
+    /// A window's requested status-bar style, the screen edges it defers, and
+    /// the controller reporting both.
     pub(super) struct StatusBar {
         style: Arc<AtomicU8>,
+        /// The `UIRectEdge` bits the window last asked to defer; the
+        /// controller reads the newest whenever it is refreshed.
+        deferred_edges: AtomicUsize,
         controller: NativeOwner<RefCell<Option<Retained<FluiViewController>>>>,
     }
 
@@ -1686,8 +1667,42 @@ pub(crate) mod status_bar {
         pub(super) fn new(mtm: MainThreadMarker) -> Arc<Self> {
             Arc::new(Self {
                 style: Arc::new(AtomicU8::new(UNSET)),
+                deferred_edges: AtomicUsize::new(UIRectEdge::empty().bits()),
                 controller: NativeOwner::new(RefCell::new(None), mtm),
             })
+        }
+
+        /// Defer `edges` from now on. On the main thread the controller hears
+        /// it at once; from any other thread the main queue refreshes it, and
+        /// reads the newest edges then, so a refresh queued earlier never
+        /// brings back edges a later call replaced.
+        pub(super) fn defer_edges(self: &Arc<Self>, edges: UIRectEdge) {
+            self.deferred_edges.store(edges.bits(), Ordering::Release);
+            if let Some(mtm) = MainThreadMarker::new() {
+                self.refresh_edges(mtm);
+                return;
+            }
+            let status_bar = Arc::clone(self);
+            DispatchQueue::main().exec_async(move || {
+                os_entry(
+                    "the deferred screen edges' refresh",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    move || {
+                        let mtm = MainThreadMarker::new()
+                            .expect("BUG: the main queue runs on the main thread");
+                        status_bar.refresh_edges(mtm);
+                    },
+                );
+            });
+        }
+
+        fn refresh_edges(&self, mtm: MainThreadMarker) {
+            let edges = UIRectEdge::from_bits_retain(self.deferred_edges.load(Ordering::Acquire));
+            let controller = self.controller.get(mtm).borrow().clone();
+            if let Some(controller) = controller {
+                controller.defer_edges(edges);
+            }
         }
 
         /// A root view controller reporting this window's style and deferring

@@ -1128,7 +1128,9 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     }
 
     fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
-        window_capabilities()
+        // Every window the platform opens routes through the AppKit main lane
+        // (`MacOSWindow::new`).
+        window_capabilities(true)
     }
 
     fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
@@ -1146,8 +1148,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
 
 /// What every AppKit window honours and observes, known before one exists
 /// (`Platform::window_capabilities`). Each field is named, so a command added
-/// to the contract is unavailable here until `apply` carries it out.
-const fn window_capabilities() -> WindowCapabilities {
+/// to the contract is unavailable here until `apply` carries it out. The
+/// material is an `NSVisualEffectView` behind FLUI's view, which lives on the
+/// main thread: a window whose owner is not the AppKit main lane draws none.
+const fn window_capabilities(owner_is_main: bool) -> WindowCapabilities {
     use flui_platform::Availability::Native;
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.sets_title = Native;
@@ -1166,6 +1170,9 @@ const fn window_capabilities() -> WindowCapabilities {
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
+    if owner_is_main {
+        capabilities.material = Native;
+    }
     capabilities
 }
 
@@ -1355,6 +1362,8 @@ impl PlatformWindow for MacOSWindow {
                 self.close_window();
                 return Ok(());
             }
+            // The material is no fact of the snapshot: nothing to publish.
+            WindowCommand::SetMaterial(material) => return self.apply_material(material),
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
             other => return Err(crate::window::state::not_carried_out(&other)),
@@ -1380,17 +1389,6 @@ impl PlatformWindow for MacOSWindow {
             let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
         });
         tracing::debug!("macOS: window revealed after its first presented frame");
-    }
-
-    /// This host draws none of the contract's materials; an AppKit window's
-    /// own materials are reached through `AppKitWindow::set_backdrop`.
-    fn set_material(
-        &self,
-        _material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
     }
 
     /// This host makes no refresh-rate request of AppKit.
@@ -1872,7 +1870,7 @@ impl MacOSWindow {
                     // The key window is the one this host reports active;
                     // the main window has no report of its own here.
                     active: focused,
-                    capabilities: window_capabilities(),
+                    capabilities: window_capabilities(self.owner_is_main),
                 }
                 .onto(state)
             }

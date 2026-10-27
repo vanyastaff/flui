@@ -154,13 +154,16 @@ pub(crate) mod mode {
 }
 
 pub(crate) mod material {
-    //! Which Windows builds draw a material behind a window: the gate the
-    //! window's [`WindowCapabilities::material`](flui_platform::WindowCapabilities::material)
-    //! and `set_material` both follow, so the two cannot disagree.
+    //! Which Windows builds draw a material behind a window: the one gate the
+    //! window's [`WindowCapabilities::material`](flui_platform::WindowCapabilities::material),
+    //! the `SetMaterial` command and `Win32Window::set_backdrop` all take, so
+    //! none of them can disagree with another.
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::{Availability, Unsupported, UnsupportedReason};
+    use flui_platform::{
+        Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial,
+    };
 
     use crate::version::gate::windows::WindowsBuild;
     use crate::version::gate::{Gate, Since};
@@ -168,7 +171,8 @@ pub(crate) mod material {
     /// `DWMWA_SYSTEMBACKDROP_TYPE`, the desktop window manager attribute that
     /// draws a system material behind a window, from Windows 11 22H2 (build
     /// 22621). Without it a window draws no material: its capability is
-    /// `Unavailable` and `set_material` answers `NotOnThisDevice`.
+    /// `Unavailable` on this device, and admission refuses `SetMaterial` with
+    /// `NotOnThisDevice`.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct SystemBackdrop;
 
@@ -185,27 +189,34 @@ pub(crate) mod material {
             .ok_or(Unsupported::new(UnsupportedReason::NotOnThisDevice))
     }
 
-    /// The material capability of a window whose platform passed or failed
-    /// the [`gate`].
-    pub(crate) const fn availability(
+    /// `capabilities` as a window on a build that passed or failed the
+    /// [`gate`] has them: below it the material is `Unavailable` on this
+    /// device.
+    pub(crate) const fn below_the_gate(
+        capabilities: WindowCapabilities,
         gate: &Result<Since<SystemBackdrop>, Unsupported>,
-    ) -> Availability {
+    ) -> WindowCapabilities {
         match gate {
-            Ok(_) => Availability::Native,
-            Err(_) => Availability::Unavailable,
+            Ok(_) => capabilities,
+            Err(_) => capabilities
+                .unavailable_on_this_device(&WindowCommand::SetMaterial(WindowMaterial::Opaque)),
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{Availability, UnsupportedReason};
+        use flui_platform::{
+            AdmissionError, Availability, UnsupportedReason, WindowCapabilities, WindowCommand,
+            WindowMaterial,
+        };
 
-        use super::{SystemBackdrop, availability, gate};
+        use super::{SystemBackdrop, below_the_gate, gate};
         use crate::version::gate::testing::row;
         use crate::version::gate::windows::WindowsBuild;
 
         /// One row per build around the gate: below it a window has no
-        /// material and is told `NotOnThisDevice`; from it on, it has one.
+        /// material and admission refuses one with `NotOnThisDevice`; from it
+        /// on, the material is admitted.
         #[test]
         fn system_backdrop_gate_table() {
             let mut failures = row::<SystemBackdrop>(
@@ -223,13 +234,21 @@ pub(crate) mod material {
                 (WindowsBuild::from_number(26100), Availability::Native),
             ];
             for (build, wanted) in cases {
-                let answer = gate(build);
-                let reason_holds = match &answer {
-                    Ok(_) => wanted == Availability::Native,
-                    Err(refused) => refused.reason == UnsupportedReason::NotOnThisDevice,
+                let capabilities = below_the_gate(WindowCapabilities::ALL, &gate(build));
+                let admission =
+                    WindowCommand::SetMaterial(WindowMaterial::System).admit(&capabilities);
+                let answer_holds = match (&admission, wanted) {
+                    (Ok(_), Availability::Native) => true,
+                    (Err(AdmissionError::Unsupported(refused)), Availability::Unavailable) => {
+                        refused.reason == UnsupportedReason::NotOnThisDevice
+                    }
+                    _ => false,
                 };
-                if availability(&answer) != wanted || !reason_holds {
-                    failures.push(format!("{build}: {answer:?}, wanted {wanted:?}"));
+                if capabilities.material != wanted || !answer_holds {
+                    failures.push(format!(
+                        "{build}: material {:?}, admission {admission:?}, wanted {wanted:?}",
+                        capabilities.material
+                    ));
                 }
             }
             assert!(failures.is_empty(), "{failures:#?}");

@@ -770,17 +770,6 @@ impl PlatformWindow for WinitWindow {
         Ok(())
     }
 
-    /// winit 0.30 has a material only per OS (`set_system_backdrop` on
-    /// Windows, `set_blur` on KDE), none it draws everywhere.
-    fn set_material(
-        &self,
-        _material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    }
-
     /// winit takes no refresh-rate request.
     fn set_frame_rate_hint(
         &self,

@@ -127,6 +127,7 @@ mod preferences;
 mod storage;
 mod system_chrome;
 mod target_platform;
+mod testing;
 mod text_input;
 pub mod text_store;
 mod unsupported;

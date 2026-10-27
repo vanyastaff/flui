@@ -26,6 +26,41 @@ use objc2_foundation::NSRect;
 use super::ext::AppKitWindow;
 use super::{BObjC, MacOSWindow, NIL, ObjcId, route_on_owner};
 
+impl MacOSWindow {
+    /// `WindowCommand::SetMaterial` on an AppKit window: `System` is
+    /// `NSVisualEffectView`'s window-background material behind FLUI's view,
+    /// `Opaque` takes the backdrop away.
+    pub(super) fn apply_material(
+        &self,
+        material: flui_platform::WindowMaterial,
+    ) -> Result<(), flui_platform::ApplyError> {
+        let view = AppKitWindow(self);
+        material_applied(match material {
+            flui_platform::WindowMaterial::System => {
+                view.set_backdrop(MacOSBackdrop::Material(MacOSMaterial::WindowBackground))
+            }
+            flui_platform::WindowMaterial::Opaque => view.clear_backdrop(),
+        })
+    }
+}
+
+/// What the window answers for AppKit's `outcome`: a closed window is
+/// `Closed`, and a backdrop AppKit did not take is a failure of the system,
+/// `ApplyError::Platform`, not a capability the window lacks.
+fn material_applied(
+    outcome: Result<(), MacOSBackdropError>,
+) -> Result<(), flui_platform::ApplyError> {
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(MacOSBackdropError::Unsupported(refused))
+            if refused.reason == UnsupportedReason::NoWindow =>
+        {
+            Err(flui_platform::ApplyError::Closed)
+        }
+        Err(error) => Err(flui_platform::ApplyError::failed(error.to_string())),
+    }
+}
+
 /// What AppKit draws behind a window's content
 /// ([`AppKitWindow::set_backdrop`]). FLUI's content shows it where it draws
 /// transparent pixels.

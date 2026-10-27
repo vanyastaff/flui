@@ -15,16 +15,17 @@
 //!   claimed and then refused.
 //! - **State converges.** A command the window accepted shows in its
 //!   [`state`](PlatformWindow::state) once the window system has settled: the
-//!   title, size, position, mode, visibility, flags and constraints it asked for.
+//!   title, size, position, mode, visibility, flags and constraints it asked for,
+//!   and the window system draws the material it asked for.
 //! - **Revisions mean change.** Reading the state twice with nothing between
 //!   keeps its revision; a command that changed something raises it.
 //! - **Bad numbers never reach the window system.** A size that is not finite
 //!   and positive is refused at admission as
 //!   [`InvalidGeometry`](AdmissionError::InvalidGeometry), so no window sees it.
-//! - **Verbs answer to their capability.** The frame-rate hint, the material
-//!   and the input regions, which a window takes outside the command queue,
-//!   answer `Unsupported` exactly when their capability is `Unavailable`
-//!   (ADR-0254 §3).
+//! - **Verbs answer to their capability.** The frame-rate hint and the input
+//!   regions, which a window takes outside the command queue because they are
+//!   sent every frame, answer `Unsupported` exactly when their capability is
+//!   `Unavailable` (ADR-0254 §3). The material is a command like the others.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
 //!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
@@ -63,6 +64,11 @@ pub struct Readback {
     /// Whether the window is shown and nothing (a cloak, a locked session)
     /// hides it.
     pub visible: bool,
+    /// The material the window system draws behind the window; `None` where
+    /// it draws one the contract has no name for, or none can be read. Not a
+    /// fact of the snapshot: the checks compare it with the
+    /// [`WindowCommand::SetMaterial`] the window accepted.
+    pub material: Option<WindowMaterial>,
 }
 
 /// A window under test, as the checks drive it.
@@ -183,6 +189,8 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
         WindowCommand::Hide,
         WindowCommand::Show,
         WindowCommand::Activate,
+        WindowCommand::SetMaterial(WindowMaterial::System),
+        WindowCommand::SetMaterial(WindowMaterial::Opaque),
     ]
 }
 
@@ -281,6 +289,12 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .visible
                 .then_some(())
                 .ok_or_else(|| "the window is still hidden".to_owned()),
+            WindowCommand::SetMaterial(material) => {
+                let held = fixture.readback().material;
+                (held == Some(*material))
+                    .then_some(())
+                    .ok_or_else(|| format!("the window system draws {held:?}, not {material:?}"))
+            }
             _ => Ok(()),
         };
         if let Err(detail) = outcome {
@@ -415,8 +429,8 @@ fn a_command_admitted_before_a_revision_is_superseded(
     Ok(())
 }
 
-/// The verbs a window takes outside the command queue — the frame-rate hint,
-/// the material and the input regions — answer `Unsupported` exactly when
+/// The verbs a window takes outside the command queue — the frame-rate hint
+/// and the input regions — answer `Unsupported` exactly when
 /// their capability is `Unavailable`, never as a refusal worth trying again,
 /// and are taken otherwise (ADR-0254 §3).
 fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
@@ -445,14 +459,6 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
             capabilities.frame_rate_hint,
             window.set_frame_rate_hint(hint),
         );
-    }
-    for material in [WindowMaterial::System, WindowMaterial::Opaque] {
-        judge(
-            format!("set_material({material:?})"),
-            capabilities.material,
-            window.set_material(material),
-        );
-        fixture.settle();
     }
     let region = InputRegion::new(
         InputRegionKind::SystemGestureExclusion,

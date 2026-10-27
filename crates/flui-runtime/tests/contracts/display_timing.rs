@@ -113,12 +113,6 @@ impl PlatformWindow for CountingWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         self.inner.set_input_regions(regions)
     }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.inner.set_material(material)
-    }
     fn state(&self) -> flui_platform::WindowState {
         self.inner.state()
     }

@@ -166,7 +166,6 @@ impl DisplayHost {
     }
 }
 
-/// The window request for a runtime demand.
 /// Ask `window` for the rate `demand` names. A window whose capabilities
 /// leave the hint `Unavailable` refuses it: the system then picks the rate,
 /// as it would for no request, and the demand is kept for a surface that
@@ -177,6 +176,7 @@ fn request_rate(window: &dyn PlatformWindow, demand: FrameRateDemand) {
     }
 }
 
+/// The window request for a runtime demand.
 fn hint_for(demand: FrameRateDemand) -> FrameRateHint {
     match demand {
         FrameRateDemand::Active => FrameRateHint::High,

@@ -916,12 +916,6 @@ impl PlatformWindow for WithDragSource {
     ) -> Result<(), flui_platform::Unsupported> {
         self.window.set_input_regions(regions)
     }
-    fn set_material(
-        &self,
-        material: flui_platform::WindowMaterial,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.window.set_material(material)
-    }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         Some(Arc::clone(&self.source))
     }

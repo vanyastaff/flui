@@ -64,7 +64,7 @@ impl WindowSet {
 
     /// What every window of this platform honours and observes.
     pub(super) const fn capabilities(&self) -> WindowCapabilities {
-        window_capabilities(material::availability(&self.material))
+        window_capabilities(&self.material)
     }
 
     /// Stops tracking the window `hwnd` names, when it is the one with

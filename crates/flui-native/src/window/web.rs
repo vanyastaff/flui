@@ -38,7 +38,7 @@ use crate::{
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, PlatformWindow, Unsupported, UnsupportedReason,
     WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
-    WindowId, WindowMaterial, WindowMode, WindowOptions, WindowState,
+    WindowId, WindowMode, WindowOptions, WindowState,
 };
 
 use crate::owner::web::listener::CanvasListener;
@@ -1168,11 +1168,6 @@ impl PlatformWindow for WebWindow {
         // `fullscreenchange`; the title is ours to report at once.
         self.publisher().publish();
         Ok(())
-    }
-
-    /// A page has no say over what the browser draws behind it.
-    fn set_material(&self, _material: WindowMaterial) -> Result<(), Unsupported> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
     /// The browser paces `requestAnimationFrame` to the display; a page asks
