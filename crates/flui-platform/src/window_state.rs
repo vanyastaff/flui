@@ -388,8 +388,10 @@ impl WindowState {
 /// [`revision`](Self::revision): the snapshot revision at which what the
 /// window honours last changed. An [`AdmittedCommand`] is bound to it, so a
 /// command checked against capabilities the window no longer has is
-/// [`ApplyError::Superseded`], never applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// [`ApplyError::Superseded`], never applied. Equality and hashing compare
+/// what is honoured and how, not the revision: the revision says when the
+/// capabilities were published, and it moves only when they differ.
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct WindowCapabilities {
     /// [`WindowCommand::SetTitle`].
@@ -430,6 +432,64 @@ pub struct WindowCapabilities {
     /// kept by [`WindowState::successor`], zero for capabilities no snapshot
     /// has published.
     revision: WindowRevision,
+}
+
+impl PartialEq for WindowCapabilities {
+    fn eq(&self, other: &Self) -> bool {
+        self.honoured() == other.honoured()
+    }
+}
+
+impl Eq for WindowCapabilities {}
+
+impl std::hash::Hash for WindowCapabilities {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.honoured().hash(state);
+    }
+}
+
+impl WindowCapabilities {
+    /// Every field but the revision, for equality and hashing. Destructured,
+    /// so a field the type gains does not compile until it is listed here.
+    const fn honoured(&self) -> [Availability; 16] {
+        let Self {
+            sets_title,
+            sets_position,
+            sets_size,
+            sets_constraints,
+            sets_resizable,
+            sets_decorated,
+            minimizes,
+            maximizes,
+            enters_fullscreen,
+            hides,
+            shows,
+            activates,
+            closes,
+            observes_position,
+            observes_minimized,
+            places_at_open,
+            revision: _,
+        } = *self;
+        [
+            sets_title,
+            sets_position,
+            sets_size,
+            sets_constraints,
+            sets_resizable,
+            sets_decorated,
+            minimizes,
+            maximizes,
+            enters_fullscreen,
+            hides,
+            shows,
+            activates,
+            closes,
+            observes_position,
+            observes_minimized,
+            places_at_open,
+        ]
+    }
 }
 
 impl WindowCapabilities {
