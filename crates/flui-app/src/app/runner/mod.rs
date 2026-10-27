@@ -117,6 +117,16 @@ pub(crate) fn presentation_window(
         ))
 }
 
+/// Close a window the runner is discarding: one whose installation failed or
+/// was cancelled, or whose open nobody waits for any more. No caller is left
+/// to hear a refusal (Android's one window does not close) or a failure, and
+/// the presentation behind it is already torn down, so it is logged.
+pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'static str) {
+    if let Err(error) = window.apply(flui_platform::WindowCommand::Close) {
+        tracing::warn!(%error, why, "a discarded window did not close");
+    }
+}
+
 /// Keep a weak reference to a window the runner is about to present, so the
 /// escape hatch finds the host's window behind a presentation's command queue.
 /// Windows already dropped leave the list here.
@@ -217,9 +227,10 @@ pub fn window_handle(
 /// removal, exit-policy consult) runs on the event-loop owner's next turn,
 /// after this call returns — never synchronously inside it (issue #919's
 /// fix) — while the **headless** double runs `on_close` synchronously
-/// inside `close()`. On **web** and **Android** the veto itself is inert
+/// inside the command. On **web** and **Android** the veto itself is inert
 /// (neither backend consults `dispatch_should_close`), so there is nothing
-/// to resolve.
+/// to resolve; an Android window refuses the close
+/// ([`CloseRequestError::Refused`](crate::CloseRequestError::Refused)).
 ///
 /// # Errors
 ///

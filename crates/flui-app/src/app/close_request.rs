@@ -73,15 +73,15 @@
 //!   calls `dispatch_should_close`, so a handler registered there is inert.
 //!   That is a property of those backends, not of this module.
 //! - **Resolving a deferred close on winit completes on the owner's next
-//!   turn, not inside the call** (issue #919, fixed). `WinitWindow::close`
-//!   posts the close to that backend's owner lane and the owner runs the
+//!   turn, not inside the call** (issue #919, fixed). A winit window's
+//!   `WindowCommand::Close` posts the close to that backend's owner lane and the owner runs the
 //!   same teardown a compositor close takes — `on_close`, window-map
 //!   removal, callback clear, exit-policy consult — so the process exits
 //!   when that was the last window. What this module inherits from it: on
 //!   winit the presentation is torn down AFTER
 //!   [`request_presentation_close`](crate::request_presentation_close)
 //!   returns, on the owner turn; the headless double still runs `on_close`
-//!   synchronously inside `close()`, so a test that asserts right after the
+//!   synchronously inside the command, so a test that asserts right after the
 //!   call pins the double, not the winit contract.
 
 use std::sync::{Arc, Weak};
@@ -251,6 +251,18 @@ pub enum CloseRequestError {
          presentation's event loop"
     )]
     NoHostedRuntime,
+    /// The window refused to close: its window system lets the application
+    /// close none of its windows (Android's one window, whose `closes`
+    /// capability is `Unavailable`), or the close failed in the window
+    /// system.
+    #[error("the window at {address:?} refused to close")]
+    Refused {
+        /// The address that was asked for.
+        address: PresentationAddress,
+        /// The window's answer to [`WindowCommand::Close`](flui_platform::WindowCommand::Close).
+        #[source]
+        error: flui_platform::WindowCommandError,
+    },
 }
 
 // ============================================================================
@@ -463,8 +475,10 @@ impl CloseRequestRouter {
     /// This is how a [`CloseResponse::KeepOpen`] answer is finished: the
     /// application saved its work and now wants the close it deferred.
     ///
-    /// **Completes on every backend whose `close()` performs a real close**
-    /// (headless, winit, Win32, AppKit). On winit the teardown — `on_close`,
+    /// **Completes on every backend whose `WindowCommand::Close` performs a
+    /// real close** (headless, winit, Win32, AppKit); a window that refuses
+    /// it (Android) answers [`CloseRequestError::Refused`]. On winit the
+    /// teardown — `on_close`,
     /// window-map removal, exit-policy consult — runs on the owner's next
     /// turn, not inside this call (issue #919's fix); the headless double
     /// runs it synchronously. See
@@ -497,8 +511,9 @@ impl CloseRequestRouter {
         // Outside the lock: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
-        let _ = window.apply(flui_platform::WindowCommand::Close);
-        Ok(())
+        window
+            .apply(flui_platform::WindowCommand::Close)
+            .map_err(|error| CloseRequestError::Refused { address, error })
     }
 }
 
@@ -687,7 +702,33 @@ mod tests {
                     "a_panicking_handler_vetoes_and_stays_registered",
                     a_panicking_handler_vetoes_and_stays_registered as fn(),
                 ),
+                (
+                    "a_window_that_cannot_close_says_so",
+                    a_window_that_cannot_close_says_so as fn(),
+                ),
             ],
+        );
+    }
+
+    /// A window whose window system lets the application close none of its
+    /// windows (Android's) refuses the programmatic close, and the caller
+    /// hears why instead of an `Ok` for a window that stays.
+    fn a_window_that_cannot_close_says_so() {
+        let router = CloseRequestRouter::new();
+        let at = address(1, 1);
+        // The double honours no command, `Close` included.
+        let window = window(1);
+        register(&router, at, &window, None);
+        let refused = router.request_close(at);
+        assert!(
+            matches!(
+                refused,
+                Err(CloseRequestError::Refused {
+                    address,
+                    error: flui_platform::WindowCommandError::Unsupported(_),
+                }) if address == at
+            ),
+            "{refused:?}"
         );
     }
 

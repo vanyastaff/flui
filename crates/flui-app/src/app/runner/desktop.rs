@@ -42,7 +42,7 @@ impl Drop for InstallRollback {
             crate::app::application_control::contain(|| close_this_window(dispatcher));
         }
         crate::app::application_control::contain(|| {
-            let _ = self.window.apply(flui_platform::WindowCommand::Close);
+            super::discard_window(self.window.as_ref(), "a rolled-back main window");
         });
     }
 }

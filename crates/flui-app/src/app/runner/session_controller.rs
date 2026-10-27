@@ -45,7 +45,7 @@ fn retire_session(state: SessionState) {
             receipt.cancel();
             contain(|| drop(acknowledgement));
             contain(|| {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(window.as_ref(), "a cancelled session");
             });
         }
     }
@@ -126,7 +126,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
                 .expect("BUG: live controller owns installer"))(Arc::clone(&window))?;
         if let Some(Err(error)) = receipt.outcome() {
             contain(|| {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(window.as_ref(), "a failed session installation");
             });
             return Err(error.into());
         }
@@ -191,7 +191,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
             } else {
                 contain(|| drop(acknowledgement));
                 contain(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "a session nobody acknowledged");
                 });
                 if let Err(error) = outcome {
                     contain(|| tracing::error!(%error, "scene runtime installation failed"));

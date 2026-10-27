@@ -527,7 +527,7 @@ thread_local! {
 ))]
 fn discard_pending_open(mut request: PendingOpen) {
     if let Some(Ok(window)) = request.pending.try_take() {
-        let _ = window.apply(flui_platform::WindowCommand::Close);
+        super::discard_window(window.as_ref(), "an open nobody waits for");
     }
     // An unresolved handle is disclaimed; a delivered handle is explicitly
     // closed above, since dropping an Arc alone need not destroy a native window.
@@ -557,7 +557,7 @@ pub(super) fn cancel_pending_secondary_windows() {
     }
     for completion in completions {
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = completion.window.apply(flui_platform::WindowCommand::Close);
+            super::discard_window(completion.window.as_ref(), "a cancelled pending open");
         }))
         .err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
@@ -759,7 +759,7 @@ pub(super) fn drain_pending_secondary_window_completions(
         );
         if failed {
             let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(window.as_ref(), "a failed installation");
             }))
             .err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(
@@ -1055,7 +1055,7 @@ fn finish_open_secondary_window(
         fn drop(&mut self) {
             if let Some(window) = self.0.take()
                 && let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "an uninstalled secondary window");
                 }))
             {
                 std::mem::forget(payload);

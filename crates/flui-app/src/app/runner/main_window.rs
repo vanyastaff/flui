@@ -202,7 +202,10 @@ impl MainController {
                 if !completion.claim() {
                     if let Ok(window) = result {
                         contain(|| {
-                            let _ = window.apply(flui_platform::WindowCommand::Close);
+                            super::discard_window(
+                                window.as_ref(),
+                                "a main window nobody waits for",
+                            );
                         });
                     }
                     self.fail(completion.failure().unwrap_or(AppWindowError::Cancelled));
@@ -266,12 +269,15 @@ impl MainController {
         if !self.is_current() {
             match opened {
                 Some(Ok(WindowOpen::Ready(window))) => contain(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
                 }),
                 Some(Ok(WindowOpen::Pending(mut pending))) => {
                     if let Some(Ok(window)) = pending.try_take() {
                         contain(|| {
-                            let _ = window.apply(flui_platform::WindowCommand::Close);
+                            super::discard_window(
+                                window.as_ref(),
+                                "a main window nobody waits for",
+                            );
                         });
                     }
                     contain(|| drop(pending));
@@ -307,7 +313,7 @@ impl MainController {
     fn install(&mut self, window: Arc<dyn HostWindow>) {
         if !self.is_current() {
             contain(|| {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(window.as_ref(), "a main window nobody waits for");
             });
             self.cancel();
             return;
@@ -341,7 +347,7 @@ impl MainController {
             }
             Ok(open) => {
                 contain(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
                 });
                 contain(|| drop(open));
                 if self.is_current() {
@@ -352,7 +358,7 @@ impl MainController {
             }
             Err(error) => {
                 contain(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
                 });
                 if self.is_current() {
                     self.fail(error);
@@ -390,7 +396,7 @@ impl MainController {
             }
             outcome => {
                 contain(|| {
-                    let _ = open.window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(open.window.as_ref(), "a main window nobody waits for");
                 });
                 contain(|| drop(open));
                 if self.is_current() {
@@ -408,14 +414,14 @@ impl MainController {
         if let Some(installing) = self.installing.take() {
             installing.installation.cancel();
             contain(|| {
-                let _ = installing.window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(installing.window.as_ref(), "a main window nobody waits for");
             });
             contain(|| drop(installing));
         }
         if let Some(mut pending) = self.pending.take() {
             if let Some(Ok(window)) = pending.try_take() {
                 contain(|| {
-                    let _ = window.apply(flui_platform::WindowCommand::Close);
+                    super::discard_window(window.as_ref(), "a main window nobody waits for");
                 });
             }
             contain(|| drop(pending));

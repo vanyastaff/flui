@@ -124,7 +124,7 @@ impl Drop for InstallationWindow {
         if !self.published {
             self.closed.store(true, Ordering::Release);
             first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = window.apply(flui_platform::WindowCommand::Close);
+                super::discard_window(window.as_ref(), "an unpublished installation");
             }))
             .err();
         }
@@ -305,27 +305,20 @@ impl WindowInstall {
             };
             // Read with no lock held: the window is platform code.
             let next = window.state();
-            let previous = last.lock().replace(next.clone());
-            let Some(previous) = previous else {
-                // Before the seed: the seed reads this state or a newer one.
-                return;
-            };
-            let scale = |state: &flui_platform::WindowState| {
-                state
-                    .metrics
-                    .map(flui_foundation::geometry::WindowMetrics::scale)
-            };
-            let rescaled = scale(&previous) != scale(&next);
-            if (previous.display != next.display || rescaled)
+            // The baseline moves before delivery: a change a subscriber makes
+            // re-enters here and is compared against this snapshot. Every
+            // event is then delivered, a panicking one included.
+            let followed = RuntimeEvent::follow(&mut last.lock(), next);
+            if followed.display_moved
                 && let Some(proxy) = &proxy
             {
                 // A failed wake leaves the owner's retry debt; nothing to do.
                 let _ = proxy.wake();
             }
-            for event in RuntimeEvent::of_state_change(&previous, &next) {
+            RuntimeEvent::deliver_each(followed.events, |event| {
                 // A refused delivery means the presentation is gone.
                 let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Event(event));
-            }
+            });
         }));
         let seed = window.state();
         *seen.lock() = Some(seed.clone());

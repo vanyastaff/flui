@@ -185,6 +185,16 @@ pub(in crate::app) enum RuntimeTask {
     ClosePresentation(flui_foundation::PresentationId),
 }
 
+/// What one snapshot of a window brought ([`RuntimeEvent::follow`]).
+#[derive(Default)]
+pub(in crate::app) struct StateFollow {
+    /// The facts that changed, in the order the presentation applies them.
+    pub(in crate::app) events: Vec<RuntimeEvent>,
+    /// The window moved to another display, or its display now gives it
+    /// another scale: the platform's display snapshot needs a new sample.
+    pub(in crate::app) display_moved: bool,
+}
+
 impl RuntimeEvent {
     /// What a window's new snapshot `next` says that `previous` did not, as
     /// the events its presentation applies, in that order: the state
@@ -223,6 +233,56 @@ impl RuntimeEvent {
             events.push(Self::WindowHover(next.hovered));
         }
         events
+    }
+
+    /// Follow one window's snapshots: what `next` brings against `seen`, the
+    /// snapshot the window's presentation saw last, which `next` then
+    /// replaces. Before the seed (`seen` empty) it brings nothing: the seed
+    /// reads `next` or a newer one. A snapshot without drawable metrics keeps
+    /// the last ones as seen, so a later one that has them brings a resize
+    /// only when they differ.
+    pub(in crate::app) fn follow(
+        seen: &mut Option<flui_platform::WindowState>,
+        mut next: flui_platform::WindowState,
+    ) -> StateFollow {
+        let Some(previous) = seen.take() else {
+            *seen = Some(next);
+            return StateFollow::default();
+        };
+        let events = Self::of_state_change(&previous, &next);
+        let scale = |state: &flui_platform::WindowState| {
+            state
+                .metrics
+                .map(flui_foundation::geometry::WindowMetrics::scale)
+        };
+        if next.metrics.is_none() {
+            next.metrics = previous.metrics;
+        }
+        let display_moved = previous.display != next.display || scale(&previous) != scale(&next);
+        *seen = Some(next);
+        StateFollow {
+            events,
+            display_moved,
+        }
+    }
+
+    /// Deliver every event, each on its own: a panic in one (a `WindowHandle`
+    /// subscriber's, say) does not keep the facts after it from their
+    /// presentation. The first panic resumes once all were delivered.
+    pub(in crate::app) fn deliver_each(events: Vec<Self>, mut deliver: impl FnMut(Self)) {
+        let mut first = None;
+        for event in events {
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(event))).err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window state delivery",
+            );
+        }
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     fn deliver(
@@ -1002,3 +1062,6 @@ mod notice_tests;
 #[path = "owner_dispatch/tests.rs"]
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 mod owner_dispatch_tests;
+#[path = "owner_dispatch/state_follow_tests.rs"]
+#[cfg(test)]
+mod state_follow_tests;
