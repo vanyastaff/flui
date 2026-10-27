@@ -257,33 +257,95 @@ fn a_panicking_method_keeps_the_queue_and_its_payload() {
     );
 }
 
-/// The handler decides a close request; asked again while it answers, the
-/// window keeps itself open without asking.
+fn never_closed() -> impl FnOnce() + Send + 'static {
+    || panic!("a request answered at once is closed by its caller")
+}
+
+/// The handler decides a close request. A request raised while one of its
+/// methods runs is never asked inside it: the window is kept for now, the
+/// request is asked after the method returns, and granted then, the window
+/// closes by its deferred close; refused, it stays. What the handler raises
+/// while it answers a close request waits for the answer too.
 fn a_close_request_is_the_handlers_to_decide() {
     let (delivery, handler) = window();
     handler.react_to_close_request(|| CloseDecision::KeepOpen);
-    assert!(!delivery.dispatch_should_close(), "a veto keeps the window");
-    handler.react_to_close_request(|| CloseDecision::Close);
-    assert!(delivery.dispatch_should_close(), "the handler closes it");
-
-    let nested = Rc::new(Cell::new(None));
-    let weak = Arc::downgrade(&delivery);
-    let heard = Rc::clone(&nested);
-    handler.react_to_close_request(move || {
-        heard.set(Some(
-            weak.upgrade()
-                .expect("live delivery")
-                .dispatch_should_close(),
-        ));
-        CloseDecision::Close
-    });
-    assert!(delivery.dispatch_should_close());
     assert_eq!(
-        nested.get(),
-        Some(false),
-        "a nested request keeps the window"
+        delivery.dispatch_close_request(never_closed()),
+        CloseDecision::KeepOpen,
+        "a veto keeps the window"
     );
-    assert_eq!(handler.count(&HandlerCall::CloseRequested), 3);
+    handler.react_to_close_request(|| CloseDecision::Close);
+    assert_eq!(
+        delivery.dispatch_close_request(never_closed()),
+        CloseDecision::Close,
+        "the handler closes it"
+    );
+
+    for (granted, closes) in [(CloseDecision::Close, 1), (CloseDecision::KeepOpen, 0)] {
+        let (delivery, handler) = window();
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let answered = Rc::new(Cell::new(None));
+        let (weak, closing, heard) = (
+            Arc::downgrade(&delivery),
+            Arc::clone(&closed),
+            Rc::clone(&answered),
+        );
+        let asked_inside = Rc::new(Cell::new(false));
+        let asking = Rc::clone(&asked_inside);
+        let inside = Rc::new(Cell::new(false));
+        let running = Rc::clone(&inside);
+        handler.react_to_close_request(move || {
+            asking.set(running.get());
+            granted
+        });
+        let running = Rc::clone(&inside);
+        delivery.deliver_capability_snapshot();
+        handler.react_to_input(move |_| {
+            running.set(true);
+            let closing = Arc::clone(&closing);
+            heard.set(Some(
+                weak.upgrade()
+                    .expect("live delivery")
+                    .dispatch_close_request(move || {
+                        closing.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }),
+            ));
+            running.set(false);
+            DispatchEventResult::default()
+        });
+        delivery.dispatch_input(ime());
+        assert_eq!(
+            answered.get(),
+            Some(CloseDecision::KeepOpen),
+            "{granted:?}: a request raised inside `input` keeps the window for now"
+        );
+        assert!(
+            !asked_inside.get(),
+            "{granted:?}: the request was asked inside `input`"
+        );
+        assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+        assert_eq!(
+            closed.load(std::sync::atomic::Ordering::SeqCst),
+            closes,
+            "{granted:?}: the deferred close follows the handler's answer"
+        );
+    }
+
+    // Input raised while the handler answers a close request is delivered
+    // after the answer, not inside it.
+    let (delivery, handler) = window();
+    delivery.deliver_capability_snapshot();
+    let weak = Arc::downgrade(&delivery);
+    handler.react_to_close_request(move || {
+        weak.upgrade().expect("live delivery").dispatch_input(ime());
+        CloseDecision::KeepOpen
+    });
+    delivery.dispatch_close_request(never_closed());
+    assert_eq!(
+        handler.take_calls(),
+        [snapshot(), HandlerCall::CloseRequested, input()],
+        "the input waited for the answer"
+    );
 }
 
 /// `closed` is called once and is the last call; a window cleared lets go of
@@ -334,8 +396,9 @@ fn closed_is_the_last_call_and_the_window_lets_go() {
         delivery.dispatch_input(ime()),
         DispatchEventResult::default()
     );
-    assert!(
-        delivery.dispatch_should_close(),
+    assert_eq!(
+        delivery.dispatch_close_request(never_closed()),
+        CloseDecision::Close,
         "with no handler the close goes ahead"
     );
 }

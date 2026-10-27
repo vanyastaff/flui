@@ -982,8 +982,16 @@ impl MockWindow {
     /// production behavior — not a test-only shortcut) removes this window
     /// from the platform's tracking and consults the exit-policy hook if
     /// every tracked window is now gone. See `Self::notify_closed`.
+    ///
+    /// Raised while one of the handler's methods runs, the request is
+    /// answered `false` at once and asked behind it; the window then closes
+    /// if the handler grants it.
     pub fn simulate_close(&self) -> bool {
-        let should = self.delivery.dispatch_should_close();
+        let later = self.clone();
+        let should = self
+            .delivery
+            .dispatch_close_request(move || later.complete_close())
+            == flui_platform::CloseDecision::Close;
         if should {
             self.complete_close();
         }

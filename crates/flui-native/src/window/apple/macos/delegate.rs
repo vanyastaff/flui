@@ -580,11 +580,18 @@ impl MacOSWindow {
 
     /// Handle close request event
     ///
-    /// Returns true to allow close, false to prevent
-    fn handle_close_request(&self) -> bool {
-        let should_close = self.delivery.dispatch_should_close();
-        tracing::debug!("Window close requested: {}", should_close);
-        should_close
+    /// Returns true to allow close, false to prevent. Asked behind a running
+    /// handler method (a `performClose:` sent from inside `input`), the
+    /// window is kept for now and closed later if the handler grants it.
+    fn handle_close_request(self: &Arc<Self>) -> bool {
+        let window = Arc::downgrade(self);
+        let decision = self.delivery.dispatch_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                window.close_window();
+            }
+        });
+        tracing::debug!(?decision, "Window close requested");
+        decision == flui_platform::CloseDecision::Close
     }
 
     /// Handle window close event

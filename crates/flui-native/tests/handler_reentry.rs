@@ -10,7 +10,7 @@
 //! for the rest of the process.
 
 use flui_testing::window_commands::AdmitAndApply as _;
-use flui_testing::window_handler::RecordingWindowHandler;
+use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -312,6 +312,69 @@ fn a_handler_dropped_at_close_reaches_the_platform(
     );
 }
 
+/// Raises something on a window from inside a handler method.
+type Raise = dyn Fn(&Arc<dyn HostWindow>);
+
+/// A close request the window system raises synchronously from inside the
+/// handler's `input` (a `WM_CLOSE` sent by the input's own handling) is not
+/// asked inside `input`: the window stays open until `input` returns, then
+/// the handler is asked once, and its `Close` closes the window.
+fn a_close_request_raised_inside_input_waits_for_it(
+    platform: &Arc<dyn Platform>,
+    options: fn() -> WindowOptions,
+    send_input: &Raise,
+    raise_close: Rc<Raise>,
+    settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
+) {
+    let handler = RecordingWindowHandler::new();
+    let own: Rc<RefCell<Weak<dyn HostWindow>>> =
+        Rc::new(RefCell::new(Weak::<flui_native::MockWindow>::new()));
+    let in_input = Rc::new(Cell::new(false));
+    let asked_inside = Rc::new(Cell::new(false));
+    let closed = Rc::new(Cell::new(false));
+    let raised = Rc::new(Cell::new(false));
+    {
+        let (own, in_input, raised) = (Rc::clone(&own), Rc::clone(&in_input), Rc::clone(&raised));
+        handler.react_to_input(move |input| {
+            if !matches!(input, flui_platform::PlatformInput::Capabilities(_))
+                && !raised.replace(true)
+                && let Some(window) = own.borrow().upgrade()
+            {
+                in_input.set(true);
+                raise_close(&window);
+                in_input.set(false);
+            }
+            DispatchEventResult::default()
+        });
+    }
+    {
+        let (in_input, asked_inside) = (Rc::clone(&in_input), Rc::clone(&asked_inside));
+        handler.react_to_close_request(move || {
+            asked_inside.set(asked_inside.get() || in_input.get());
+            CloseDecision::Close
+        });
+    }
+    {
+        let closed = Rc::clone(&closed);
+        handler.react_to_close(move || closed.set(true));
+    }
+    let window = platform
+        .open_window(options(), handler.clone())
+        .expect("a window opens");
+    *own.borrow_mut() = Arc::downgrade(&window);
+    send_input(&window);
+    assert!(
+        settle(&|| closed.get()),
+        "the granted request closed the window"
+    );
+    assert!(raised.get(), "the input never ran");
+    assert!(
+        !asked_inside.get(),
+        "the close request was asked inside `input`"
+    );
+    assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+}
+
 // --- headless -------------------------------------------------------------
 
 fn headless() -> Arc<HeadlessPlatform> {
@@ -396,6 +459,36 @@ fn headless_handler_methods_reenter() {
         a_handler_dropped_at_close_reaches_the_platform(
             &platform,
             WindowOptions::default,
+            &|done| done(),
+        );
+    });
+}
+
+/// A close request simulated from inside `input` on the headless window.
+fn headless_close_request_inside_input_waits_for_it() {
+    within("headless close request inside input", || {
+        let platform: Arc<dyn Platform> = headless();
+        let mock = |window: &Arc<dyn HostWindow>| {
+            window
+                .as_any()
+                .downcast_ref::<flui_native::MockWindow>()
+                .expect("a headless window")
+                .clone()
+        };
+        a_close_request_raised_inside_input_waits_for_it(
+            &platform,
+            WindowOptions::default,
+            &move |window| {
+                mock(window).inject_event(flui_platform::PlatformInput::Ime(
+                    flui_platform::ImeEvent::Enabled,
+                ));
+            },
+            Rc::new(move |window| {
+                assert!(
+                    !mock(window).simulate_close(),
+                    "a request raised inside `input` keeps the window for now"
+                );
+            }),
             &|done| done(),
         );
     });
@@ -580,6 +673,10 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
                 headless_handler_methods_reenter,
             ),
             (
+                "a close request raised inside input waits for it",
+                headless_close_request_inside_input_waits_for_it,
+            ),
+            (
                 "a session-end hook replaces itself",
                 headless_session_end_hook_replaces_itself,
             ),
@@ -674,6 +771,7 @@ mod win32 {
         reason = "pumps the owner thread's own Win32 message queue"
     )]
 
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -688,8 +786,9 @@ mod win32 {
     };
 
     use super::{
-        Method, Trigger, Witness, a_handler_dropped_at_close_reaches_the_platform,
-        a_handler_method_reenters, replaced_application_handlers_reach_the_platform, within,
+        Method, Trigger, Witness, a_close_request_raised_inside_input_waits_for_it,
+        a_handler_dropped_at_close_reaches_the_platform, a_handler_method_reenters,
+        replaced_application_handlers_reach_the_platform, within,
     };
 
     fn platform() -> Arc<WindowsPlatform> {
@@ -800,6 +899,49 @@ mod win32 {
         });
     }
 
+    /// A `WM_CLOSE` sent from inside the handler's `input`, inside the window
+    /// procedure that delivers the press: the window procedure keeps the
+    /// window, the handler is asked after `input` returns, and the close it
+    /// grants destroys the window by the posted close.
+    fn close_request_inside_input_waits_for_it() {
+        within("Win32 close request inside input", || {
+            let platform: Arc<dyn Platform> = platform();
+            a_close_request_raised_inside_input_waits_for_it(
+                &platform,
+                hidden,
+                &|window| {
+                    let hwnd = crate::win32_handle(window.as_ref());
+                    // SAFETY: the test opened this window on this thread, which
+                    // owns it, and it is alive (nothing closed it yet); the
+                    // message carries plain integers, a primary press at
+                    // client (10, 10).
+                    unsafe {
+                        SendMessageW(
+                            hwnd,
+                            WM_LBUTTONDOWN,
+                            Some(WPARAM(0x0001)),
+                            Some(LPARAM((0x000a << 16) | 0x000a)),
+                        );
+                    }
+                },
+                Rc::new(|window| {
+                    let hwnd = crate::win32_handle(window.as_ref());
+                    // SAFETY: the window is alive and owned by this thread (the
+                    // send runs inside its own window procedure), and
+                    // `WM_CLOSE` carries no pointers.
+                    unsafe {
+                        SendMessageW(hwnd, WM_CLOSE, None, None);
+                    }
+                    assert!(
+                        flui_platform::PlatformWindow::window_handle(window.as_ref()).is_ok(),
+                        "the window was destroyed inside `input`"
+                    );
+                }),
+                &|done| pump_until(done),
+            );
+        });
+    }
+
     fn replaced_application_handlers() {
         within("Win32 application handlers", || {
             let platform: Arc<dyn Platform> = platform();
@@ -888,6 +1030,10 @@ mod win32 {
                 (
                     "every window handler method opens a window and quits",
                     handler_methods_reenter,
+                ),
+                (
+                    "a close request raised inside input waits for it",
+                    close_request_inside_input_waits_for_it,
                 ),
                 (
                     "replaced application handlers reach the platform",

@@ -100,6 +100,11 @@ enum Delivery {
     Frame(FrameRequest),
     StateChanged,
     Closed,
+    /// A close request: asked with the FIFO idle (`None`, its answer is
+    /// returned), or queued behind a running method or from another thread,
+    /// answered `KeepOpen` then and closed by its action if the handler
+    /// answers `Close` when asked.
+    CloseRequest(Option<DeferredClose>),
     Surface(SurfaceChange),
     /// A deferred [`WindowDelivery::clear`]: queued instead of run inline
     /// when the window's FIFO is already draining (a close issued from inside
@@ -111,6 +116,33 @@ enum Delivery {
 /// Run by a queued clear once the handler is let go (Win32 orders its
 /// window-destroyed notice after the handler's release this way).
 type RetirementNotice = Box<dyn FnOnce() + Send>;
+
+/// Closes a window whose queued close request the handler granted, without
+/// asking it again.
+type DeferredClose = Box<dyn FnOnce() + Send>;
+
+/// Close `window` the way the application would, by an admitted
+/// [`WindowCommand::Close`](flui_platform::WindowCommand::Close), which asks
+/// no handler: the deferred close of a request the handler already granted.
+#[cfg_attr(
+    not(all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )),
+    expect(
+        dead_code,
+        reason = "only the winit loop closes a granted request by command"
+    )
+)]
+pub(crate) fn close_by_command(window: &dyn flui_platform::PlatformWindow) {
+    let closed = flui_platform::WindowCommand::Close
+        .admit(&window.state().capabilities)
+        .map_err(|error| error.to_string())
+        .and_then(|command| window.apply(command).map_err(|error| error.to_string()));
+    if let Err(error) = closed {
+        tracing::warn!(%error, "a granted close request could not close its window");
+    }
+}
 
 struct DispatchState {
     pending: VecDeque<Delivery>,
@@ -209,7 +241,9 @@ pub struct WindowDelivery {
     /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
-    asking_to_close: AtomicBool,
+    /// The answer of the close request asked with the FIFO idle
+    /// ([`Self::dispatch_close_request`]), left by its delivery.
+    close_answer: Mutex<Option<CloseDecision>>,
     /// Publishes the window's snapshot when the window system reports a fact;
     /// see [`Self::set_state_publisher`].
     state_publisher: Mutex<Option<StatePublisher>>,
@@ -264,7 +298,7 @@ impl WindowDelivery {
                 dispatching: false,
             }),
             frames_run,
-            asking_to_close: AtomicBool::new(false),
+            close_answer: Mutex::new(None),
             state_publisher: Mutex::new(None),
             hovered: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -514,6 +548,17 @@ impl WindowDelivery {
                 })
                 .or_resume(());
             }
+            Delivery::CloseRequest(later) => {
+                let decision = call(&self.handler(), |handler| handler.close_requested())
+                    .or_resume(CloseDecision::Close);
+                match later {
+                    None => *self.close_answer.lock() = Some(decision),
+                    Some(close) if decision == CloseDecision::Close => {
+                        contain_owner_callback(close);
+                    }
+                    Some(_) => {}
+                }
+            }
             Delivery::Surface(change) => call(&self.handler(), |handler| {
                 handler.surface_changed(change);
             })
@@ -636,26 +681,45 @@ impl WindowDelivery {
         self.drain(Delivery::Closed);
     }
 
-    /// Ask the handler whether the window closes.
+    /// Ask the handler whether the window closes, in the window's FIFO like
+    /// every other delivery.
     ///
-    /// `true` once the window let go of its handler. Asked again while the
-    /// handler answers, a causally valid answer cannot be given, so the nested
-    /// question is answered `false` (keep the window) without asking; the
-    /// outer answer decides.
-    pub(crate) fn dispatch_should_close(&self) -> bool {
-        if self.asking_to_close.swap(true, Ordering::SeqCst) {
-            return false;
+    /// With the FIFO idle the question is asked now and its answer returned;
+    /// what the handler raises while it answers is queued behind it.
+    /// `Close` once the window let go of its handler. Raised while a method
+    /// of the handler runs (a `WM_CLOSE` sent from inside `input`), or off the
+    /// owner thread, the answer cannot wait: the window is kept for now
+    /// (`KeepOpen`), the question is queued behind the running method, and
+    /// when the handler then answers `Close`, `close_later` closes the window
+    /// without asking again.
+    pub(crate) fn dispatch_close_request(
+        &self,
+        close_later: impl FnOnce() + Send + 'static,
+    ) -> CloseDecision {
+        if !self.handler.is_owner_thread() {
+            self.queue_for_owner(Delivery::CloseRequest(Some(Box::new(close_later))));
+            return CloseDecision::KeepOpen;
         }
-        struct Asked<'a>(&'a AtomicBool);
-        impl Drop for Asked<'_> {
-            fn drop(&mut self) {
-                self.0.store(false, Ordering::SeqCst);
+        let drain = {
+            let mut state = self.dispatch.lock();
+            if state.dispatching {
+                state
+                    .pending
+                    .push_back(Delivery::CloseRequest(Some(Box::new(close_later))));
+                return CloseDecision::KeepOpen;
             }
-        }
-        let _asked = Asked(&self.asking_to_close);
-        let decision = call(&self.handler(), |handler| handler.close_requested())
-            .or_resume(CloseDecision::Close);
-        decision == CloseDecision::Close
+            state.dispatching = true;
+            state.pending.push_back(Delivery::CloseRequest(None));
+            Drain {
+                state: &self.dispatch,
+                active: true,
+            }
+        };
+        let _ = self.run(drain);
+        self.close_answer
+            .lock()
+            .take()
+            .unwrap_or(CloseDecision::Close)
     }
 
     /// Deliver an iOS surface change in its own transaction, even when an

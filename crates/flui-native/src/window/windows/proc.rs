@@ -82,6 +82,32 @@ pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 
 pub(crate) use crate::owner::windows::WindowRef;
 
+/// The close of a `WM_CLOSE` the handler grants after it was asked behind a
+/// running method: a posted [`CLOSE_WINDOW`] naming this window, which the
+/// owner thread takes once the method returned.
+fn granted_close(hwnd: HWND, identity: WindowIdentity) -> impl FnOnce() + Send + 'static {
+    let (low, high) = identity.halves();
+    // The handle as an integer: it is only compared and posted to, never
+    // dereferenced, so it may travel with the queued request.
+    let raw = hwnd.0 as isize;
+    move || {
+        // SAFETY: `PostMessageW` takes a window handle and plain integers by
+        // value and dereferences nothing; the message names the window's
+        // identity, so a handle the system reused by then is left alone.
+        let posted = unsafe {
+            PostMessageW(
+                Some(HWND(raw as *mut _)),
+                CLOSE_WINDOW,
+                WPARAM(low),
+                LPARAM(high),
+            )
+        };
+        if let Err(error) = posted {
+            tracing::warn!(%error, "posting the close a handler granted failed");
+        }
+    }
+}
+
 /// The window context a [`WindowRef`] names: the owner declares the
 /// reference, and the window feature, whose context it is, reaches it.
 impl WindowRef {
@@ -682,9 +708,14 @@ impl WindowProc {
                     tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
-                        // Ask per-window callback if close should proceed; a
-                        // `false` vetoes the close.
-                        if ctx.delivery.dispatch_should_close()
+                        // Ask the handler whether the close proceeds;
+                        // `KeepOpen` vetoes it. Asked behind a running method
+                        // (a `WM_CLOSE` sent from inside `input`), it is kept
+                        // for now and destroyed later, by the posted
+                        // `CLOSE_WINDOW` naming this window, if granted.
+                        let close_later = granted_close(hwnd, ctx.identity);
+                        if ctx.delivery.dispatch_close_request(close_later)
+                            == flui_platform::CloseDecision::Close
                             && let Err(error) = DestroyWindow(hwnd)
                         {
                             tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");

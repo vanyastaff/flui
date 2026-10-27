@@ -1536,12 +1536,17 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::CloseRequested => {
                 tracing::info!(?platform_id, "Window close requested");
 
-                // Ask the window if it should close
-                if window
-                    .as_ref()
-                    .is_some_and(|win| !win.delivery().dispatch_should_close())
-                {
-                    return; // Vetoed
+                // Ask the window's handler; asked behind a running method, the
+                // window is kept for now and closed by command if granted.
+                if window.as_ref().is_some_and(|win| {
+                    let later = Arc::downgrade(win);
+                    win.delivery().dispatch_close_request(move || {
+                        if let Some(window) = later.upgrade() {
+                            crate::owner::window_delivery::close_by_command(&*window);
+                        }
+                    }) == flui_platform::CloseDecision::KeepOpen
+                }) {
+                    return; // Vetoed, or asked later
                 }
 
                 self.complete_window_close(event_loop, platform_id, window.as_ref());
