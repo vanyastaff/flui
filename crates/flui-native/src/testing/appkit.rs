@@ -17,7 +17,13 @@ const EVENT_WAIT: Duration = Duration::from_millis(20);
 /// What `MacOSPlatform::run` does on each turn of its loop, for a test that
 /// owns the main thread instead. The application must have finished
 /// launching.
-pub fn run_for(mtm: MainThreadMarker, span: Duration) {
+///
+/// # Panics
+/// When called off the main thread, the only thread AppKit runs its event
+/// loop on.
+pub fn run_for(span: Duration) {
+    let mtm = MainThreadMarker::new()
+        .expect("`testing::appkit::run_for` is called on the main thread, where AppKit runs");
     let app = NSApplication::sharedApplication(mtm);
     #[expect(
         unsafe_code,

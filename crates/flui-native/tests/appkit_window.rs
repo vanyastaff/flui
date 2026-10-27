@@ -112,7 +112,6 @@ mod cases {
     /// window and settles, so a case that fails part way leaves no window for
     /// the next one.
     struct AppKitFixture {
-        mtm: MainThreadMarker,
         app: Retained<NSApplication>,
         _platform: MacOSPlatform,
         window: Arc<dyn HostWindow>,
@@ -159,7 +158,7 @@ mod cases {
             let mut last = self.window.state().revision;
             let mut quiet_since = Instant::now();
             while Instant::now() < deadline {
-                appkit::run_for(self.mtm, Duration::from_millis(50));
+                appkit::run_for(Duration::from_millis(50));
                 let now = self.window.state().revision;
                 if now == last {
                     if quiet_since.elapsed() >= Duration::from_secs(1) {
@@ -224,7 +223,6 @@ mod cases {
             .expect("an AppKit window opens");
         let ns_window = ns_window_of(window.as_ref());
         let mut fixture = AppKitFixture {
-            mtm,
             app,
             _platform: platform,
             window,
