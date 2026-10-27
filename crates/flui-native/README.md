@@ -45,8 +45,8 @@ an extension of `HostWindow` (`WindowsWindowExt`, `MacOSWindowExt`) that
 answers `None` for another host's window. The Android host starts over the
 Activity `android_main` is handed, through `android_platform(app)`.
 
-- **Windows** — creation, bounds, appearance, fullscreen, and `WindowEvent`
-  dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).
+- **Windows** — creation, bounds, appearance, fullscreen, each fact published
+  in the window's state snapshot and announced by `on_state_changed`.
 - **Events** — native input converted to FLUI-owned pointer and keyboard values
   wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
   applicable W3C vocabularies; native adapters keep their platform contracts

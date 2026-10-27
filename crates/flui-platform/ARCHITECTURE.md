@@ -57,6 +57,14 @@ this one path (ADR-0151 §9).
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
   the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
+- **A window fact has one source: the `WindowState` snapshot (ADR-0254 §1).**
+  `PlatformWindow` has no getter and no per-fact callback beside `state()`
+  and `on_state_changed`; its capabilities are a field of the snapshot.
+  Showing, activating and closing are `WindowCommand`s (`Show`, `Activate`,
+  `Close`, the last admitted by `WindowCapabilities::closes`), with no method
+  twin. `WindowState::is_seen` is the one reading of "the surface is seen":
+  visible and not minimized. A `compile_fail` doctest on the trait pins that
+  a getter does not compile.
 - **"Not here" has one vocabulary.** Every error and outcome that can mean
   absence carries an `Unsupported`, built with `Unsupported::new(reason)` and
   never written as a literal, whose `UnsupportedReason` says why
@@ -68,7 +76,7 @@ this one path (ADR-0151 §9).
   carrier to it.
 - **A closed enum is a decision.** `#![deny(clippy::exhaustive_enums)]`: a
   public enum is `#[non_exhaustive]` where a backend may report something new
-  to an application (`WindowAppearance`, `WindowEvent`, the errors), and
+  to an application (`WindowAppearance`, `WindowCommand`, the errors), and
   closed with an `allow` that says why where its set is fixed by what it
   names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
   where `Custom` is its open end (`TransferFormat`), or where every consumer

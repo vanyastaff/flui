@@ -151,7 +151,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
 
     // Callbacks + metadata
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
     fn name(&self) -> &'static str;
     // ... plus file pickers, app activation, exit policy, preferences and data dirs
 }
