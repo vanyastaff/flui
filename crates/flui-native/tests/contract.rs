@@ -5232,11 +5232,7 @@ mod native_appkit {
     )]
     fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         let platform = flui_native::current_platform().expect("AppKit platform");
-        let window = platform
-            .open_window(
-                WindowOptions::default().with_visible(false),
-                flui_testing::window_handler::RecordingWindowHandler::new(),
-            )
+        let window = crate::Opened::on(&*platform, WindowOptions::default().with_visible(false))
             .expect("AppKit window");
         let RawWindowHandle::AppKit(handle) =
             window.window_handle().expect("live window handle").as_raw()

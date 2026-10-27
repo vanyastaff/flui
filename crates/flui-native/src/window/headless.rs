@@ -350,12 +350,12 @@ pub struct HeadlessWindowSystem {
 /// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
 ///   delivered through the resize path exactly like the winit backend);
 /// - `request_redraw` dispatching through the window handler on the
-///   owner thread, a request from another thread in the owner's next turn
-///   ([`WindowDelivery`]), like a real backend's frame wire;
+///   owner thread, a request from another thread in the owner's next turn,
+///   like a real backend's frame wire;
 /// - programmatic event injection ([`Self::inject_event`]) and lifecycle
 ///   simulation (`simulate_resize` / `simulate_focus` /
-///   `simulate_visibility` / `simulate_close`), each firing the same
-///   registered callback a real platform would.
+///   `simulate_visibility` / `simulate_close`), each calling the same
+///   handler method a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned

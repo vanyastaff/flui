@@ -9,6 +9,7 @@
 
 #[cfg(not(target_os = "android"))]
 use crate::app::runner::window_routes::OpenRouted as _;
+#[cfg(not(target_os = "android"))]
 use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]

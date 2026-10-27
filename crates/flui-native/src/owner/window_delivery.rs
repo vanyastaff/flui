@@ -107,8 +107,8 @@ enum Delivery {
     Clear(Option<RetirementNotice>),
 }
 
-/// Run by a queued clear once the handler is let go; see
-/// [`WindowDelivery::clear_then`].
+/// Run by a queued clear once the handler is let go (Win32 orders its
+/// window-destroyed notice after the handler's release this way).
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
 struct DispatchState {
