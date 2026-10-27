@@ -3458,6 +3458,14 @@ delivers the capability snapshot (`PlatformInput::Capabilities`, the
 backend's availability table from `input::availability` with the presence its
 device registry reports) as the handler's first `input`, before the open
 returns, and every later capability change in order with the input around it.
+A close request is a delivery of the same FIFO: asked at once when nothing
+runs, and raised behind a running method (a `WM_CLOSE` sent from inside
+`input`) it keeps the window for now and is asked after the method returns,
+a granted one closing the window by the host's deferred close (Win32 posts
+`CLOSE_WINDOW`, winit and headless close by command, AppKit sends `close`).
+A delivery raised on another thread (a command applied from a worker
+publishes the window's state there) is queued and delivered in an owner turn
+the window asks for (`WindowDelivery::resume_through`; winit and headless).
 The host keeps no input for a handler still to come: a handler that cannot
 take its input yet keeps it itself (`flui-app`'s `WindowRoutes` holds what
 arrives before the window's presentation exists and hands it over in order).
