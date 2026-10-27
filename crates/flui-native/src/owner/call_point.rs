@@ -272,11 +272,7 @@ impl<'a, G: ?Sized + Guarded, H> Field<'a, G, H> {
 
     /// The same field, taking a handler back only while `accepts` answers
     /// `true`.
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        all(test, not(target_arch = "wasm32"))
-    ))]
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
     pub(crate) fn restoring_while<A: Fn() -> bool>(self, accepts: A) -> Field<'a, G, H, A> {
         Field {
             state: self.state,

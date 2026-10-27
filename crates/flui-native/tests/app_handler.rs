@@ -103,7 +103,7 @@ fn a_report_before_the_handler_is_heard_after_ready() {
     let events = platform.host_events();
     events.notice(SystemNotice::Sleep);
     let log = AppLog::new();
-    let inside = events.clone();
+    let inside = events;
     let kept = Rc::new(Cell::new(None));
     let keep = Rc::clone(&kept);
     log.bootstrap(move |owner| {

@@ -1161,10 +1161,9 @@ fn finish_open_secondary_window(
     // `request_ui_runtime_uninstall`, which would tear down the WHOLE shared
     // ui_runtime out from under a still-open sibling window.
     //
-    // No `on_quit` registration here — that is a single platform-level
-    // callback slot the FIRST window's bootstrap already owns
-    // (`Platform::on_quit`/`SharedPlatform::on_quit` replace, never stack);
-    // registering a second one here would silently steal the first window's
+    // No quit route here — that is the run's single route, which the FIRST
+    // window's bootstrap already set (`route_quit` replaces, never stacks);
+    // setting another here would silently steal the first window's
     // Detached-lifecycle notification on process quit instead of adding to
     // it. The loop-owned quit callback visits every installed ui_runtime once,
     // including this window's ui_runtime, after any active dispatch restores it.

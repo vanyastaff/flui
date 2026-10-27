@@ -419,8 +419,8 @@ mod native_windows {
             window_opened_by_the_exit_policy_keeps_the_loop,
         ),
         (
-            "panicking_exit_policy_vetoes_and_stays_installed",
-            panicking_exit_policy_vetoes_and_stays_installed,
+            "panicking_exit_policy_vetoes_and_is_asked_again",
+            panicking_exit_policy_vetoes_and_is_asked_again,
         ),
         (
             "press_captures_the_mouse_until_the_last_release",
@@ -5108,7 +5108,7 @@ mod native_windows {
         );
     }
 
-    fn panicking_exit_policy_vetoes_and_stays_installed() {
+    fn panicking_exit_policy_vetoes_and_is_asked_again() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let calls = Arc::new(AtomicUsize::new(0));
         let releaser = Arc::new(Mutex::new(None));

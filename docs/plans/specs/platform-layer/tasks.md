@@ -3170,6 +3170,65 @@ graph LR
   305; rustdoc `--document-private-items` нашёл ссылку на удалённый `set_material`
   (исправлено). Не запускалось: Mac и iPhone для новых путей (материал macOS, частота кадров iOS,
   края iOS из чужого потока) — запрошено у владельца; `cross-typecheck`; браузер.
+- [x] **LY45** — ветка `platform/app-handler`, от `main` @ `e93d756f4` (LY44 влит), `main` с
+  vanyastaff/flui#1917 (LY43) влит слиянием. **Ядро.** `AppHandler` (`platform.rs`): `ready(OwnerPlatform)
+  -> Result<(), BootstrapError>`, `quit_requested`, `reopen`, `session_end(phase) -> SessionEndAnswer`,
+  `host_notice`, `exit_policy -> bool`, `wake_deadline -> Option<Instant>`; каждый метод, кроме
+  `ready`, получает `&OwnerPlatform` (ADR-0254 §4), умолчаний нет, трейт не `Send`.
+  `Platform::run(self: Box<Self>, Rc<dyn AppHandler>)`. Удалены `PlatformReadyCallback`,
+  `PlatformHandlers`, `SessionEndHook`, `on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`,
+  `on_open_urls`, `set_exit_policy_hook`, `set_wake_deadline_hook` (у `Platform`, `OwnerPlatform`,
+  `SharedPlatform`, `host::Loop`, `host::Lifecycle`, `LifecycleHooks`), `NoticeChannel::set_hook`,
+  `SharedField` и `Once` точки вызова, учёт идентичности хука в дедлайне Win32 (у прогона один
+  обработчик). `on_keyboard_layout_change` остаётся регистрацией до LY55 (хранится рядом с
+  загрузкой цикла: `HeadlessState::keyboard_layout_changed`, Win32 `AppHooks`).
+  **Доставка** — `owner/app_delivery.rs`, `AppDelivery` у каждого цикла: обработчик в owner-слоте
+  (`bind` при `run`, на потоке владельца), платформа и owner-хуки — слабо (платформа владеет циклом,
+  который владеет доставкой; цикл держит их сильно на время `run`), `OwnerPlatform` чеканится на
+  каждый вызов. Сообщения (выход, reopen, notice) идут одной FIFO: принятое до `bind`, во время
+  `ready` или другого метода, с чужого потока — ждёт и доставляется по порядку на владельце
+  (ход сигнала владельца, `resume_through_signal`, на всех хостах); выход доходит один раз за прогон.
+  Вопросы (конец сеанса, политика выхода, дедлайн) задаются сразу, повторно-входно; сообщение,
+  поднятое во время ответа, ждёт ответа. Без обработчика хост отвечает сам (`Proceed`, свой
+  умолчательный выход, без дедлайна). Паника метода сдерживается, хвост доставляется, первая
+  паника возвращается. `release` в конце прогона: при раскрутке обработчик удерживается навсегда,
+  а не остаётся в таблице потока (иначе его захваты падали бы при выходе потока —
+  `deadline_query_unwind_retains_hostile_captures`). `SystemNotices` строится поверх доставки
+  (`H::notices(&app)`), помечает устаревшее при пробуждении и передаёт. Хосты: Win32 (`RunGuard`
+  сообщает выход и отпускает; хуки объявлены до охраны), winit (связывание в `resumed`), AppKit
+  (`LoopControl` и `WakePump` поверх доставки; reopen сохраняет очередь и забор выхода), UIKit,
+  Android, Web, headless. `HeadlessHostEvents::reopen` — новый ввод для тестов.
+  **`flui-app`.** `app_handler(bootstrap)` (`runner/host.rs`): `ready` — загрузка раннера; конец
+  сеанса и notice — во все UI runtime; выход, reopen, политика выхода и дедлайн — по маршрутам
+  `AppRoutes` (`route_quit`, `route_reopen`, `route_exit_policy`, `route_wake_deadline`), которые
+  ставит загрузка; каждая установка владельца начинает маршруты заново, обработчик отвечает только
+  за свою установку. Регистраций колбэков у раннеров нет. Без маршрута: выход и reopen никуда,
+  выход из цикла запрещён, дедлайна нет; прямой режим ставит `route_exit_policy(|| true)`.
+  **Решение сверх строки (для владельца):** `flui-app` не использует `&OwnerPlatform` из методов —
+  его маршруты читают TLS `APP_RUNTIME`, как раньше хуки.
+  **Тесты** (откат проверен): `app_handler_obligation_table` (`tests/app_handler.rs`; строки
+  `ready`, выход, reopen, конец сеанса с ответом, notice, политика выхода, сообщение до
+  обработчика, паника метода, дедлайн на Win32); `app_delivery_contracts` (юнит, 10 строк);
+  `handler_reentry` — каждый метод `AppHandler` открывает окно, сообщает notice и выходит изнутри
+  вызова, прогон внутри обработчика связывает свой (вместо «замены обработчика»: заменить его
+  API нет); `explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock`,
+  `winit_exit_policy_runs_outside_the_state_lock`, `a_due_deadline_gets_one_modal_frame_per_generation`,
+  `web_session_end_handler_reenters_the_platform`. Откаты: без очереди до `bind` падают «a report
+  before ready waits for it», «a failed bootstrap keeps the reports» и «a report before the handler
+  is heard after ready»; без доставки хвоста после паники — «a panicking method …» в обеих
+  таблицах; без «выход один раз» — по строке в обеих таблицах и `handler_reentry` (headless-тест
+  выхода виснет); без ожидания ответа на вопрос — «a report raised inside a question …»; с
+  `retire(binding)` вместо выемки обработчика — `deadline_query_unwind_retains_hostile_captures`
+  (abort процесса); с хуками Win32 после охраны — «a failing exit policy keeps the loop» и «the wake
+  deadline is asked and kept». Удалены строки замены хуков (замены нет) и строки очереди
+  `SystemNotices` (очередь теперь в доставке, её строки — в `app_delivery_contracts`).
+  Тесты, вызывавшие `quit()` внутри загрузки и ждавшие хука там же, выполняют сценарий после неё
+  (`after_bootstrap`). `.stderr` `host_table_names_every_position` и
+  `platform_and_host_window_are_sealed` перегенерированы (сдвиг строк).
+  Документы: ARCHITECTURE.md ядра, README ядра, `docs/architecture.md`, `docs/gaps.md` (запись 13),
+  `docs/platform-parity.md` (заметка о диплинках, ячейки без изменений),
+  `changelog.d/platform-app-handler.md`.
+  Проверки: CHECKS_PLACEHOLDER
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

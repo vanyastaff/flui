@@ -342,9 +342,7 @@ where
         // before lifecycle observers run.
 
         // Native close and quit both revoke this binding before observers run.
-        owner_platform_installed(|owner| {
-            installation.terminal_callbacks();
-        });
+        installation.terminal_callbacks();
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
@@ -578,7 +576,7 @@ impl AndroidFrameDriver {
 
             let has_pending = ui_runtime.has_pending_work();
             // See the desktop closure's matching comment: a wake-
-            // deadline source (here, `set_wake_deadline_hook` forces
+            // deadline source (here, the routed wake deadline forces
             // a dispatch once due — `flui-native`'s
             // `owner/android/looper.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and

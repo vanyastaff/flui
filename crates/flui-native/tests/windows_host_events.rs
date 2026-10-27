@@ -175,7 +175,7 @@ fn a_query_the_host_lets_through_is_allowed() {
     );
 }
 
-fn without_a_hook_a_query_is_allowed() {
+fn without_a_handler_a_query_is_allowed() {
     let platform = WindowsPlatform::new().expect("native Windows platform");
     let receiver = receiver_of_this_thread();
     // SAFETY: a pointer-free message to this platform's own receiver.
@@ -292,8 +292,8 @@ fn native_host_events() {
             a_query_the_host_lets_through_is_allowed,
         ),
         (
-            "without_a_hook_a_query_is_allowed",
-            without_a_hook_a_query_is_allowed,
+            "without_a_handler_a_query_is_allowed",
+            without_a_handler_a_query_is_allowed,
         ),
         (
             "a_critical_session_end_cannot_be_blocked",

@@ -695,6 +695,10 @@ pub(crate) fn route_exit_policy(route: impl Fn() -> bool + 'static) {
 }
 
 /// Answer the platform's wake-deadline question with `route`.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(dead_code, reason = "the web host has no idle wait to bound")
+)]
 pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> + 'static) {
     set_route(
         |routes| &mut routes.wake_deadline,

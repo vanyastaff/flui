@@ -83,7 +83,7 @@ secrets).
 | Memory pressure | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | — | ❌ | Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device. |
 | Bring the app forward, request attention | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows `activate` re-foregrounds whatever is already in front; Wayland needs an `xdg-activation` token |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself |
-| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | `on_open_urls` is never called, at cold start or while running; the Web entry URL is under history routing |
+| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing |
 | State restoration | — | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state` |
 | Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process) | ❔ | 🟡 | ❌ | 🟡 | — | — | — | — | No activation token is requested or passed on Wayland; Windows `activate` re-foregrounds the current foreground window without `AllowSetForegroundWindow`. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited. |
 | App identity (AUMID, bundle ID, `.desktop` file) | ❔ | ❔ | ❔ | ❔ | — | — | — | — | Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited |

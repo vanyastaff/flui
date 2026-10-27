@@ -2,13 +2,13 @@
 //!
 //! # Why this module exists
 //!
-//! `install_wake_deadline_hook` publishes the earliest wall-clock instant the
+//! The application's handler answers the earliest wall-clock instant the
 //! event loop should come back at. `winit` hands that to
 //! `ControlFlow::WaitUntil` and the Android backend checks it once per
 //! iteration of its own loop. AppKit has neither: `[NSApplication run]` is an
-//! opaque, unbounded run loop, so its default `set_wake_deadline_hook` (a
-//! no-op) dropped the deadline on the floor and the process parked in
-//! `_nextEventMatchingEventMask:untilDate:` with the hook never consulted.
+//! opaque, unbounded run loop, so a deadline nothing actuated was dropped
+//! on the floor and the process parked in
+//! `_nextEventMatchingEventMask:untilDate:` with the handler never asked.
 //! This module is that deadline's landing place.
 //!
 //! # The two things that make the shape what it is
@@ -125,7 +125,7 @@ impl WakePump {
     }
 
     /// Ask the pump to make the loop come back. Called from `request_redraw`
-    /// (and once from `set_wake_deadline_hook`), i.e. whenever a frame is
+    /// (and once as the run binds the application's handler), i.e. whenever a frame is
     /// about to happen.
     pub(crate) fn arm(self: &Arc<Self>) {
         // The hook is not consulted here. The caller is inside the owner's
