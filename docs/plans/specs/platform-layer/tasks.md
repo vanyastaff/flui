@@ -2805,6 +2805,76 @@ graph LR
   WSL: clippy без признаков, с `winit-backend` и `--all-features`; nextest под xvfb — 444, 341,
   296; rustdoc обоих вариантов. Не запускалось: Mac и iPhone
   (vanyastaff/flui#1840), `cross-typecheck`, браузер.
+- [x] **LY44** — ветка `platform/window-handler`, начата на вершине LY42 `9ae010429`, после слияния
+  vanyastaff/flui#1914 перенесена на `main` @ `620d37f82`. **Контракт.** `flui-platform`:
+  `WindowHandler` (`!Send`), шесть обязательных методов по обязательствам — `input` →
+  `DispatchEventResult`, `state_changed`, `frame_requested(FrameRequest)`, `close_requested` →
+  `CloseDecision { Close, KeepOpen }`, `closed`, `surface_changed(SurfaceChange { Release,
+  Rebuild })`; каждый получает `OwnerThread` — `!Send`-доказательство потока владельца, которое
+  чеканит только вызов, держащий `Rc` обработчика. `PlatformWindow` потерял `on_input`,
+  `on_state_changed`, `on_request_frame`, `on_close`, `on_should_close`,
+  `on_surface_status_change`. **Ядро.** `open_window(options, Rc<dyn WindowHandler>)` у `Platform`,
+  `OwnerPlatform` и `Window::open` каждого хоста; `HostPlatform` отдаёт снимок возможностей первым
+  `input` до возврата из открытия (winit — в конце `create_window_now`, iOS — в `create`).
+  `WindowCallbacks`, `impl_window_callback_setters!`, инертные умолчания, очередь раннего ввода,
+  снимок «ещё не зарегистрирован» (ADR-0213 §3) и защёлка `clear()` (ADR-0063 §5) удалены; вместо них
+  `owner/window_delivery.rs` — `WindowDelivery`: обработчик в `OwnerSlot`, причинная FIFO окна,
+  вызов через точку вызова LY26 (клон `Rc` на время вызова, обработчик остаётся на месте и может быть
+  вызван изнутри себя). Доставка изнутри метода ждёт его конца, вложенный ввод отвечает отложенной
+  формой (`DEFERRED`, клавиша — `DEFERRED_UNHANDLED`), вложенный `close_requested` — `KeepOpen` без
+  вопроса; паника метода не теряет хвост очереди — он доставляется, каждый в своей защите, первая
+  паника возобновляется после; паника на снимке сдерживается, ввод за ним доставляется; `closed` —
+  последнее обязательство; `clear` встаёт в очередь, если она осушается (закрытие изнутри метода), и
+  клон, оказавшийся последним, уходит в точку вызова, которая роняет его вне локов. Запечатанный
+  `HostWindow` отдаёт доставку (`Sealed::delivery`). Отложенное открытие:
+  `PlatformProxy::open_window(WindowRequest)`, `WindowRequest { options, handler:
+  WindowHandlerFactory }` — `Send`-фабрика, которую `build_on_owner` выполняет на владельце (паника
+  фабрики — `OpenWindowError::Backend`, полезная нагрузка удерживается); блокирующее открытие winit
+  не с потока владельца — `Unavailable` (обработчик `!Send`). iOS спрашивает обработчик окна сеанса у
+  потребителя сцены до создания окна; ошибка — сцена отклонена. **`flui-app`.** Каждое окно
+  открывается с `WindowRoutes` (`runner/window_routes.rs`): маршрут каждого обязательства
+  ставится, когда появляется представление; ввод до маршрута отвечает результатом по умолчанию,
+  возможности сохраняются и отдаются маршруту ввода; `closed`, услышанное раньше маршрута, запускает
+  его сразу; маршрут, который запаниковал, остаётся. `RouteBook` в `AppRuntime` по `WindowId`.
+  Регистраций колбэков нет. `AppConfig::input_latency` (`with_input_latency`) попадает в
+  `WindowOptions`, их читают Web и Android. **Тестовый набор.** `flui_testing::window_handler` —
+  `RecordingWindowHandler` (`react_to_*`, `calls`, `inputs`, `count`) и `HandlerCall`; открытия
+  окон в тестах всех крейтов перешли на него.
+  Тесты (откат проверен): `window_handler_obligation_table` (`flui-native`, юнит) — без доставки
+  хвоста после паники, без отложенного ответа вложенному вводу, с `true` на вложенный вопрос
+  закрытия, без проверки `closed` падает; `input_capabilities_contracts` —
+  `the_first_event_after_open_reaches_the_handler` (без снимка при открытии падают он и ещё пять
+  строк), `a_panic_on_the_snapshot_loses_no_input` (снимок через `or_resume` вместо сдерживания),
+  `a_native_event_during_a_callback_is_queued_not_dropped` (ответ по умолчанию вместо `DEFERRED`),
+  `input_raised_from_input_is_delivered_after_it`; `handler_reentry` — каждый из шести методов
+  открывает окно, меняет своё и завершает приложение изнутри вызова (headless; Win32 — пять, без
+  `surface_changed`), `a_handler_dropped_at_close_reaches_the_platform`: с локом состояния окна,
+  удержанным на `dispatch_close`, headless-случай виснет и падает по таймауту;
+  `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` — запрос за упавшим кадром доставлен,
+  вложенное закрытие отвечает `KeepOpen`, закрытие из упавшего метода завершается и окно отпускает
+  обработчик (без доставки хвоста и с `Some(handler)` в `Shared::restore` падает);
+  `window_routes_contract` (`flui-app`; без немедленного запуска услышанного `closed` падает);
+  строка `the_input_latency_is_kept` в `config_to_options_keeps_every_field` (без переноса из
+  конфига падает); trybuild `ui_pass/window_handler_holds_rc.rs`. Удалены строки, чьё состояние
+  стало невыразимым: Win32 `deadline_window_without_frame_callback_does_not_spin` и
+  `deadline_hidden_window_without_frame_callback_does_not_spin`, строки очереди раннего ввода и
+  замены колбэка ввода. `globals` — 57, `module-dag` `flui-native` — 300 модулей, 323 ребра.
+  Документы: ARCHITECTURE.md `flui-platform` и `flui-native`, README `flui-native`,
+  `docs/architecture.md`, `docs/gaps.md` (имя метода), `changelog.d/platform-window-handler.md`;
+  `docs/platform-parity.md` не тронут — поддержка платформ не изменилась.
+  Проверки (Windows): `cargo fmt`; clippy `-D warnings` рабочего пространства `--all-targets`
+  обычный и с `flui-native/winit-backend,flui/native`; nextest `flui-platform`, `flui-native`,
+  `flui-app`, `flui-testing`, `flui-view`, `flui-runtime`, `flui-interaction`, `flui-sdk` — 702 из
+  703 (16 пропущены), `flui-native` с `winit-backend` и `flui-app` — 367 из 368 (оба раза падает
+  только trybuild `owner_thread_token_has_no_default` с `main`), `flui --features native` — 10;
+  trybuild `flui-platform`; clippy Android `-p flui-native -p flui-app --all-targets`, macOS
+  `--all-targets` (clang и llvm-ar LLVM) обычный и с `winit-backend`, iOS lib `flui-native`
+  (`DOCS_RS=1`), wasm32 lib четырёх крейтов; Linux кросс-clippy с Windows (clang LLVM)
+  `--all-targets` пяти крейтов без признаков, с `winit-backend` и `flui-native --all-features`,
+  rustdoc `--document-private-items -D warnings` Linux обоих вариантов и Windows; `checks`,
+  `doc-strict`, `wasm-check`, `wasm-test` — 51. Не запускалось: WSL (песочница агента не пускает
+  `wsl`) — nextest под xvfb для winit/X11 и headless на Linux; Android-устройство; Mac и iPhone
+  (vanyastaff/flui#1840); браузер (`web_browser` только собран под wasm32); `cross-typecheck`.
 - [x] **LY49** — ветка `platform/host-only-core`, начата на вершине LY41
   (`origin/platform/snapshot-consumers` @ `87977afc3`), после слияния vanyastaff/flui#1912 перенесена
   на `main` @ `c50202c7a` (дерево то же). **В ядро, `pub(crate)`.** Модель `drag/offers.rs`
