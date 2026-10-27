@@ -1,9 +1,11 @@
 //! Drag and drop: the OS transport behind the data-transfer contract
 //! (ADR-0038, ADR-0211, ADR-0151 §10).
 //!
-//! The model is `offers`: what a drag that names its representations by media
-//! type offers, and the payload their bytes carry, which the Android and Web
-//! files share. Beside it, one file per platform holds the host's one
+//! The model is `offers`: the offer table every source mints its ids in, the
+//! producer half of a delivery, the URI list the hosts that read paths or
+//! URIs share, and what a drag that names its representations by media type
+//! offers and the payload their bytes carry, which the Android and Web files
+//! share. Beside it, one file per platform holds the host's one
 //! `DataTransferSource` (the drag position of its table) and what a window
 //! needs to take and start drags:
 //!
@@ -24,8 +26,7 @@
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
 pub(crate) mod headless;
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
-mod offers;
+pub(crate) mod offers;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod web;
 #[cfg(any(windows, test))]

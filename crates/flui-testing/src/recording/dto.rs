@@ -1271,7 +1271,7 @@ impl TryFrom<&KeyEvent> for KeyEventDto {
                 KeyState::Up => KeyStateDto::Up,
             },
             key: match &event.key {
-                Key::Character(text) => KeyDto::Character(text.as_str().to_owned()),
+                Key::Character(text) => KeyDto::Character(text.clone()),
                 Key::Named(named) => KeyDto::Named(named.as_str().to_owned()),
                 _ => return Err(unmirrored("Key")),
             },

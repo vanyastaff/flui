@@ -17,7 +17,7 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
+use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
     WindowGeometry, WindowOptions, WindowState,
@@ -25,6 +25,7 @@ use flui_platform::{
 use parking_lot::Mutex;
 
 use crate::host::{self, WindowFacets, WindowPositions};
+use crate::input::regions::ProjectedInputRegions;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,

@@ -59,10 +59,12 @@ mod crossing {
     use flui_platform::UnsupportedReason;
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferImage, TransferPayload, TransferUri,
+        TransferPayload,
     };
     use flui_platform::drag::IDENTITY_ESSENCE;
     use flui_platform::pointer::PointerKind;
+
+    use crate::drag::offers::TransferUri;
 
     /// `DROPEFFECT_COPY`.
     pub(super) const EFFECT_COPY: u32 = 1;
@@ -237,7 +239,8 @@ mod crossing {
         match (native, payload) {
             (NativeFormat::UnicodeText, TransferPayload::Text(text)) => Some(encode_text(text)),
             (NativeFormat::Html, TransferPayload::Html(markup)) => Some(encode_html(markup)),
-            (NativeFormat::FileDrop, TransferPayload::UriList(uris)) => {
+            (NativeFormat::FileDrop, payload) => {
+                let uris = TransferUri::list_of(payload)?;
                 let paths: Vec<&std::path::Path> = uris
                     .iter()
                     .filter_map(|uri| match uri {
@@ -248,7 +251,6 @@ mod crossing {
                 (!paths.is_empty()).then(|| encode_file_drop(&paths))
             }
             (NativeFormat::Named(_), TransferPayload::Custom { bytes, .. }) => Some(bytes.to_vec()),
-            (NativeFormat::Named(_), TransferPayload::Image(image)) => Some(image.bytes.to_vec()),
             _ => None,
         }
     }
@@ -270,9 +272,8 @@ mod crossing {
         match (native, format) {
             (NativeFormat::UnicodeText, _) => decode_text(bytes).map(TransferPayload::Text),
             (NativeFormat::Html, _) => decode_html(bytes).map(TransferPayload::Html),
-            (NativeFormat::FileDrop, _) => decode_file_drop(bytes).map(|paths| {
-                TransferPayload::UriList(paths.into_iter().map(TransferUri::Path).collect())
-            }),
+            (NativeFormat::FileDrop, _) => decode_file_drop(bytes)
+                .map(|paths| TransferUri::list_payload(paths.into_iter().map(TransferUri::Path))),
             // The identity is read from the descriptor; its payload is empty, as
             // the source runtime serves it.
             (NativeFormat::Named(name), _) if is_identity(name) => Ok(TransferPayload::Custom {
@@ -280,10 +281,10 @@ mod crossing {
                 bytes: Arc::from(Vec::new()),
             }),
             (NativeFormat::Named(_), TransferFormat::Image { mime }) => {
-                Ok(TransferPayload::Image(TransferImage {
+                Ok(TransferPayload::Custom {
                     mime: mime.clone(),
                     bytes: Arc::from(bytes),
-                }))
+                })
             }
             (NativeFormat::Named(_), TransferFormat::Custom { mime }) => {
                 Ok(TransferPayload::Custom {
@@ -518,9 +519,8 @@ use flui_foundation::DataTransferId;
 use flui_platform::{
     Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-        RepresentationDescriptor, RepresentationIndex, TransferError, TransferLimits,
-        TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
+        RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },
     drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
     pointer::PointerKind,
@@ -552,6 +552,7 @@ use windows_core::{ComObject, HSTRING};
 
 #[cfg(windows)]
 use crate::{
+    drag::offers::OfferTable,
     owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
     owner::slot::OwnerSlot,
@@ -720,9 +721,7 @@ impl OleTransfer {
         let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
         let id = {
             let mut offers = self.offers.lock();
-            let id = offers
-                .table
-                .mint(OfferRecord::new(Arc::clone(&representations)));
+            let id = offers.table.mint(Arc::clone(&representations));
             offers.feedback.insert(id, DropFeedback::default());
             id
         };

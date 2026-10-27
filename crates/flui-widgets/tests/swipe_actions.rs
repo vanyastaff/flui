@@ -320,7 +320,7 @@ pub(crate) fn swipe_actions_leave_the_system_edges_to_the_os() {
         let excluded = laid.window().input_region_updates().iter().any(|update| {
             update
                 .iter()
-                .any(|region| region.kind() == InputRegionKind::SystemGestureExclusion)
+                .any(|(kind, _)| *kind == InputRegionKind::SystemGestureExclusion)
         });
         assert!(!excluded, "{name}: the row excludes no system gesture");
     }

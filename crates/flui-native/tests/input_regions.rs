@@ -7,7 +7,7 @@ use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
+use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{DispatchEventResult, PlatformInput};
 use parking_lot::Mutex;
 
@@ -39,8 +39,8 @@ fn mock(window: &Arc<dyn HostWindow>) -> &MockWindow {
     window.as_any().downcast_ref::<MockWindow>().expect("mock")
 }
 
-fn device(left: i32, top: i32, right: i32, bottom: i32) -> DeviceInputRegion {
-    DeviceInputRegion::new(
+fn device(left: i32, top: i32, right: i32, bottom: i32) -> (InputRegionKind, DeviceRect) {
+    (
         EXCLUSION,
         DeviceRect::from_min_max(DevicePoint::new(left, top), DevicePoint::new(right, bottom)),
     )

@@ -30,6 +30,7 @@ pub mod assembly;
 pub mod availability;
 #[doc(hidden)]
 pub mod keys;
+pub(crate) mod regions;
 pub(crate) mod scroll;
 
 #[doc(hidden)]

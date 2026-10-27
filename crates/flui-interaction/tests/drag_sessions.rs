@@ -27,9 +27,8 @@ use flui_interaction::{
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationIndex, TransferActions, TransferCompleter, TransferFormat, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
+    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
@@ -76,8 +75,12 @@ struct RecordingSource {
     concluded: Mutex<Vec<DataTransferId>>,
     /// Concluding a drop panics, as a failing backend would.
     fail_conclude: std::sync::atomic::AtomicBool,
-    requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
+    /// Each request with the claim slot a backend completes it through.
+    requests: Mutex<Vec<(DataTransferId, RepresentationIndex, Completer)>>,
 }
+
+/// The producer half a backend keeps of a pending request.
+type Completer = flui_foundation::ClaimSlot<Result<TransferPayload, TransferError>>;
 
 impl DataTransferSource for RecordingSource {
     fn clipboard_offer(&self) -> Option<DataTransferOffer> {
@@ -90,9 +93,9 @@ impl DataTransferSource for RecordingSource {
         representation: RepresentationIndex,
         _limits: TransferLimits,
     ) -> TransferRequest {
-        let (request, completer) = TransferRequest::channel();
+        let (completer, handle) = flui_foundation::claim_slot(Arc::new(|| {}));
         self.requests.lock().push((id, representation, completer));
-        request
+        TransferRequest::pending(handle)
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
@@ -320,7 +323,8 @@ struct Fixture {
     source: Arc<RecordingSource>,
     probe: Rc<Probe>,
     hit: HitTestHandle,
-    offers: RefCell<OfferTable>,
+    /// How many offers the simulated OS minted: the next one's slot.
+    offers: Cell<u32>,
     presentation: PresentationId,
     windows: RefCell<Vec<Arc<dyn PlatformWindow>>>,
     /// The pointer kinds an OS drag's hit tests asked for, in order.
@@ -369,7 +373,7 @@ impl Fixture {
             source,
             probe,
             hit,
-            offers: RefCell::new(OfferTable::new()),
+            offers: Cell::new(0),
             presentation: presentation(1),
             windows: RefCell::default(),
             hit_kinds: Rc::default(),
@@ -437,15 +441,13 @@ impl Fixture {
 
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
         let representations: Arc<[_]> = Arc::from(vec![
             flui_platform::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },
         ]);
-        let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-        DataTransferOffer::new(id, representations)
+        DataTransferOffer::new(self.mint(), representations)
     }
 
     fn start(&self, window: Arc<dyn PlatformWindow>, allowed: AllowedActions) -> DragSession {
@@ -481,12 +483,16 @@ impl Fixture {
     }
 
     fn offer_for(&self, request: &OsDragRequest) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
-        let id = table.mint(OfferRecord::new(Arc::from(request.representations.clone())));
-        DataTransferOffer::new(
-            id,
-            Arc::clone(table.get(id).expect("live").representations()),
-        )
+        DataTransferOffer::new(self.mint(), Arc::from(request.representations.clone()))
+    }
+
+    /// A fresh offer id, as the OS's one table mints it: never one minted
+    /// before.
+    fn mint(&self) -> DataTransferId {
+        let slot = self.offers.get();
+        self.offers
+            .set(slot.checked_add(1).expect("the test mints few offers"));
+        DataTransferId::new_gen(slot, std::num::NonZeroU32::MIN)
     }
 
     fn deliver(&self, presentation: PresentationId, event: DragDropEvent) {
@@ -1114,17 +1120,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             on_drop: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
-        let offer = {
-            let mut table = f.offers.borrow_mut();
-            let representations: Arc<[_]> = Arc::from(vec![
-                flui_platform::data_transfer::RepresentationDescriptor {
-                    format: TransferFormat::Text,
-                    declared_len: None,
-                },
-            ]);
-            let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-            DataTransferOffer::new(id, representations)
-        };
+        let offer = f.text_offer();
         let id = offer.id();
         let here = Some(Point::new(5.0, 5.0));
         f.deliver(
@@ -1434,7 +1430,7 @@ fn value_is_redeemed_only_in_source_runtime() {
             .pop()
             .expect("the text was requested");
         assert_eq!((asked, index), (id, RepresentationIndex(0)));
-        completer.complete(provider(index));
+        drop(completer.deliver(provider(index)));
         let fetch = target
             .fetched
             .borrow_mut()
@@ -2537,7 +2533,7 @@ fn the_last_fetch_resolved_off_thread_wakes_the_owner() {
         );
         assert_eq!(f.owner.next_deadline(), None, "nothing to conclude yet");
 
-        completer.complete(Ok(TransferPayload::Text("hello".into())));
+        drop(completer.deliver(Ok(TransferPayload::Text("hello".into()))));
         std::thread::spawn(move || {
             let mut fetch = std::pin::pin!(fetch);
             let mut context = std::task::Context::from_waker(std::task::Waker::noop());

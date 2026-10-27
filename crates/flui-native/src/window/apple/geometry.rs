@@ -797,7 +797,9 @@ pub(crate) mod screen_edges {
     //! `preferredScreenEdgesDeferringSystemGestures`).
 
     use flui_foundation::geometry::Size;
-    use flui_platform::input_regions::{DeviceInputRegion, InputRegionKind};
+    use flui_platform::input_regions::InputRegionKind;
+
+    use crate::input::regions::DeviceInputRegion;
 
     /// The window edges whose system gestures the application asks the OS to defer.
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]

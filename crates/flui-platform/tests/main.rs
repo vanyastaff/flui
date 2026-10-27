@@ -12,9 +12,6 @@ mod flag_sets;
 #[path = "haptics.rs"]
 mod haptics;
 
-#[path = "input_regions.rs"]
-mod input_regions;
-
 #[path = "display.rs"]
 mod display;
 
