@@ -42,6 +42,7 @@ mod native_text_sizing;
 ))]
 mod placement;
 mod window_install;
+pub(in crate::app) mod window_routes;
 
 mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
@@ -124,6 +125,15 @@ pub(crate) fn presentation_window(
 pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'static str) {
     if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
         tracing::warn!(%error, why, "a discarded window did not close");
+    }
+}
+
+/// Close a window whose close request, held until its presentation could be
+/// asked, the presentation granted: the window system's request was answered
+/// already, so the close is the application's command.
+pub(crate) fn close_granted_request(window: &dyn flui_platform::PlatformWindow) {
+    if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
+        tracing::warn!(%error, "a granted close request did not close its window");
     }
 }
 
@@ -339,6 +349,7 @@ where
 mod tests {
 
     use super::host::APP_RUNTIME;
+    use super::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 
     // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither
     // platform runs the desktop teardown path it exercises.
@@ -358,7 +369,7 @@ mod tests {
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
-    /// `on_request_frame` callback SYNCHRONOUSLY — unlike a real winit window,
+    /// `WindowHandler::frame_requested` callback SYNCHRONOUSLY — unlike a real winit window,
     /// where a queued `RedrawRequested` would not fire until `on_ready` (and
     /// this reordering) has already returned. That is exactly why the ordering
     /// bug was invisible in a real window's actual first frame but is directly
@@ -397,10 +408,10 @@ mod tests {
 
         let platform = flui_native::headless_platform();
         let window = platform
-            .open_window(flui_platform::WindowOptions::default().with_size(marker_size))
+            .open_routed(flui_platform::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
-        // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
+        // `WindowHandler::frame_requested` requires `Send` on the callback; `AppRuntime` is
         // not `Send` (it holds owner-thread-affine ui_runtime state), so the
         // closure below cannot capture a specific `&AppRuntime`. Resolving
         // `APP_RUNTIME` fresh inside the closure (zero captures for the
@@ -413,15 +424,17 @@ mod tests {
         // stack) would deadlock on the slot's own non-reentrant lock.
         let saw_marker_window = Arc::new(AtomicBool::new(false));
         let saw_marker_window_cb = Arc::clone(&saw_marker_window);
-        window.on_request_frame(Box::new(move |_| {
-            let matches_marker = APP_RUNTIME
-                .with(|slot| {
-                    slot.borrow()
-                        .with_redraw_window(|w| w.state().outer.size == marker_size)
-                })
-                .unwrap_or(false);
-            saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
-        }));
+        crate::app::runner::window_routes::WindowRoutes::of(&*window).route_frame_requested(
+            move |_| {
+                let matches_marker = APP_RUNTIME
+                    .with(|slot| {
+                        slot.borrow()
+                            .with_redraw_window(|w| w.state().outer.size == marker_size)
+                    })
+                    .unwrap_or(false);
+                saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+            },
+        );
 
         // Mirrors the FIXED order in `bootstrap_desktop`/`run_android`:
         // store the window BEFORE requesting the initial redraw. `wake_frame`
@@ -512,7 +525,7 @@ mod tests {
             .run(Box::new(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                    owner.open_routed(flui_platform::WindowOptions::default())
                 })
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_native::WindowOpen::try_ready)

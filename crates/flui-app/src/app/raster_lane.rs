@@ -37,7 +37,7 @@
 //!   the lane observes the rejection ([`PumpOutcome::SurfaceOutdated`]) and
 //!   re-adopts [`flui_engine::SurfaceState::required_generation`] before the retry;
 //! - device-loss recovery recreates the surface, and so does the platform's
-//!   surface-availability signal (`PlatformWindow::on_surface_status_change`'s
+//!   surface-availability signal (`WindowHandler::surface_changed`'s
 //!   `false`/`true` pair, which Android emits from four arms: `false` on
 //!   `MainEvent::Pause` and `MainEvent::TerminateWindow`, `true` on
 //!   `MainEvent::Resume` and `MainEvent::InitWindow` — a `Resume` whose
@@ -298,7 +298,7 @@ impl<B: RasterBackend> RasterLane<B> {
     /// Three production causes reach here, and the caller is the one that
     /// knows which: device-loss recovery (`Renderer::recover`) on every
     /// backend; the platform's surface-availability signal — `false` then
-    /// `true` from `PlatformWindow::on_surface_status_change` — which the
+    /// `true` from `WindowHandler::surface_changed` — which the
     /// mobile backends emit (Android from four arms: `false` on
     /// `MainEvent::Pause` and `MainEvent::TerminateWindow`, `true` on
     /// `MainEvent::Resume` and `MainEvent::InitWindow`; iOS on scene

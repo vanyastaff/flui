@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 use flui_native::{HeadlessPlatform, Platform};
 use std::sync::atomic::AtomicUsize;
@@ -124,14 +125,14 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
         .run(Box::new(move |owner| {
             install_owner_platform(owner)?;
             let a_host = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open A")
             .try_ready()
             .expect("ready A");
             let b_host = with_owner_platform(|owner| {
-                owner.open_window(flui_platform::WindowOptions::default())
+                owner.open_routed(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open B")
@@ -139,12 +140,16 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
             .expect("ready B");
             let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
             let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
-            a_window.on_request_frame(Box::new(move |_| {
-                a_seen.fetch_add(1, Ordering::SeqCst);
-            }));
-            b_window.on_request_frame(Box::new(move |_| {
-                b_seen.fetch_add(1, Ordering::SeqCst);
-            }));
+            crate::app::runner::window_routes::WindowRoutes::of(&*a_window).route_frame_requested(
+                move |_| {
+                    a_seen.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+            crate::app::runner::window_routes::WindowRoutes::of(&*b_window).route_frame_requested(
+                move |_| {
+                    b_seen.fetch_add(1, Ordering::SeqCst);
+                },
+            );
             APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&a_window)));
             let mut a = super::super::host::build_ui_runtime(
                 super::super::presentation_window(a_host),

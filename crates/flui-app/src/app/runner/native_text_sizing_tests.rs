@@ -1,6 +1,7 @@
 //! Installed owner delivery through a private capture failure seam. No SDK calls.
 
 use super::*;
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use flui_native::{HeadlessPlatform, Platform};
 use flui_runtime::ui_runtime::UiRuntime;
 
@@ -22,7 +23,7 @@ fn installed_capture(
             let owner = Rc::new(owner);
             owner.on_wake(Box::new(refresh_installed_after_wake))?;
             let window = owner
-                .open_window(flui_platform::WindowOptions::default())?
+                .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::new(
                 flui_runtime::presentation::PresentationWindow::new(

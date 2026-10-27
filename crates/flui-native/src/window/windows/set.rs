@@ -2,7 +2,7 @@
 //! the deadline redraws and the modal paints, the window position that opens
 //! them into it, and where a window opens and returns to (its placement).
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
@@ -14,7 +14,7 @@ use windows::Win32::{
     },
 };
 
-use flui_platform::{PlatformWindow, WindowCapabilities, WindowId, WindowOptions};
+use flui_platform::{PlatformWindow, WindowCapabilities, WindowHandler, WindowId, WindowOptions};
 
 use super::proc::{WindowRef, to_screen, with_window_context_checked};
 use super::window::{WindowsWindow, window_capabilities};
@@ -178,6 +178,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         owner: &WindowsLoop,
         windows: &Arc<WindowSet>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         if !owner.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
@@ -199,24 +200,13 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
 
         let window = WindowsWindow::new(
             options,
+            handler,
             Arc::clone(windows),
             shares,
             owner.apartment.share(),
             Arc::clone(&owner.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
-        let this = WindowRef::new(window.hwnd(), window.identity);
-        let wake =
-            crate::owner::signal::OwnerSignal::input_wake(&owner.owner_control.signal, move || {
-                let _ = this.with_context("resume_input_delivery", |context| {
-                    context.callbacks.resume_input_delivery();
-                });
-            });
-        // The input set the window's capabilities when the class announced
-        // it; the wake resumes the input held behind them.
-        let _ = with_window_context_checked(window.hwnd(), "input_wake", |context| {
-            context.callbacks.set_input_wake(wake);
-        });
 
         // Store window
         let _prev = windows.by_handle.lock().insert(hwnd_value, window.clone());
@@ -576,6 +566,7 @@ mod open_tests {
                 WindowOptions::default()
                     .with_size(Size::new(640.0, 480.0))
                     .with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         let state = window.state();
@@ -596,7 +587,10 @@ mod open_tests {
     fn a_size_set_while_maximized_is_the_size_restored_to() {
         let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
-            .open_window(WindowOptions::default().with_visible(false))
+            .open_window(
+                WindowOptions::default().with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("window");
         window
             .admit_and_apply(WindowCommand::SetMode(WindowMode::Maximized))
@@ -631,6 +625,7 @@ mod open_tests {
                         Some(Point::new(120.0, 100.0)),
                         Size::new(700.0, 500.0),
                     ))),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         assert_eq!(window.state().mode, WindowMode::Maximized);
@@ -658,6 +653,7 @@ mod open_tests {
                     .with_size(Size::new(640.0, 480.0))
                     .with_position(Some(Point::new(150.0, 120.0)))
                     .with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
         let normal = window.state().outer;

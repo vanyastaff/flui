@@ -785,6 +785,7 @@ fn a_window_offers_its_text_services_as_its_host() {
                 .with_title("flui window host")
                 .with_size(Size::new(200.0, 80.0))
                 .with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
     let win32 = window
@@ -892,6 +893,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
                 .with_title("flui moved field")
                 .with_size(Size::new(200.0, 80.0))
                 .with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
     let win32 = window
@@ -1011,6 +1013,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
                 .with_title("flui rescaled field")
                 .with_size(Size::new(200.0, 80.0))
                 .with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
     let hwnd = window
@@ -1052,6 +1055,7 @@ fn the_text_services_answer_a_completion_for_its_store() {
                 .with_title("flui text services")
                 .with_size(Size::new(200.0, 80.0))
                 .with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
     let hwnd = window
@@ -1310,6 +1314,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
                     .with_title(TITLE)
                     .with_size(Size::new(200.0, 80.0))
                     .with_visible(false),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
         }))
     });
@@ -1356,6 +1361,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
             .with_title("flui destroyed during activation")
             .with_size(Size::new(200.0, 80.0))
             .with_visible(false),
+        flui_testing::window_handler::RecordingWindowHandler::new(),
     );
     super::super::BEFORE_TSF_ACTIVATION.set(None);
     assert!(
@@ -1404,6 +1410,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
                 .with_title("flui outlives its platform")
                 .with_size(Size::new(200.0, 80.0))
                 .with_visible(false),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
     let hwnd = window

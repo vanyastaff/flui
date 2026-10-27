@@ -77,6 +77,13 @@ impl<R> Called<R> {
     /// What the handler returned, or `fallback` when none ran or it panicked,
     /// for a caller with no frame to unwind into (an OS callback): the panic
     /// is logged under `handler` and its payload retained.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
         match self {
             Self::Vacant => fallback,

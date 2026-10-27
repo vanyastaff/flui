@@ -10,8 +10,15 @@ use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 static_assertions::assert_not_impl_any!(OwnerHost: Send, Sync);
 
 pub(super) fn window() -> PresentationWindow {
+    window_with(flui_testing::window_handler::RecordingWindowHandler::new())
+}
+
+/// A headless window delivering to `handler`, as a presentation's window.
+pub(super) fn window_with(
+    handler: Rc<flui_testing::window_handler::RecordingWindowHandler>,
+) -> PresentationWindow {
     let window = flui_native::headless_platform()
-        .open_window(flui_platform::WindowOptions::default())
+        .open_window(flui_platform::WindowOptions::default(), handler)
         .expect("headless window");
     let accessibility = window.accessibility();
     PresentationWindow::new(window, accessibility)

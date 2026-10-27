@@ -1,10 +1,14 @@
 //! The per-window contract.
 //!
 //! A thin abstraction over platform windows for testability and
-//! flexibility, including per-window callback registration for event
-//! delivery. It names no OS, winit or AccessKit type (ADR-0082 §1): the
-//! accessibility bridge is reached through `flui_native::HostWindow`, a
-//! host-side subtrait only the composition root sees.
+//! flexibility. What a window delivers (its input, state changes, frame and
+//! close requests, surface changes) goes to the [`WindowHandler`] it was
+//! opened with (ADR-0254 §4). It names no OS, winit or AccessKit type
+//! (ADR-0082 §1): the accessibility bridge is reached through
+//! `flui_native::HostWindow`, a host-side subtrait only the composition root
+//! sees.
+//!
+//! [`WindowHandler`]: crate::WindowHandler
 
 use std::sync::Arc;
 
@@ -12,8 +16,8 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, PlatformHaptics, PlatformInput,
-    PlatformTextInput, WindowBackgroundAppearance, WindowId, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformHaptics, PlatformTextInput,
+    WindowBackgroundAppearance, WindowId, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -46,16 +50,12 @@ pub enum WindowAt {
 /// Provides a minimal interface for window operations, enabling
 /// testing and future flexibility (e.g., headless rendering).
 ///
-/// # Callback Registration
+/// # What a window delivers
 ///
-/// Per-window callbacks use `&self` (not `&mut self`) with interior mutability.
-/// This allows registering callbacks on shared references (`Arc<dyn
-/// PlatformWindow>`). Callbacks are invoked by the platform's event loop when
-/// native events arrive.
-///
-/// Callback storage locks are released before user code is invoked. Nested
-/// notifications share one causal FIFO across event kinds; see
-/// `flui_native::WindowCallbacks` for nested input return semantics.
+/// A window has no registrations. Its input, state changes, frame requests,
+/// close requests, close and surface changes go to the
+/// [`WindowHandler`](crate::WindowHandler) passed when it was opened, on the
+/// owner thread, outside any lock the window holds (ADR-0254 §4).
 ///
 /// # Thread affinity
 ///
@@ -65,13 +65,6 @@ pub enum WindowAt {
 /// anything reaching a native windowing API — is: call it on the thread that
 /// owns the platform event loop.** A method callable from elsewhere says so on
 /// itself; silence on the rest is this rule applying, not an omission.
-///
-/// *Registering* a callback is not driving one: registration writes a `Send`
-/// callback into mutex-held storage from any thread, while **delivery** is
-/// bound to the platform/event-loop thread that registered it. A backend
-/// marshals first, or rejects the dispatch, rather than running user code on an
-/// arbitrary worker. That is the same split ADR-0039 §2 records for
-/// `Platform`'s own `on_*` methods.
 ///
 /// A worker that needs the owner to act reaches it through
 /// `flui_native::PlatformProxy`, the recorded cross-thread-to-owner lane
@@ -89,7 +82,7 @@ pub enum WindowAt {
 /// Every fact of the window — its metrics and scale, focus, visibility, hover,
 /// appearance, display, safe area, execution state and capabilities — is a
 /// field of the [`WindowState`] snapshot (ADR-0254 §1), and a change of any of
-/// them is one [`on_state_changed`](Self::on_state_changed). There is no getter
+/// them is one [`WindowHandler::state_changed`](crate::WindowHandler::state_changed). There is no getter
 /// and no callback per fact: a consumer that needs to know which fact changed
 /// compares the new snapshot with the one it saw last. Showing, activating and
 /// closing a window are [`WindowCommand`](crate::WindowCommand)s like every
@@ -278,12 +271,9 @@ pub trait PlatformWindow: Send + Sync {
     ///   `InvalidateRect` leaves `WM_PAINT` for the owning thread's pump;
     ///   **android** sets an atomic. All three tolerate a cross-thread call, so
     ///   exercising one there proves nothing about the rule.
-    /// - **headless** dispatches the registered `on_request_frame` callback
-    ///   *synchronously on the calling thread*, so a cross-thread call runs user
-    ///   code on a worker — the delivery half of the rule above, broken. It is
-    ///   the one backend here CI actually executes. **web** shares that body but
-    ///   is wasm32-only with no executing coverage at all (#985), so nothing
-    ///   exercises it either way.
+    /// - **headless** carries a cross-thread request to the owner's next turn,
+    ///   where the window handler's `frame_requested` runs; **web** has one
+    ///   thread.
     /// - **macOS** messages `-[NSView setNeedsDisplay:]` inside an `unsafe`
     ///   block whose `unsafe impl Send` justification IS main-thread affinity.
     ///   It is the only backend where the wrong call is *unsound* rather than
@@ -350,10 +340,10 @@ pub trait PlatformWindow: Send + Sync {
     /// they changed since admission.
     ///
     /// [`WindowCommand::Close`](crate::WindowCommand::Close) is a decision already made, not a
-    /// request: it asks no should-close veto
-    /// ([`on_should_close`](Self::on_should_close))
-    /// and runs the same teardown a user's close takes — the
-    /// [`on_close`](Self::on_close) callback, removal from the backend's window
+    /// request: it asks no veto
+    /// ([`WindowHandler::close_requested`](crate::WindowHandler::close_requested))
+    /// and runs the same teardown a user's close takes — the handler's
+    /// [`closed`](crate::WindowHandler::closed), removal from the backend's window
     /// tracking, cleanup of per-window input state, and the exit-policy consult
     /// that ends the loop when this was the last window. Win32 and the headless
     /// double run that teardown before `apply` returns; winit runs it on the
@@ -364,22 +354,6 @@ pub trait PlatformWindow: Send + Sync {
     /// [`ApplyError`]: the window closed, its capabilities moved since
     /// admission, or the operating system refused or failed the request.
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError>;
-
-    /// Register a callback meaning "[`state`](Self::state) answers differently
-    /// now".
-    ///
-    /// Called on the owner thread after a new snapshot was published, outside
-    /// any lock the window holds, once per revision whichever fact changed:
-    /// geometry, mode, metrics, appearance, display, safe area, execution
-    /// state, focus, activation, visibility, hover or capabilities. Facts the window system
-    /// reports together are published in one revision. A host delivers it
-    /// inside the OS callback that reported the change where the OS gives one
-    /// (each `WM_SIZE` of a Win32 live resize, inside its modal loop), before
-    /// the callback for that one fact. The callback carries no payload: it
-    /// re-reads `state()` and compares it with the snapshot it last saw.
-    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        let _ = callback;
-    }
 
     /// This window's IME text-input capability: the receiver of the
     /// requests a field makes of the input method (whether it may compose,
@@ -443,7 +417,8 @@ pub trait PlatformWindow: Send + Sync {
     /// framework also re-sends the last set when the presentation's pixel ratio changes
     /// when a published [`state`](Self::state) puts the window somewhere else: another
     /// position, display or frame. A backend whose window can change displays at an equal
-    /// scale must publish that state and raise [`on_state_changed`](Self::on_state_changed),
+    /// scale must publish that state and call its handler's
+    /// [`state_changed`](crate::WindowHandler::state_changed),
     /// or the OS keeps the previous display's projection until the next composited frame.
     ///
     /// A backend whose OS honours no input region keeps this default, which ignores the set,
@@ -490,53 +465,6 @@ pub trait PlatformWindow: Send + Sync {
     /// update fails.
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError>;
 
-    // ==================== Callback Registration ====================
-
-    /// All callbacks registered on a window must be invoked on the same
-    /// platform/event-loop thread that registered them. `Send` permits backend
-    /// storage and wake plumbing; it is not permission to execute a UI callback
-    /// on an arbitrary worker thread. Backends must marshal first or reject the
-    /// dispatch when they cannot uphold this contract.
-    ///
-    /// Register a callback for input events (pointer, keyboard)
-    ///
-    /// The callback receives a `PlatformInput` and returns a
-    /// `DispatchEventResult` indicating whether the event was consumed.
-    ///
-    /// It need not be `Send` (ADR-0082 §4): a backend stores it for the
-    /// window's owner thread only, refuses a registration from any other
-    /// thread (dropping the callback on the thread that made it), and runs
-    /// and drops it on the owner, so it may capture an `Rc`.
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for frame rendering requests
-    ///
-    /// Called by the platform when a new frame should be rendered (e.g., after
-    /// `request_redraw()` or when the compositor needs content), with the
-    /// [`FrameRequest`](crate::FrameRequest) the platform could fill: the frame's vsync and,
-    /// where the platform names it, when the frame will be shown (ADR-0257).
-    fn on_request_frame(&self, callback: Box<dyn FnMut(crate::FrameRequest) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for when the window is destroyed
-    ///
-    /// This fires once when the window is actually closed/destroyed.
-    /// Uses `FnOnce` since it can only fire once.
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback to query whether the window should close
-    ///
-    /// Return `false` to veto the close request (e.g., unsaved changes dialog).
-    /// If no callback is registered, close is always allowed.
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        let _ = callback;
-    }
-
     /// Tell the system which refresh rate this window wants from its display.
     ///
     /// [`FrameRateHint::High`](crate::FrameRateHint::High) asks for the display's highest rate while the
@@ -551,61 +479,6 @@ pub trait PlatformWindow: Send + Sync {
     /// Called on the owner thread.
     fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) {
         let _ = hint;
-    }
-
-    /// Register a callback for the GPU surface's availability.
-    ///
-    /// Called with `false` when the surface behind this window is about to
-    /// become invalid and must be released **before this callback returns**,
-    /// and with `true` when a surface valid for the window's current native
-    /// handle must exist. The signal is a request about the present, not a
-    /// report about the past: a `true` asks for a live surface whatever
-    /// happened before, so an implementation may receive more of either than
-    /// it needs.
-    ///
-    /// This is not the snapshot's focus or execution state under another
-    /// name: those change when a window loses focus or is suspended, and the
-    /// surface must not be dropped for that; the signals coincide on some
-    /// backends and diverge on the ones that report focus at all.
-    ///
-    /// # Delivery is backend-conditional, and the asymmetry costs
-    ///
-    /// **Android** emits: `MainEvent::TerminateWindow`
-    /// and `MainEvent::Pause` produce `false`, `MainEvent::InitWindow` and
-    /// `MainEvent::Resume` produce `true`. Winit's own Android support
-    /// forwards `suspended()`/`resumed()` for the same pair, so a second
-    /// emitter is available to the winit backend. Native **iOS** emits on true
-    /// background/foreground transitions, never on temporary focus loss.
-    ///
-    /// A backend that never emits either signal is harmless: the surface is
-    /// never released and the window is always treated as available. A
-    /// backend that emits `false` and never `true` is not — the presentation
-    /// stays released, every later frame is a skipped one, and the window
-    /// stays blank while the loop reports "nothing to present" forever. An
-    /// implementation that overrides no setter at all (a test double built
-    /// from this trait's defaults) therefore accepts a registration and
-    /// silently drops it. Inside this crate the mitigation is a convention
-    /// rather than a mechanism: `shared::impl_window_callback_setters!` is
-    /// `pub(crate)`, so only an in-crate backend can use it, and every one of
-    /// them does — that macro is the single place this family's setters are
-    /// written, so a backend *inside this crate* cannot override this method
-    /// without storing its callback. An implementor outside this crate is not
-    /// covered by that and has to store the callback itself; `flui-app`'s
-    /// `TestWindow` (`window_test_support.rs`) implements this trait and
-    /// overrides no setter, which is the live counterexample to reading that
-    /// macro as a guarantee.
-    ///
-    /// # Why `bool`
-    ///
-    /// The signal is genuinely two-state. A callback's parameter type is a one-way
-    /// door — changing it later breaks every registrant's closure — so the
-    /// alternative considered was a `#[non_exhaustive] enum` (the shape these
-    /// crates use for input and owner status). A third state would be a third
-    /// state of the *surface*, which belongs in its own callback rather than
-    /// in a widened parameter here (ADR-0035 splits this callback family by
-    /// signal, not by arity).
-    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        let _ = callback;
     }
 
     // ==================== Window Handles (for GPU integration)
@@ -675,8 +548,8 @@ pub trait PlatformWindow: Send + Sync {
     ///   way the answer is **not** the same thing as the surface's validity:
     ///   the swapchain dies with the window, at `TerminateWindow`, and a
     ///   pause that keeps the window keeps the swapchain too. The release is
-    ///   driven by
-    ///   [`on_surface_status_change`](Self::on_surface_status_change), not by
+    ///   driven by the handler's
+    ///   [`surface_changed`](crate::WindowHandler::surface_changed), not by
     ///   this method's answer.
     /// - **Headless** — always `Unavailable` (no native handle exists).
     fn window_handle(

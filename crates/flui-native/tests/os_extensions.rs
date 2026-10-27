@@ -75,7 +75,10 @@ mod cases {
     fn with_foreign_windows(check: impl Fn(&str, &dyn HostWindow) + 'static) {
         let headless = flui_native::headless_platform();
         let window = headless
-            .open_window(hidden())
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a headless window opens");
         check("headless", window.as_ref());
 
@@ -90,7 +93,10 @@ mod cases {
             platform
                 .run(Box::new(move |owner| {
                     let window = owner
-                        .open_window(hidden())
+                        .open_window(
+                            hidden(),
+                            flui_testing::window_handler::RecordingWindowHandler::new(),
+                        )
                         .expect("the winit owner opens a window")
                         .try_ready()
                         .expect("a window opened on the owner is ready");
@@ -119,7 +125,10 @@ mod cases {
         let platform: Box<dyn Platform> =
             Box::new(flui_native::WindowsPlatform::new().expect("the Win32 platform"));
         let window = platform
-            .open_window(hidden())
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window has its view");
         assert!(
@@ -152,7 +161,10 @@ mod cases {
                     .with_theme(theme),
             );
             let window = platform
-                .open_window(hidden().with_os_options(options))
+                .open_window(
+                    hidden().with_os_options(options),
+                    flui_testing::window_handler::RecordingWindowHandler::new(),
+                )
                 .expect("a Win32 window opens");
             let win32 = window.win32().expect("a Win32 window has its view");
             assert_eq!(win32.corner_preference(), Ok(corners));
@@ -173,7 +185,10 @@ mod cases {
         let platform: Box<dyn Platform> =
             Box::new(flui_native::WindowsPlatform::new().expect("the Win32 platform"));
         let window = platform
-            .open_window(hidden())
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window has its view");
         let elsewhere = std::thread::scope(|scope| {
@@ -328,7 +343,10 @@ mod cases {
         let platform: Box<dyn Platform> =
             Box::new(flui_native::MacOSPlatform::new().expect("the AppKit platform"));
         let window = platform
-            .open_window(hidden())
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("an AppKit window opens");
         let appkit = window.appkit().expect("an AppKit window has its view");
         let tree = AppKitTree::of(window.as_ref());

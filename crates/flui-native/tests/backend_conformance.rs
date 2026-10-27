@@ -57,14 +57,13 @@ use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, Unsu
 /// has none for it.
 const NO_ACTUATOR: HapticOutcome =
     HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
-use flui_platform::{DispatchEventResult, PlatformInput};
+use flui_platform::PlatformInput;
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ContactAction, ContactStep, KeyStep, PanStep, PinchChange,
     PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, assert_backend_conforms,
     run_backend_conformance,
 };
-use parking_lot::Mutex;
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
 const GESTURE: NativeContact = NativeContact(u64::MAX - 1);
@@ -846,13 +845,13 @@ impl PlatformDragSource for ProfileDragSource {
 }
 
 /// The headless backend: the shared decoder's output delivered through a
-/// headless window's input callback, which first reports the window's
+/// headless window's handler, whose first input is the window's
 /// capability snapshot.
 struct Headless {
     assembly: SharedAssembly,
     _owner: OwnerPlatform,
     window: Arc<dyn HostWindow>,
-    delivered: Arc<Mutex<Vec<PlatformInput>>>,
+    handler: std::rc::Rc<flui_testing::window_handler::RecordingWindowHandler>,
     capabilities: InputCapabilities,
 }
 
@@ -867,25 +866,21 @@ impl Headless {
             }))
             .expect("headless owner");
         let owner: OwnerPlatform = saved.borrow_mut().take().expect("started owner");
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), handler.clone())
             .expect("open")
             .try_ready()
             .expect("ready");
-        let delivered = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&delivered);
-        window.on_input(Box::new(move |input| {
-            sink.lock().push(input);
-            DispatchEventResult::default()
-        }));
-        let capabilities = delivered
-            .lock()
-            .drain(..)
+        let capabilities = handler
+            .inputs()
+            .into_iter()
             .find_map(|input| match input {
                 PlatformInput::Capabilities(capabilities) => Some(capabilities),
                 _ => None,
             })
-            .expect("the snapshot is delivered on registration");
+            .expect("the snapshot is the handler's first input");
+        handler.take_calls();
         let profile = Profile {
             clock: ClockShape::Epoch,
             kinds: ALL_KINDS,
@@ -900,7 +895,7 @@ impl Headless {
             assembly: SharedAssembly::new(profile),
             _owner: owner,
             window,
-            delivered,
+            handler,
             capabilities,
         }
     }
@@ -926,7 +921,7 @@ impl BackendUnderTest for Headless {
 
     fn restart(&mut self) {
         self.assembly.restart();
-        self.delivered.lock().clear();
+        self.handler.take_calls();
     }
 
     fn reading(&mut self, step: Step) -> Option<Reading> {
@@ -937,9 +932,15 @@ impl BackendUnderTest for Headless {
         for input in self.assembly.decode_reading(reading) {
             self.mock().inject_event(input);
         }
-        std::mem::take(&mut *self.delivered.lock())
+        self.handler
+            .take_calls()
             .into_iter()
-            .map(HostInput::Platform)
+            .filter_map(|call| match call {
+                flui_testing::window_handler::HandlerCall::Input(input) => {
+                    Some(HostInput::Platform(input))
+                }
+                _ => None,
+            })
     }
 
     fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
@@ -971,21 +972,18 @@ struct Win32Window {
 impl Win32Window {
     fn new() -> Self {
         let platform = flui_native::WindowsPlatform::new().expect("native Windows platform");
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = platform
-            .open_window(WindowOptions::default())
+            .open_window(WindowOptions::default(), handler.clone())
             .expect("a Win32 window");
-        let snapshot = Arc::new(Mutex::new(None));
-        let kept = Arc::clone(&snapshot);
-        window.on_input(Box::new(move |input| {
-            if let PlatformInput::Capabilities(capabilities) = input {
-                *kept.lock() = Some(capabilities);
-            }
-            DispatchEventResult::default()
-        }));
-        let capabilities = snapshot
-            .lock()
-            .take()
-            .expect("the snapshot is delivered on registration");
+        let capabilities = handler
+            .inputs()
+            .into_iter()
+            .find_map(|input| match input {
+                PlatformInput::Capabilities(capabilities) => Some(capabilities),
+                _ => None,
+            })
+            .expect("the snapshot is the handler's first input");
         Self {
             assembly: SharedAssembly::new(Profile {
                 capabilities,

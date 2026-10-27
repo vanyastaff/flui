@@ -120,6 +120,7 @@
 //! use flui_native::headless_platform;
 //! use flui_platform::WindowOptions;
 //! use flui_foundation::geometry::Size;
+//! use flui_testing::window_handler::RecordingWindowHandler;
 //!
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
@@ -129,9 +130,12 @@
 //!         .with_size(Size::new(800.0, 600.0))
 //!         .with_visible(true);
 //!
+//!     let handler = RecordingWindowHandler::new();
 //!     let window = platform
-//!         .open_window(options)
+//!         .open_window(options, handler.clone())
 //!         .expect("Failed to create window");
+//!     // The handler's first input is the window's capability snapshot.
+//!     assert!(!handler.inputs().is_empty());
 //!     // Window is a mock, no actual OS resources allocated
 //! }
 //! ```
@@ -154,9 +158,10 @@
 //!
 //! There is no per-platform capability constant (ADR-0213). A capability with
 //! a handle answers through it (`PlatformWindow::haptics`, `text_input`); the
-//! rest arrive per window as `PlatformInput::Capabilities`, first as a
-//! snapshot before any other input once the window's input callback is
-//! installed, then as changes in order with the input around them.
+//! rest arrive per window as `PlatformInput::Capabilities`: first as a
+//! snapshot, the first input of the handler the window was opened with,
+//! delivered before the open returns, then as changes in order with the input
+//! around them.
 
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
 // AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
@@ -274,11 +279,8 @@ pub use window::headless::{
 pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
 #[cfg(target_os = "ios")]
 pub use window::apple::ios::IOSSceneEvent;
-// The application's handler set and a window's callbacks (`owner/handlers.rs`).
-pub use owner::handlers::{
-    InputCallback, InputWake, WindowCallbacks, frame_request_aged, frame_request_now,
-    frame_request_timed,
-};
+// The frame request a host stamps on the event clock (`owner/handlers.rs`).
+pub use owner::handlers::{frame_request_aged, frame_request_now, frame_request_timed};
 // Re-export task types
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from
@@ -290,7 +292,7 @@ pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyC
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WakeRegistrationError, WindowOpen,
+    WaitError, WakeRegistrationError, WindowHandlerFactory, WindowOpen, WindowRequest,
 };
 
 /// Get the current platform implementation
@@ -389,7 +391,7 @@ pub use owner::{
 ///
 /// ```rust,ignore
 /// let platform = current_platform()?;
-/// let window = platform.open_window(WindowOptions::default())?;
+/// let window = platform.open_window(WindowOptions::default(), handler)?;
 ///
 /// #[cfg(windows)]
 /// {

@@ -9,6 +9,7 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
@@ -34,12 +35,13 @@ use crate::{
     owner::PendingWindow,
     owner::ProxyTransport,
     owner::WindowOpen,
-    owner::handlers::{OpenWindows, PlatformHandlers, WindowCallbacks},
+    owner::handlers::{OpenWindows, PlatformHandlers},
+    owner::window_delivery::WindowDelivery,
     platform::Platform,
     platform::PlatformExecutor,
     platform::PlatformReadyCallback,
 };
-use flui_platform::{DisplayId, DisplaySnapshot, WindowId, WindowOptions};
+use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to —
 /// mirrors the winit backend's own private `OpenWindowResult` alias
@@ -130,20 +132,24 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
 /// through it; the simulated devices and drag sessions reach a window's
 /// callbacks through it.
 pub(crate) trait TrackedWindows: OpenWindows {
-    /// Builds a window under the locked `state` and tracks it; `platform` is
-    /// the lock `state` came from, which the window keeps to close.
+    /// Builds a window delivering to `handler` under the locked `state` and
+    /// tracks it; `platform` is the lock `state` came from, which the window
+    /// keeps to close. The caller delivers the capability snapshot once the
+    /// lock is released.
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
     ) -> Arc<dyn HostWindow>;
 
-    /// The callbacks of every open window, in the order they opened.
-    fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>>;
+    /// What every open window delivers to its handler, in the order they
+    /// opened.
+    fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>>;
 
-    /// The callbacks of the open window `id` names.
-    fn callbacks_of(&self, id: WindowId) -> Option<Arc<WindowCallbacks>>;
+    /// What the open window `id` names delivers to its handler.
+    fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>>;
 }
 
 /// The headless host's loop: the state every position of its table reads.
@@ -216,7 +222,7 @@ pub(crate) struct HeadlessState {
     /// while `deferred_window_open` is set, awaiting a manual
     /// `HeadlessDeferredWindowOpens::resolve_next` call. FIFO order: the
     /// oldest request resolves first.
-    pending_opens: Vec<(ClaimSlot<OpenWindowResult>, WindowOptions)>,
+    pending_opens: Vec<PendingOpen>,
     /// Parked `Platform::request_exit_policy_reevaluation` request (any
     /// thread may set it; coalesced). This mock has no event loop of its
     /// own, so the embedder drives the actual owner-thread re-check via
@@ -627,6 +633,15 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
 /// instead of creating synchronously, and
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
 /// demand.
+/// A deferred open waiting for [`HeadlessDeferredWindowOpens::resolve_next`]:
+/// where its window goes, its options, and its handler, which stays on the
+/// owner thread that made it.
+pub(crate) struct PendingOpen {
+    slot: ClaimSlot<OpenWindowResult>,
+    options: WindowOptions,
+    handler: OwnerSlot<Rc<dyn WindowHandler>>,
+}
+
 struct HeadlessDeferredOwnerHooks {
     signal: Arc<crate::owner::signal::OwnerSignal>,
     state: Arc<Mutex<HeadlessState>>,
@@ -641,7 +656,11 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
         self.signal.register(callback)
     }
 
-    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+    fn open_owner_window(
+        &self,
+        options: WindowOptions,
+        handler: Rc<dyn WindowHandler>,
+    ) -> Result<WindowOpen, OpenWindowError> {
         // No wake-worthy event loop to notify on abandonment (this backend
         // never parks a real loop on the request) -- see `claim_slot`'s own
         // doc for why a no-op wake is the correct choice for a generic
@@ -651,8 +670,19 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
                 rejected: Some(Box::new(options)),
             });
         }
+        let kept = OwnerSlot::new();
+        if let Err(handler) = kept.replace(handler) {
+            crate::owner::call_point::retire(handler);
+            return Err(OpenWindowError::Unavailable {
+                message: "the owner thread cannot keep another window handler".to_owned(),
+            });
+        }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
-        self.state.lock().pending_opens.push((slot, options));
+        self.state.lock().pending_opens.push(PendingOpen {
+            slot,
+            options,
+            handler: kept,
+        });
         Ok(WindowOpen::Pending(PendingWindow::new(
             handle,
             self.owner_thread,
@@ -816,7 +846,10 @@ impl HeadlessDeferredWindowOpens {
     /// a genuine `.close()` — since the whole point of this test seam is
     /// that nothing else in the framework hands that handle back once a
     /// request defers), or `None` if there was nothing pending (the platform
-    /// was dropped, or every request so far has already been resolved).
+    /// was dropped, or every request so far has already been resolved) or
+    /// the call is not on the owner thread whose handler the oldest request
+    /// carries, which it leaves pending. The window's handler hears the
+    /// capability snapshot before this returns.
     pub fn resolve_next(&self) -> Option<Arc<dyn HostWindow>> {
         let platform_state = self.state.upgrade()?;
 
@@ -827,14 +860,31 @@ impl HeadlessDeferredWindowOpens {
         // rely on that.
         let (slot, window) = {
             let mut state = platform_state.lock();
-            if state.pending_opens.is_empty() {
+            // The handler lives on the owner thread that asked: off it, the
+            // request stays pending.
+            if state.pending_opens.first()?.handler.is_occupied() != Some(true) {
                 return None;
             }
-            let (slot, options) = state.pending_opens.remove(0);
+            let PendingOpen {
+                slot,
+                options,
+                handler,
+            } = state.pending_opens.remove(0);
+            let handler = handler
+                .take()
+                .expect("BUG: a deferred open resolves on the owner thread that made it");
             let windows = Arc::clone(&state.windows);
-            let window = windows.open(&mut state, Arc::downgrade(&platform_state), options);
+            let window = windows.open(
+                &mut state,
+                Arc::downgrade(&platform_state),
+                options,
+                handler,
+            );
             (slot, window)
         };
+        // The lock is released: the handler hears its window's capabilities
+        // before anything later.
+        window.delivery().deliver_capability_snapshot();
 
         // The requester may have already abandoned the request (dropped its
         // `PendingWindow` before this call) -- `deliver`'s `Err` hands the
@@ -953,15 +1003,16 @@ mod tests {
             _: &mut HeadlessState,
             _: Weak<Mutex<HeadlessState>>,
             _: WindowOptions,
+            _: Rc<dyn WindowHandler>,
         ) -> Arc<dyn HostWindow> {
             unreachable!("the test opens no window")
         }
 
-        fn callbacks_of_all(&self) -> Vec<Arc<WindowCallbacks>> {
+        fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>> {
             Vec::new()
         }
 
-        fn callbacks_of(&self, _: WindowId) -> Option<Arc<WindowCallbacks>> {
+        fn delivery_of(&self, _: WindowId) -> Option<Arc<WindowDelivery>> {
             None
         }
     }

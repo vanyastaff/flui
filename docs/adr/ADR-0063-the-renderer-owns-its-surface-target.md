@@ -6,7 +6,9 @@
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window itself as the
   `Send + Sync` surface target (decision 1's `Arc<dyn PlatformWindow>` handed to
   `Renderer::new`, and decision 5's `Unavailable` obligation on every `PlatformWindow`, which
-  moves to the separate surface target the window hands out) and decision 6's
+  moves to the separate surface target the window hands out; and its `WindowCallbacks::clear()`
+  latch, since a window that lets go of its one handler cannot have a callback return to a slot)
+  and decision 6's
   `on_surface_status_change` registration (it becomes the window handler's `surface_changed`; the
   signal's release-and-rebuild semantics stay). The `WindowTarget` bound, the lease, probing
   before creating and the engine side stay.
@@ -69,6 +71,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    moves there unchanged.
 5. **Every `PlatformWindow` backend owes `Err(HandleError::Unavailable)` once its native window is
    destroyed or suspended, and native backends release the renderer on close.**
+   *(Superseded-by ADR-0254 §4 and §5 in part: see the header.)*
    - winit: inherits winit's contract — the `Arc<winit::Window>` the surface holds *is* the native
      lifetime.
    - Win32: `window_handle()` consults the `hwnd_affinity::teardown_route` identity probe

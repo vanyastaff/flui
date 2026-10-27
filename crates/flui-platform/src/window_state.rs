@@ -10,7 +10,7 @@
 //! the window (ADR-0254 §1): geometry and mode, the drawable metrics and scale,
 //! appearance, display, safe area, execution state, focus, activation, visibility, hover
 //! and the [`WindowCapabilities`]. A change publishes a new snapshot with a
-//! higher [`WindowRevision`] and one payload-free `on_state_changed`
+//! higher [`WindowRevision`] and one payload-free `WindowHandler::state_changed`
 //! notification; a sample equal to the published one keeps the revision
 //! ([`WindowState::successor`]). The revision never wraps: the last one is
 //! reached once, then the snapshot refuses further change.

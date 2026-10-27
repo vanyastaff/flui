@@ -40,8 +40,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
-use crate::owner::handlers::WindowCallbacks;
 use crate::owner::panic_boundary::{AfterPanic, contain_owner_callback, os_entry};
+use crate::owner::window_delivery::WindowDelivery;
 
 /// What the host's table makes for each content view: its input and its text
 /// input, each one per view.
@@ -124,10 +124,10 @@ impl ContentView<'_> {
     /// event of the view takes, so the text input's are ordered against the
     /// pointer's and the keyboard's.
     pub(crate) fn dispatch_input(&self, input: PlatformInput) {
-        if let Some(callbacks) = self.context.callbacks.upgrade() {
-            let _result = callbacks.dispatch_input(input);
+        if let Some(delivery) = self.context.delivery.upgrade() {
+            let _result = delivery.dispatch_input(input);
         } else {
-            tracing::trace!("Input event received after window callbacks were dropped");
+            tracing::trace!("Input event received after window delivery were dropped");
         }
     }
 
@@ -152,7 +152,7 @@ const CONTEXT_IVAR: &CStr = c"context_ptr";
 /// What one content view keeps, in its ivar, from its creation to its
 /// `dealloc`.
 struct ViewContext {
-    callbacks: Weak<WindowCallbacks>,
+    delivery: Weak<WindowDelivery>,
     input: Box<dyn ViewInput>,
     text: Box<dyn ViewText>,
     /// The `keyDown:` event inside `interpretKeyEvents:`, null otherwise: what
@@ -170,7 +170,7 @@ struct ViewContext {
 /// responder, and receives its keyboard, mouse and scroll events.
 pub(crate) fn create(
     frame: NSRect,
-    callbacks: Weak<WindowCallbacks>,
+    delivery: Weak<WindowDelivery>,
     hooks: ViewHooks,
 ) -> *mut AnyObject {
     // SAFETY: FLUIContentView is registered before alloc/init; the boxed
@@ -182,7 +182,7 @@ pub(crate) fn create(
         let view: *mut AnyObject = msg_send![view, initWithFrame: frame];
 
         let context = Box::into_raw(Box::new(ViewContext {
-            callbacks,
+            delivery,
             input: (hooks.input)(),
             text: (hooks.text)(),
             pending_key_event: Cell::new(std::ptr::null_mut()),
@@ -364,8 +364,8 @@ fn dispatch_hover_change(this: &AnyObject, is_hovered: bool) {
     // live objects).
     unsafe {
         with_this(this, |view| {
-            if let Some(callbacks) = view.context.callbacks.upgrade() {
-                callbacks.report_hover(is_hovered);
+            if let Some(delivery) = view.context.delivery.upgrade() {
+                delivery.report_hover(is_hovered);
             }
         });
     }
@@ -395,7 +395,7 @@ extern "C-unwind" fn mouse_exited(this: &AnyObject, sel: Sel, event: *mut AnyObj
 ///
 /// `request_redraw()` marks the view dirty via `setNeedsDisplay:`; AppKit then
 /// calls this method on the next display pass, which is where the per-window
-/// `on_request_frame` contract fires (the macOS analogue of the Win32
+/// `WindowHandler::frame_requested` contract fires (the macOS analogue of the Win32
 /// window's `WM_PAINT`). The frame runs inside this callback, so a redraw the
 /// frame asks for is asked for while AppKit is displaying this view — the one
 /// moment a `setNeedsDisplay:` is discarded; the display pass marks this
@@ -406,10 +406,10 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
         // message is the documented NSView handling of the dirty region.
         unsafe {
             let _display_pass = super::display_pass::DisplayPassGuard::enter();
-            let callbacks = with_this(this, |view| view.context.callbacks.upgrade()).flatten();
-            if let Some(callbacks) = callbacks {
+            let delivery = with_this(this, |view| view.context.delivery.upgrade()).flatten();
+            if let Some(delivery) = delivery {
                 tracing::trace!("FLUIContentView drawRect: dispatching frame request");
-                callbacks.dispatch_request_frame();
+                delivery.dispatch_request_frame();
             } else {
                 // The window's callbacks are gone (torn down, or the view
                 // outlived its window). AppKit still owns this display pass, so
@@ -418,7 +418,7 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
                 // request, which is otherwise indistinguishable from AppKit
                 // never asking at all.
                 tracing::trace!(
-                    "FLUIContentView drawRect: no live callbacks; frame request dropped"
+                    "FLUIContentView drawRect: no live delivery; frame request dropped"
                 );
             }
 
@@ -444,14 +444,14 @@ extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel
                     viewDidChangeEffectiveAppearance
                 ];
                 let appearance = effective_appearance(as_view(this));
-                let callbacks = with_this(this, |view| {
+                let delivery = with_this(this, |view| {
                     (view.context.appearance.replace(appearance) != appearance)
-                        .then(|| view.context.callbacks.upgrade())
+                        .then(|| view.context.delivery.upgrade())
                         .flatten()
                 })
                 .flatten();
-                if let Some(callbacks) = callbacks {
-                    callbacks.publish_state();
+                if let Some(delivery) = delivery {
+                    delivery.publish_state();
                 }
             }
         },

@@ -115,7 +115,7 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 /// on the owner thread, never through an arbitrary cross-thread callback.
 ///
 /// The window facts among them are read from the window's snapshot: its one
-/// `on_state_changed` subscription compares each new snapshot with the one it
+/// `WindowHandler::state_changed` subscription compares each new snapshot with the one it
 /// saw before and delivers what differs ([`Self::of_state_change`]).
 // `pub(in crate::app)` because `RuntimeTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
@@ -573,9 +573,8 @@ pub(super) fn install_input_wiring(
     dispatcher: PresentationDispatcher,
     window: &(impl flui_platform::PlatformWindow + ?Sized),
 ) {
-    window.on_input(Box::new(move |input| {
-        dispatch_platform_input(dispatcher, input)
-    }));
+    super::window_routes::WindowRoutes::of(window)
+        .route_input(move |input| dispatch_platform_input(dispatcher, input));
 }
 
 /// Deliver a window's platform input to its UI runtime and answer the platform

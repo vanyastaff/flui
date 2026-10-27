@@ -68,7 +68,10 @@ fn test_window_lifecycle_contract() {
         .with_min_size(Some(Size::new(320.0, 240.0)))
         .with_max_size(None);
 
-    match platform.open_window(options) {
+    match platform.open_window(
+        options,
+        flui_testing::window_handler::RecordingWindowHandler::new(),
+    ) {
         Ok(window) => {
             tracing::info!("✓ Platform supports window creation");
 
@@ -161,7 +164,10 @@ fn test_window_lifecycle_contract() {
                 .with_size(Size::new(400.0, 300.0))
                 .with_visible(false);
 
-            match platform.open_window(options2) {
+            match platform.open_window(
+                options2,
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            ) {
                 Ok(window2) => {
                     tracing::info!("✓ Platform supports multiple concurrent windows");
 
@@ -201,6 +207,7 @@ fn test_window_lifecycle_contract() {
 #[cfg(target_os = "windows")]
 mod native_windows {
     use super::{physical_of, scale_of};
+    use crate::Opened;
     use flui_foundation::geometry::Size;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
     use flui_platform::{DispatchEventResult, WindowOptions};
@@ -277,12 +284,12 @@ mod native_windows {
             deadline_no_frame_can_service_does_not_spin,
         ),
         (
-            "deadline_window_without_frame_callback_does_not_spin",
-            deadline_window_without_frame_callback_does_not_spin,
+            "deadline_window_declining_its_frames_does_not_spin",
+            deadline_window_declining_its_frames_does_not_spin,
         ),
         (
-            "deadline_hidden_window_without_frame_callback_does_not_spin",
-            deadline_hidden_window_without_frame_callback_does_not_spin,
+            "deadline_hidden_window_declining_its_frames_does_not_spin",
+            deadline_hidden_window_declining_its_frames_does_not_spin,
         ),
         (
             "deadline_query_unwind_retains_replaced_hostile_captures",
@@ -643,11 +650,13 @@ mod native_windows {
         let rescaled = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&rescaled);
         let weak = Arc::downgrade(&window);
-        let mut scale = window
-            .state()
-            .metrics
-            .map(flui_foundation::geometry::WindowMetrics::scale);
-        window.on_state_changed(Box::new(move || {
+        let scale = std::cell::Cell::new(
+            window
+                .state()
+                .metrics
+                .map(flui_foundation::geometry::WindowMetrics::scale),
+        );
+        window.handler.react_to_state_change(move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
@@ -655,10 +664,10 @@ mod native_windows {
                 .state()
                 .metrics
                 .map(flui_foundation::geometry::WindowMetrics::scale);
-            if std::mem::replace(&mut scale, now) != now {
+            if scale.replace(now) != now {
                 counted.fetch_add(1, Ordering::SeqCst);
             }
-        }));
+        });
         let send = |dpi: u32| {
             // SAFETY: the window is live on this thread; `rect` outlives the
             // synchronous send, which is the pointer WM_DPICHANGED's lparam
@@ -695,16 +704,16 @@ mod native_windows {
         let moved = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&moved);
         let weak = Arc::downgrade(&window);
-        let mut display = window.state().display;
-        window.on_state_changed(Box::new(move || {
+        let display = std::cell::Cell::new(window.state().display);
+        window.handler.react_to_state_change(move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
             let now = window.state().display;
-            if std::mem::replace(&mut display, now) != now {
+            if display.replace(now) != now {
                 counted.fetch_add(1, Ordering::SeqCst);
             }
-        }));
+        });
         let move_to = |x: i32, y: i32| {
             // SAFETY: this live wrapper owns the HWND on its creating thread;
             // SetWindowPos receives only by-value coordinates and flags.
@@ -796,15 +805,15 @@ mod native_windows {
         );
     }
 
-    fn open(platform: &WindowsPlatform, decorated: bool) -> Arc<dyn HostWindow> {
-        platform
-            .open_window(
-                WindowOptions::default()
-                    .with_visible(false)
-                    .with_decorated(decorated)
-                    .with_size(Size::new(320.0, 240.0)),
-            )
-            .expect("create actual hidden Win32 window")
+    fn open(platform: &WindowsPlatform, decorated: bool) -> Opened {
+        Opened::on(
+            platform,
+            WindowOptions::default()
+                .with_visible(false)
+                .with_decorated(decorated)
+                .with_size(Size::new(320.0, 240.0)),
+        )
+        .expect("create actual hidden Win32 window")
     }
 
     // The DirectManipulation viewport initialises on a real window and the
@@ -825,19 +834,11 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
-        let claimed = Arc::new(Mutex::new(None));
-        let observed = Arc::clone(&claimed);
-        window.on_input(Box::new(move |input| {
-            if let PlatformInput::Capabilities(capabilities) = input {
-                *observed.lock().expect("capabilities") = Some(capabilities);
-            }
-            DispatchEventResult::default()
-        }));
-        let capabilities = claimed
-            .lock()
-            .expect("capabilities")
-            .take()
-            .expect("the window reports its capabilities first");
+        let Some(PlatformInput::Capabilities(capabilities)) =
+            window.handler.inputs().into_iter().next()
+        else {
+            panic!("the window reports its capabilities first");
+        };
         assert_eq!(capabilities.precise_scroll(), Availability::Native);
         assert_eq!(capabilities.trackpad_gestures(), Availability::Native);
         // SAFETY: integer message data for the fixture's own HWND on its
@@ -858,9 +859,9 @@ mod native_windows {
         }
         let closed = Arc::new(AtomicBool::new(false));
         let close_observed = Arc::clone(&closed);
-        window.on_close(Box::new(move || {
+        window.handler.react_to_close(move || {
             close_observed.store(true, Ordering::SeqCst);
-        }));
+        });
         window.close_now();
         assert!(
             closed.load(Ordering::SeqCst),
@@ -872,14 +873,14 @@ mod native_windows {
 
     // DefWindowProc ignores Alt+F4 and leaves menu mode at once for a hidden
     // window, so system-key defaults are exercised on a shown one.
-    fn open_shown(platform: &WindowsPlatform) -> Arc<dyn HostWindow> {
-        platform
-            .open_window(
-                WindowOptions::default()
-                    .with_visible(true)
-                    .with_size(Size::new(160.0, 120.0)),
-            )
-            .expect("create actual shown Win32 window")
+    fn open_shown(platform: &WindowsPlatform) -> Opened {
+        Opened::on(
+            platform,
+            WindowOptions::default()
+                .with_visible(true)
+                .with_size(Size::new(160.0, 120.0)),
+        )
+        .expect("create actual shown Win32 window")
     }
 
     struct ClosePointerTarget(Arc<dyn HostWindow>);
@@ -894,9 +895,7 @@ mod native_windows {
         unsafe_code,
         reason = "keeps only the ephemeral injected-input target above unrelated host windows"
     )]
-    fn open_pointer_target(
-        platform: &WindowsPlatform,
-    ) -> Option<(Arc<dyn HostWindow>, ClosePointerTarget)> {
+    fn open_pointer_target(platform: &WindowsPlatform) -> Option<(Opened, ClosePointerTarget)> {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetForegroundWindow, HWND_TOPMOST, SetForegroundWindow,
         };
@@ -948,22 +947,16 @@ mod native_windows {
     }
 
     fn deadline_none_allows_same_instant_readmission() {
-        use flui_native::WindowOpen;
-
         let calls = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&calls);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
-                let WindowOpen::Ready(window) = owner
-                    .open_window(
-                        WindowOptions::default()
-                            .with_visible(true)
-                            .with_size(Size::new(160.0, 120.0)),
-                    )
-                    .expect("open readmission window")
-                else {
-                    panic!("Win32 on-ready window was deferred");
-                };
+                let window = Opened::ready(
+                    &owner,
+                    WindowOptions::default()
+                        .with_visible(true)
+                        .with_size(Size::new(160.0, 120.0)),
+                );
                 let initial = web_time::Instant::now() + Duration::from_millis(80);
                 let state = Arc::new(Mutex::new((Some(initial), 0_usize)));
                 let wake_state = Arc::clone(&state);
@@ -978,7 +971,7 @@ mod native_windows {
                 let callback_state = Arc::clone(&state);
                 let callback_proxy = owner.proxy();
                 let weak = Arc::downgrade(&window);
-                window.on_request_frame(Box::new(move |_| {
+                window.handler.react_to_frame(move |_| {
                     let count = {
                         let mut state = callback_state.lock().expect("readmission state");
                         if state.0.is_none_or(|due| web_time::Instant::now() < due) {
@@ -994,7 +987,7 @@ mod native_windows {
                             .request_quit()
                             .expect("quit after readmission");
                     }
-                }));
+                });
                 let proxy = owner.proxy();
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
                     let (deadline, stage) = *state.lock().expect("readmission state");
@@ -1035,7 +1028,7 @@ mod native_windows {
     }
 
     fn deadline_no_frame_can_service_does_not_spin() {
-        // No window is open, so a delivery runs no frame callback.
+        // No window is open, so a delivery runs no frame.
         let queries = unserviced_deadline_queries(None);
         assert!(
             queries < 16,
@@ -1043,47 +1036,44 @@ mod native_windows {
         );
     }
 
-    fn deadline_window_without_frame_callback_does_not_spin() {
-        // A visible window paints, but no frame callback is registered.
+    fn deadline_window_declining_its_frames_does_not_spin() {
+        // A visible window paints, and its handler declines every frame.
         let queries = unserviced_deadline_queries(Some(true));
         assert!(
             queries < 16,
-            "a deadline a callback-less window received was re-armed {queries} times"
+            "a deadline a declining window received was re-armed {queries} times"
         );
     }
 
-    fn deadline_hidden_window_without_frame_callback_does_not_spin() {
-        // A hidden window gets its frame request directly, and no frame
-        // callback is registered to answer it.
+    fn deadline_hidden_window_declining_its_frames_does_not_spin() {
+        // A hidden window gets its frame request directly, and its handler
+        // declines it.
         let queries = unserviced_deadline_queries(Some(false));
         assert!(
             queries < 16,
-            "a deadline a callback-less hidden window received was re-armed {queries} times"
+            "a deadline a declining hidden window received was re-armed {queries} times"
         );
     }
 
     // How many times the loop queries a hook that keeps answering one past
-    // instant no frame callback services, over a fixed span a watchdog ends.
-    // `window` opens one window with no frame callback, visible or hidden.
-    // A delivery that ran no frame must stay delivered, so the loop parks.
+    // instant no frame services, over a fixed span a watchdog ends. `window`
+    // opens one window, visible or hidden, whose handler declines every frame
+    // (a handler with nothing to draw with yet). A delivery that ran no frame
+    // must stay delivered, so the loop parks.
     fn unserviced_deadline_queries(window: Option<bool>) -> usize {
-        use flui_native::WindowOpen;
-
         let queries = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&queries);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 if let Some(visible) = window {
-                    let WindowOpen::Ready(_window) = owner
-                        .open_window(
-                            WindowOptions::default()
-                                .with_visible(visible)
-                                .with_size(Size::new(160.0, 120.0)),
-                        )
-                        .expect("open callback-less window")
-                    else {
-                        panic!("Win32 on-ready window was deferred");
-                    };
+                    // No frame reaction: the recording handler declines.
+                    // The platform keeps the window open for the run.
+                    let _window = Opened::ready(
+                        &owner,
+                        WindowOptions::default()
+                            .with_visible(visible)
+                            .with_size(Size::new(160.0, 120.0)),
+                    );
                 }
                 let watchdog = owner.proxy();
                 std::thread::spawn(move || {
@@ -1109,22 +1099,16 @@ mod native_windows {
         reason = "synchronous first paint of an owned Win32 window on its creating thread"
     )]
     fn same_instant_deadline_frames(obligations: usize) -> usize {
-        use flui_native::WindowOpen;
-
         let frames = Arc::new(AtomicUsize::new(0));
         let result = Arc::clone(&frames);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
-                let WindowOpen::Ready(window) = owner
-                    .open_window(
-                        WindowOptions::default()
-                            .with_visible(true)
-                            .with_size(Size::new(160.0, 120.0)),
-                    )
-                    .expect("open same-instant window")
-                else {
-                    panic!("Win32 on-ready window was deferred");
-                };
+                let window = Opened::ready(
+                    &owner,
+                    WindowOptions::default()
+                        .with_visible(true)
+                        .with_size(Size::new(160.0, 120.0)),
+                );
                 let hwnd = hwnd_of(&window);
                 // SAFETY: the live wrapper owns this HWND on its creating
                 // thread; the paint it sends runs synchronously here.
@@ -1137,7 +1121,7 @@ mod native_windows {
                 let due = web_time::Instant::now() + Duration::from_millis(60);
                 let pending = Arc::new(AtomicUsize::new(obligations));
                 let callback_pending = Arc::clone(&pending);
-                window.on_request_frame(Box::new(move |_| {
+                window.handler.react_to_frame(move |_| {
                     if callback_pending.load(Ordering::SeqCst) == 0
                         || web_time::Instant::now() < due
                     {
@@ -1145,7 +1129,7 @@ mod native_windows {
                     }
                     callback_pending.fetch_sub(1, Ordering::SeqCst);
                     frames.fetch_add(1, Ordering::SeqCst);
-                }));
+                });
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
                     (pending.load(Ordering::SeqCst) > 0).then_some(due)
                 }));
@@ -1229,8 +1213,6 @@ mod native_windows {
         reason = "actual owned Win32 minimize on its creating thread"
     )]
     fn deadline_reaches_unpainted_window(minimized: bool) {
-        use flui_native::WindowOpen;
-
         // A minimized or hidden window paints nothing, so a due deadline must
         // reach its frame callback by another route or stay stranded until
         // input. A watchdog quits a stranded loop so the row fails instead of
@@ -1239,16 +1221,12 @@ mod native_windows {
         let result = Arc::clone(&serviced);
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
-                let WindowOpen::Ready(window) = owner
-                    .open_window(
-                        WindowOptions::default()
-                            .with_visible(minimized)
-                            .with_size(Size::new(160.0, 120.0)),
-                    )
-                    .expect("open unpainted window")
-                else {
-                    panic!("Win32 on-ready window was deferred");
-                };
+                let window = Opened::ready(
+                    &owner,
+                    WindowOptions::default()
+                        .with_visible(minimized)
+                        .with_size(Size::new(160.0, 120.0)),
+                );
                 let hwnd = hwnd_of(&window);
                 if minimized {
                     // SAFETY: the live wrapper owns this HWND, minimized on
@@ -1266,7 +1244,7 @@ mod native_windows {
                 let callback_pending = Arc::clone(&pending);
                 let proxy = owner.proxy();
                 let raw_hwnd = hwnd.0 as isize;
-                window.on_request_frame(Box::new(move |_| {
+                window.handler.react_to_frame(move |_| {
                     let mut pending = callback_pending.lock().expect("deadline state");
                     if pending.is_none_or(|due| web_time::Instant::now() < due) {
                         return;
@@ -1277,7 +1255,7 @@ mod native_windows {
                     let still = unpainted(HWND(raw_hwnd as *mut _), minimized);
                     *serviced.lock().expect("serviced state") = Some(still);
                     proxy.request_quit().expect("quit after unpainted deadline");
-                }));
+                });
                 owner.shared().set_wake_deadline_hook(Box::new(move || {
                     *pending.lock().expect("deadline state")
                 }));
@@ -1296,8 +1274,6 @@ mod native_windows {
         reason = "synchronous first paint of owned Win32 windows on their creating thread"
     )]
     fn run_deadline_windows(mode: &'static str) {
-        use flui_native::WindowOpen;
-
         // Every frame request before the first admitted deadline is a
         // delivery nothing asked for (a stale answer of a replaced hook).
         // Each window's first paint is forced before the hooks arm, so no
@@ -1319,23 +1295,19 @@ mod native_windows {
                 let mut first = None;
                 let mut windows = Vec::new();
                 for index in 0..2 {
-                    let WindowOpen::Ready(window) = owner
-                        .open_window(
-                            WindowOptions::default()
-                                .with_visible(true)
-                                .with_size(Size::new(160.0, 120.0)),
-                        )
-                        .expect("open actual deadline window")
-                    else {
-                        panic!("Win32 on-ready window was deferred");
-                    };
+                    let window = Opened::ready(
+                        &owner,
+                        WindowOptions::default()
+                            .with_visible(true)
+                            .with_size(Size::new(160.0, 120.0)),
+                    );
                     windows.push(Arc::clone(&window));
                     if index == 0 {
                         first = Some(Arc::downgrade(&window));
                         let closed = Arc::clone(&first_closed);
-                        window.on_close(Box::new(move || {
+                        window.handler.react_to_close(move || {
                             closed.fetch_add(1, Ordering::SeqCst);
-                        }));
+                        });
                     }
                     let callback_deadlines = Arc::clone(&deadlines);
                     let callback_counts = Arc::clone(&counts);
@@ -1344,7 +1316,7 @@ mod native_windows {
                     let callback_early = Arc::clone(&early);
                     let callback_armed = Arc::clone(&armed);
                     let weak = Arc::downgrade(&window);
-                    window.on_request_frame(Box::new(move |_| {
+                    window.handler.react_to_frame(move |_| {
                         let now = web_time::Instant::now();
                         let count = {
                             let mut deadlines = callback_deadlines.lock().expect("deadline state");
@@ -1369,7 +1341,7 @@ mod native_windows {
                                     .expect("quit after both deadline rearms");
                             }
                         }
-                    }));
+                    });
                 }
                 let first = first.expect("first native window");
                 for window in &windows {
@@ -1537,31 +1509,31 @@ mod native_windows {
         let platform = Arc::new(WindowsPlatform::new().expect("native Windows platform"));
         let window = open_shown(&platform);
         let original_weak = Arc::downgrade(&window);
-        let replacement = Arc::new(Mutex::new(None::<Arc<dyn HostWindow>>));
+        let replacement = Rc::new(RefCell::new(None::<Opened>));
         let replacement_closes = Arc::new(AtomicUsize::new(0));
         let hwnd = hwnd_of(&window);
         let close_count = Arc::new(AtomicUsize::new(0));
         let close_observations = Arc::clone(&close_count);
-        window.on_close(Box::new(move || {
+        window.handler.react_to_close(move || {
             close_observations.fetch_add(1, Ordering::SeqCst);
-        }));
+        });
         let input_count = Arc::new(AtomicUsize::new(0));
         let veto_count = Arc::new(AtomicUsize::new(0));
         if mode == "vetoed" {
             let veto_observations = Arc::clone(&veto_count);
-            window.on_should_close(Box::new(move || {
+            window.handler.react_to_close_request(move || {
                 veto_observations.fetch_add(1, Ordering::SeqCst);
-                false
-            }));
+                flui_platform::CloseDecision::KeepOpen
+            });
         }
         if mode != "unhandled" {
             let input_observations = Arc::clone(&input_count);
             let weak = Arc::downgrade(&window);
             let raw_hwnd = hwnd.0 as isize;
             let callback_platform = Arc::downgrade(&platform);
-            let callback_replacement = Arc::clone(&replacement);
+            let callback_replacement = Rc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
-            window.on_input(Box::new(move |event| {
+            window.handler.react_to_input(move |event| {
                 if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                     return flui_platform::DispatchEventResult::default();
                 }
@@ -1589,16 +1561,16 @@ mod native_windows {
                     let replacement =
                         open(&callback_platform.upgrade().expect("live platform"), true);
                     let closes = Arc::clone(&callback_replacement_closes);
-                    replacement.on_close(Box::new(move || {
+                    replacement.handler.react_to_close(move || {
                         closes.fetch_add(1, Ordering::SeqCst);
-                    }));
-                    *callback_replacement.lock().expect("replacement storage") = Some(replacement);
+                    });
+                    *callback_replacement.borrow_mut() = Some(replacement);
                 }
                 DispatchEventResult::resolved(
                     true,
                     mode == "prevented" || (mode == "reentrant" && first),
                 )
-            }));
+            });
         }
         // Direct system-key dispatch also supplies the owner thread's logical
         // Alt state. This is a synthetic default-processing fixture, not a
@@ -1643,7 +1615,7 @@ mod native_windows {
             0,
             "{mode}: native default affected replacement"
         );
-        let replacement = replacement.lock().expect("replacement storage").take();
+        let replacement = replacement.borrow_mut().take();
         if let Some(replacement) = replacement {
             assert!(
                 flui_platform::PlatformWindow::window_handle(replacement.as_ref()).is_ok(),
@@ -1662,7 +1634,9 @@ mod native_windows {
             "{mode}: close veto delivery"
         );
         if mode == "vetoed" {
-            window.on_should_close(Box::new(|| true));
+            window
+                .handler
+                .react_to_close_request(|| flui_platform::CloseDecision::Close);
         }
         if mode == "vetoed" || mode == "prevented" {
             window.close_now();
@@ -1701,7 +1675,7 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
-        window.on_input(Box::new(move |event| {
+        window.handler.react_to_input(move |event| {
             if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -1715,7 +1689,7 @@ mod native_windows {
                     .push(text.as_str().to_owned());
             }
             DispatchEventResult::resolved(true, false)
-        }));
+        });
         let _plain = ThreadKeyboardState::with_keys(&[
             (VK_SHIFT, false),
             (VK_CONTROL, false),
@@ -1841,7 +1815,7 @@ mod native_windows {
             flui_platform::keyboard::Key,
         )>::new()));
         let observed = Arc::clone(&keys);
-        window.on_input(Box::new(move |event| {
+        window.handler.react_to_input(move |event| {
             if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -1864,7 +1838,7 @@ mod native_windows {
                     .push((keyboard.state(), keyboard.key.clone()));
             }
             DispatchEventResult::resolved(true, false)
-        }));
+        });
         // Layouts are switched for this thread only, after the window exists
         // (creating it resets the thread's layout), and restored on drop; each
         // row runs in its own child process.
@@ -2123,12 +2097,12 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let closes = Arc::new(AtomicUsize::new(0));
         let close_observations = Arc::clone(&closes);
-        window.on_close(Box::new(move || {
+        window.handler.react_to_close(move || {
             close_observations.fetch_add(1, Ordering::SeqCst);
-        }));
+        });
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
-        window.on_input(Box::new(move |event| {
+        window.handler.react_to_input(move |event| {
             if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -2142,7 +2116,7 @@ mod native_windows {
                     .push(text.as_str().to_owned());
             }
             DispatchEventResult::resolved(true, false)
-        }));
+        });
         // SAFETY: a thread-local hook on the current thread, whose procedure
         // touches only an atomic; it is removed below before the row returns.
         let hook = unsafe {
@@ -2265,7 +2239,7 @@ mod native_windows {
         let pumped_observations = Arc::clone(&pumped);
         // The input callback must be `Send`; carry the handle as an address.
         let pumped_window = hwnd.0 as usize;
-        window.on_input(Box::new(move |event| {
+        window.handler.react_to_input(move |event| {
             if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -2298,7 +2272,7 @@ mod native_windows {
                 }
             }
             DispatchEventResult::resolved(true, consume)
-        }));
+        });
         let mut keyboard_state = ThreadKeyboardState::with_alt_pressed();
         // SAFETY: integer VK_SPACE, scan-code and Alt-context data queued for
         // the platform's own HWND on its creating thread.
@@ -2414,7 +2388,7 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_state_changed(Box::new(move || {
+        window.handler.react_to_state_change(move || {
             let window = weak.upgrade().expect("live moved window");
             let hwnd = hwnd_of(&window);
             let mut rect = windows::Win32::Foundation::RECT::default();
@@ -2431,7 +2405,7 @@ mod native_windows {
                 .lock()
                 .expect("move observations")
                 .push((actual, window.state().outer.position));
-        }));
+        });
         for (x, y) in [(40_000, 100), (200, 150)] {
             observations.lock().expect("move observations").clear();
             // SAFETY: this live wrapper owns the HWND on its creating thread;
@@ -2474,7 +2448,7 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let observed = Arc::new(Mutex::new(Vec::new()));
         let keys = observed.clone();
-        window.on_input(Box::new(move |event| {
+        window.handler.react_to_input(move |event| {
             if matches!(event, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -2482,7 +2456,7 @@ mod native_windows {
                 keys.lock().expect("keys").push(event.clone());
             }
             DispatchEventResult::resolved(true, false)
-        }));
+        });
         let _shift = ThreadKeyboardState::with_keys(&[
             (VK_SHIFT, true),
             (VK_LSHIFT, true),
@@ -2617,33 +2591,37 @@ mod native_windows {
             destroyed: Arc::clone(&destroyed),
             traced_before_release: Arc::clone(&traced_before_release),
         };
+        /// A capture whose destructor tries to hand the handler a new
+        /// reaction while the window lets go of that handler.
         struct InstallDuringRetirement {
-            window: Arc<dyn HostWindow>,
+            handler: std::rc::Weak<flui_testing::window_handler::RecordingWindowHandler>,
             probe: Option<SurfaceRelease>,
         }
         impl Drop for InstallDuringRetirement {
             fn drop(&mut self) {
                 let probe = self.probe.take().expect("replacement capture");
-                self.window.on_state_changed(Box::new(move || {
-                    let _owned = &probe;
-                }));
+                if let Some(handler) = self.handler.upgrade() {
+                    handler.react_to_state_change(move || {
+                        let _owned = &probe;
+                    });
+                }
             }
         }
         let replacement_release = Arc::new(Mutex::new(None));
         let install = InstallDuringRetirement {
-            window: window.clone(),
+            handler: Rc::downgrade(&window.handler),
             probe: Some(SurfaceRelease {
                 destroyed: destroyed.clone(),
                 traced_before_release: replacement_release.clone(),
             }),
         };
         let weak = Arc::downgrade(&window);
-        window.on_state_changed(Box::new(move || {
+        window.handler.react_to_state_change(move || {
             let _owned = (&surface, &install);
             if let Some(window) = weak.upgrade() {
                 window.close_now();
             }
-        }));
+        });
         let id = window.id().0;
         drop(window);
         let subscriber =
@@ -2667,12 +2645,12 @@ mod native_windows {
         assert_eq!(
             *traced_before_release.lock().expect("release slot"),
             Some(0),
-            "the surface-owning callback is released before destruction is traced"
+            "the surface-owning handler is released before destruction is traced"
         );
         assert_eq!(
             *replacement_release.lock().expect("replacement release"),
             Some(0),
-            "a callback registered by capture Drop is refused and retired before the notice"
+            "a capture that reaches for the retiring handler is released before the notice"
         );
         assert_eq!(
             *destroyed.lock().expect("recorder lock"),
@@ -2687,9 +2665,9 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let owner = Arc::new(Mutex::new(Some(Arc::clone(&window))));
         let callback_owner = Arc::clone(&owner);
-        window.on_close(Box::new(move || {
+        window.handler.react_to_close(move || {
             drop(callback_owner.lock().expect("owner slot").take());
-        }));
+        });
         drop(window);
         weak.upgrade().expect("tracked window").close_now();
         assert!(owner.lock().expect("owner slot").is_none());
@@ -2766,9 +2744,9 @@ mod native_windows {
         // A settings broadcast that leaves the theme alone reports no change.
         let changes = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&changes);
-        window.on_state_changed(Box::new(move || {
+        window.handler.react_to_state_change(move || {
             counted.fetch_add(1, Ordering::SeqCst);
-        }));
+        });
         let section = windows::core::w!("ImmersiveColorSet");
         // SAFETY: a same-thread send to a live window this test owns; the
         // section name is a static NUL-terminated literal.
@@ -2799,7 +2777,7 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_state_changed(Box::new(move || {
+        window.handler.react_to_state_change(move || {
             let Some(metrics) = weak.upgrade().and_then(|window| window.state().metrics) else {
                 return;
             };
@@ -2821,7 +2799,7 @@ mod native_windows {
                     window.state().content_size,
                     physical_of(&*window),
                 ));
-        }));
+        });
         for (width, height) in [(40_000, 100), (100, 40_000), (320, 240)] {
             observations.lock().expect("resize observations").clear();
             // SAFETY: this wrapper owns the HWND on the creating thread. The
@@ -2878,7 +2856,7 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_state_changed(Box::new(move || {
+        window.handler.react_to_state_change(move || {
             let Some(metrics) = weak.upgrade().and_then(|window| window.state().metrics) else {
                 return;
             };
@@ -2894,7 +2872,7 @@ mod native_windows {
                     physical_of(&*window),
                     scale_of(&*window),
                 ));
-        }));
+        });
         for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
             window
                 .admit_and_apply(flui_platform::WindowCommand::SetSize(requested))
@@ -2942,12 +2920,10 @@ mod native_windows {
     }
 
     /// Every pointer event `window` delivers, in order.
-    fn record_pointer(
-        window: &Arc<dyn HostWindow>,
-    ) -> Arc<Mutex<Vec<flui_platform::pointer::PointerEvent>>> {
+    fn record_pointer(window: &Opened) -> Arc<Mutex<Vec<flui_platform::pointer::PointerEvent>>> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
-        window.on_input(Box::new(move |input| {
+        window.handler.react_to_input(move |input| {
             if matches!(input, flui_platform::PlatformInput::Capabilities(_)) {
                 return flui_platform::DispatchEventResult::default();
             }
@@ -2955,7 +2931,7 @@ mod native_windows {
                 recorded.lock().expect("pointer log").push(event.clone());
             }
             DispatchEventResult::default()
-        }));
+        });
         events
     }
 
@@ -3052,7 +3028,7 @@ mod native_windows {
         assert!(captured().is_invalid(), "the last release lets go");
 
         assert_eq!(kinds(&events), ["down", "button_down", "button_up", "up"]);
-        let scale = scale_of(&*window);
+        let scale = scale_of(&**window);
         let log = events.lock().expect("pointer log");
         let PointerEvent::Up(last) = log.last().expect("last release") else {
             unreachable!("kinds checked above");
@@ -3203,7 +3179,7 @@ mod native_windows {
         // Every timed delivery in order: a touch reading's time, or a key's.
         let timeline = Arc::new(Mutex::new(Vec::new()));
         let (recorded, timed) = (Arc::clone(&events), Arc::clone(&timeline));
-        window.on_input(Box::new(move |input| {
+        window.handler.react_to_input(move |input| {
             match &input {
                 flui_platform::PlatformInput::Keyboard(key) => {
                     timed.lock().expect("timeline").push(("key", key.time));
@@ -3223,7 +3199,7 @@ mod native_windows {
                 _ => {}
             }
             DispatchEventResult::default()
-        }));
+        });
         let place = |flags: POINTER_FLAGS, dx: i32| {
             let at = POINT {
                 x: target.x + dx,
@@ -3768,14 +3744,14 @@ mod native_windows {
                     Some(0.5)
                 );
                 let point = down.sample.position.get();
-                let expected = 40.0 / scale_of(&*window);
+                let expected = 40.0 / scale_of(&**window);
                 if native_kind == PT_TOUCH {
                     assert_eq!((point.x, point.y), (expected, expected));
                 } else {
                     // A pen is placed from its himetric position through its
                     // device's rectangles, which the system derived from the
                     // injected pixel: within that pixel, not on its corner.
-                    let pixel = 1.0 / scale_of(&*window);
+                    let pixel = 1.0 / scale_of(&**window);
                     assert!(
                         (point.x - expected).abs() < pixel && (point.y - expected).abs() < pixel,
                         "the pen is at its injected pixel: {point:?}"
@@ -3788,7 +3764,7 @@ mod native_windows {
                 let mut origin = POINT::default();
                 // SAFETY: the live shown owner window and an initialized point.
                 assert!(unsafe { ClientToScreen(hwnd, &raw mut origin) }.as_bool());
-                let scale = scale_of(&*window);
+                let scale = scale_of(&**window);
                 for (down, (x, y)) in downs.iter().zip(mapped) {
                     let point = down.sample.position.get();
                     let (want_x, want_y) = (
@@ -3814,7 +3790,7 @@ mod native_windows {
                     .get();
                 assert_eq!(
                     (contact.width, contact.height),
-                    (20.0 / scale_of(&*window), 30.0 / scale_of(&*window))
+                    (20.0 / scale_of(&**window), 30.0 / scale_of(&**window))
                 );
             } else {
                 let orientation = downs[0]
@@ -4338,7 +4314,7 @@ mod native_windows {
             let point = scroll.position.get();
             assert_eq!(
                 (point.x, point.y),
-                (40.0 / scale_of(&*window), 40.0 / scale_of(&*window))
+                (40.0 / scale_of(&**window), 40.0 / scale_of(&**window))
             );
         }
         drop(log);
@@ -4475,16 +4451,16 @@ mod native_windows {
         let hovers = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&hovers);
         let weak = Arc::downgrade(&window);
-        let mut hovered = window.state().hovered;
-        window.on_state_changed(Box::new(move || {
+        let hovered = std::cell::Cell::new(window.state().hovered);
+        window.handler.react_to_state_change(move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
             let now = window.state().hovered;
-            if std::mem::replace(&mut hovered, now) != now {
+            if hovered.replace(now) != now {
                 observed.lock().expect("hover log").push(now);
             }
-        }));
+        });
         let events = record_pointer(&window);
 
         if !send(MOUSE_EVENT_FLAGS(0), Some(inside)) {
@@ -4716,8 +4692,8 @@ mod native_windows {
                 "observed granularity is not hardware identity"
             );
             assert_eq!(scroll.phase, None);
-            assert_eq!(scroll.position.get().x, 40.0 / scale_of(&*window));
-            assert_eq!(scroll.position.get().y, 40.0 / scale_of(&*window));
+            assert_eq!(scroll.position.get().x, 40.0 / scale_of(&**window));
+            assert_eq!(scroll.position.get().y, 40.0 / scale_of(&**window));
         }
         drop(log);
         window.close_now();
@@ -4848,7 +4824,7 @@ mod native_windows {
         let raw = hwnd.0 as isize;
         let came_back = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&came_back);
-        window.on_input(Box::new(move |input| {
+        window.handler.react_to_input(move |input| {
             if let Some(PointerEvent::Leave(signal)) = input.as_pointer()
                 && signal.pointer.kind == PointerKind::Mouse
                 && seen.load(Ordering::SeqCst) == 0
@@ -4869,7 +4845,7 @@ mod native_windows {
                 };
             }
             DispatchEventResult::default()
-        }));
+        });
         if !inject_mouse(MOUSE_EVENT_FLAGS(0), Some(inside)) || !window.state().hovered {
             eprintln!("CANNOT_VERIFY reentrant leave: the mouse did not enter by input");
             return;
@@ -4975,7 +4951,7 @@ mod native_windows {
         pump_translated(hwnd);
         let times = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&times);
-        window.on_input(Box::new(move |input| {
+        window.handler.react_to_input(move |input| {
             let time = match &input {
                 PlatformInput::Keyboard(key) => Some(key.time),
                 PlatformInput::Pointer(flui_platform::pointer::PointerEvent::Move(update)) => {
@@ -4987,7 +4963,7 @@ mod native_windows {
                 recorded.lock().expect("time log").push(time.as_nanos());
             }
             DispatchEventResult::default()
-        }));
+        });
         // 'A', scan code 0x1e: a key down, a mouse move, the key up.
         let a_down = LPARAM(1 | (0x1e << 16));
         let a_up = LPARAM(1 | (0x1e << 16) | (1 << 30) | (1 << 31));
@@ -5076,6 +5052,7 @@ mod native_windows {
                 WindowOptions::default()
                     .with_visible(false)
                     .with_size(Size::new(320.0, 240.0)),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("create actual hidden Win32 window")
             .try_ready()
@@ -5293,8 +5270,7 @@ mod native_appkit {
     )]
     fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
         let platform = flui_native::current_platform().expect("AppKit platform");
-        let window = platform
-            .open_window(WindowOptions::default().with_visible(false))
+        let window = crate::Opened::on(&*platform, WindowOptions::default().with_visible(false))
             .expect("AppKit window");
         let RawWindowHandle::AppKit(handle) =
             window.window_handle().expect("live window handle").as_raw()
@@ -5305,7 +5281,7 @@ mod native_appkit {
         let log = Arc::new(Mutex::new(Vec::new()));
         let nested = Arc::new(AtomicBool::new(false));
         let (sink, inside) = (Arc::clone(&log), Arc::clone(&nested));
-        window.on_input(Box::new(move |input| {
+        window.handler.react_to_input(move |input| {
             let PlatformInput::Keyboard(_) = input else {
                 return DispatchEventResult::default();
             };
@@ -5327,7 +5303,7 @@ mod native_appkit {
                 inside.store(false, Ordering::SeqCst);
             }
             DispatchEventResult::default()
-        }));
+        });
         // SAFETY: as above, outside any callback.
         unsafe {
             let _: () = msg_send![view as *mut AnyObject, keyDown: key_event()];

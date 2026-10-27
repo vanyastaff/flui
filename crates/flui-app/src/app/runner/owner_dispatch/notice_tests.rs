@@ -3,6 +3,7 @@
 //! the platform's own `simulate_*` entry points. Declared in `owner_dispatch.rs`
 //! through `#[path]` because the host it exercises is private to the runner.
 
+use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -60,7 +61,7 @@ struct Win {
 
 fn open_window() -> Win {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");

@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-27 · **Change:** minor (entry 9: Android cannot close its window; entry 4: the browser run of the window snapshot is owed; previously minor: entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-27 · **Change:** minor (entry 9: no close request on the Web and Android; previously minor: entry 9: Android cannot close its window; entry 4: the browser run of the window snapshot is owed; previously minor: entry 20: the macOS backdrop material and Liquid Glass are reachable through `flui::native::macos`, unrun; previously minor: entry 30, panic containment not gated, closed by `cargo xtask panic-boundary`, its Apple runs a bullet on entry 4, and entries 31–40 renumbered 30–39; entry 2: the desktop accessibility adapters are always on; previously minor: a bullet on entry 15, an Android touch held through Home; before that minor: entry 23, preferences polled on Android, closed and entries 24–41 renumbered 23–40; entry 14 retitled now that every host reads contrast and languages; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -98,7 +98,7 @@ request.
   - a window moved between two monitors on every host but Windows
   - unplugging a monitor on Windows
   - in a browser, the page moved to another screen changing the window snapshot's `display`, and
-    a `freeze`/`resume` and a canvas focus change each arriving as one `on_state_changed`: the
+    a `freeze`/`resume` and a canvas focus change each arriving as one `WindowHandler::state_changed`: the
     Node suite covers them against a fake page, no browser run yet
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
@@ -162,6 +162,7 @@ request.
   - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.
   - Android: not run; the conformance needs a device fixture.
 - **Android cannot close its window:** `WindowCommand::Close` is `Unavailable` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
+- **No close request on the Web and Android:** neither host ever asks a window handler's `close_requested` (a page's unload and an Activity's finish are not requests the application can refuse), so an application's close veto never runs there.
 
 ### 10. No custom title bar, popups or owned windows
 

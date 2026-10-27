@@ -29,9 +29,8 @@ use crate::{
     host::WindowPositions,
     host_window::HostWindow,
     owner::OpenWindowError,
-    owner::handlers::WindowCallbacks,
-    owner::signal::OwnerSignal,
     owner::web::WebLoop,
+    owner::window_delivery::WindowDelivery,
     text::WindowTextInput,
     window::state::{ReportedFacts, WindowStateCell},
 };
@@ -52,7 +51,7 @@ pub struct WebWindow {
     id: WindowId,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     drag: RefCell<Option<Box<dyn crate::owner::web::CanvasDrag>>>,
@@ -73,7 +72,7 @@ pub(crate) struct StatePublisher {
     cell: Arc<WindowStateCell>,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     displays: Arc<dyn HostDisplays>,
 }
 
@@ -84,17 +83,17 @@ impl StatePublisher {
             &self.canvas,
             &self.state,
             self.displays.current_display(),
-            self.callbacks.hovered(),
+            self.delivery.hovered(),
         )
     }
 
     /// The published state, read from the page again first when something
-    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
     /// revision.
     fn current(&self) -> WindowState {
         let published = self.cell.state_with(|| self.sample());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -107,7 +106,7 @@ impl StatePublisher {
 
     /// Read the page again for the window's state publisher, announcing
     /// nothing.
-    fn read(&self) -> crate::owner::handlers::Publication {
+    fn read(&self) -> crate::owner::window_delivery::Publication {
         self.cell.invalidate();
         self.cell.state_with(|| self.sample()).outcome()
     }
@@ -338,6 +337,7 @@ impl WebWindow {
         width: f64,
         height: f64,
         displays: Arc<dyn HostDisplays>,
+        delivery: WindowDelivery,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -431,7 +431,7 @@ impl WebWindow {
             facets: RefCell::new(None),
             canvas,
             state,
-            callbacks: Arc::new(WindowCallbacks::new()),
+            delivery: Arc::new(delivery),
             displays,
             snapshot: Arc::new(WindowStateCell::new(initial)),
         })
@@ -443,7 +443,7 @@ impl WebWindow {
             cell: Arc::clone(&self.snapshot),
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
             displays: Arc::clone(&self.displays),
         }
     }
@@ -459,15 +459,10 @@ impl WebWindow {
         LayoutSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
             publisher: self.publisher(),
             observed: Cell::new(None),
         }
-    }
-
-    /// Get window callbacks for event dispatch
-    pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
-        &self.callbacks
     }
 
     /// Register the canvas's listeners: the drag transport's first, so the
@@ -492,10 +487,10 @@ impl WebWindow {
             .take()
             .expect("BUG: newly opened window owns its registration");
         let drag =
-            Arc::clone(transfer).register(&self.canvas, &self.callbacks, &mut registration)?;
+            Arc::clone(transfer).register(&self.canvas, &self.delivery, &mut registration)?;
         let keys = input.register(
             &self.canvas,
-            &self.callbacks,
+            &self.delivery,
             input_latency,
             &mut registration,
         )?;
@@ -610,12 +605,12 @@ impl WebWindow {
         let Some(query) = dark_scheme_query() else {
             return Ok(());
         };
-        let callbacks = Arc::clone(&self.callbacks);
+        let delivery = Arc::clone(&self.delivery);
         registration.listen(
             query.as_ref(),
             "change",
             Rc::new(move |_: web_sys::Event| {
-                callbacks.publish_state();
+                delivery.publish_state();
             }),
         )
     }
@@ -673,16 +668,22 @@ impl WebWindow {
         &self,
         registration: &mut Registration,
     ) -> Result<(), OpenWindowError> {
-        for (kind, available) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
-            let callbacks = Arc::clone(&self.callbacks);
+        for (kind, change) in [
+            ("webglcontextlost", flui_platform::SurfaceChange::Release),
+            (
+                "webglcontextrestored",
+                flui_platform::SurfaceChange::Rebuild,
+            ),
+        ] {
+            let delivery = Arc::clone(&self.delivery);
             registration.listen(
                 self.canvas.as_ref(),
                 kind,
                 Rc::new(move |event: web_sys::Event| {
-                    if !available {
+                    if change == flui_platform::SurfaceChange::Release {
                         event.prevent_default();
                     }
-                    callbacks.dispatch_surface_status_change(available);
+                    delivery.dispatch_surface_change(change);
                 }),
             )?;
         }
@@ -711,7 +712,7 @@ impl WebWindow {
     fn execution_sync(&self) -> ExecutionSync {
         ExecutionSync {
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            delivery: Arc::clone(&self.delivery),
         }
     }
 
@@ -748,26 +749,16 @@ impl WebWindow {
             retire();
         }
         drop(registration);
-        struct Clear<'a>(&'a WindowCallbacks);
+        struct Clear<'a>(&'a WindowDelivery);
         impl Drop for Clear<'_> {
             fn drop(&mut self) {
                 self.0.clear();
             }
         }
-        let _clear = Clear(&self.callbacks);
+        let _clear = Clear(&self.delivery);
         if notify_close {
-            self.callbacks.dispatch_close();
+            self.delivery.dispatch_close();
         }
-    }
-
-    fn install_callback<T>(&self, slot: &Mutex<Option<T>>, callback: T) {
-        let accepting = self.registration.borrow().is_some();
-        let old = if accepting {
-            slot.lock().replace(callback)
-        } else {
-            Some(callback)
-        };
-        crate::owner::call_point::retire(old);
     }
 }
 
@@ -846,7 +837,7 @@ impl VisibilitySync {
 /// change once; see [`WebWindow::execution_sync`].
 pub(crate) struct ExecutionSync {
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
 }
 
 impl ExecutionSync {
@@ -861,7 +852,7 @@ impl ExecutionSync {
             }
             state.execution = next;
         }
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 }
 
@@ -869,7 +860,7 @@ impl ExecutionSync {
 pub(crate) struct LayoutSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     publisher: StatePublisher,
     /// The device-pixel size the `ResizeObserver` last reported, with the
     /// CSS box it was reported for.
@@ -958,11 +949,15 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, backing);
         self.publisher.publish();
-        self.callbacks.dispatch_request_frame();
+        self.delivery.dispatch_request_frame();
     }
 }
 
-impl crate::host_window::CoreHostWindow for WebWindow {}
+impl crate::host_window::CoreHostWindow for WebWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl WebWindow {
     /// What the window's text input answers; `None` before its canvas
@@ -1040,6 +1035,7 @@ impl host::Window<WebLoop> for WebWindow {
         owner: &WebLoop,
         positions: &Arc<WindowPositions<CanvasRef>>,
         options: WindowOptions,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
@@ -1049,13 +1045,13 @@ impl host::Window<WebLoop> for WebWindow {
             options.size.width,
             options.size.height,
             Arc::clone(&owner.displays),
+            WindowDelivery::new(handler, owner.input.availability()),
         )?;
 
-        // Store window callbacks in state so the RAF loop can dispatch frames
-        let callbacks = window.callbacks().clone();
-        callbacks.set_input_capabilities(owner.input.availability());
-        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&owner.signal, &callbacks));
-        let retiring = Arc::clone(&callbacks);
+        // The RAF loop and the owner's wake reach the window's delivery
+        // through the loop's state.
+        let delivery = Arc::clone(&window.delivery);
+        let retiring = Arc::clone(&delivery);
         let state = Arc::downgrade(&owner.state);
         let transfer = Arc::clone(&owner.drag);
         window.install(
@@ -1067,11 +1063,11 @@ impl host::Window<WebLoop> for WebWindow {
                 let removed = state.upgrade().and_then(|state| {
                     let mut state = state.lock();
                     if state
-                        .window_callbacks
+                        .window_delivery
                         .as_ref()
                         .is_some_and(|current| Arc::ptr_eq(current, &retiring))
                     {
-                        state.window_callbacks.take()
+                        state.window_delivery.take()
                     } else {
                         None
                     }
@@ -1080,12 +1076,12 @@ impl host::Window<WebLoop> for WebWindow {
             },
         )?;
         owner.with_state(|s| {
-            s.window_callbacks = Some(callbacks);
+            s.window_delivery = Some(delivery);
         });
 
         let window = Arc::new(window);
         window
-            .callbacks
+            .delivery
             .publish_through(Arc::downgrade(&window), |window: &WebWindow| {
                 window.publisher().read()
             });
@@ -1096,7 +1092,7 @@ impl host::Window<WebLoop> for WebWindow {
         owner
             .state
             .lock()
-            .window_callbacks
+            .window_delivery
             .as_ref()
             .map(|_| WindowId(0))
     }
@@ -1201,36 +1197,6 @@ impl PlatformWindow for WebWindow {
             .style()
             .set_property("cursor", cursor.name())
             .map_err(|error| CursorError::Backend(format!("{error:?}")))
-    }
-
-    // ==================== Callback Registration ====================
-
-    fn on_input(
-        &self,
-        callback: Box<
-            dyn FnMut(flui_platform::PlatformInput) -> flui_platform::DispatchEventResult,
-        >,
-    ) {
-        if self.registration.borrow().is_some() {
-            self.callbacks.set_input_callback(callback);
-        } else {
-            crate::owner::panic_boundary::contain_owner_callback(|| drop(callback));
-        }
-    }
-    fn on_request_frame(&self, callback: Box<dyn FnMut(flui_platform::FrameRequest) + Send>) {
-        self.install_callback(&self.callbacks.on_request_frame, callback);
-    }
-    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_state_changed, callback);
-    }
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        self.install_callback(&self.callbacks.on_close, callback);
-    }
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        self.install_callback(&self.callbacks.on_should_close, callback);
-    }
-    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.install_callback(&self.callbacks.on_surface_status_change, callback);
     }
 
     // ==================== GPU Surface Handles ====================

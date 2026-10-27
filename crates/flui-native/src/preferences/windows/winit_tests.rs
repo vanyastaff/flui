@@ -276,8 +276,9 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         };
         let snapshot = owner.preferences()?;
         *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner
-            .open_window(options("winit-wheel-policy"))?
+            .open_window(options("winit-wheel-policy"), handler.clone())?
             .try_ready()?;
         let redraw_window = window.clone();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
@@ -317,7 +318,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             panic!("Windows event loop must create a Win32 window");
         };
         let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-        window.on_request_frame(Box::new(move |_| {
+        handler.react_to_frame(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;
@@ -332,15 +333,15 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 callback_done.store(true, Ordering::Release);
                 quit.quit();
             }
-        }));
+        });
         make_unactivated_offscreen(window.as_ref())?;
         window.request_redraw();
-        window.on_input(Box::new(move |input| {
+        handler.react_to_input(move |input| {
             if let flui_platform::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
                 sink.lock().push(scroll);
             }
             flui_platform::DispatchEventResult::default()
-        }));
+        });
         // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
         // every queued message contains only by-value coordinates/wheel distance.
         unsafe {
@@ -541,8 +542,9 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
             Err(crate::PlatformError::PreferencesDeferred)
         ));
         bootstrap_deferred.store(true, Ordering::Release);
+        let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = owner
-            .open_window(options("cold-winit-preferences"))?
+            .open_window(options("cold-winit-preferences"), handler.clone())?
             .try_ready()?;
         let redraw_window = window.clone();
         owner.on_wake(Box::new(move || match wake_platform.preferences() {
@@ -574,7 +576,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
             }
             Err(error) => panic!("unexpected recovery result: {error}"),
         }))?;
-        window.on_request_frame(Box::new(move |_| {
+        handler.react_to_frame(move |_| {
             let count = {
                 let mut frames = frame_sink.lock();
                 *frames += 1;
@@ -589,7 +591,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 frame_done.store(true, Ordering::Release);
                 frame_quit.quit();
             }
-        }));
+        });
         make_unactivated_offscreen(window.as_ref())?;
         window.request_redraw();
         Ok(())

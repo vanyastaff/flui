@@ -7,6 +7,7 @@ use std::thread::{self, ThreadId};
 
 use flui_native::{HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::WindowOptions;
+use flui_testing::window_handler::RecordingWindowHandler;
 use parking_lot::Mutex;
 
 struct Session {
@@ -30,27 +31,25 @@ fn session() -> Session {
 }
 
 impl Session {
-    fn open(&self) -> Arc<dyn HostWindow> {
-        self.owner
-            .open_window(WindowOptions::default())
+    /// A window, and the threads its handler's `frame_requested` ran on.
+    fn open(&self) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<ThreadId>>>) {
+        let handler = RecordingWindowHandler::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&log);
+        handler.react_to_frame(move |_| sink.lock().push(thread::current().id()));
+        let window = self
+            .owner
+            .open_window(WindowOptions::default(), handler)
             .expect("open")
             .try_ready()
-            .expect("ready")
+            .expect("ready");
+        (window, log)
     }
-}
-
-/// The thread each frame callback ran on.
-fn frame_threads(window: &Arc<dyn HostWindow>) -> Arc<Mutex<Vec<ThreadId>>> {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&log);
-    window.on_request_frame(Box::new(move |_| sink.lock().push(thread::current().id())));
-    log
 }
 
 fn a_redraw_requested_off_the_owner_runs_in_the_owners_next_turn() {
     let session = session();
-    let window = session.open();
-    let frames = frame_threads(&window);
+    let (window, frames) = session.open();
 
     let requester = Arc::clone(&window);
     thread::spawn(move || {
@@ -74,8 +73,7 @@ fn a_redraw_requested_off_the_owner_runs_in_the_owners_next_turn() {
 
 fn a_redraw_requested_on_the_owner_dispatches_at_once() {
     let session = session();
-    let window = session.open();
-    let frames = frame_threads(&window);
+    let (window, frames) = session.open();
 
     window.request_redraw();
     assert_eq!(*frames.lock(), [thread::current().id()]);

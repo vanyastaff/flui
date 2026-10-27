@@ -54,9 +54,9 @@ use super::mode::NativeMode;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
-use crate::owner::handlers::{Publication, WindowCallbacks};
 use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::control::OwnerPreferences;
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
@@ -80,7 +80,65 @@ pub(crate) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 /// asking the veto: a close command is not a close request.
 pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 
+/// Posted when another thread raised a delivery for a window: the owner
+/// delivers what waits in the window's FIFO when it takes the message.
+pub(crate) const DELIVER_QUEUED: u32 = WM_APP + 5;
+
+/// The owner turn a window's delivery asks for when another thread raises
+/// something for it: a posted [`DELIVER_QUEUED`] naming this window.
+pub(crate) fn deliver_queued_turn(
+    hwnd: HWND,
+    identity: WindowIdentity,
+) -> crate::owner::signal::WindowWake {
+    let (low, high) = identity.halves();
+    // The handle as an integer: only posted to, never dereferenced.
+    let raw = hwnd.0 as isize;
+    Arc::new(move || {
+        // SAFETY: `PostMessageW` takes a window handle and plain integers by
+        // value, from any thread, and dereferences nothing; the message
+        // names the window's identity, so a handle the system reused by then
+        // is left alone.
+        let posted = unsafe {
+            PostMessageW(
+                Some(HWND(raw as *mut _)),
+                DELIVER_QUEUED,
+                WPARAM(low),
+                LPARAM(high),
+            )
+        };
+        if let Err(error) = posted {
+            tracing::warn!(%error, "posting a window's queued deliveries failed");
+        }
+    })
+}
+
 pub(crate) use crate::owner::windows::WindowRef;
+
+/// The close of a `WM_CLOSE` the handler grants after it was asked behind a
+/// running method: a posted [`CLOSE_WINDOW`] naming this window, which the
+/// owner thread takes once the method returned.
+fn granted_close(hwnd: HWND, identity: WindowIdentity) -> impl FnOnce() + Send + 'static {
+    let (low, high) = identity.halves();
+    // The handle as an integer: it is only compared and posted to, never
+    // dereferenced, so it may travel with the queued request.
+    let raw = hwnd.0 as isize;
+    move || {
+        // SAFETY: `PostMessageW` takes a window handle and plain integers by
+        // value and dereferences nothing; the message names the window's
+        // identity, so a handle the system reused by then is left alone.
+        let posted = unsafe {
+            PostMessageW(
+                Some(HWND(raw as *mut _)),
+                CLOSE_WINDOW,
+                WPARAM(low),
+                LPARAM(high),
+            )
+        };
+        if let Err(error) = posted {
+            tracing::warn!(%error, "posting the close a handler granted failed");
+        }
+    }
+}
 
 /// The window context a [`WindowRef`] names: the owner declares the
 /// reference, and the window feature, whose context it is, reaches it.
@@ -127,7 +185,7 @@ pub(crate) struct WindowContext {
     /// Per-window callbacks for event delivery, shared with the features the
     /// class's hooks announced the window to and released by `WM_DESTROY` on
     /// the owner thread.
-    pub callbacks: Arc<WindowCallbacks>,
+    pub delivery: Arc<WindowDelivery>,
     /// The hooks of the window's class, which the window tells of its steps.
     pub(crate) hooks: WindowHooks,
     /// The system preferences: the window's gesture geometry is measured with
@@ -245,11 +303,11 @@ impl WindowContext {
     /// event clock's reading otherwise.
     pub(crate) fn request_frame(&self) {
         match compositor_refresh() {
-            Some(timing) => self.callbacks.dispatch_frame(crate::frame_request_timed(
+            Some(timing) => self.delivery.dispatch_frame(crate::frame_request_timed(
                 timing.since_refresh,
                 Some(timing.until_refresh),
             )),
-            None => self.callbacks.dispatch_request_frame(),
+            None => self.delivery.dispatch_request_frame(),
         }
     }
 
@@ -266,7 +324,7 @@ impl WindowContext {
     /// publish the snapshot, whose metrics read the client area.
     pub(crate) fn report_resize(&self, device: Size<i32>) {
         self.last_resize.set(Some((device, self.scale.scale())));
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 
     /// Complete cache updates before callback-capable native/user code.
@@ -277,7 +335,7 @@ impl WindowContext {
     }
 
     /// The window's published state, read from the OS again first when
-    /// something invalidated it; `on_state_changed` is raised when that
+    /// something invalidated it; `WindowHandler::state_changed` is raised when that
     /// produced a new revision.
     pub(crate) fn window_state(&self, hwnd: HWND) -> flui_platform::WindowState {
         // While a change takes several steps the window is half-way between two
@@ -291,9 +349,9 @@ impl WindowContext {
         let published = self
             .snapshot
             .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
-        // `on_state_changed` when the revision grew.
+        // `WindowHandler::state_changed` when the revision grew.
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
@@ -323,7 +381,7 @@ impl WindowContext {
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
-            hovered: self.callbacks.hovered(),
+            hovered: self.delivery.hovered(),
         }
     }
 
@@ -607,9 +665,9 @@ impl WindowMessages for WindowProc {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
             | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
-            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | WM_SETTEXT
-            | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
-            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
+            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | DELIVER_QUEUED
+            | WM_SETTEXT | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR
+            | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -682,9 +740,14 @@ impl WindowProc {
                     tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
-                        // Ask per-window callback if close should proceed; a
-                        // `false` vetoes the close.
-                        if ctx.callbacks.dispatch_should_close()
+                        // Ask the handler whether the close proceeds;
+                        // `KeepOpen` vetoes it. Asked behind a running method
+                        // (a `WM_CLOSE` sent from inside `input`), it is kept
+                        // for now and destroyed later, by the posted
+                        // `CLOSE_WINDOW` naming this window, if granted.
+                        let close_later = granted_close(hwnd, ctx.identity);
+                        if ctx.delivery.dispatch_close_request(close_later)
+                            == flui_platform::CloseDecision::Close
                             && let Err(error) = DestroyWindow(hwnd)
                         {
                             tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
@@ -712,14 +775,14 @@ impl WindowProc {
                         let hooks = Rc::clone(&ctx.hooks);
                         window_destroyed(&hooks, WindowRef::new(hwnd, ctx.identity));
 
-                        // Fire per-window on_close callback (FnOnce)
-                        ctx.callbacks.dispatch_close();
+                        // Fire the handler's `closed`
+                        ctx.delivery.dispatch_close();
 
                         // Release every remaining registered callback now,
                         // while the HWND is still valid (Win32 only frees it
                         // after this handler returns, at `WM_NCDESTROY`).
                         // Without this, the frame callback registered via
-                        // `on_request_frame` — which in `flui-app`'s wiring
+                        // `WindowHandler::frame_requested` — which in `flui-app`'s wiring
                         // owns this window's GPU renderer, whose
                         // `wgpu::Surface` is built from the
                         // `Arc<dyn PlatformWindow>` clone the renderer owns
@@ -738,7 +801,7 @@ impl WindowProc {
                         // so the trace is ordered after the release however
                         // the close arrived.
                         let window_id = ctx.window_id.0;
-                        ctx.callbacks.clear_then(move || {
+                        ctx.delivery.clear_then(move || {
                             tracing::debug!(
                                 target: "flui.platform",
                                 event = "native_window_destroyed",
@@ -1115,6 +1178,19 @@ impl WindowProc {
                     LRESULT(0)
                 }
 
+                // Deliveries another thread raised for this window wait in
+                // its FIFO; this turn delivers them. Named by identity, like
+                // `CLOSE_WINDOW`.
+                DELIVER_QUEUED => {
+                    if let Some(ctx) = ctx
+                        && ctx.identity.halves() == (wparam.0, lparam.0)
+                    {
+                        let delivery = Arc::clone(&ctx.delivery);
+                        delivery.deliver_queued();
+                    }
+                    LRESULT(0)
+                }
+
                 // A close command applied off this thread. It names the
                 // window it closes, so a handle reused since is left alone,
                 // and it asks no veto, unlike `WM_CLOSE`.
@@ -1466,7 +1542,7 @@ impl WindowsWindow {
     /// - Automatically detects the monitor containing the window and fills it
     ///   completely
     /// - Preserves window state (position, size, style) for proper restoration
-    /// - Publishes the new window state (`on_state_changed`) once the window
+    /// - Publishes the new window state (`WindowHandler::state_changed`) once the window
     ///   has moved
     ///
     /// # Thread Safety
@@ -1898,7 +1974,7 @@ impl WindowContext {
         // A cloak or a lock hides a shown window in its snapshot too: read it
         // again and publish it, which says nothing when nothing changed.
         self.snapshot.invalidate();
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 }
 
@@ -2178,7 +2254,7 @@ impl WindowContext {
     /// minimized mode in its snapshot, whatever the first show asked for (a
     /// launcher can choose the first show state).
     pub(crate) fn settle_shown(&self) {
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
     }
 
     /// Note that the app asked for the window to be shown, so a restore that

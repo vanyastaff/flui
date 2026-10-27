@@ -460,7 +460,7 @@ impl LoopControl {
         // No queued cleanup: these resources must be released while main is alive.
         let windows: Vec<_> = self.windows.lock().values().cloned().collect();
         for window in &windows {
-            cleanup_step(|| window.callbacks().clear());
+            cleanup_step(|| window.delivery().clear());
         }
         for window in &windows {
             cleanup_step(|| {

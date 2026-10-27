@@ -25,7 +25,10 @@ fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
 /// wired exactly as a production window's would be.
 fn test_window() -> crate::presentation::PresentationWindow {
     let host = flui_native::headless_platform()
-        .open_window(flui_platform::WindowOptions::default())
+        .open_window(
+            flui_platform::WindowOptions::default(),
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+        )
         .expect("headless platform should create a test window");
     let accessibility = host.accessibility();
     crate::presentation::PresentationWindow::new(host, accessibility)

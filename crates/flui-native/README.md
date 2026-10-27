@@ -26,7 +26,8 @@ host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
 owner/           OwnerPlatform, SharedPlatform, PlatformProxy; the owner-turn
                  signal, the owner-thread slot, the panic boundary, the
-                 PlatformHandlers / WindowCallbacks registries, and each
+                 PlatformHandlers registry, each window's delivery to its
+                 handler (WindowDelivery), and each
                  platform's loop
 version/         the OS version floors and the gates above them (ADR-0244)
 window/, input/, text/, display/, clipboard/, drag/, accessibility/,
@@ -46,7 +47,7 @@ answers `None` for another host's window. The Android host starts over the
 Activity `android_main` is handed, through `android_platform(app)`.
 
 - **Windows** — creation, bounds, appearance, fullscreen, each fact published
-  in the window's state snapshot and announced by `on_state_changed`.
+  in the window's state snapshot and announced by `WindowHandler::state_changed`.
 - **Events** — native input converted to FLUI-owned pointer and keyboard values
   wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
   applicable W3C vocabularies; native adapters keep their platform contracts

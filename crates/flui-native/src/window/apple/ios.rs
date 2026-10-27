@@ -22,6 +22,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -53,9 +54,9 @@ use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
     SceneInstallation, SceneWindow, SceneWindows,
 };
-use crate::owner::handlers::WindowCallbacks;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
+use crate::owner::window_delivery::WindowDelivery;
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
@@ -66,7 +67,9 @@ use flui_platform::{
     AdmittedCommand, ApplyError, WindowAppearance, WindowCapabilities, WindowCommand,
     WindowGeometry, WindowState,
 };
-use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowOptions};
+use flui_platform::{
+    CursorError, PlatformWindow, SurfaceChange, WindowExecutionState, WindowId, WindowOptions,
+};
 use status_bar::FluiViewController;
 pub(crate) use status_bar::IOSSystemChrome;
 
@@ -88,7 +91,7 @@ enum SamplingAdmission {
 }
 
 pub struct FluiViewIvars {
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     /// The window's text input, which keeps the text size captured from the
     /// view's traits; set once, as the window is made after its view.
     text: std::cell::OnceCell<Arc<dyn TextInput>>,
@@ -168,7 +171,7 @@ define_class!(
                 let events = self.ivars().input.borrow_mut().hover(recognizer, self);
                 for event in events {
                     if self.window().is_none() { break; }
-                    self.callbacks().dispatch_input(event);
+                    self.delivery().dispatch_input(event);
                 }
             });
         }
@@ -244,7 +247,7 @@ define_class!(
                     .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
                 if current && !link.isPaused() {
                     self.observe_link_cadence(link);
-                    self.callbacks().dispatch_request_frame();
+                    self.delivery().dispatch_request_frame();
                 }
             });
         }
@@ -266,7 +269,7 @@ impl FluiView {
     /// which hands its touches to `touches`.
     fn new(
         mtm: MainThreadMarker,
-        callbacks: Arc<WindowCallbacks>,
+        delivery: Arc<WindowDelivery>,
         touches: Box<dyn ViewTouches>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
         dark: Arc<AtomicBool>,
@@ -276,7 +279,7 @@ impl FluiView {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
-            callbacks,
+            delivery,
             text: std::cell::OnceCell::new(),
             owner_signal,
             input: RefCell::new(touches),
@@ -326,7 +329,7 @@ impl FluiView {
         // thread UIKit requires.
         let dark = unsafe { traits.userInterfaceStyle() } == UIUserInterfaceStyle::Dark;
         if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
-            self.callbacks().publish_state();
+            self.delivery().publish_state();
         }
     }
 
@@ -422,7 +425,7 @@ impl FluiView {
         if let Some(link) = link {
             self.ivars().displays.request_frame_rate(&link, screen);
         }
-        self.callbacks().publish_state();
+        self.delivery().publish_state();
     }
 
     /// The scene is gone: this window names no screen until it is attached
@@ -436,7 +439,7 @@ impl FluiView {
             ScreenIdentity::default(),
         );
         if moved {
-            self.callbacks().publish_state();
+            self.delivery().publish_state();
         }
     }
 
@@ -480,8 +483,8 @@ impl FluiView {
         }
     }
 
-    fn callbacks(&self) -> &Arc<WindowCallbacks> {
-        &self.ivars().callbacks
+    fn delivery(&self) -> &Arc<WindowDelivery> {
+        &self.ivars().delivery
     }
 
     fn pin_for_native_callback(&self) {
@@ -512,12 +515,12 @@ impl FluiView {
             }
             let events = self.ivars().input.borrow_mut().touch(&touch, phase);
             for event in events {
-                let result = self.callbacks().dispatch_input(event);
+                let result = self.delivery().dispatch_input(event);
                 any |= result.default_prevented;
             }
         }
         if any {
-            self.callbacks().dispatch_request_frame();
+            self.delivery().dispatch_request_frame();
         }
     }
 
@@ -588,7 +591,7 @@ impl FluiView {
         };
         if previous != next {
             // The size, scale and safe area go out in one revision.
-            self.callbacks().publish_state();
+            self.delivery().publish_state();
         }
     }
 }
@@ -655,7 +658,7 @@ pub struct IOSWindow {
     /// The status-bar style its content asks for, reported by the root
     /// controller of each attachment.
     status_bar: Arc<status_bar::StatusBar>,
-    callbacks: Arc<WindowCallbacks>,
+    delivery: Arc<WindowDelivery>,
     closed: AtomicBool,
     lifecycle: parking_lot::Mutex<IOSLifecycle>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
@@ -686,14 +689,16 @@ impl IOSWindow {
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
         positions: &WindowPositions<ViewRef>,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
-        let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(crate::input::availability::ios());
-        if let Some(owner) = signal.upgrade() {
-            callbacks.set_input_wake(crate::owner::signal::OwnerSignal::callbacks_wake(
-                &owner, &callbacks,
-            ));
+        let delivery = Arc::new(WindowDelivery::new(
+            handler,
+            crate::input::availability::ios(),
+        ));
+        // What another thread raises for the window waits for an owner turn.
+        if let Some(signal) = signal.upgrade() {
+            delivery.resume_through_signal(&signal);
         }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
@@ -703,7 +708,7 @@ impl IOSWindow {
         let dark = Arc::new(AtomicBool::new(false));
         let view = FluiView::new(
             mtm,
-            Arc::clone(&callbacks),
+            Arc::clone(&delivery),
             touches,
             Arc::clone(&metrics),
             Arc::clone(&dark),
@@ -733,7 +738,7 @@ impl IOSWindow {
                 mtm,
             ),
             status_bar,
-            callbacks,
+            delivery,
             metrics,
             dark,
             screen,
@@ -915,14 +920,20 @@ impl SceneWindow for IOSWindow {
         }
         self.begin_retirement();
         // A closed window's snapshot is detached, hidden and unfocused.
-        self.callbacks.publish_state();
-        self.callbacks.dispatch_surface_immediate(false);
-        crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
-        crate::owner::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
+        self.delivery.publish_state();
+        let failure = self
+            .delivery
+            .dispatch_surface_immediate(SurfaceChange::Release);
+        crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.dispatch_close());
+        crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
         self.facets.text.detach();
         self.facets.accessibility.detach();
         if let Some(marker) = MainThreadMarker::new() {
             self.detach_native(marker);
+        }
+        // The release's panic is the first failure; the close finished first.
+        if let Some(failure) = failure {
+            failure.resume();
         }
     }
 }
@@ -966,7 +977,7 @@ impl IOSWindow {
             },
             safe_area: metrics.safe_area,
             execution: self.execution_now(),
-            hovered: self.callbacks.hovered(),
+            hovered: self.delivery.hovered(),
             // A scene has no activation apart from its focus.
             active: focused,
             capabilities: scene_capabilities(),
@@ -975,7 +986,7 @@ impl IOSWindow {
     }
 
     /// Read the scene again for its state publisher, announcing nothing.
-    fn read_state(&self) -> crate::owner::handlers::Publication {
+    fn read_state(&self) -> crate::owner::window_delivery::Publication {
         self.snapshot.invalidate();
         self.snapshot.state_with(|| self.sample_state()).outcome()
     }
@@ -1039,7 +1050,7 @@ impl IOSWindow {
             }
         }
         // Execution, visibility and focus are published in one revision.
-        self.callbacks.publish_state();
+        self.delivery.publish_state();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1053,22 +1064,32 @@ impl IOSWindow {
             }
             // The surface goes after the snapshot that stops the frames.
             Background | Detached => {
-                if current() {
-                    self.callbacks.dispatch_surface_immediate(false);
+                if current()
+                    && let Some(failure) = self
+                        .delivery
+                        .dispatch_surface_immediate(SurfaceChange::Release)
+                {
+                    failure.resume();
                 }
             }
             // The surface comes back before the snapshot that runs the frames
             // again.
             Foreground => {
-                self.callbacks.dispatch_surface_immediate(true);
-                if !current() {
-                    return;
-                }
-                self.lifecycle.lock().execution = WindowExecutionState::Running;
-                self.callbacks.publish_state();
+                // A panicking rebuild still lets the frames run again; its
+                // panic resumes once they do.
+                let failure = self
+                    .delivery
+                    .dispatch_surface_immediate(SurfaceChange::Rebuild);
                 if current() {
-                    self.set_frame_tick_paused(false);
-                    self.request_redraw();
+                    self.lifecycle.lock().execution = WindowExecutionState::Running;
+                    self.delivery.publish_state();
+                    if current() {
+                        self.set_frame_tick_paused(false);
+                        self.request_redraw();
+                    }
+                }
+                if let Some(failure) = failure {
+                    failure.resume();
                 }
             }
         }
@@ -1108,6 +1129,7 @@ impl SceneWindows for IOSWindows {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
+        handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Arc<dyn SceneWindow> {
         let window = Arc::new(IOSWindow::new(
             marker,
@@ -1116,10 +1138,13 @@ impl SceneWindows for IOSWindows {
             displays,
             touches,
             &self.positions,
+            handler,
         ));
         window
-            .callbacks
+            .delivery
             .publish_through(Arc::downgrade(&window), IOSWindow::read_state);
+        // The loop holds no borrow while it makes the window.
+        window.delivery.deliver_capability_snapshot();
         window
     }
 }
@@ -1132,6 +1157,7 @@ impl host::Window<IOSLoop> for IOSWindow {
         _: &IOSLoop,
         _: &Arc<IOSWindows>,
         _options: WindowOptions,
+        _handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
     }
@@ -1159,7 +1185,11 @@ const fn scene_capabilities() -> WindowCapabilities {
     capabilities
 }
 
-impl crate::host_window::CoreHostWindow for IOSWindow {}
+impl crate::host_window::CoreHostWindow for IOSWindow {
+    fn window_delivery(&self) -> &WindowDelivery {
+        &self.delivery
+    }
+}
 
 impl crate::host_window::HostWindow for IOSWindow {
     fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
@@ -1204,7 +1234,7 @@ impl PlatformWindow for IOSWindow {
     ///   synchronously on the caller. A static tree runs one frame and
     ///   returns, which is why the Material and ColoredBox demos looked fine;
     ///   an *animated* tree re-arms from inside that frame (its ticker wakes
-    ///   through `request_redraw` again), so the `WindowCallbacks` drain
+    ///   through `request_redraw` again), so the `WindowDelivery` drain
     ///   never empties and `didFinishLaunching` never returns to UIKit. iOS's
     ///   scene-create watchdog then kills the app at ~19.6 s
     ///   (`0x8BADF00D`) with a blank window. The `CADisplayLink` this view
@@ -1307,7 +1337,7 @@ impl PlatformWindow for IOSWindow {
     }
 
     /// The scene's size, visibility and focus. The metrics and lifecycle live
-    /// apart from this cell, so each call reads them again. `on_state_changed`
+    /// apart from this cell, so each call reads them again. `WindowHandler::state_changed`
     /// is raised where they change: when the view's size or scale does, and on
     /// each lifecycle step. `UIWindow` has no title, frame, position or
     /// commands, so a scene's window honours none and observes nothing.
@@ -1315,12 +1345,10 @@ impl PlatformWindow for IOSWindow {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| self.sample_state());
         if published.changed {
-            self.callbacks.dispatch_state_changed();
+            self.delivery.dispatch_state_changed();
         }
         published.state
     }
-
-    crate::owner::handlers::impl_window_callback_setters!(callbacks);
 
     fn window_handle(
         &self,
@@ -1441,12 +1469,27 @@ impl std::fmt::Debug for IOSSceneEvent {
 /// The application's handler of scene sessions.
 pub(crate) type SceneHandler = Box<dyn FnMut(IOSSceneEvent) -> Result<(), BootstrapError>>;
 
-/// The application's handler as the loop calls it: each call becomes the
+/// What makes the handler of a session's window, before the window exists
+/// (ADR-0254 §4).
+pub(crate) type SceneWindowHandlers =
+    Box<dyn FnMut(&IOSSceneSessionId) -> Rc<dyn flui_platform::WindowHandler>>;
+
+/// The application's handlers as the loop calls them: each call becomes the
 /// [`IOSSceneEvent`] it describes, and a connection returns the loop the
 /// pending side of the installation it hands the application.
-struct EventConsumer(SceneHandler);
+struct EventConsumer {
+    events: SceneHandler,
+    windows: SceneWindowHandlers,
+}
 
 impl SceneConsumer for EventConsumer {
+    fn window_handler(
+        &mut self,
+        session: &IOSSceneSessionId,
+    ) -> Rc<dyn flui_platform::WindowHandler> {
+        (self.windows)(session)
+    }
+
     fn connected(
         &mut self,
         session: IOSSceneSessionId,
@@ -1456,7 +1499,7 @@ impl SceneConsumer for EventConsumer {
         wake: PlatformProxy,
     ) -> Result<Box<dyn SceneInstallation>, BootstrapError> {
         let (installation, watched) = WindowInstallation::channel(wake);
-        (self.0)(IOSSceneEvent::Connected {
+        (self.events)(IOSSceneEvent::Connected {
             session,
             attachment,
             window,
@@ -1471,7 +1514,7 @@ impl SceneConsumer for EventConsumer {
         session: IOSSceneSessionId,
         attachment: IOSSceneAttachmentId,
     ) -> Result<(), BootstrapError> {
-        (self.0)(IOSSceneEvent::Disconnected {
+        (self.events)(IOSSceneEvent::Disconnected {
             session,
             attachment,
         })
@@ -1482,14 +1525,14 @@ impl SceneConsumer for EventConsumer {
         session: IOSSceneSessionId,
         attachment: IOSSceneAttachmentId,
     ) -> Result<(), BootstrapError> {
-        (self.0)(IOSSceneEvent::InstallationAborted {
+        (self.events)(IOSSceneEvent::InstallationAborted {
             session,
             attachment,
         })
     }
 
     fn discarded(&mut self, session: IOSSceneSessionId) -> Result<(), BootstrapError> {
-        (self.0)(IOSSceneEvent::Discarded { session })
+        (self.events)(IOSSceneEvent::Discarded { session })
     }
 }
 
@@ -1507,11 +1550,21 @@ impl<H: Host<Loop = IOSLoop>> HostPlatform<H> {
     /// The accepted consumer is invoked and retired on main and may capture
     /// owner-local state such as `Rc`; no `Send` bound is required.
     ///
+    /// `window_handler` makes the handler of a session's window, once per
+    /// window, before UIKit's scene gets it: the window delivers to it from
+    /// its first event on and keeps it across reconnections (ADR-0254 §4).
+    ///
     /// # Errors
     /// [`PlatformError::Init`] off the main thread, or once the owner stopped.
-    pub fn on_scene_event(&self, callback: SceneHandler) -> Result<(), PlatformError> {
-        self.owner()
-            .install_scene_consumer(Box::new(EventConsumer(callback)))
+    pub fn on_scene_event(
+        &self,
+        callback: SceneHandler,
+        window_handler: SceneWindowHandlers,
+    ) -> Result<(), PlatformError> {
+        self.owner().install_scene_consumer(Box::new(EventConsumer {
+            events: callback,
+            windows: window_handler,
+        }))
     }
 }
 

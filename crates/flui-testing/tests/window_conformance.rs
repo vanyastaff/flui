@@ -110,7 +110,10 @@ impl Fixture {
     fn new(capabilities: WindowCapabilities, fault: Option<Fault>) -> Self {
         let platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
         let model = platform
-            .open_window(WindowOptions::default())
+            .open_window(
+                WindowOptions::default(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
             .expect("a headless window opens");
         let window: Arc<dyn PlatformWindow> = match fault {
             Some(
