@@ -387,7 +387,7 @@ impl WindowState {
 /// [`AdmissionError::Unsupported`] — or, for the verbs a window takes outside
 /// the command queue ([`frame_rate_hint`](Self::frame_rate_hint),
 /// [`material`](Self::material)), when the verb answers
-/// [`Unsupported`](crate::Unsupported); a boolean could not say "only
+/// [`Unsupported`]; a boolean could not say "only
 /// approximately". Fields are public so a backend can start from
 /// [`NONE`](Self::NONE) or [`ALL`](Self::ALL) and set the difference.
 ///

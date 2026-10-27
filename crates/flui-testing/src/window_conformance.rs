@@ -430,11 +430,10 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
             availability.is_available(),
             answer,
         ) {
-            (true, Ok(())) => {}
             (false, Err(refused)) if refused.is_retryable() => broken.push(format!(
                 "{verb} is Unavailable but was refused as {refused}, which asks to be tried again"
             )),
-            (false, Err(_)) => {}
+            (true, Ok(())) | (false, Err(_)) => {}
             (true, Err(refused)) => {
                 broken.push(format!("{verb} is {availability:?} but answered {refused}"));
             }

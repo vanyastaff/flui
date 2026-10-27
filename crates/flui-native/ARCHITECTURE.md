@@ -121,7 +121,14 @@ trait depends on `flui-platform` instead.
   (`Unsupported` with `NoWindow`, `NotOnTheOwnerThread`), and a refusal of the
   desktop window manager is `Refused` with its `HRESULT`; each attribute is a
   constant that pairs its ordinal with its value's type, and each mapping is
-  one table read both ways. The AppKit backdrop (`AppKitWindow::set_backdrop`)
+  one table read both ways. The contract's material
+  (`PlatformWindow::set_material`) is a Win32 window's own verb, not the
+  view's: the window set reads the build once, and the `SystemBackdrop` gate
+  (build 22621, `window::windows::material`) decides both the window's
+  `material` capability and whether the verb reaches the desktop window
+  manager; below it, and when the manager refuses, the answer is
+  `Unsupported` with `NotOnThisDevice`. A Win32 window opens on Mica through
+  the same gate. The AppKit backdrop (`AppKitWindow::set_backdrop`)
   is an `NSVisualEffectView` material or Liquid Glass, an
   `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),
   holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a
@@ -3882,7 +3889,10 @@ for `High`, with `max` the highest supported-mode rate of the Activity's display
 `InitWindow`, because the request rides on one `ANativeWindow`, and again when a
 sample finds another highest rate for the Activity's display (a `High` hint
 skipped while that rate was unknown). The host also sends its demand on
-`PrimarySurfaceRestored`; the two overlap on a resume and are idempotent.
+`PrimarySurfaceRestored`; the two overlap on a resume and are idempotent. Where
+`ANativeWindow_setFrameRate` did not resolve (`HostDisplays::takes_frame_rate_requests`),
+the window's `frame_rate_hint` capability is `Unavailable` and the hint answers
+`Unsupported` with `NotOnThisDevice`.
 
 **Alternatives considered:**
 - `DisplayManager.DisplayListener` — it needs a Java object implementing the

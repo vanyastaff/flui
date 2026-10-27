@@ -103,8 +103,18 @@ this one path (ADR-0151 §9).
   closed with an `allow` that says why where its set is fixed by what it
   names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
   where `Custom` is its open end (`TransferFormat`), or where every consumer
-  must handle a new variant (`PlatformInput`; `WindowBackgroundAppearance`,
-  which every backend of the sealed window trait maps).
+  must handle a new variant (`PlatformInput`; `WindowMaterial`, which every
+  host maps).
+- **A verb a window cannot always honour answers in the same type.** The
+  frame-rate hint, the input regions and the window material are verbs, not
+  `WindowCommand`s, because commands apply at the owner's next turn and these
+  are sent per frame (ADR-0254 §3). Each returns `Result<(), Unsupported>`
+  and has an `Availability` (`WindowCapabilities::frame_rate_hint` and
+  `material`, `InputCapabilities::input_regions`); none has a default body,
+  and the window conformance checks the answer is `Unsupported` exactly when
+  the capability is `Unavailable`. The material set is the vocabulary every
+  host shares (`Opaque`, `System`); a material one OS alone has is that OS's
+  extension.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
   puts them next to the trait; `flui-native` repeats them for
