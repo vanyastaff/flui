@@ -56,7 +56,13 @@ impl Key {
 }
 
 /// The text a [`Key::Character`] produces: never empty, so the variant cannot be built with
-/// an invalid payload.
+/// an invalid payload. Only [`Key::character`] makes one:
+///
+/// ```compile_fail
+/// use flui_platform::keyboard::Key;
+///
+/// let _ = Key::Character(String::new());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyText(String);
 

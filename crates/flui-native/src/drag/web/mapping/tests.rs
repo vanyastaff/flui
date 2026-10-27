@@ -16,7 +16,7 @@ use crate::drag::offers::{format_of, payload_of_bytes};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
-    TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
+    TransferActions, TransferError, TransferFormat, TransferPayload,
 };
 use flui_platform::drag::{DragSessionKey, OsDragProvider, ProcessNonce};
 
@@ -121,19 +121,14 @@ fn a_hover_offers_the_types_flui_announces_then_the_files() {
 }
 
 fn payloads_travel_as_the_strings_the_browser_stores() {
-    let uris = payload_of(
-        &TransferFormat::UriList,
-        "# comment\r\nhttps://a.example/\r\n\r\nfile:///tmp/x\r\n".to_owned(),
-    );
-    let TransferPayload::UriList(list) = &uris else {
-        panic!("a uri list");
+    let list = "# comment\r\nhttps://a.example/\r\n\r\nfile:///tmp/x\r\n";
+    let uris = payload_of(&TransferFormat::UriList, list.to_owned());
+    let TransferPayload::Custom { mime, bytes } = &uris else {
+        panic!("a uri list is the browser's string");
     };
     assert_eq!(
-        list,
-        &[
-            TransferUri::Uri("https://a.example/".to_owned()),
-            TransferUri::Uri("file:///tmp/x".to_owned())
-        ]
+        (mime.as_str(), &**bytes),
+        ("text/uri-list", list.as_bytes())
     );
     let text = RepresentationDescriptor {
         format: TransferFormat::Text,
@@ -164,33 +159,32 @@ fn payloads_travel_as_the_strings_the_browser_stores() {
     };
     assert_eq!(
         stored(&uri_list, &uris).map(|(_, text)| text),
-        Some("https://a.example/\r\nfile:///tmp/x".to_owned())
+        Some(list.to_owned())
     );
 }
 
 /// A dropped file, and an image a page stored as a string, resolve as the
-/// format they were announced as: an image for `image/*`, bytes otherwise.
+/// format they were announced as: the bytes of the image's container for
+/// `image/*`, of the type's essence otherwise.
 fn dropped_images_resolve_as_the_image_they_announced() {
     let offer = offered(["image/svg+xml"], ["image/png", "application/pdf"]);
     let resolve =
         |index: usize, bytes: &[u8]| payload_of_bytes(&offer[index].1.format, bytes.to_vec());
-    let TransferPayload::Image(png) = resolve(1, b"\x89PNG") else {
-        panic!("a png file is an image");
+    let carried = |payload: TransferPayload| match payload {
+        TransferPayload::Custom { mime, bytes } => (mime.as_str().to_owned(), bytes.to_vec()),
+        other => panic!("a file is its bytes, not {other:?}"),
     };
     assert_eq!(
-        (png.mime.as_str(), &*png.bytes),
-        ("image/png", &b"\x89PNG"[..])
+        carried(resolve(1, b"\x89PNG")),
+        ("image/png".to_owned(), b"\x89PNG".to_vec())
     );
-    let TransferPayload::Custom { mime, bytes } = resolve(2, b"%PDF") else {
-        panic!("a pdf file is bytes");
-    };
-    assert_eq!((mime.as_str(), &*bytes), ("application/pdf", &b"%PDF"[..]));
-    let TransferPayload::Image(svg) = payload_of(&offer[0].1.format, "<svg/>".to_owned()) else {
-        panic!("an image string is an image");
-    };
     assert_eq!(
-        (svg.mime.as_str(), &*svg.bytes),
-        ("image/svg+xml", &b"<svg/>"[..])
+        carried(resolve(2, b"%PDF")),
+        ("application/pdf".to_owned(), b"%PDF".to_vec())
+    );
+    assert_eq!(
+        carried(payload_of(&offer[0].1.format, "<svg/>".to_owned())),
+        ("image/svg+xml".to_owned(), b"<svg/>".to_vec())
     );
 }
 

@@ -666,7 +666,7 @@ pub struct IOSWindow {
     id: WindowId,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: parking_lot::Mutex<(
-        flui_platform::input_regions::ProjectedInputRegions,
+        crate::input::regions::ProjectedInputRegions,
         crate::window::apple::geometry::screen_edges::DeferredEdges,
     )>,
     /// What the table's positions made for this window: its actuator, shared

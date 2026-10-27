@@ -27,9 +27,8 @@ use flui_interaction::{
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationIndex, TransferActions, TransferCompleter, TransferFormat, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
+    TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
@@ -90,7 +89,7 @@ impl DataTransferSource for RecordingSource {
         representation: RepresentationIndex,
         _limits: TransferLimits,
     ) -> TransferRequest {
-        let (request, completer) = TransferRequest::channel();
+        let (request, completer) = TransferRequest::pending();
         self.requests.lock().push((id, representation, completer));
         request
     }
@@ -320,7 +319,8 @@ struct Fixture {
     source: Arc<RecordingSource>,
     probe: Rc<Probe>,
     hit: HitTestHandle,
-    offers: RefCell<OfferTable>,
+    /// How many offers the simulated OS minted: the next one's slot.
+    offers: Cell<u32>,
     presentation: PresentationId,
     windows: RefCell<Vec<Arc<dyn PlatformWindow>>>,
     /// The pointer kinds an OS drag's hit tests asked for, in order.
@@ -369,7 +369,7 @@ impl Fixture {
             source,
             probe,
             hit,
-            offers: RefCell::new(OfferTable::new()),
+            offers: Cell::new(0),
             presentation: presentation(1),
             windows: RefCell::default(),
             hit_kinds: Rc::default(),
@@ -437,15 +437,13 @@ impl Fixture {
 
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
         let representations: Arc<[_]> = Arc::from(vec![
             flui_platform::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             },
         ]);
-        let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-        DataTransferOffer::new(id, representations)
+        DataTransferOffer::new(self.mint(), representations)
     }
 
     fn start(&self, window: Arc<dyn PlatformWindow>, allowed: AllowedActions) -> DragSession {
@@ -481,12 +479,16 @@ impl Fixture {
     }
 
     fn offer_for(&self, request: &OsDragRequest) -> DataTransferOffer {
-        let mut table = self.offers.borrow_mut();
-        let id = table.mint(OfferRecord::new(Arc::from(request.representations.clone())));
-        DataTransferOffer::new(
-            id,
-            Arc::clone(table.get(id).expect("live").representations()),
-        )
+        DataTransferOffer::new(self.mint(), Arc::from(request.representations.clone()))
+    }
+
+    /// A fresh offer id, as the OS's one table mints it: never one minted
+    /// before.
+    fn mint(&self) -> DataTransferId {
+        let slot = self.offers.get();
+        self.offers
+            .set(slot.checked_add(1).expect("the test mints few offers"));
+        DataTransferId::new_gen(slot, std::num::NonZeroU32::MIN)
     }
 
     fn deliver(&self, presentation: PresentationId, event: DragDropEvent) {
@@ -1114,17 +1116,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             on_drop: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
-        let offer = {
-            let mut table = f.offers.borrow_mut();
-            let representations: Arc<[_]> = Arc::from(vec![
-                flui_platform::data_transfer::RepresentationDescriptor {
-                    format: TransferFormat::Text,
-                    declared_len: None,
-                },
-            ]);
-            let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
-            DataTransferOffer::new(id, representations)
-        };
+        let offer = f.text_offer();
         let id = offer.id();
         let here = Some(Point::new(5.0, 5.0));
         f.deliver(

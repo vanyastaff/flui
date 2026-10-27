@@ -16,7 +16,7 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
+use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
@@ -28,6 +28,7 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
+use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
 
 use crate::owner::handlers::{OpenWindows, Publication, WindowCallbacks};

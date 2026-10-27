@@ -30,7 +30,7 @@ use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
-    TransferPayload, TransferRequest, TransferUri,
+    TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
 use flui_platform::{
@@ -58,6 +58,7 @@ use windows_core::HRESULT;
 
 use super::OleTransfer;
 use crate::WindowsPlatform;
+use crate::drag::offers::{PathStyle, TransferUri};
 use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
 use crate::owner::windows::{HostDrag, WindowsLoop};
@@ -398,7 +399,10 @@ fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
         provider: Box::new(|RepresentationIndex(index)| match index {
             0 => Ok(TransferPayload::Text("dragged \u{2713}".into())),
             1 => Ok(TransferPayload::Html("<b>dragged</b>".into())),
-            2 => Ok(TransferPayload::UriList(vec![TransferUri::Path(path())])),
+            2 => Ok(TransferUri::list_payload(
+                [TransferUri::Path(path())],
+                PathStyle::Windows,
+            )),
             3 => Ok(TransferPayload::Custom {
                 mime: custom(),
                 bytes: Arc::from(&b"\x00raw\xff"[..]),
@@ -608,7 +612,11 @@ fn a_drag_over_a_window_is_offered_answered_and_fetched() {
     );
     let files = fetch(&transfer, &offer, &TransferFormat::UriList);
     assert!(
-        matches!(&files, Ok(TransferPayload::UriList(uris)) if *uris == [TransferUri::Path(path())]),
+        files
+            .as_ref()
+            .ok()
+            .and_then(|files| TransferUri::list_of(files, PathStyle::Windows))
+            == Some(vec![TransferUri::Path(path())]),
         "{files:?}"
     );
     let bytes = fetch(

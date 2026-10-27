@@ -435,8 +435,7 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// The framework calls it on every composited frame with the window's whole set,
     /// whether or not it changed. The backend projects the set to device pixels with the
-    /// window's current scale through
-    /// [`ProjectedInputRegions`](crate::input_regions::ProjectedInputRegions) and updates
+    /// window's current scale, each rectangle rounded outward, and updates
     /// the OS only when the projection, the scale or the display changed, so no caller-side
     /// comparison can hide a scale or display change from it.
     ///
