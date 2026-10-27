@@ -32,10 +32,14 @@ use crate::owner::android::{
 use crate::owner::handlers::CallbackWindow;
 use crate::text::WindowTextInput;
 use crate::{
-    input::availability::AndroidInputApis, owner::OpenWindowError,
-    owner::handlers::WindowCallbacks, version::gate::android::AndroidApi,
-    version::gate::android::DragSource, version::gate::android::GestureExclusion,
-    version::gate::android::TouchpadGestures, window::state::WindowStateCell,
+    input::availability::AndroidInputApis,
+    owner::OpenWindowError,
+    owner::handlers::WindowCallbacks,
+    version::gate::android::AndroidApi,
+    version::gate::android::DragSource,
+    version::gate::android::GestureExclusion,
+    version::gate::android::TouchpadGestures,
+    window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -128,7 +132,7 @@ impl AndroidWindow {
             preferences.as_ref(),
             displays.as_ref(),
             &activity,
-            &Reported {
+            &Kept {
                 appearance,
                 safe_area: EdgeInsets::ZERO,
                 hovered: false,
@@ -236,23 +240,32 @@ impl AndroidWindow {
     /// invalidated it; `on_state_changed` is raised when that produced a new
     /// revision.
     fn current_state(&self) -> WindowState {
-        let published = self.snapshot.state_with(|| {
-            sample_state(
-                &self.app,
-                self.preferences.as_ref(),
-                self.displays.as_ref(),
-                &self.activity,
-                &Reported {
-                    appearance: *self.appearance.lock(),
-                    safe_area: self.safe_area.lock().accepted,
-                    hovered: self.callbacks.hovered(),
-                },
-            )
-        });
+        let published = self.snapshot.state_with(|| self.sample());
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
         published.state
+    }
+
+    fn sample(&self) -> WindowState {
+        sample_state(
+            &self.app,
+            self.preferences.as_ref(),
+            self.displays.as_ref(),
+            &self.activity,
+            &Kept {
+                appearance: *self.appearance.lock(),
+                safe_area: self.safe_area.lock().accepted,
+                hovered: self.callbacks.hovered(),
+            },
+        )
+    }
+
+    /// Read the activity surface again for its state publisher, announcing
+    /// nothing.
+    fn read_state(&self) -> crate::owner::handlers::Publication {
+        self.snapshot.invalidate();
+        self.snapshot.state_with(|| self.sample()).outcome()
     }
 }
 
@@ -413,23 +426,24 @@ fn native_scale(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> f64 
     density as f64 / 160.0
 }
 
-/// The activity surface as the system reports it now. The activity fills its
-/// display with no frame, title or position of its own.
-/// What the window keeps of facts the Activity reported earlier: the night
+/// What the window kept of facts the Activity reported earlier: the night
 /// mode its configuration last said, the safe area last accepted and the
 /// hover last reported.
-struct Reported {
+struct Kept {
     appearance: WindowAppearance,
     safe_area: EdgeInsets,
     hovered: bool,
 }
 
+/// The activity surface as the system reports it now, with what the window
+/// `kept`. The activity fills its display with no frame, title or position of
+/// its own.
 fn sample_state(
     app: &AndroidApp,
     preferences: &dyn ActivityPreferences,
     displays: &dyn crate::owner::android::HostDisplays,
     activity: &ActivityFlags,
-    reported: &Reported,
+    kept: &Kept,
 ) -> WindowState {
     let (width, height) = native_extent(app);
     let scale = native_scale(app, preferences);
@@ -438,21 +452,26 @@ fn sample_state(
     } else {
         Size::new(f64::from(width), f64::from(height))
     };
-    WindowState::new(WindowGeometry::new(None, size), size)
+    let focused = activity.focused.load(Ordering::SeqCst);
+    let state = WindowState::new(WindowGeometry::new(None, size), size)
         .with_visible(activity.visible.load(Ordering::SeqCst))
-        .with_focused(activity.focused.load(Ordering::SeqCst))
+        .with_focused(focused)
         .with_resizable(false)
         .with_decorated(false)
-        .with_display(displays.activity_display())
+        .with_display(displays.activity_display());
+    ReportedFacts {
         // No native window (terminated, or not yet made) is no drawable area.
-        .with_metrics(
-            flui_foundation::geometry::WindowMetrics::new(Size::new(width, height), scale).ok(),
-        )
-        .with_appearance(reported.appearance)
-        .with_safe_area(reported.safe_area)
-        .with_hovered(reported.hovered)
-        .with_execution(execution_of(activity))
-        .with_capabilities(WindowCapabilities::NONE)
+        metrics: flui_foundation::geometry::WindowMetrics::new(Size::new(width, height), scale)
+            .ok(),
+        appearance: kept.appearance,
+        safe_area: kept.safe_area,
+        execution: execution_of(activity),
+        hovered: kept.hovered,
+        // An Activity has no activation apart from its window's focus.
+        active: focused,
+        capabilities: WindowCapabilities::NONE,
+    }
+    .onto(state)
 }
 
 /// Running while the Activity is resumed, independent of focus and of the
@@ -552,14 +571,9 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             Arc::clone(&owner.preferences),
             drag_source,
         ));
-        window.callbacks.set_state_publisher({
-            let window = Arc::downgrade(&window);
-            Arc::new(move || {
-                if let Some(window) = window.upgrade() {
-                    window.publish_state();
-                }
-            })
-        });
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), AndroidWindow::read_state);
         let previous = owner
             .window
             .lock()

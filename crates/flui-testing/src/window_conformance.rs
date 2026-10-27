@@ -38,17 +38,20 @@ use flui_platform::{
 
 /// What the window system says of the window now, read by the fixture by its
 /// own means (the operating system's queries, a headless host's model), never
-/// through the window's snapshot. `None` for a fact the fixture cannot read.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// through the window's snapshot. Every fact is read: a fixture cannot leave
+/// one out and pass for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Readback {
-    /// The drawable area in device pixels and its scale; `None` also while the
+    /// The drawable area in device pixels and its scale; `None` while the
     /// window has no drawable area (minimized), whose snapshot keeps the last.
     pub metrics: Option<WindowMetrics>,
     /// Whether the window has input focus.
-    pub focused: Option<bool>,
+    pub focused: bool,
+    /// Whether the window is the active window of its desktop.
+    pub active: bool,
     /// Whether the window is shown and nothing (a cloak, a locked session)
     /// hides it.
-    pub visible: Option<bool>,
+    pub visible: bool,
 }
 
 /// A window under test, as the checks drive it.
@@ -316,21 +319,16 @@ fn disagreements(step: &str, state: &WindowState, readback: Readback) -> Vec<Str
             state.metrics
         ));
     }
-    if let Some(focused) = readback.focused
-        && state.focused != focused
-    {
-        broken.push(format!(
-            "{step}: the snapshot says focused {}, the window system {focused}",
-            state.focused
-        ));
-    }
-    if let Some(visible) = readback.visible
-        && state.visible != visible
-    {
-        broken.push(format!(
-            "{step}: the snapshot says visible {}, the window system {visible}",
-            state.visible
-        ));
+    for (fact, published, read) in [
+        ("focused", state.focused, readback.focused),
+        ("active", state.active, readback.active),
+        ("visible", state.visible, readback.visible),
+    ] {
+        if published != read {
+            broken.push(format!(
+                "{step}: the snapshot says {fact} {published}, the window system {read}"
+            ));
+        }
     }
     broken
 }

@@ -24,9 +24,16 @@ use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::{
-    host, host::WindowFacets, host::WindowPositions, host_window::HostWindow,
-    owner::OpenWindowError, owner::handlers::WindowCallbacks, owner::signal::OwnerSignal,
-    owner::web::WebLoop, text::WindowTextInput, window::state::WindowStateCell,
+    host,
+    host::WindowFacets,
+    host::WindowPositions,
+    host_window::HostWindow,
+    owner::OpenWindowError,
+    owner::handlers::WindowCallbacks,
+    owner::signal::OwnerSignal,
+    owner::web::WebLoop,
+    text::WindowTextInput,
+    window::state::{ReportedFacts, WindowStateCell},
     window::visibility::ReportedVisibility,
 };
 use flui_platform::{
@@ -95,6 +102,22 @@ impl StatePublisher {
         self.cell.invalidate();
         let _ = self.current();
     }
+
+    /// Read the page again for the window's state publisher, announcing
+    /// nothing.
+    fn read(&self) -> crate::owner::handlers::Publication {
+        self.cell.invalidate();
+        self.cell
+            .state_with(|| {
+                sample_state(
+                    &self.canvas,
+                    &self.state,
+                    self.displays.current_display(),
+                    self.callbacks.hovered(),
+                )
+            })
+            .outcome()
+    }
 }
 
 /// The window as the page reports it now. A canvas has no frame, no global
@@ -132,7 +155,7 @@ fn sample_state(
             .fullscreen_element()
             .is_some_and(|element| element.contains(Some(canvas)))
     });
-    WindowState::new(WindowGeometry::new(None, size), size)
+    let state = WindowState::new(WindowGeometry::new(None, size), size)
         .with_mode(if fullscreen {
             WindowMode::Fullscreen
         } else {
@@ -143,12 +166,19 @@ fn sample_state(
         .with_title(Some(title))
         .with_resizable(false)
         .with_decorated(false)
-        .with_display(display)
-        .with_metrics(metrics)
-        .with_appearance(page_appearance())
-        .with_execution(execution)
-        .with_hovered(hovered)
-        .with_capabilities(window_capabilities())
+        .with_display(display);
+    ReportedFacts {
+        metrics,
+        appearance: page_appearance(),
+        // The page owns the viewport; the canvas has no safe area of its own.
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution,
+        hovered,
+        // A page has no activation apart from the canvas's focus.
+        active: focused,
+        capabilities: window_capabilities(),
+    }
+    .onto(state)
 }
 
 /// The user's color scheme as the page sees it (`prefers-color-scheme`).
@@ -1082,14 +1112,11 @@ impl host::Window<WebLoop> for WebWindow {
         WebLoop::dispatch_window_event(&owner.state, WindowEvent::Created(WindowId(0)));
 
         let window = Arc::new(window);
-        window.callbacks.set_state_publisher({
-            let window = Arc::downgrade(&window);
-            Arc::new(move || {
-                if let Some(window) = window.upgrade() {
-                    window.publisher().publish();
-                }
-            })
-        });
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), |window: &WebWindow| {
+                window.publisher().read()
+            });
         Ok(window)
     }
 
@@ -1200,7 +1227,7 @@ impl PlatformWindow for WebWindow {
                 }
             }
             // Every other command is refused by `admit` through a capability
-            // this backend leaves `false`.
+            // this backend leaves `Unavailable`.
             _ => {
                 return Err(flui_platform::Unsupported::new(
                     flui_platform::UnsupportedReason::NotOnThisPlatform,

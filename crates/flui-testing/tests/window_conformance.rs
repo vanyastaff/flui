@@ -133,8 +133,9 @@ impl WindowFixture for Fixture {
         Readback {
             metrics: WindowMetrics::new(self.window.physical_size(), self.window.scale_factor())
                 .ok(),
-            focused: Some(self.window.is_focused()),
-            visible: Some(self.window.is_visible()),
+            focused: self.window.is_focused(),
+            active: self.window.is_active(),
+            visible: self.window.is_visible(),
         }
     }
 

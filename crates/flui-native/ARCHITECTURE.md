@@ -793,17 +793,33 @@ trait depends on `flui-platform` instead.
   focus, visibility, hover and the capabilities.
 - **Every fact callback is preceded by the snapshot that holds the fact.**
   Each host sets a `StatePublisher` on the window's `WindowCallbacks` when the
-  window opens (over a weak reference to the window); every fact dispatch
-  (resize and scale, focus, visibility, hover, appearance, display, safe area,
-  execution state) runs it first, so the snapshot is read again, published
-  and `on_state_changed` queued ahead of the fact's own callback, in the OS
-  callback that reported it (each `WM_SIZE` of a Win32 live resize inside its
-  modal loop). A fact another feature reports reaches the snapshot the same
-  way: the hover is what the last `dispatch_hover_status_change` said
+  window opens (`publish_through`, over a weak reference to the window); every
+  fact dispatch (resize and scale, focus, visibility, hover, appearance,
+  display, safe area, execution state) runs it first. The publisher reads the
+  window again and answers `Publication` (changed, unchanged, held) without
+  announcing anything; `on_state_changed` and the fact's own callback then go
+  as one `Published` event, each contained, so a panic in either loses
+  neither and the first failure resurfaces after both ran. This happens in the
+  OS callback that reported the fact (each `WM_SIZE` of a Win32 live resize
+  inside its modal loop). While a window holds its publishing back (Win32
+  through a DPI change or a fullscreen switch), the facts wait in
+  `WindowCallbacks` and follow the publication that ends the hold
+  (`announce`). The Win32 publisher reads only a context whose
+  `WindowIdentity` is its window's, so a recycled handle publishes nothing of
+  another window; every fact comes from the window procedure on the owner
+  thread, and a read the context refuses leaves the snapshot stale for the
+  owner's next read. A fact another feature reports reaches the snapshot the
+  same way: the hover is what the last `dispatch_hover_status_change` said
   (`WindowCallbacks::hovered`), whether Win32 or web input, AppKit's tracking
   area or winit's cursor events reported it. An observation committed at its
   delivery point (the Web's focus and visibility) is published right after
-  its commit.
+  its commit. The facts beyond geometry (metrics, appearance, safe area,
+  execution, hover, activation, capabilities) are one value,
+  `window::state::ReportedFacts`, that every host builds. Activation is
+  Win32's `WM_ACTIVATE` (a window whose owned popup has the keyboard is active
+  and not focused); the other hosts have no notion apart from focus (AppKit's
+  key window, winit's `Focused`, the canvas focus, the scene and the
+  Activity), so their activation is their focus.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one

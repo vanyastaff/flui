@@ -91,7 +91,7 @@ use crate::{
     owner::OpenWindowError,
     owner::handlers::WindowCallbacks,
     window::config::WindowConfiguration,
-    window::state::{WindowStateCell, mode_of},
+    window::state::{ReportedFacts, WindowStateCell, mode_of},
     window::visibility::ReportedVisibility,
 };
 use flui_platform::{
@@ -650,14 +650,9 @@ impl MacOSWindow {
                 )),
             });
 
-            window.callbacks.set_state_publisher({
-                let window = Arc::downgrade(&window);
-                Arc::new(move || {
-                    if let Some(window) = window.upgrade() {
-                        window.publish_state();
-                    }
-                })
-            });
+            window
+                .callbacks
+                .publish_through(Arc::downgrade(&window), Self::read_state);
 
             // Enable mouse tracking for mouse moved events
             content_view::enable_mouse_tracking(content_view);
@@ -1839,6 +1834,12 @@ impl MacOSWindow {
         let _ = self.current_state();
     }
 
+    /// Read the window again for its state publisher, announcing nothing.
+    fn read_state(&self) -> crate::owner::handlers::Publication {
+        self.snapshot.invalidate();
+        self.snapshot.state_with(|| self.sample_state()).outcome()
+    }
+
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
         let (display, normal, scale) = {
@@ -1879,7 +1880,7 @@ impl MacOSWindow {
                 let position = primary_screen_height().and_then(|height| {
                     top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
                 });
-                WindowState::new(
+                let state = WindowState::new(
                     WindowGeometry::new(position, Size::new(frame.size.width, frame.size.height)),
                     Size::new(content.size.width, content.size.height),
                 )
@@ -1898,22 +1899,31 @@ impl MacOSWindow {
                     Size::new(min.width, min.height),
                     Size::new(max.width, max.height),
                 ))
-                .with_display(display)
-                .with_metrics(
-                    flui_foundation::geometry::WindowMetrics::from_logical(
+                .with_display(display);
+                ReportedFacts {
+                    metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                         Size::new(content.size.width, content.size.height),
                         scale,
                     )
                     .ok(),
-                )
-                // The window's appearance, not NSApp's: a window may override it.
-                .with_appearance(content_view::effective_appearance(
-                    (&*self.ns_window)
-                        .downcast_ref::<objc2_app_kit::NSWindow>()
-                        .expect("BUG: MacOSWindow wraps an NSWindow"),
-                ))
-                .with_hovered(hovered)
-                .with_capabilities(window_capabilities())
+                    // The window's appearance, not NSApp's: a window may
+                    // override it.
+                    appearance: content_view::effective_appearance(
+                        (&*self.ns_window)
+                            .downcast_ref::<objc2_app_kit::NSWindow>()
+                            .expect("BUG: MacOSWindow wraps an NSWindow"),
+                    ),
+                    // A desktop window has no safe area and AppKit never
+                    // suspends one.
+                    safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+                    execution: flui_platform::WindowExecutionState::Running,
+                    hovered,
+                    // The key window is the one this host reports active;
+                    // the main window has no report of its own here.
+                    active: focused,
+                    capabilities: window_capabilities(),
+                }
+                .onto(state)
             }
         })
     }

@@ -31,6 +31,7 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::call_point::install;
 use crate::owner::handlers::CallbackWindow;
+use crate::owner::handlers::Publication;
 use crate::owner::winit::HostDisplays;
 use crate::owner::winit::control::{ControlSendError, ControlSender};
 use crate::owner::winit::{
@@ -39,7 +40,7 @@ use crate::owner::winit::{
 use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
-use crate::window::state::{ModeFlags, WindowStateCell, mode_of};
+use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
 use crate::window::visibility::ReportedVisibility;
 use flui_platform::{
     CursorError, DisplayId, PlatformTextInput, PlatformWindow, SizeConstraints, WindowAppearance,
@@ -199,9 +200,13 @@ impl WinitWindow {
                 visible: options.visible,
                 display,
                 probed_mode: None,
-                appearance: appearance_of(&window, false),
-                hovered: false,
-                capabilities,
+                reported: reported_facts(
+                    &window,
+                    appearance_of(&window, false),
+                    true,
+                    false,
+                    capabilities,
+                ),
             },
         );
         Self {
@@ -331,20 +336,39 @@ impl WinitWindow {
     /// Reads winit with no lock of the snapshot held, and keeps the rectangle
     /// a maximized or fullscreen window returns to: the outer geometry the
     /// window had the last time it was in normal mode.
+    /// Read the window again for its state publisher, announcing nothing: the
+    /// fact that asked is delivered behind the announcement.
+    fn read_state(&self) -> Publication {
+        self.window_state.invalidate();
+        let published = self.window_state.state_with(|| self.sample());
+        #[cfg(target_os = "linux")]
+        if published.changed {
+            self.follow_wm_minimized(&published.state);
+        }
+        published.outcome()
+    }
+
     fn sample(&self) -> WindowState {
         let title = self.title.lock().clone();
+        // Read once: a second lock of the flag inside the literal below would
+        // wait on the first one's guard, alive until the statement ends.
+        let focused = *self.is_focused.lock();
         let mut state = sample_state(
             &self.window,
             &RecordedState {
                 title: &title,
                 constraints: *self.constraints.lock(),
-                focused: *self.is_focused.lock(),
+                focused,
                 visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
                 display: PlatformWindow::display_id(self),
                 probed_mode: self.probed_mode(),
-                appearance: PlatformWindow::appearance(self),
-                hovered: self.callbacks.hovered(),
-                capabilities: PlatformWindow::capabilities(self),
+                reported: reported_facts(
+                    &self.window,
+                    PlatformWindow::appearance(self),
+                    focused,
+                    self.callbacks.hovered(),
+                    PlatformWindow::capabilities(self),
+                ),
             },
         );
         let mut remembered = self.normal_geometry.lock();
@@ -522,13 +546,30 @@ struct RecordedState<'a> {
     /// The mode the window system reports directly, where winit's flags fall
     /// short of it (X11 minimization).
     probed_mode: Option<WindowMode>,
-    /// The user's theme as applied to the window.
+    /// The facts beyond geometry; their capabilities are what the window
+    /// honours now (an X11 window whose minimization goes unseen says so).
+    reported: ReportedFacts,
+}
+
+/// What a winit window reports beyond its geometry. winit has no safe area
+/// and never suspends a desktop window, and its focus is the activation (it
+/// reports no other).
+fn reported_facts(
+    window: &Window,
     appearance: WindowAppearance,
-    /// Whether winit last reported the cursor over the window.
+    focused: bool,
     hovered: bool,
-    /// What the window honours now: an X11 window whose minimization goes
-    /// unseen says so.
     capabilities: WindowCapabilities,
+) -> ReportedFacts {
+    ReportedFacts {
+        metrics: WindowMetrics::new(device_size(window.inner_size()), window.scale_factor()).ok(),
+        appearance,
+        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        execution: flui_platform::WindowExecutionState::Running,
+        hovered,
+        active: focused,
+        capabilities,
+    }
 }
 
 /// The user's theme as applied to `window`: winit's live theme where it has
@@ -554,7 +595,7 @@ fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
 
 /// The window as winit and `facts` describe it.
 fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
-    let capabilities = facts.capabilities;
+    let capabilities = facts.reported.capabilities;
     let scale = window.scale_factor();
     let logical = |size: winit::dpi::PhysicalSize<u32>| {
         Size::new(
@@ -570,7 +611,7 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
         .map(|at| Point::new(f64::from(at.x) / scale, f64::from(at.y) / scale));
     let minimized =
         capabilities.observes_minimized.is_available() && window.is_minimized() == Some(true);
-    WindowState::new(
+    let state = WindowState::new(
         WindowGeometry::new(position, logical(window.outer_size())),
         logical(window.inner_size()),
     )
@@ -587,11 +628,8 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
     .with_constraints(facts.constraints)
     .with_resizable(window.is_resizable())
     .with_decorated(window.is_decorated())
-    .with_display(facts.display)
-    .with_metrics(WindowMetrics::new(device_size(window.inner_size()), scale).ok())
-    .with_appearance(facts.appearance)
-    .with_hovered(facts.hovered)
-    .with_capabilities(capabilities)
+    .with_display(facts.display);
+    facts.reported.onto(state)
 }
 
 impl Drop for WinitWindow {
@@ -1130,14 +1168,9 @@ impl LoopWindows for WinitWindows {
             self,
         ));
         seed.notices.mark_stale_on_wake(window.state_cell());
-        window.callbacks.set_state_publisher({
-            let window = Arc::downgrade(&window);
-            Arc::new(move || {
-                if let Some(window) = window.upgrade() {
-                    window.refresh_state();
-                }
-            })
-        });
+        window
+            .callbacks
+            .publish_through(Arc::downgrade(&window), WinitWindow::read_state);
         // Before the window is mapped: the window manager reads the mode a
         // window opens in from the properties the view writes.
         #[cfg(target_os = "linux")]

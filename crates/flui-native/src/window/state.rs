@@ -7,8 +7,46 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_platform::WindowState;
+use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
+use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
 use parking_lot::Mutex;
+
+/// The facts a window reports beyond its geometry, mode and flags, as each
+/// host reads them its own way, put onto a sample in one place
+/// ([`Self::onto`]): a fact the snapshot gains is added here, and every host
+/// that builds this value is then told by the compiler to read it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReportedFacts {
+    /// The drawable area and scale; `None` for a report that is not one.
+    pub(crate) metrics: Option<WindowMetrics>,
+    /// The user's theme as applied to the window (ADR-0222).
+    pub(crate) appearance: WindowAppearance,
+    /// The safe-area insets in logical pixels.
+    pub(crate) safe_area: EdgeInsets,
+    /// Whether the platform lets the window run its UI (ADR-0035).
+    pub(crate) execution: WindowExecutionState,
+    /// What the last hover report said.
+    pub(crate) hovered: bool,
+    /// Whether the window is the active window of its desktop; its focus where
+    /// the window system has no notion apart from it.
+    pub(crate) active: bool,
+    /// What the window honours now.
+    pub(crate) capabilities: WindowCapabilities,
+}
+
+impl ReportedFacts {
+    /// `state` with these facts.
+    pub(crate) fn onto(self, state: WindowState) -> WindowState {
+        state
+            .with_metrics(self.metrics)
+            .with_appearance(self.appearance)
+            .with_safe_area(self.safe_area)
+            .with_execution(self.execution)
+            .with_hovered(self.hovered)
+            .with_active(self.active)
+            .with_capabilities(self.capabilities)
+    }
+}
 
 /// What a window system says of a window, as the three facts its mode is
 /// decided from. Each platform reads them from its own report (winit's
@@ -61,6 +99,17 @@ pub(crate) struct Published {
     /// `on_state_changed` exactly when this is `true`, after the call returned
     /// and so outside the cell's lock.
     pub(crate) changed: bool,
+}
+
+impl Published {
+    /// What a state publisher answers for this read.
+    pub(crate) const fn outcome(&self) -> crate::owner::handlers::Publication {
+        if self.changed {
+            crate::owner::handlers::Publication::Changed
+        } else {
+            crate::owner::handlers::Publication::Unchanged
+        }
+    }
 }
 
 struct Slot {

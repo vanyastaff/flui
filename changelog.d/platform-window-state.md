@@ -1,12 +1,13 @@
 ### Added
 
 - `WindowState` holds every fact of the window: `metrics` (the drawable area and scale; a report
-  that is not a drawable area keeps the last), `appearance`, `safe_area`, `execution`, `hovered`
-  and `capabilities`, with a `with_*` builder each. Every host publishes them in one revision and
-  raises `on_state_changed` before the fact's own callback.
+  that is not a drawable area keeps the last), `appearance`, `safe_area`, `execution`, `hovered`,
+  `active` (the active window of its desktop, apart from focus on Win32) and `capabilities`, with a
+  `with_*` builder each. Every host publishes them in one revision and
+  raises `on_state_changed` before the fact's own callback; a panic in either loses neither.
 - `Availability::is_available` and `WindowCapabilities::availability`.
 - `flui_testing::window_conformance` checks that the snapshot agrees with what the window system
-  reports: a `WindowFixture` reads it back (`Readback`).
+  reports: a `WindowFixture` reads back every fact (`Readback`, no field left out).
 
 ### Changed
 

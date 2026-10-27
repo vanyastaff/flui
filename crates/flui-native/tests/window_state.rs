@@ -396,7 +396,7 @@ fn listen(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<Heard>>> {
 /// one revision, announced once and before the fact's own callback; the same
 /// report again publishes nothing; a report that is not a drawable area
 /// publishes nothing.
-fn window_facts_arrive_only_in_the_snapshot() {
+fn each_window_fact_reaches_the_snapshot_before_its_callback() {
     use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
     use flui_platform::{WindowAppearance, WindowExecutionState};
 
@@ -415,7 +415,7 @@ fn window_facts_arrive_only_in_the_snapshot() {
             "focus",
             "focus",
             Box::new(|mock: &MockWindow| mock.simulate_focus(false)),
-            Box::new(|state: &WindowState| !state.focused),
+            Box::new(|state: &WindowState| !state.focused && !state.active),
         ),
         (
             "visibility",
@@ -522,6 +522,39 @@ fn window_facts_arrive_only_in_the_snapshot() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// `on_state_changed` and a fact's own callback are delivered together: one
+/// that panics loses neither, and its failure resurfaces afterwards.
+fn a_panicking_state_callback_still_delivers_the_resize() {
+    let platform = HeadlessPlatform::new();
+    let window = open(&platform);
+    let mock = mock(&window).clone();
+    window.on_state_changed(Box::new(|| panic!("a state callback that fails")));
+    let resized = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&resized);
+    window.on_resize(Box::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        mock.simulate_resize(1024.0, 768.0);
+    }));
+    let payload = outcome.expect_err("the state callback's failure resurfaces");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"a state callback that fails"),
+        "the first failure is the one resurfaced"
+    );
+    assert_eq!(
+        resized.load(Ordering::SeqCst),
+        1,
+        "the resize arrived in spite of it"
+    );
+    assert_eq!(
+        window.state().content_size,
+        Size::new(1024.0, 768.0),
+        "and the snapshot holds it"
+    );
+}
+
 #[test]
 fn window_state_contract() {
     crate::run_table(
@@ -588,8 +621,12 @@ fn window_state_contract() {
                 opening_options_are_reflected_in_the_first_snapshot as fn(),
             ),
             (
-                "window_facts_arrive_only_in_the_snapshot",
-                window_facts_arrive_only_in_the_snapshot as fn(),
+                "each_window_fact_reaches_the_snapshot_before_its_callback",
+                each_window_fact_reaches_the_snapshot_before_its_callback as fn(),
+            ),
+            (
+                "a_panicking_state_callback_still_delivers_the_resize",
+                a_panicking_state_callback_still_delivers_the_resize as fn(),
             ),
         ],
     );

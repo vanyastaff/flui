@@ -8,7 +8,7 @@
 //! never what code asked for: a size the OS clamped is the clamped size, and a
 //! maximize the OS refused leaves the mode where it was. It holds every fact of
 //! the window (ADR-0254 §1): geometry and mode, the drawable metrics and scale,
-//! appearance, display, safe area, execution state, focus, visibility, hover
+//! appearance, display, safe area, execution state, focus, activation, visibility, hover
 //! and the [`WindowCapabilities`]. A change publishes a new snapshot with a
 //! higher [`WindowRevision`] and one payload-free `on_state_changed`
 //! notification; a sample equal to the published one keeps the revision
@@ -172,13 +172,19 @@ pub struct WindowState {
     pub execution: WindowExecutionState,
     /// Whether the pointer is over the window's content.
     pub hovered: bool,
+    /// Whether the window is the active window of its desktop: the one the
+    /// user works in, holding the keyboard itself or through a window it owns
+    /// (a Win32 window whose owned popup has the focus is active and not
+    /// focused). Where the window system has no notion apart from focus, it
+    /// is the focus.
+    pub active: bool,
     /// Which commands the window honours. A change in what it honours (a
     /// compositor revising what it allows) is a state change like any other.
     pub capabilities: WindowCapabilities,
 }
 
 impl WindowState {
-    /// A visible, unfocused, unhovered, running, resizable, decorated window
+    /// A visible, unfocused, inactive, unhovered, running, resizable, decorated window
     /// in normal mode at revision zero, with no title, limits, display,
     /// metrics or safe area, the light appearance, and capabilities that
     /// honour nothing.
@@ -202,6 +208,7 @@ impl WindowState {
             safe_area: EdgeInsets::ZERO,
             execution: WindowExecutionState::Running,
             hovered: false,
+            active: false,
             capabilities: WindowCapabilities::NONE,
         }
     }
@@ -302,6 +309,13 @@ impl WindowState {
     #[must_use]
     pub fn with_hovered(mut self, hovered: bool) -> Self {
         self.hovered = hovered;
+        self
+    }
+
+    /// Set whether the window is the active window of its desktop.
+    #[must_use]
+    pub fn with_active(mut self, active: bool) -> Self {
+        self.active = active;
         self
     }
 

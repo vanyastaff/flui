@@ -394,7 +394,7 @@ pub trait PlatformWindow: Send + Sync {
     /// Called on the owner thread after a new snapshot was published, outside
     /// any lock the window holds, once per revision whichever fact changed:
     /// geometry, mode, metrics, appearance, display, safe area, execution
-    /// state, focus, visibility, hover or capabilities. Facts the window system
+    /// state, focus, activation, visibility, hover or capabilities. Facts the window system
     /// reports together are published in one revision. A host delivers it
     /// inside the OS callback that reported the change where the OS gives one
     /// (each `WM_SIZE` of a Win32 live resize, inside its modal loop), before

@@ -236,10 +236,11 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE;
     honours_title.sets_title = Availability::Native;
-    let facts: [(&str, WindowState); 8] = [
+    let facts: [(&str, WindowState); 9] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
         ("hover", base_state().with_hovered(true)),
+        ("activation", base_state().with_active(true)),
         (
             "appearance",
             base_state().with_appearance(WindowAppearance::Dark),
